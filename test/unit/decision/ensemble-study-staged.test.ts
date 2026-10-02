@@ -3,16 +3,19 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { prepare, runD17Bundle, runD17Calibration } from '../../../tools/decision/d17-study.mjs';
+import { prepare, runD17Bundle, runD17Calibration, runD17PhaseDryRun } from '../../../tools/decision/d17-study.mjs';
 import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { readHeldoutCalibrationPhase } from '../../../src/decision/heldout/calibration.js';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle } from '../../../src/decision/heldout/contract.js';
-import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
+import { heldoutRunsRoot, readHeldoutJournal, scanHeldoutSpend } from '../../../src/decision/heldout/journal.js';
 import type { HeldoutAttempt, HeldoutBundle } from '../../../src/decision/heldout/types.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
-import { applyD17Mapping, d17CalibrationHandoffFromSealed, fitD17Calibration, fitD17Isotonic, qualifyD17Calibration,
-  registerD17CalibrationFromHandoff, validateD17DevelopmentReview } from '../../../src/decision/ensemble-study/calibration.js';
-import { buildD17NativeReport, d17NativeHandoff, scoreD17StagedStudy, scoreD17Study } from '../../../src/decision/ensemble-study/score.js';
+import { applyD17Mapping, d17AttemptsByRow, d17CalibrationHandoffFromSealed, d17RawProbabilities, fitD17Calibration, fitD17Isotonic,
+  qualifyD17Calibration, registerD17CalibrationFromHandoff, validateD17DevelopmentReview } from '../../../src/decision/ensemble-study/calibration.js';
+import { buildD17NativeReport, d17NativeHandoff, d17NativeIntegrity, scoreD17StagedStudy, scoreD17Study } from '../../../src/decision/ensemble-study/score.js';
+import { assertD17SeedUnused, d17FreshAllowance, d17TwoPhaseFit, d17TwoPhasePlan } from '../../../src/decision/ensemble-study/staged.js';
+import { promoteChampionChallenger } from '../../../src/decision/ensemble/runtime.js';
+import { buildIntegrityMetadata } from '../../../tools/eval/src/integrity.js';
 import { validateD17Artifact } from '../../../src/decision/ensemble-study/artifacts.js';
 import { D17_CALIBRATION } from '../../../src/decision/ensemble-study/protocol.js';
 import { validateEnsembleIntegrityReport } from '../../../src/decision/ensemble/contract.js';
@@ -52,9 +55,10 @@ function developmentReview(prepared: Staged, reviewedAt = '2026-10-01T00:00:00Z'
     goldAuditLabel: prepared.gold.labels[item.rowId], goldAmbiguousOrIncorrect: false, rationale: 'fixture: facts establish the stated label' });
   return review;
 }
-function approval(bundle: Pick<HeldoutBundle, 'corpus' | 'preregistration'>, runId: string, calibration: HeldoutBundle['approval']['calibration']) {
+function approval(bundle: Pick<HeldoutBundle, 'corpus' | 'preregistration'>, runId: string, calibration: HeldoutBundle['approval']['calibration'],
+  approvalReference = 'fixture-only') {
   const value = { schemaVersion: 'decision-heldout-approval/v1', approved: true, study: 'D17', runId, reviewer: 'fixture-reviewer',
-    approvalReference: 'fixture-only', sourceCommit: 'a'.repeat(40), exactHeadCi: 'fixture-ci', stagingHost: 'titan',
+    approvalReference, sourceCommit: 'a'.repeat(40), exactHeadCi: 'fixture-ci', stagingHost: 'titan',
     stagingWorkspace: 'fixture-workspace', model: 'jev-1.13.0', servedModel: 'jev-1.13.0', region: 'fixture-region',
     credentialRef: 'openbao-approle.fixture.typesafe-jev', credentialResolverDigest: pin, corpusDigest: heldoutDigest(bundle.corpus),
     preregistrationDigest: heldoutDigest(bundle.preregistration), executionDigest: pin, calibration,
@@ -102,17 +106,58 @@ function synthetic(base: HeldoutAttempt, prepared: Staged, rowId: string, reques
   attempt.result!.receiptDigest = heldoutDigest(attempt.result!.receipt);
   return attempt;
 }
-/** Deterministic synthetic native probabilities: about 5% confident errors and some moderate scores. */
-function observedYes(prepared: Staged, rowId: string, index: number, member: number) {
+type YesFn = (prepared: Staged, rowId: string, index: number, member: number) => number;
+const spread = (index: number, member: number) => [0.92, 0.85, 0.78, 0.97][(index + member) % 4]!;
+/** Deterministic synthetic native probabilities: about 5% confident errors shared by every call. */
+const observedYes: YesFn = (prepared, rowId, index, member) => {
+  const gold = prepared.gold.labels[rowId] === 'yes', right = index % 20 === 0 ? !gold : gold;
+  return right ? spread(index, member) : 1 - spread(index, member);
+};
+/** A better ensemble: the single champion call errs on 4% of rows, all three members together on 0.5%. */
+const promoteYes: YesFn = (prepared, rowId, index, member) => {
   const gold = prepared.gold.labels[rowId] === 'yes';
-  const confident = index % 20 === 0 ? !gold : gold;
-  const spread = [0.92, 0.85, 0.78, 0.97][(index + member) % 4]!;
-  return confident ? spread : 1 - spread;
-}
-function attemptsFor(base: HeldoutAttempt, prepared: Staged, split: string) {
+  const right = member === 0 ? index % 25 !== 0 : index % 200 !== 0;
+  return (right ? gold : !gold) ? spread(index, member) : 1 - spread(index, member);
+};
+/** Uninformative scores: the label carries no signal, so only an in-sample fit can look calibrated. */
+const noiseYes: YesFn = (_prepared, rowId, _index, member) => Number.parseInt(rowId.slice(8 * member, 8 * member + 6), 16) % 97 / 100 + 0.01;
+function attemptsFor(base: HeldoutAttempt, prepared: Staged, split: string, yes: YesFn = observedYes) {
   return prepared.corpus.rows.filter(row => row.split === split).flatMap((row, index) =>
     ['champion', 'member_1', 'member_2', 'member_3'].map((requestId, member) =>
-      synthetic(base, prepared, row.id, requestId, observedYes(prepared, row.id, index, member))));
+      synthetic(base, prepared, row.id, requestId, yes(prepared, row.id, index, member))));
+}
+const sealedAt = '2026-10-01T02:00:00.000Z', reviewedAt = '2026-10-01T03:00:00Z', accessAt = '2026-10-01T04:00:00.000Z';
+const evaluatedAt = Date.parse('2026-10-02T00:00:00Z');
+/** A full staged calibration phase from synthetic sealed attempts: review-bound approval, fit, operator review, registration. */
+async function stagedFlow(yes: YesFn = observedYes) {
+  const base = await receiptTemplate();
+  const review = developmentReview(staged);
+  const phaseApproval = approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' },
+    `roctinam calibration-phase approval citing development review ${heldoutDigest(review)}`);
+  const record = { schemaVersion: 'decision-heldout-calibration-phase/v1', study: 'D17', runId: 'd17-calibration-01',
+    corpusDigest: heldoutDigest(staged.corpus), preregistrationDigest: heldoutDigest(staged.preregistration),
+    approvalDigest: heldoutDigest(phaseApproval), sealedAt, rowIds: [], lineage: [], lineageDigest: pin } as const;
+  const calibration = attemptsFor(base, staged, 'calibration', yes);
+  const sealed = { bundle: { corpus: staged.corpus, preregistration: staged.preregistration, approval: phaseApproval },
+    source: 'injected-transport' as const, record: record as any, attempts: [...attemptsFor(base, staged, 'tuning', yes), ...calibration] };
+  const handoffInput = { sealed, prepared: staged, trustedApprovalDigest: heldoutDigest(phaseApproval),
+    trustedCalibrationPhaseRecordDigest: heldoutDigest(record), developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review) };
+  const observed = d17CalibrationHandoffFromSealed(handoffInput);
+  const calibrationReview = { ...observed.reviewTemplate, approved: true, reviewer: 'roctinam', approvalReference: 'offline-fixture-only', reviewedAt };
+  const registered = registerD17CalibrationFromHandoff(observed, calibrationReview, heldoutDigest(calibrationReview));
+  const context = { sealed, registered: { set: registered.set, artifacts: registered.artifacts, mappings: registered.mappings },
+    trustedCalibrationSetDigest: registered.calibrationSetDigest, calibrationReview, trustedCalibrationReviewDigest: heldoutDigest(calibrationReview),
+    developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review), testPhaseAccessAt: accessAt as string | null, nowEpochMs: evaluatedAt };
+  const testApproval = approval(staged, 'd17-test-01', registered.approval.calibration as HeldoutBundle['approval']['calibration']);
+  const input = { corpus: { ...staged.corpus, rows: staged.corpus.rows.filter(row => row.split === 'test') }, preregistration: staged.preregistration,
+    attempts: attemptsFor(base, staged, 'test', yes).map(attempt => ({ ...attempt, approvalDigest: heldoutDigest(testApproval) })),
+    gold: staged.gold, integrity: verifiedHold(), approvedCalibration: testApproval.calibration, calibrated: null };
+  return { base, review, phaseApproval, handoffInput, observed, calibrationReview, registered, context, input, calibration };
+}
+function verifiedHold(): QualificationIntegrityMetadata {
+  return { sample_n: 1200, uncertainty: { method: 'newcombe-10', levelBps: 9500 }, paired_baseline: { n: 1200 }, integrity_mode: 'locked',
+    fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'verified', trusted_score_source: 'locked-artifact-snapshot',
+    compromise_labels: [], weak_signal_reason: null, release_gate: { decision: 'HOLD', reasons: ['offline-control'] } };
 }
 
 describe('D17 staged D09 preparation', () => {
@@ -124,6 +169,8 @@ describe('D17 staged D09 preparation', () => {
     expect(diagnostic.preregistration.calibration).toEqual({ scope: 'uncalibrated-diagnostic', allowedModes: ['uncalibrated-diagnostic'] });
     expect(staged.preregistration.studyAnalysisDigest).toBe(heldoutDigest(staged.analysis));
     expect(staged.analysis).toMatchObject({ schemaVersion: 'decision-d17-analysis/v2', scope: 'staged-calibrated', calibration: D17_CALIBRATION });
+    expect(D17_CALIBRATION.qualificationMetrics).toEqual({ method: 'slice-stratified-k-fold-out-of-fold', folds: 5,
+      assignment: 'row-id-order-within-slice-modulo-folds', finalMapping: 'full-calibration-split' });
     expect(diagnostic.analysis.schemaVersion).toBe('decision-d17-analysis/v1');
     expect(staged.approvalTemplate).toMatchObject({ approved: false, calibration: { mode: 'staged', phase: 'calibration' },
       preregistrationDigest: heldoutDigest(staged.preregistration), budget: { calls: 18000, tokens: 72000000, usd: 8 } });
@@ -145,6 +192,21 @@ describe('D17 staged D09 preparation', () => {
     expect(() => validateHeldoutBundle({ corpus: diagnostic.corpus, preregistration: diagnostic.preregistration, approval: crossed },
       heldoutDigest(crossed))).toThrow('calibration-scope');
   });
+  it('E bounds both phases from real request sizes before any spend', async () => {
+    const plan = await d17TwoPhasePlan(staged.corpus, staged.preregistration,
+      { ...staged.approvalTemplate, region: 'offline-planning', credentialRef: 'offline-planning' } as any);
+    expect(plan.calibration).toMatchObject({ rows: 600, firstAttempts: 2400, maximumAttempts: 4800 });
+    expect(plan.test).toMatchObject({ rows: 1200, firstAttempts: 4800, maximumAttempts: 9600 });
+    expect(plan.combined.maximumAttempts).toBe(14400);
+    expect(plan.combined.reservedTokens).toBeLessThan(57_600_000);
+    const template = { ...staged.approvalTemplate, priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 } as any;
+    // The 18,000-call budget leaves exactly the 14,400-call worst case at the 80% stop: no call headroom.
+    expect(d17TwoPhaseFit(plan, d17FreshAllowance(template))).toMatchObject({ fits: true, headroom: { calls: 0 } });
+    expect(d17TwoPhaseFit(plan, d17FreshAllowance({ ...template, priorStudySpendUsd: 0.099052 })).fits).toBe(true);
+    expect(d17TwoPhaseFit(plan, d17FreshAllowance({ ...template, budget: { ...template.budget, calls: 17999 } })).fits).toBe(false);
+    // The ledger in which 904 diagnostic calls were already charged cannot hold the two-phase worst case.
+    expect(d17TwoPhaseFit(plan, { ...d17FreshAllowance(template), calls: 14400 - 904 })).toMatchObject({ fits: false, headroom: { calls: -904 } });
+  }, 120_000);
 });
 
 describe('D17 isotonic calibration', () => {
@@ -186,43 +248,62 @@ describe('D17 development review precondition', () => {
     }
     expect(() => validateD17DevelopmentReview(staged, review, digest, { before: '2026-10-01T00:00:00Z' })).toThrow('development-review-time');
   });
-  it('assembles a collector bundle only with a completed development review', async () => {
+  it('G/E assembles a bundle only with a completed review that the approval cites, and a test bundle only with a qualified set', async () => {
     const dir = await root(), preparedDir = join(dir, 'prepared');
     const { writeHeldoutFile } = await import('../../../src/decision/heldout/journal.js');
     const { mkdir } = await import('node:fs/promises'); await mkdir(preparedDir);
     for (const name of ['corpus', 'preregistration', 'gold'] as const) await writeHeldoutFile(join(preparedDir, `${name}.json`), staged[name]);
-    const form = approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' });
-    await writeFile(join(dir, 'approval.json'), JSON.stringify(form));
-    const review = developmentReview(staged);
-    await writeFile(join(dir, 'review.json'), JSON.stringify(staged.reviewTemplate));
-    await expect(runD17Bundle([preparedDir, join(dir, 'approval.json'), join(dir, 'review.json'),
-      heldoutDigest(staged.reviewTemplate), join(dir, 'refused.json')])).rejects.toThrow('development-review');
-    await expect(readFile(join(dir, 'refused.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const review = developmentReview(staged), reviewDigest = heldoutDigest(review);
+    const uncited = approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' });
+    const fullBudget = { budget: { calls: 18000, tokens: 72000000, usd: 8 } };
+    const uncitedFull = { ...uncited, ...fullBudget };
+    const cited = { ...approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' }, `approval citing ${reviewDigest}`), ...fullBudget };
+    const tooSmall = { ...cited, budget: { ...cited.budget, calls: 17999 } };
+    for (const [name, value] of [['uncited', uncitedFull], ['cited', cited], ['small', tooSmall]] as const) {
+      await writeFile(join(dir, `${name}.json`), JSON.stringify(value));
+    }
+    await writeFile(join(dir, 'template.json'), JSON.stringify(staged.reviewTemplate));
     await writeFile(join(dir, 'review.json'), JSON.stringify(review));
-    expect(await runD17Bundle([preparedDir, join(dir, 'approval.json'), join(dir, 'review.json'), heldoutDigest(review), join(dir, 'bundle.json')]))
-      .toMatchObject({ providerCalls: 0, phase: 'calibration', approvalDigest: heldoutDigest(form), preregistrationDigest: heldoutDigest(staged.preregistration) });
-    const bundle = JSON.parse(await readFile(join(dir, 'bundle.json'), 'utf8'));
-    expect(Object.keys(bundle).sort()).toEqual(['approval', 'corpus', 'preregistration']);
+    const bundle = (approvalFile: string, reviewFile = 'review.json', digest = reviewDigest, out = 'refused.json', extra: string[] = []) =>
+      runD17Bundle([preparedDir, join(dir, approvalFile), join(dir, reviewFile), digest, join(dir, out), ...extra]);
+    await expect(bundle('cited.json', 'template.json', heldoutDigest(staged.reviewTemplate))).rejects.toThrow('development-review');
+    await expect(bundle('uncited.json')).rejects.toThrow('development-review-not-bound');
+    await expect(bundle('small.json')).rejects.toThrow('two-phase');
+    await expect(readFile(join(dir, 'refused.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const accepted = await bundle('cited.json', 'review.json', reviewDigest, 'bundle.json');
+    expect(accepted).toMatchObject({ providerCalls: 0, phase: 'calibration', approvalDigest: heldoutDigest(cited),
+      twoPhaseFreshLedger: { fits: true } });
+    expect(Object.keys(JSON.parse(await readFile(join(dir, 'bundle.json'), 'utf8'))).sort()).toEqual(['approval', 'corpus', 'preregistration']);
+    // A test-phase bundle needs the calibration context (sealed run, registered set and calibration review).
+    const testForm = approval(staged, 'd17-test-01', { mode: 'staged', phase: 'test', calibrationArtifactDigest: pin,
+      calibrationPhaseRecordDigest: pin, priorApprovalDigest: heldoutDigest(cited) });
+    await writeFile(join(dir, 'test.json'), JSON.stringify(testForm));
+    await expect(bundle('test.json')).rejects.toThrow('usage');
+    await writeFile(join(dir, 'context.json'), JSON.stringify({ calibrationRun: dir, calibrationDir: dir, calibrationReviewFile: join(dir, 'review.json'),
+      trustedCalibrationReviewDigest: pin }));
+    await expect(bundle('test.json', 'review.json', reviewDigest, 'refused.json', [join(dir, 'context.json')])).rejects.toThrow();
+    await expect(readFile(join(dir, 'refused.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 120_000);
 });
 
 describe('D17 staged calibration phase through the shared collector', () => {
-  it('collects only calibration-phase rows, seals the phase and refuses unsupported or unreproduced fits', async () => {
+  it('collects only calibration-phase rows, seals the phase and refuses unsupported, unbound or unreproduced fits', async () => {
     const dir = await root(), small = reduced(staged);
+    const review = developmentReview(small, '2026-10-01T00:30:00Z');
     const bundle = { corpus: small.corpus, preregistration: small.preregistration,
-      approval: approval(small, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' }) } as HeldoutBundle;
+      approval: approval(small, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' }, `cites ${heldoutDigest(review)}`) } as HeldoutBundle;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
+    const host = { resolveCredential: async () => new TextEncoder().encode('fake-d17-reader'), dispose: () => {} };
     let time = Date.parse('2026-10-01T01:00:00Z');
+    const clock = { now: () => time, sleep: async (ms: number) => { time += ms; } };
     const summary = await collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: heldoutDigest(bundle.approval), artifactRoot: dir,
-      sourceRoot: process.cwd(), offline: { transport, host: { resolveCredential: async () => new TextEncoder().encode('fake-d17-reader'), dispose: () => {} } },
-      now: () => time, sleep: async (ms: number) => { time += ms; } });
+      sourceRoot: process.cwd(), offline: { transport, host }, ...clock });
     if (summary.status === 'disabled') throw new Error('expected offline collection');
     expect(summary).toMatchObject({ status: 'complete', completedRows: 3 });
     expect(transport).toHaveBeenCalledTimes(12);
     const run = join(heldoutRunsRoot(dir), 'd17-calibration-01');
     const sealed = await readHeldoutCalibrationPhase(run, heldoutDigest(bundle.approval), summary.calibrationPhaseRecordDigest!);
     expect(sealed.attempts.every(attempt => small.corpus.rows.find(row => row.id === attempt.rowId)!.split !== 'test')).toBe(true);
-    const review = developmentReview(small, '2026-10-01T00:30:00Z');
     const input = { sealed, prepared: small, trustedApprovalDigest: heldoutDigest(bundle.approval),
       trustedCalibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest!, developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review) };
     // Two calibration rows cannot meet the preregistered 380-row support; nothing is fitted.
@@ -234,6 +315,10 @@ describe('D17 staged calibration phase through the shared collector', () => {
     const late = developmentReview(small, '2026-10-02T00:00:00Z');
     expect(() => d17CalibrationHandoffFromSealed({ ...input, developmentReview: late, trustedDevelopmentReviewDigest: heldoutDigest(late) }))
       .toThrow('development-review-time');
+    // G: a review completed in time but not cited by the approval that authorized the spend is refused.
+    const other = developmentReview(small, '2026-10-01T00:40:00Z');
+    expect(() => d17CalibrationHandoffFromSealed({ ...input, developmentReview: other, trustedDevelopmentReviewDigest: heldoutDigest(other) }))
+      .toThrow('development-review-not-bound');
     // The CLI regenerates the study from the sealed seed; a reduced corpus never reproduces it.
     await writeFile(join(dir, 'review.json'), JSON.stringify(review));
     await expect(runD17Calibration('--fit-calibration', [run, heldoutDigest(bundle.approval), summary.calibrationPhaseRecordDigest!,
@@ -244,113 +329,155 @@ describe('D17 staged calibration phase through the shared collector', () => {
       calibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest!, priorApprovalDigest: heldoutDigest(bundle.approval) }) } as HeldoutBundle;
     time += 60_000;
     const tested = await collectHeldoutStudy({ enabled: true, bundle: testBundle, trustedApprovalDigest: heldoutDigest(testBundle.approval), artifactRoot: dir,
-      sourceRoot: process.cwd(), offline: { transport, host: { resolveCredential: async () => new TextEncoder().encode('fake-d17-reader'), dispose: () => {} } },
-      now: () => time, sleep: async (ms: number) => { time += ms; } });
+      sourceRoot: process.cwd(), offline: { transport, host }, ...clock });
     if (tested.status === 'disabled') throw new Error('expected offline collection');
     expect(tested).toMatchObject({ status: 'complete', completedRows: 1 }); expect(transport).toHaveBeenCalledTimes(16);
     const integrity: QualificationIntegrityMetadata = { sample_n: 1, uncertainty: null, paired_baseline: null, integrity_mode: 'standard',
       fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'not-assessed', trusted_score_source: 'local-unverified',
       compromise_labels: [], weak_signal_reason: 'offline-control', release_gate: { decision: 'HOLD', reasons: ['offline-control'] } };
-    const seen: any[] = [];
-    await expect(scoreHeldoutStudy({ run: join(heldoutRunsRoot(dir), 'd17-test-01'), trustedEvidenceDigest: tested.evidenceDigest,
+    const scoring = { run: join(heldoutRunsRoot(dir), 'd17-test-01'), trustedEvidenceDigest: tested.evidenceDigest,
       trustedApprovalDigest: heldoutDigest(testBundle.approval), gold: small.gold, integrity, trustedIntegrityDigest: heldoutDigest(integrity),
-      moduleDigest: small.preregistration.scorerDigest, module: { prepare: async () => small, score: async scored => {
-        seen.push(scored);
-        return scoreD17StagedStudy(scored, small, { set: {}, trustedCalibrationSetDigest: pin, artifacts: {} as any, mappings: {} as any,
-          developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review), nowEpochMs: time });
-      } } })).rejects.toThrow('calibration-set');
+      moduleDigest: small.preregistration.scorerDigest };
+    const seen: any[] = [];
+    await expect(scoreHeldoutStudy({ ...scoring, module: { prepare: async () => small, score: async scored => {
+      seen.push(scored);
+      return scoreD17StagedStudy(scored, small, { sealed, registered: { set: {}, artifacts: {} as any, mappings: {} as any },
+        trustedCalibrationSetDigest: pin, calibrationReview: {}, trustedCalibrationReviewDigest: pin, developmentReview: review,
+        trustedDevelopmentReviewDigest: heldoutDigest(review), testPhaseAccessAt: accessAt, nowEpochMs: time });
+    } } })).rejects.toThrow('calibration');
     expect(seen[0]).toMatchObject({ calibrated: null, approvedCalibration: { mode: 'staged', phase: 'test' } });
     expect(seen[0].corpus.rows.map((row: any) => row.split)).toEqual(['test']);
+    // F: the wrapper reflects a staged scorer's validation only when it names the exact approved binding.
+    const claim = (calibrationSetDigest: string) => ({ calibrated: true, d09Qualified: true, calibratedGate: true, decision: 'HOLD',
+      calibration: { mode: 'staged-test', calibrationSetDigest } });
+    expect(await scoreHeldoutStudy({ ...scoring, module: { prepare: async () => small, score: async () => claim(pin) } }))
+      .toMatchObject({ calibrated: true, d09Qualified: true, calibratedGate: true, calibrationArtifactValidation: 'performed-by-study-scorer', decision: 'HOLD' });
+    expect(await scoreHeldoutStudy({ ...scoring, module: { prepare: async () => small, score: async () => claim(heldoutDigest('other')) } }))
+      .toMatchObject({ calibrated: null, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed' });
+    expect(await scoreHeldoutStudy({ ...scoring, module: { prepare: async () => small, score: async () => ({ decision: 'HOLD' }) } }))
+      .toMatchObject({ calibrated: null, d09Qualified: false, calibrationArtifactValidation: 'not-performed' });
+  }, 120_000);
+  it('G refuses a seed whose corpus already has diagnostic observations, in the collector and before spend', async () => {
+    const dir = await root(), small = reduced(staged);
+    const diagnosticSmall = { corpus: small.corpus, preregistration: { ...diagnostic.preregistration, corpusDigest: heldoutDigest(small.corpus) } };
+    const host = { resolveCredential: async () => new TextEncoder().encode('fake-d17-reader'), dispose: () => {} };
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
+    let time = Date.parse('2026-10-01T01:00:00Z');
+    const clock = { now: () => time, sleep: async (ms: number) => { time += ms; } };
+    const seen = { ...diagnosticSmall, approval: approval(diagnosticSmall, 'd17-diagnostic-01', { mode: 'uncalibrated-diagnostic' }) } as HeldoutBundle;
+    const first = await collectHeldoutStudy({ enabled: true, bundle: seen, trustedApprovalDigest: heldoutDigest(seen.approval), artifactRoot: dir,
+      sourceRoot: process.cwd(), offline: { transport, host }, ...clock });
+    expect(first).toMatchObject({ status: 'complete', completedRows: 4 });
+    const review = developmentReview(small);
+    const reused = { corpus: small.corpus, preregistration: small.preregistration,
+      approval: approval(small, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' }, `cites ${heldoutDigest(review)}`) } as HeldoutBundle;
+    await expect(collectHeldoutStudy({ enabled: true, bundle: reused, trustedApprovalDigest: heldoutDigest(reused.approval), artifactRoot: dir,
+      sourceRoot: process.cwd(), offline: { transport, host }, ...clock })).rejects.toThrow('changed-preregistration');
+    const scan = await scanHeldoutSpend(dir, 'D17');
+    expect(() => assertD17SeedUnused(scan.attempts, reused.approval)).toThrow('seed reused');
+    await writeFile(join(dir, 'bundle.json'), JSON.stringify(reused));
+    await expect(runD17PhaseDryRun([join(dir, 'bundle.json'), heldoutDigest(reused.approval), dir])).rejects.toThrow('seed reused');
   }, 120_000);
 });
 
 describe('D17 calibration fit, registration and calibrated test-phase scoring', () => {
-  const sealedAt = '2026-10-01T02:00:00.000Z', reviewedAt = '2026-10-01T03:00:00Z', evaluatedAt = Date.parse('2026-10-02T00:00:00Z');
-  async function handoff() {
-    const base = await receiptTemplate();
-    const calibration = attemptsFor(base, staged, 'calibration');
-    const phaseApproval = approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' });
-    const review = developmentReview(staged);
-    const record = { schemaVersion: 'decision-heldout-calibration-phase/v1', study: 'D17', runId: 'd17-calibration-01',
-      corpusDigest: heldoutDigest(staged.corpus), preregistrationDigest: heldoutDigest(staged.preregistration),
-      approvalDigest: heldoutDigest(phaseApproval), sealedAt, rowIds: [], lineage: [], lineageDigest: pin } as const;
-    const sealed = { bundle: { corpus: staged.corpus, preregistration: staged.preregistration, approval: phaseApproval },
-      source: 'injected-transport' as const, record: record as any, attempts: [...attemptsFor(base, staged, 'tuning'), ...calibration] };
-    const observed = d17CalibrationHandoffFromSealed({ sealed, prepared: staged, trustedApprovalDigest: heldoutDigest(phaseApproval),
-      trustedCalibrationPhaseRecordDigest: heldoutDigest(record), developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review) });
-    const calibrationReview = { ...observed.reviewTemplate, approved: true, reviewer: 'roctinam', approvalReference: 'offline-fixture-only', reviewedAt };
-    const registered = registerD17CalibrationFromHandoff(observed, calibrationReview, heldoutDigest(calibrationReview));
-    return { base, calibration, observed, registered, review, calibrationReview };
-  }
-  it('fits only calibration rows, emits observed artifacts and requires a reviewed, qualified registration', async () => {
-    const { base, calibration, observed, registered, calibrationReview } = await handoff();
+  it('fits only calibration rows from this study, gates on out-of-fold metrics and requires a reviewed, qualified registration', async () => {
+    const { base, calibration, observed, registered, calibrationReview } = await stagedFlow();
     // Tuning and test observations never change the fitted calibrators.
     expect(fitD17Calibration(staged, [...calibration, ...attemptsFor(base, staged, 'test').slice(0, 40)])).toEqual(observed.mappings);
     expect(() => fitD17Calibration(staged, attemptsFor(base, staged, 'tuning'))).toThrow('calibration-support');
+    // P6: attempts pinned to another study, corpus or preregistration are refused by the library fit itself.
+    for (const patch of [{ study: 'D29' }, { corpusDigest: pin }, { preregistrationDigest: pin }]) {
+      expect(() => fitD17Calibration(staged, calibration.map(attempt => ({ ...attempt, ...patch }) as HeldoutAttempt))).toThrow('attempt-membership');
+    }
     expect(observed.mappings.member).toMatchObject({ role: 'member', n: 1600, rows: 400, calibrator: { id: 'd17-single-call-isotonic' } });
     expect(observed.mappings.aggregate).toMatchObject({ role: 'aggregate', n: 400, rows: 400, calibrator: { id: 'd17-three-sample-mean-isotonic' } });
     for (const role of ['member', 'aggregate'] as const) {
-      const artifact = observed.artifacts[role];
+      const artifact = observed.artifacts[role], { qualification } = observed.mappings[role];
+      expect(qualification).toMatchObject({ method: 'slice-stratified-k-fold-out-of-fold', folds: 5 });
+      // D: the artifact gates on the out-of-fold metrics, not the in-sample ones.
+      expect(artifact.metrics).toEqual(qualification.outOfFold);
       expect(artifact).toMatchObject({ schemaVersion: 'decision-calibration-artifact/v1', approval: { state: 'observed', reference: null },
         effectiveAt: sealedAt, identity: { actualModel: 'jev-1.13.0', calibrator: { parametersDigest: heldoutDigest(observed.mappings[role]) } },
         metrics: { totalSamples: 400, perSliceSamples: 100 } });
       expect(() => qualifyD17Calibration(artifact, reviewedAt)).toThrow('calibration-unqualified');
       expect(registered.compatibility[role]).toMatchObject({ action: 'allow', state: 'exact' });
       expect(registered.artifacts[role].approval).toEqual({ state: 'approved', reference: 'offline-fixture-only' });
+      // C: the registry refuses an artifact before it takes effect, so a back-dated clock cannot qualify it.
+      expect(() => qualifyD17Calibration(registered.artifacts[role], '2026-10-01T01:00:00Z')).toThrow('calibration-unqualified');
     }
     expect(observed.approval).toMatchObject({ approved: false, runId: null, calibration: { mode: 'staged', phase: 'test',
       calibrationArtifactDigest: observed.calibrationSetDigest } });
     expect(registered.approval.calibration).toMatchObject({ calibrationArtifactDigest: heldoutDigest(registered.set) });
-    expect(registered.set.member.artifactDigest).toBe(registered.artifacts.member.digest);
     for (const changed of [{ ...calibrationReview, memberArtifactDigest: pin }, { ...calibrationReview, reviewedAt: '2026-09-30T00:00:00Z' },
       { ...calibrationReview, approved: null }]) {
       expect(() => registerD17CalibrationFromHandoff(observed, changed, heldoutDigest(changed))).toThrow('calibration-review');
     }
     expect(() => registerD17CalibrationFromHandoff(observed, calibrationReview, pin)).toThrow('calibration-review');
-    // Expired, unbounded or unapproved artifacts never qualify.
     expect(() => qualifyD17Calibration(registered.artifacts.member, '2026-12-01T00:00:00Z')).toThrow('calibration-unqualified');
     for (const patch of [{ selectiveRisk: 0.5 }, { totalSamples: 10 }, { confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.2 } } }]) {
       const { digest: _digest, ...payload } = structuredClone(registered.artifacts.member); Object.assign(payload.metrics, patch);
       expect(() => qualifyD17Calibration({ ...payload, digest: calibrationArtifactDigest(payload) }, reviewedAt)).toThrow('calibration-unqualified');
     }
   }, 120_000);
-  it('applies member and aggregate calibration, runs the native gates on calibrated measurements and supports AC7/AC14', async () => {
-    const { base, registered, review } = await handoff();
-    const testApproval = { ...approval(staged, 'd17-test-01', registered.approval.calibration as HeldoutBundle['approval']['calibration']) };
-    const attempts = attemptsFor(base, staged, 'test').map(attempt => ({ ...attempt, approvalDigest: heldoutDigest(testApproval) }));
-    const testCorpus = { ...staged.corpus, rows: staged.corpus.rows.filter(row => row.split === 'test') };
-    const integrity: QualificationIntegrityMetadata = { sample_n: 1200, uncertainty: { method: 'newcombe-10', levelBps: 9500 },
-      paired_baseline: { n: 1200 }, integrity_mode: 'locked', fresh_workspace_required: false, fresh_workspace_verified: false,
-      integrity_state: 'verified', trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [], weak_signal_reason: null,
-      release_gate: { decision: 'HOLD', reasons: ['offline-control'] } };
-    const context = { set: registered.set, trustedCalibrationSetDigest: heldoutDigest(registered.set), artifacts: registered.artifacts,
-      mappings: registered.mappings, developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review), nowEpochMs: evaluatedAt };
-    const input = { corpus: testCorpus, preregistration: staged.preregistration, attempts, gold: staged.gold, integrity,
-      approvedCalibration: testApproval.calibration, calibrated: null };
+  it('D out-of-fold metrics expose uninformative scores that an in-sample fit hides', async () => {
+    const base = await receiptTemplate();
+    const mappings = fitD17Calibration(staged, attemptsFor(base, staged, 'calibration', noiseYes));
+    for (const role of ['member', 'aggregate'] as const) {
+      const { inSample, outOfFold } = mappings[role].qualification;
+      expect(outOfFold.calibrationError).toBeGreaterThan(inSample.calibrationError);
+      expect(outOfFold.confidenceIntervals.selectiveRisk.upper).toBeGreaterThan(D17_CALIBRATION.profile.maximumSelectiveRisk);
+    }
+  }, 120_000);
+  it('B/C scores calibrated probabilities only for a set re-derived from the seal, at a clock after review and test access', async () => {
+    const { registered, context, input, base } = await stagedFlow();
     const report = await scoreD17StagedStudy(input, staged, context);
     expect(report).toMatchObject({ schemaVersion: 'decision-d17-study-report/v2', calibrated: true, d09Qualified: true, calibratedGate: true,
-      decision: 'HOLD', calibration: { mode: 'staged-test', calibrationSetDigest: heldoutDigest(registered.set),
+      decision: 'HOLD', calibrationReviewDigest: context.trustedCalibrationReviewDigest,
+      calibration: { mode: 'staged-test', calibrationSetDigest: heldoutDigest(registered.set),
         member: { artifactDigest: registered.artifacts.member.digest, compatibility: { action: 'allow' } },
         aggregate: { artifactDigest: registered.artifacts.aggregate.digest } }, gates: { source: 'd17-native-protocol', gateBinding: null } });
     expect(report.pairs).toHaveLength(1200);
     const row = staged.corpus.rows.find(item => item.split === 'test')!;
-    const rawChampion = observedYes(staged, row.id, 0, 0);
-    expect(report.pairs[0]!.champion.probability).toBe(applyD17Mapping(registered.mappings.member, rawChampion));
+    expect(report.pairs[0]!.champion.probability).toBe(applyD17Mapping(registered.mappings.member, observedYes(staged, row.id, 0, 0)));
     const rawMean = [1, 2, 3].reduce((sum, member) => sum + observedYes(staged, row.id, 0, member), 0) / 3;
     expect(report.pairs[0]!.challenger.probability).toBe(applyD17Mapping(registered.mappings.aggregate, rawMean));
     expect(report.uncalibratedStatistics.sampleN).toBe(1200);
-    expect(report.statistics.pairedDeltas.map(delta => delta.metric)).toEqual(['quality', 'calibration', 'risk-coverage', 'abstention',
-      'latency', 'tokens', 'cost', 'slice']);
     expect(report.calibrationDiagnostics.calibrated).toBe(true);
     expect(() => validateD17Artifact('reportV2', { ...report, decision: 'PROMOTE' })).toThrow('invalid reportV2');
-    expect(await scoreD17StagedStudy({ ...input, integrity: { ...integrity, release_gate: { decision: 'ROLLBACK', reasons: ['control'] } } }, staged, context))
+    expect(await scoreD17StagedStudy({ ...input, integrity: { ...input.integrity, release_gate: { decision: 'ROLLBACK', reasons: ['control'] } } }, staged, context))
       .toMatchObject({ decision: 'ROLLBACK' });
-    // The approved binding, each artifact, the mapping, the review and the scoring clock are all enforced.
+    // P1: mappings fitted on TEST observations, with artifacts hand-set to approved, never score.
+    const testAttempts = d17AttemptsByRow(attemptsFor(base, staged, 'test'));
+    const forged = (role: 'member' | 'aggregate') => {
+      const samples = staged.corpus.rows.filter(item => item.split === 'test').flatMap(item => {
+        const raw = d17RawProbabilities(testAttempts.get(item.id) ?? [], item), label = Number(staged.gold.labels[item.id] === 'yes') as 0 | 1;
+        return role === 'member' ? [raw.champion, ...raw.members].map(score => ({ score: score!, label })) : [{ score: raw.mean!, label }];
+      });
+      const mapping = { ...registered.mappings[role], blocks: fitD17Isotonic(samples), n: samples.length };
+      const { digest: _digest, ...payload } = structuredClone(registered.artifacts[role]);
+      payload.identity.calibrator.parametersDigest = heldoutDigest(mapping);
+      return { mapping, artifact: { ...payload, digest: calibrationArtifactDigest(payload) } };
+    };
+    const member = forged('member'), aggregate = forged('aggregate');
+    const forgedSet = { ...registered.set, member: { artifactId: member.artifact.id, artifactDigest: member.artifact.digest, mappingDigest: heldoutDigest(member.mapping) },
+      aggregate: { artifactId: aggregate.artifact.id, artifactDigest: aggregate.artifact.digest, mappingDigest: heldoutDigest(aggregate.mapping) } };
+    const forgedCalibration = { ...input.approvedCalibration, calibrationArtifactDigest: heldoutDigest(forgedSet) };
+    await expect(scoreD17StagedStudy({ ...input, approvedCalibration: forgedCalibration }, staged, { ...context,
+      trustedCalibrationSetDigest: heldoutDigest(forgedSet), registered: { set: forgedSet, artifacts: { member: member.artifact, aggregate: aggregate.artifact },
+        mappings: { member: member.mapping, aggregate: aggregate.mapping } } })).rejects.toThrow('calibration-set');
+    // Registered files that differ from the re-derivation (even with the honest set digest) are refused.
+    await expect(scoreD17StagedStudy(input, staged, { ...context, registered: { ...context.registered,
+      mappings: { ...registered.mappings, member: member.mapping } } })).rejects.toThrow('calibration-registered-mismatch');
     const refusals: Array<[Partial<typeof context>, string]> = [
       [{ trustedCalibrationSetDigest: pin }, 'calibration-set'],
-      [{ mappings: { ...registered.mappings, member: { ...registered.mappings.member, n: 1 } } }, 'mapping-pin'],
-      [{ artifacts: { ...registered.artifacts, aggregate: registered.artifacts.member } }, 'calibration-artifact'],
+      [{ trustedCalibrationReviewDigest: pin }, 'calibration-review'],
+      [{ calibrationReview: { ...context.calibrationReview, approvalReference: 'changed' } }, 'calibration-review'],
+      // P2: a clock before the calibration review, or before the recorded first test access, is refused.
+      [{ nowEpochMs: Date.parse(sealedAt) + 60_000 }, 'scoring-clock'],
+      [{ nowEpochMs: Date.parse(reviewedAt) + 60_000 }, 'scoring-clock'],
       [{ nowEpochMs: Date.parse('2026-12-01T00:00:00Z') }, 'calibration-unqualified'],
+      [{ testPhaseAccessAt: null }, 'staged test access'],
       [{ developmentReview: staged.reviewTemplate, trustedDevelopmentReviewDigest: heldoutDigest(staged.reviewTemplate) }, 'development-review'],
     ];
     for (const [patch, reason] of refusals) await expect(scoreD17StagedStudy(input, staged, { ...context, ...patch })).rejects.toThrow(reason);
@@ -358,29 +485,90 @@ describe('D17 calibration fit, registration and calibrated test-phase scoring', 
     await expect(scoreD17StagedStudy({ ...input, corpus: staged.corpus }, staged, context)).rejects.toThrow('frozen scoring pins');
     await expect(scoreD17StagedStudy({ ...input, approvedCalibration: { mode: 'staged', phase: 'calibration' } }, staged, context))
       .rejects.toThrow('approved-calibration');
-    // The diagnostic scorer still refuses any calibrated binding.
-    await expect(scoreD17Study({ ...input, corpus: staged.corpus, approvedCalibration: testApproval.calibration, calibrated: false } as any, staged as any))
+    await expect(scoreD17Study({ ...input, corpus: staged.corpus, calibrated: false } as any, staged as any))
       .rejects.toThrow('D17 uncalibrated diagnostic scope');
+  }, 300_000);
+});
 
-    // AC7/AC14: a real champion/challenger record citing both D09 artifacts, bound into anchored integrity metadata.
-    const operator = { alias: 'd17-offline-alias', aliasRevision: 1, eligibilityId: 'd17-eligibility-not-issued',
-      integrityReportId: 'd17-native-integrity-offline', approvalReference: 'offline-fixture-only', approvedAt: '2026-10-02T00:00:00Z',
-      holdoutAccessedAt: '2026-10-01T04:00:00Z' };
-    const native = await d17NativeHandoff({ report, trustedReportDigest: heldoutDigest(report), prepared: staged, artifacts: registered.artifacts, operator });
-    expect(native.record.champion.calibration).toEqual({ artifactId: registered.artifacts.member.id, artifactDigest: registered.artifacts.member.digest });
-    expect(native.record.challenger.calibration).toEqual({ artifactId: registered.artifacts.aggregate.id, artifactDigest: registered.artifacts.aggregate.digest });
-    const anchored = { ...integrity, paired_baseline: native.pairedBaseline };
-    const record = { ...native.record, evaluationIntegrityReport: { ...native.record.evaluationIntegrityReport, digest: heldoutDigest(anchored) } };
-    const nativeInput = { report, prepared: staged, record, integrity: anchored, trustedIntegrityDigest: heldoutDigest(anchored), trustedReportDigest: heldoutDigest(report) };
-    const nativeReport = await buildD17NativeReport(nativeInput);
-    expect(() => validateEnsembleIntegrityReport(nativeReport)).not.toThrow();
-    expect(nativeReport.decision).toBe('HOLD'); expect(nativeReport.findings).toContain('d09-eligibility-missing');
-    expect(nativeReport.pairedDeltas.every(delta => delta.pairs === 1200)).toBe(true);
-    const uncited = structuredClone(record); uncited.challenger.calibration = { artifactId: registered.artifacts.member.id, artifactDigest: registered.artifacts.member.digest };
-    await expect(buildD17NativeReport({ ...nativeInput, record: uncited })).rejects.toThrow('native calibration pins');
-    await expect(d17NativeHandoff({ report, trustedReportDigest: pin, prepared: staged, artifacts: registered.artifacts, operator })).rejects.toThrow('native report pin');
-    // An unregistered registry never resolves an observed artifact.
-    expect(new CalibrationRegistry().artifactHistory()).toEqual([]);
+describe('D17 AC7/AC14 native record and the D09 promotion route', () => {
+  const operator = { alias: 'd17-offline-alias', aliasRevision: 1, eligibilityId: 'd17-eligibility-offline',
+    integrityReportId: 'd17-native-integrity-offline', approvalReference: 'offline-fixture-only', approvedAt: '2026-10-02T00:00:00Z',
+    holdoutAccessedAt: accessAt };
+  /** Scores the flow and returns everything a promotion needs; `pieces` removes one prerequisite at a time. */
+  async function promotion(yes: YesFn, pieces: { tradeoff?: boolean; eligibility?: boolean } = {}) {
+    const flow = await stagedFlow(yes);
+    const report = await scoreD17StagedStudy(flow.input, staged, flow.context);
+    const handoff = await d17NativeHandoff({ report, trustedReportDigest: heldoutDigest(report), prepared: staged, artifacts: flow.registered.artifacts, operator });
+    const passed = report.pairs.filter(pair => pair.challenger.correct).length;
+    const base = buildIntegrityMetadata({ mode: 'locked', freshWorkspaceRequired: false, freshWorkspaceVerified: false, changedArtifacts: [],
+      sampleN: report.statistics.sampleN, passedN: passed, overallScore: 100 * passed / report.statistics.sampleN }) as QualificationIntegrityMetadata;
+    const tradeoff = { schemaVersion: 'decision-d17-tradeoff-approval/v1', approved: true, reviewer: 'roctinam', reportDigest: heldoutDigest(report),
+      statisticsDigest: report.statisticsDigest, netSavingsMicros: report.statistics.netSavingsMicros,
+      acceptedAdditionalCostMicros: Math.max(0, -report.statistics.netSavingsMicros), qualityLowerBps: report.statistics.quality!.lowerBps,
+      approvalReference: 'offline-fixture-only', approvedAt: '2026-10-02T00:00:00Z' };
+    const withTradeoff = pieces.tradeoff !== false;
+    const integrity = d17NativeIntegrity({ base, pairedBaseline: handoff.pairedBaseline, report,
+      ...(withTradeoff ? { tradeoff, trustedTradeoffDigest: heldoutDigest(tradeoff) } : {}) });
+    const record = { ...handoff.record, evaluationIntegrityReport: { ...handoff.record.evaluationIntegrityReport, digest: heldoutDigest(integrity) } };
+    const registry = new CalibrationRegistry();
+    registry.observeAlias(operator.alias, flow.registered.artifacts.member.identity, '2026-10-02T00:00:00.000Z');
+    const eligibility = { id: operator.eligibilityId, alias: operator.alias, candidateIdentityDigest: record.challenger.identityDigest,
+      candidateActualModel: 'jev-1.13.0', evaluationIntegrityReport: { ...record.evaluationIntegrityReport } as { id: string; digest: `sha256:${string}` },
+      approvalReference: operator.approvalReference, rollbackTarget: { ...record.rollbackTarget }, eligible: true, reasons: [],
+      recordedAt: '2026-10-02T01:00:00.000Z' };
+    registry.recordPromotionEligibility(eligibility);
+    const nativeInput = { report, prepared: staged, record, integrity, trustedIntegrityDigest: heldoutDigest(integrity), trustedReportDigest: heldoutDigest(report),
+      ...(pieces.eligibility !== false ? { eligibility, registry } : {}),
+      ...(withTradeoff ? { tradeoff, trustedTradeoffDigest: heldoutDigest(tradeoff) } : {}) };
+    return { flow, report, integrity, record, registry, eligibility, nativeInput, tradeoff, base };
+  }
+  it('A promotes a fully qualified calibrated challenger only through D09 eligibility and promoteChampionChallenger', async () => {
+    const { report, integrity, record, registry, eligibility, nativeInput } = await promotion(promoteYes);
+    expect(report.decision).toBe('HOLD');
+    expect(report.gates.statisticalGate).toBe('pass'); expect(report.statistics.benefitSupported).toBe(true);
+    expect(integrity.release_gate.decision).toBe('PROMOTE');
+    expect(record.champion.calibration).toEqual({ artifactId: report.calibration.member.artifactId, artifactDigest: report.calibration.member.artifactDigest });
+    expect(record.challenger.calibration).toEqual({ artifactId: report.calibration.aggregate.artifactId, artifactDigest: report.calibration.aggregate.artifactDigest });
+    const native = await buildD17NativeReport(nativeInput);
+    expect(() => validateEnsembleIntegrityReport(native)).not.toThrow();
+    expect(native).toMatchObject({ decision: 'PROMOTE', upstreamDecision: 'PROMOTE', findings: [] });
+    const event = promoteChampionChallenger({ record, integrityReport: native, eligibility, gateway: registry, at: '2026-10-02T02:00:00.000Z' });
+    expect(event).toMatchObject({ kind: 'promoted', alias: operator.alias, actualIdentityDigest: record.challenger.identityDigest, revision: 2 });
+    // The eligibility must be D09's stored record, not a caller-supplied copy.
+    await expect(buildD17NativeReport({ ...nativeInput, eligibility: { ...eligibility, recordedAt: '2026-10-02T01:30:00.000Z' } })).rejects.toThrow('native eligibility');
+  }, 300_000);
+  it('A holds when any promotion prerequisite is missing, and the diagnostic v1 route stays refused', async () => {
+    // No anchored tradeoff approval: the locked-snapshot PROMOTE gate is held.
+    const noTradeoff = await promotion(promoteYes, { tradeoff: false });
+    expect(noTradeoff.base.release_gate.decision).toBe('PROMOTE');
+    expect(noTradeoff.integrity.release_gate).toMatchObject({ decision: 'HOLD' });
+    expect(noTradeoff.integrity.release_gate.reasons.join(' ')).toContain('no anchored extra-cost tradeoff approval');
+    const held = await buildD17NativeReport(noTradeoff.nativeInput);
+    expect(held.decision).toBe('HOLD');
+    expect(() => promoteChampionChallenger({ record: noTradeoff.record, integrityReport: held, eligibility: noTradeoff.eligibility,
+      gateway: noTradeoff.registry, at: '2026-10-02T02:00:00.000Z' })).toThrow('promotion requires');
+    // No D09 eligibility: HOLD with the eligibility finding.
+    const noEligibility = await promotion(promoteYes, { eligibility: false });
+    expect(await buildD17NativeReport(noEligibility.nativeInput)).toMatchObject({ decision: 'HOLD', findings: ['d09-eligibility-missing'] });
+    // A failing calibrated study gate (5% shared errors): HOLD even with a tradeoff approval.
+    const failing = await promotion(observedYes);
+    expect(failing.report.gates.statisticalGate).toBe('HOLD');
+    expect(failing.integrity.release_gate.decision).not.toBe('PROMOTE');
+    expect((await buildD17NativeReport(failing.nativeInput)).decision).not.toBe('PROMOTE');
+    // An upstream PROMOTE that does not carry the bound tradeoff is refused outright.
+    const unbound = { ...noTradeoff.base, paired_baseline: noTradeoff.integrity.paired_baseline };
+    await expect(buildD17NativeReport({ ...noTradeoff.nativeInput, integrity: unbound, trustedIntegrityDigest: heldoutDigest(unbound),
+      record: { ...noTradeoff.record, evaluationIntegrityReport: { ...noTradeoff.record.evaluationIntegrityReport, digest: heldoutDigest(unbound) } } }))
+      .rejects.toThrow('anchored HOLD or ROLLBACK');
+    // A tradeoff that under-accepts the measured extra cost is invalid.
+    const cheap = { ...noTradeoff.tradeoff, acceptedAdditionalCostMicros: 0 };
+    expect(() => d17NativeIntegrity({ base: noTradeoff.base, pairedBaseline: {}, report: noTradeoff.report, tradeoff: cheap,
+      trustedTradeoffDigest: heldoutDigest(cheap) })).toThrow('tradeoff approval');
+    const uncited = structuredClone(noTradeoff.record);
+    uncited.challenger.calibration = { ...uncited.champion.calibration! };
+    await expect(buildD17NativeReport({ ...noTradeoff.nativeInput, record: uncited })).rejects.toThrow('native calibration pins');
+    await expect(d17NativeHandoff({ report: noTradeoff.report, trustedReportDigest: pin, prepared: staged,
+      artifacts: noTradeoff.flow.registered.artifacts, operator })).rejects.toThrow('native report pin');
   }, 300_000);
 });
 
@@ -388,9 +576,11 @@ describe('D17 staged CLIs', () => {
   it('describe the staged modes and refuse open or mismatched configs before reading evidence', async () => {
     const help = spawnSync(process.execPath, ['tools/decision/d17-score.mjs', '--help'], { encoding: 'utf8', timeout: 20000 });
     expect(help.status, help.stderr).toBe(0);
-    for (const word of ['--staged', '--native-handoff', '--native', 'trustedCalibrationSetDigest', 'trustedDevelopmentReviewDigest']) expect(help.stdout).toContain(word);
+    for (const word of ['--staged', '--native-handoff', '--native', 'calibrationRun', 'trustedCalibrationReviewDigest', 'trustedTradeoffApprovalDigest']) {
+      expect(help.stdout).toContain(word);
+    }
     const studyHelp = spawnSync(process.execPath, ['tools/decision/d17-study.mjs', '--help'], { encoding: 'utf8', timeout: 20000 });
-    for (const word of ['--prepare-staged', '--bundle', '--fit-calibration', '--register-calibration']) expect(studyHelp.stdout).toContain(word);
+    for (const word of ['--prepare-staged', '--bundle', '--dry-run-phases', '--fit-calibration', '--register-calibration']) expect(studyHelp.stdout).toContain(word);
     const dir = await root(), config = join(dir, 'config.json');
     await writeFile(config, JSON.stringify({ run: dir, trustedEvidenceDigest: pin, trustedApprovalDigest: pin, goldFile: config,
       integrityFile: config, trustedIntegrityDigest: pin, unexpected: true }));
