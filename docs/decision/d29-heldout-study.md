@@ -1524,7 +1524,7 @@ contestable.
   `V8-22` and `V8-23` positive controls parse legacy rows with the legacy
   pools' own forms. Reviewer probes r1–r8 on the public seed and two fresh
   seeds give the same results as round 15: blind trees at most 0.659, verified
-  pair 0.575 / 0.580, and masked transfer models at most 0.672. The only
+  pair 0.575 / 0.580, and masked transfer models at most 0.675 (optimistic naive Bayes). The only
   movement is in the whole-text logistic word and naive Bayes models, by at
   most 0.008. Gold labels are unchanged (2000 of 2000 rows on two seeds).
 
