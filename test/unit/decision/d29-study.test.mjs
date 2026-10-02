@@ -17,6 +17,9 @@ import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js'
 import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
 import { evaluateSdlcEvidenceScreening, applySdlcScreeningToGateOutcome } from '../../../src/decision/sdlc-screening.js';
+import { freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT, ADMISSION_CLOCK } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 /** Project root fixture with an empty aiwg.config: default floors, explicit root. */
 const PROJECT_ROOT = (() => {
@@ -72,7 +75,7 @@ async function loadLegacyV2() {
 }
   for (const source of [prepared, collectable]) source.corpus.rows.forEach((row, i) => fixtureLabels.set(heldoutDigest(row.input.payload), source.gold.rows[i]));
   small = smallStudy();
-}, 180_000);
+}, PREPARE_HOOK_TIMEOUT);
 const dirs = [];
 afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const integrity = () => ({ sample_n: 1500, uncertainty: { method: 'wilson', levelBps: 9500 }, paired_baseline: { n: 1500 },
@@ -520,12 +523,19 @@ describe('D29 report thresholds', () => {
   });
 });
 
+/**
+ * Real per-request timeout of the offline fixture runs. It was 100 ms, so under
+ * CI load a single slow in-process evaluation timed out and stopped the run
+ * (STAGED-02 'stopped' on be84567ad). The timeout test fakes setTimeout and
+ * advances past it explicitly.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'd29-study-')); dirs.push(root); hostChecks.root = root;
   const prepared = collectable;
   const corpus = structuredClone(prepared.corpus);
   corpus.rows = SLICES.map(slice => corpus.rows.find(row => row.split === 'tuning' && row.slice === slice));
-  const preregistration = { ...prepared.preregistration, corpusDigest: heldoutDigest(corpus), requestTimeoutMs: 100 };
+  const preregistration = { ...prepared.preregistration, corpusDigest: heldoutDigest(corpus), requestTimeoutMs: REQUEST_TIMEOUT_MS };
   const approval = { ...structuredClone(prepared.approval), approved: true, runId: 'd29-offline', reviewer: 'offline-fixture',
     approvalReference: 'fixture-only', sourceCommit: 'a'.repeat(40), exactHeadCi: 'fixture-only', stagingWorkspace: 'fixture',
     region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev', credentialResolverDigest: heldoutDigest('fixture'),
@@ -624,7 +634,7 @@ describe('D29 collector integration', () => {
       const bundle = structuredClone(c.bundle); bundle.approval.calibration = calibration;
       expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).toThrow('calibration-scope');
     }
-  }, 5000);
+  }, 60_000);
   it('STAGED-03 reconstructs the sealed phase, fits only calibration, and requires reviewed qualification before registration', async () => {
     const { prepareCalibrationHandoff, calibrationHandoffFromSealed, registerCalibrationHandoffFromPrepared,
       qualifyD29Calibration } = await import('../../../tools/decision/studies/d29-calibration.mjs');
@@ -727,12 +737,12 @@ describe('D29 collector integration', () => {
   it.each(['budget', 'rejection', 'timeout', 'cancel'])('AC8/9 retains completed observations on %s and reserves before dispatch', async kind => {
     const c = await setup(); let calls = 0; const controller = new AbortController();
     if (kind === 'budget') c.bundle.approval.budget.calls = 5;
-    if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', ...ADMISSION_CLOCK] });
     const transport = vi.fn(async (_url, init) => {
       if (++calls <= 3 || kind === 'budget') return response(init);
       if (kind === 'rejection') throw new Error('synthetic dispatch rejection');
       if (kind === 'cancel') controller.abort();
-      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(101);
+      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
       return new Promise((_resolve, reject) => {
         if (init.signal.aborted) reject(new Error('aborted'));
         else init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });

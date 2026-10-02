@@ -6,6 +6,9 @@ import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.js';
 import { d29PassageBaselineV2 } from '../../../src/decision/heldout/d29-passage-baseline-v2.js';
 import { definitions, oracle } from '../../../tools/decision/studies/d29.mjs';
+import { freezeAdmissionClock } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 const current = definitions();
 const procedure = [

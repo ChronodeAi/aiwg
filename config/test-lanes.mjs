@@ -24,3 +24,16 @@ export const nodeFiles = [
   'test/contract/site-manifest-release-dispatch.test.mjs',
   'test/contract/socket-post-publish-workflow.test.mjs',
 ];
+// Heavy D29 suites: multi-seed structure scans, positive controls, repeated
+// audits and full-corpus reproductions. They run in their own CI job
+// (test:d29-slow) so they never push the shared test:ci step past its cap;
+// test/unit/decision/d29-synthetic-v8-smoke.test.mjs keeps fast single-seed
+// coverage in the default lane.
+export const d29SlowFiles = [
+  'test/unit/decision/d29-synthetic-v8.test.mjs',
+  'test/unit/decision/d29-study.test.mjs',
+  'test/unit/decision/d29-synthetic-v6.test.mjs',
+  'test/unit/decision/d29-synthetic-v7.test.mjs',
+  'test/unit/decision/d29-gates-regression.test.mjs',
+  'test/unit/decision/d29-v8-review.test.mjs',
+];

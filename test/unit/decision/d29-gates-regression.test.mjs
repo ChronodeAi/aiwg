@@ -4,6 +4,9 @@ import { prepare, prepareV7, dryRun, dryRunV7 } from '../../../tools/decision/st
 import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import { evaluateSdlcScreeningPreregistration } from '../../../src/decision/sdlc-screening.js';
 import { preregistration, heldoutRecords, anchored, HELDOUT_NOW } from './sdlc-screening-fixtures.ts';
+import { freezeAdmissionClock } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 const header = async version => JSON.parse(await readFile(new URL(
   `../../fixtures/decision/d29-synthetic-${version}/corpus.json`, import.meta.url), 'utf8'));

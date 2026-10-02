@@ -4,9 +4,12 @@ import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.js';
 import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import { shortcutAudit } from '../../../tools/decision/studies/d29-shortcuts.mjs';
 import { prepare, dryRun, validateStudyArtifact, oracle } from '../../../tools/decision/studies/d29.mjs';
+import { freezeAdmissionClock, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 let prepared;
-beforeAll(async () => { prepared = await prepare('d29-study-v6'); });
+beforeAll(async () => { prepared = await prepare('d29-study-v6'); }, PREPARE_HOOK_TIMEOUT);
 
 const rows = split => Array.from({ length: split === 'test' ? 1500 : 500 }, (_, i) => {
   const row = d29WorldV6('d29-study-v6', i + (split === 'test' ? 500 : 0));
@@ -70,7 +73,7 @@ describe('D29 v6 balanced inventory records', () => {
     expect(report.modelLeakage.maximumBalancedAccuracy).toBeLessThan(0.85);
     const forged = structuredClone(report); forged.targets[0].maximumClaimRelativeBalancedAccuracy = null;
     expect(() => validateStudyArtifact(forged)).toThrow('study-schema');
-  }, 9000);
+  }, 120_000);
   it('V6-04 reproduces closed small artifacts and header-pinned public fixtures without provider observations', async () => {
     // v6 commits only small artifacts plus digest pins: corpus/gold fixtures are slim headers, and
     // regenerated rows must reproduce the pinned historical digests recorded in those headers.
@@ -112,6 +115,6 @@ describe('D29 v6 balanced inventory records', () => {
     expect(report.baseline.test.falseReady.events).toBe(300);
     expect(report.passageBaselineV1.test.n).toBe(1500); expect(report.secondaryBaseline.test.n).toBe(1500);
     expect(report.shortcutAudit.passed).toBe(true); expect(report.publicTestShortcutAudit.passed).toBe(true);
-  }, 9000);
+  }, 120_000);
 
 });

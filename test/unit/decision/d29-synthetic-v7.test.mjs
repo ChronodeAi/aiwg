@@ -7,12 +7,15 @@ import { d29PassageBaselineV3 } from '../../../src/decision/heldout/d29-passage-
 import { heldoutDigest, validateHeldoutBundle } from '../../../src/decision/heldout/contract.js';
 import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v7.mjs';
 import { prepareV7, dryRunV7, validateStudyArtifact, oracle, studyModule } from '../../../tools/decision/studies/d29.mjs';
+import { freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 let prepared, dry;
 beforeAll(async () => {
   prepared = await prepareV7('d29-study-v7');
   dry = await dryRunV7(prepared);
-}, 30000);
+}, PREPARE_HOOK_TIMEOUT);
 
 const words = text => new Set((text.toLowerCase().match(/[a-z]+/g) ?? []).filter(word => word.length > 2));
 const poolText = pool => [...pool.injections, ...pool.tasks, ...pool.roles, ...pool.timings, ...pool.scoped,
@@ -142,7 +145,7 @@ describe('D29 v7 held-out wording pools', () => {
     // Unparsed test wording routes to REVIEW, so the primary misses ready gold honestly and never false-readies test rows.
     expect(testV3.falseReady).toBe(0);
     expect(testV3.nonReady).toBe(1200);
-  }, 15000);
+  }, 120_000);
   it('V7-05 gates every train-learned rule family on held-out folds and the test split', async () => {
     const report = shortcutAuditV7(prepared.corpus, prepared.gold);
     expect(report.passed).toBe(true);
@@ -179,7 +182,7 @@ describe('D29 v7 held-out wording pools', () => {
     expect(caught.targets.find(target => target.target === 'injection').maximumSingleBalancedAccuracy).toBeGreaterThan(0.75);
     const forged = structuredClone(report); forged.heldoutTest[0].single = null;
     expect(() => validateStudyArtifact(forged)).toThrow('study-schema');
-  }, 15000);
+  }, 120_000);
   it('V7-06 reproduces closed v7 artifacts and zero-call spend without provider observations', async () => {
     // v7 commits only small artifacts plus digest pins: no full corpus/gold fixture exists by design.
     for (const name of ['analysis', 'preregistration', 'approval', 'reviews']) {
@@ -201,7 +204,7 @@ describe('D29 v7 held-out wording pools', () => {
       expect(() => validateStudyArtifact(artifact)).not.toThrow();
       expect(() => validateStudyArtifact({ ...artifact, forged: true })).toThrow('study-schema');
     }
-  }, 15000);
+  }, 120_000);
   it('V7-07 covers every variant family and train injection phrasing in development review', () => {
     const development = new Set(prepared.reviews.assessments.filter(item => item.phase === 'development').map(item => item.id));
     expect(development.size).toBe(50);
@@ -262,13 +265,13 @@ describe('D29 v7 held-out wording pools', () => {
   it('V7-09 leaves existing decision behavior byte-identical when v7 stays unused', async () => {
     const { prepare } = studyModule(null);
     // v6 seeds still prepare through the frozen v6 pipeline.
-    const frozen = await prepare('d29-study-v6');
+    const frozen = await preparedOnce('d29-study-v6', () => prepare('d29-study-v6'));
     expect(frozen.analysis.schemaVersion).toBe('decision-d29-analysis/v6');
     expect(frozen.gold.schemaVersion).toBe('decision-d29-gold/v6');
     expect(frozen.corpus.rows.every(row => row.localOutcome.passageBaselineV3 === undefined)).toBe(true);
     // The v7 seed prepares through the v7 pipeline only.
-    const seventh = await prepare('d29-study-v7');
+    const seventh = await preparedOnce('d29-study-v7', () => prepare('d29-study-v7'));
     expect(seventh.analysis.schemaVersion).toBe('decision-d29-analysis/v6');
     expect(heldoutDigest(seventh.corpus)).toBe(heldoutDigest(prepared.corpus));
-  }, 15000);
+  }, 120_000);
 });

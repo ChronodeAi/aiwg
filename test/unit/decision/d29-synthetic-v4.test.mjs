@@ -5,6 +5,9 @@ import { generateHeldoutRow, d29WorldV4, D29_V4_VARIANTS, D29_V4_INJECTIONS, hel
 import { shortcutAudit } from '../../../tools/decision/studies/d29-shortcuts.mjs';
 import { heldoutDigest, heldoutExecution, heldoutRequest } from '../../../src/decision/heldout/contract.js';
 import { projectDecisionState, partitionProjectedState } from '../../../src/decision/projection.js';
+import { freezeAdmissionClock, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 let prepared;
 beforeAll(async () => {
@@ -33,7 +36,7 @@ beforeAll(async () => {
   const small = Object.fromEntries(await Promise.all(['analysis', 'reviews', 'preregistration', 'approval'].map(async name => [name,
     JSON.parse(await readFile(dir(name === 'approval' ? 'approval-template' : name), 'utf8'))])));
   prepared = { corpus, gold, ...small, pins: header.pins };
-});
+}, PREPARE_HOOK_TIMEOUT);
 
 describe('D29 synthetic v4', () => {
   it('V4-01 applies each semantic form to every attribute without using variant or slice labels', () => {

@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { prepareV7, buildReport } from '../../../tools/decision/studies/d29.mjs';
+import { freezeAdmissionClock, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 /**
  * Ported reviewer probes for the D29 v8 review fixes (refs #2622).
@@ -16,7 +19,7 @@ import { prepareV7, buildReport } from '../../../tools/decision/studies/d29.mjs'
 let prepared;
 beforeAll(async () => {
   prepared = await prepareV7('d29-study-v7');
-}, 30000);
+}, PREPARE_HOOK_TIMEOUT);
 
 const FIRST_ACCESS = '2026-10-02T00:00:00.000Z';
 const EVALUATED_AT = '2026-10-03T00:00:00.000Z';

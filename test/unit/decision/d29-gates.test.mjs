@@ -7,6 +7,9 @@ import { validateGateReport } from '../../../src/gates/report.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
 import { loadGatePackFile } from '../../../src/gates/discovery.js';
 import { createCoreProviderRegistry, screeningProvider } from '../../../src/gates/providers/index.js';
+import { freezeAdmissionClock } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 const ADDON = new URL('../../../agentic/code/addons/decision-engine/gate-packs/', import.meta.url);
 const PACK_ID = 'aiwg:decision-engine/absolute-screening';

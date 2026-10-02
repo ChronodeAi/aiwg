@@ -18,13 +18,16 @@ import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v
 import { prepare, prepareV7, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
   d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID,
   definitions, definitionsV8, LABELING_CONVENTIONS, LABELING_CONVENTIONS_V8 } from '../../../tools/decision/studies/d29.mjs';
+import { freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT, MULTI_AUDIT_TIMEOUT } from './d29-test-support.mjs';
+
+freezeAdmissionClock();
 
 let prepared, dry, v7;
 beforeAll(async () => {
   prepared = await prepare(D29_V8_SEED);
   dry = await dryRun(prepared);
   v7 = await prepareV7('d29-study-v7');
-}, 120_000);
+}, PREPARE_HOOK_TIMEOUT);
 
 const words = text => new Set((text.toLowerCase().match(/[a-z]+/g) ?? []).filter(word => word.length > 2));
 const visible = payload => [payload.source ?? payload.evidence, payload.context].filter(Boolean).join('\n');
@@ -265,7 +268,7 @@ describe('D29 v5 shortcut audit', () => {
     expect(caught.pools[0].targets.find(target => target.target === 'injection').passed).toBe(false);
     const forged = structuredClone(after); forged.pools[0].targets[0].maximumPairBalancedAccuracy = null;
     expect(() => validateStudyArtifact(forged)).toThrow('study-schema');
-  }, 120_000);
+  }, MULTI_AUDIT_TIMEOUT);
 });
 
 describe('D29 v8 study wiring', () => {
@@ -355,7 +358,7 @@ describe('D29 generator routing', () => {
     expect(d29GeneratorForSeed('d29-study-v7')).toBe('d29-synthetic/v7');
     expect(d29GeneratorForSeed('d29-study-v8')).toBe(D29_V8_GENERATOR_ID);
     expect(d29GeneratorForSeed('constructor')).toBe(D29_V8_GENERATOR_ID);
-    const fresh = await prepare('fresh-private-seed');
+    const fresh = await preparedOnce('fresh-private-seed', () => prepare('fresh-private-seed'));
     expect(new Set(fresh.corpus.rows.map(row => row.provenance.generatorId))).toEqual(new Set([D29_V8_GENERATOR_ID]));
     expect(fresh.corpus.provenance).toMatchObject({ seed: 'fresh-private-seed', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID) });
     expect(fresh.analysis.native.planId).toBe('d29-synthetic-v8');
@@ -447,7 +450,7 @@ describe('D29 v8 review round 2', () => {
     }
     // A non-D29 generator relabelled as D29 (the lamp fixture) is refused too.
     const { generateRegisteredHeldoutRow } = await import('../../../src/decision/heldout/generator-registry.js');
-    const fresh = await prepare('fresh-private-seed');
+    const fresh = await preparedOnce('fresh-private-seed', () => prepare('fresh-private-seed'));
     for (const [id, seed] of [['heldout-lamp/v1', i => `zz-priv-c:${i}:single`], ['heldout-lamp-splits/v1', i => `zz-priv-c:${i}:single:tuning`]]) {
       const corpus = { ...fresh.corpus, rows: Array.from({ length: 4 }, (_, i) => generateRegisteredHeldoutRow(id, seed(i))) };
       const lamp = approve({ ...fresh, corpus, preregistration: { ...fresh.preregistration, corpusDigest: heldoutDigest(corpus) } });
