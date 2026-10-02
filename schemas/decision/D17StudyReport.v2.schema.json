@@ -26,6 +26,7 @@
     "decision",
     "calibration",
     "developmentReviewDigest",
+    "calibrationReviewDigest",
     "uncalibratedStatistics",
     "gates"
   ],
@@ -978,6 +979,10 @@
           "const": "not-authorized: requires separate extra-cost tradeoff approval and D09 promotion eligibility"
         }
       }
+    },
+    "calibrationReviewDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
     }
   },
   "$defs": {

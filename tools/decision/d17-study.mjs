@@ -10,7 +10,8 @@ const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const USAGE = 'D17 experimental/default-off. --dry-run SEED; --prepare SEED OUTPUT_DIR; staged D09 calibration: '
-  + '--dry-run-staged SEED; --prepare-staged SEED OUTPUT_DIR; --bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json; '
+  + '--dry-run-staged SEED; --prepare-staged SEED OUTPUT_DIR; --bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json [CALIBRATION_CONTEXT.json for the test phase]; '
+  + '--dry-run-phases CALIBRATION_BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT; '
   + '--fit-calibration RUN APPROVAL_DIGEST SEAL_DIGEST DEV_REVIEW.json DEV_REVIEW_DIGEST NEW_DIR; '
   + '--register-calibration RUN APPROVAL_DIGEST SEAL_DIGEST DEV_REVIEW.json DEV_REVIEW_DIGEST CALIBRATION_REVIEW.json CALIBRATION_REVIEW_DIGEST NEW_DIR.\n'
   + 'Live execution uses tools/decision/heldout-study.mjs --collect-approved only after operator approval.\n';
@@ -99,29 +100,84 @@ export async function runD17Calibration(mode, args) {
     registration: approved ? 'reviewed-and-qualified' : 'pending-operator-review', testApproved: false };
 }
 
+/** Protected calibration context for test-phase checks: the sealed phase plus the anchored registered files and reviews. */
+export async function d17CalibrationContext(config, developmentReview, trustedDevelopmentReviewDigest, approvedCalibration) {
+  const keys = ['calibrationDir', 'calibrationReviewFile', 'calibrationRun', 'trustedCalibrationReviewDigest'];
+  if (!config || Object.keys(config).sort().join(',') !== keys.join(',')) throw new Error('calibration context');
+  const { readHeldoutCalibrationPhase } = await import('../../src/decision/heldout/calibration.ts');
+  const dir = resolve(config.calibrationDir);
+  return { sealed: await readHeldoutCalibrationPhase(resolve(config.calibrationRun), approvedCalibration.priorApprovalDigest,
+    approvedCalibration.calibrationPhaseRecordDigest),
+  registered: { set: await json(join(dir, 'calibration-set.json')),
+    artifacts: { member: await json(join(dir, 'member-artifact.json')), aggregate: await json(join(dir, 'aggregate-artifact.json')) },
+    mappings: { member: await json(join(dir, 'member-mapping.json')), aggregate: await json(join(dir, 'aggregate-mapping.json')) } },
+  trustedCalibrationSetDigest: approvedCalibration.calibrationArtifactDigest,
+  calibrationReview: await json(config.calibrationReviewFile), trustedCalibrationReviewDigest: config.trustedCalibrationReviewDigest,
+  developmentReview, trustedDevelopmentReviewDigest };
+}
+
 /**
- * Assembles the collector's closed bundle only after the 40-item development review is complete and agrees with
- * gold and the text oracle. The shared collector is study-agnostic and its approval schema is closed, so it cannot
- * check this itself; fitting, registration and test scoring re-verify the same anchored review.
+ * Assembles the collector's closed bundle only after the 40-item development review is complete and agrees with gold and
+ * the text oracle. A calibration-phase approval must cite the review digest in its approvalReference, and both phases must
+ * fit the approval's allowance before any spend. A test-phase bundle needs the calibration context: the registered set is
+ * re-derived from the seal and must be reviewed, qualified and unexpired now. The shared collector is study-agnostic and
+ * its approval schema is closed, so it cannot check these itself; fitting, registration and scoring re-verify them.
  */
-export async function runD17Bundle([preparedDir, approvalPath, devReview, devReviewDigest, output, ...extra]) {
+export async function runD17Bundle([preparedDir, approvalPath, devReview, devReviewDigest, output, calibrationContext, ...extra]) {
   if (!preparedDir || !approvalPath || !devReview || !devReviewDigest || !output || extra.length) throw new Error('usage');
   const prepared = await preparedFrom(resolve(preparedDir));
-  const { validateD17DevelopmentReview, assertD17Staged } = await import('../../src/decision/ensemble-study/calibration.ts');
+  const calibration = await import('../../src/decision/ensemble-study/calibration.ts');
+  const staged = await import('../../src/decision/ensemble-study/staged.ts');
   const { heldoutDigest, validateHeldoutBundle } = await import('../../src/decision/heldout/contract.ts');
   const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
   const { writeHeldoutFile } = await import('../../src/decision/heldout/journal.ts');
-  assertD17Staged(prepared);
-  const approval = await json(approvalPath);
+  calibration.assertD17Staged(prepared);
+  const approval = await json(approvalPath), review = await json(devReview);
   const testPhase = approval?.calibration?.phase === 'test';
-  validateD17DevelopmentReview(prepared, await json(devReview), devReviewDigest, { testStagesBlank: !testPhase });
+  calibration.validateD17DevelopmentReview(prepared, review, devReviewDigest, { testStagesBlank: !testPhase });
   const bundle = { corpus: prepared.corpus, preregistration: prepared.preregistration, approval };
   validateHeldoutBundle(bundle, heldoutDigest(approval));
+  let plan = null;
+  if (testPhase) {
+    if (!calibrationContext) throw new Error('usage');
+    const context = await d17CalibrationContext(await json(calibrationContext), review, devReviewDigest, approval.calibration);
+    calibration.verifyD17CalibrationSet(prepared, approval.calibration, { ...context, testPhaseAccessAt: null, nowEpochMs: Date.now() });
+  } else {
+    if (calibrationContext) throw new Error('usage');
+    calibration.assertD17ReviewBoundToApproval(approval, devReviewDigest);
+    plan = staged.d17TwoPhaseFit(await staged.d17TwoPhasePlan(prepared.corpus, prepared.preregistration, approval), staged.d17FreshAllowance(approval));
+    if (!plan.fits) throw new Error('D17 two-phase plan exceeds the approval allowance');
+  }
   await assertContextArtifactRoot(root, resolve(output, '..'), 'within');
   await writeHeldoutFile(resolve(output), bundle);
   return { providerCalls: 0, phase: approval.calibration.phase, approvalDigest: heldoutDigest(approval),
     corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest: heldoutDigest(prepared.preregistration),
-    developmentReviewDigest: devReviewDigest };
+    developmentReviewDigest: devReviewDigest, ...(plan ? { twoPhaseFreshLedger: plan } : {}) };
+}
+
+/**
+ * Calibration-phase pre-spend check against the real ledger: the shared collector plan, the remaining allowance after every
+ * prior charge, the combined worst case of both phases, and a refusal when this corpus already has observations under
+ * another preregistration (a reused seed). Writes nothing.
+ */
+export async function runD17PhaseDryRun([bundlePath, approvalDigest, artifactRoot, ...extra]) {
+  if (!bundlePath || !approvalDigest || !artifactRoot || extra.length) throw new Error('usage');
+  const bundle = await json(bundlePath);
+  const { planHeldoutCollection } = await import('../../src/decision/heldout/contract.ts');
+  const { scanHeldoutSpend, heldoutCollectionAllowance } = await import('../../src/decision/heldout/journal.ts');
+  const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
+  const staged = await import('../../src/decision/ensemble-study/staged.ts');
+  if (bundle?.approval?.calibration?.mode !== 'staged' || bundle.approval.calibration.phase !== 'calibration') throw new Error('usage');
+  await assertContextArtifactRoot(root, resolve(artifactRoot));
+  const estimate = await planHeldoutCollection(bundle, approvalDigest);
+  const prior = await scanHeldoutSpend(resolve(artifactRoot), 'D17', bundle.approval);
+  staged.assertD17SeedUnused(prior.attempts, bundle.approval);
+  const plan = await staged.d17TwoPhasePlan(bundle.corpus, bundle.preregistration, bundle.approval);
+  const fit = staged.d17TwoPhaseFit(plan, heldoutCollectionAllowance(bundle.approval, prior));
+  const ready = fit.fits && estimate.fitsBeforeStop && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
+  return { providerCalls: 0, phaseEstimate: { maximumAttempts: estimate.maximumAttempts, reservedTokens: estimate.reservedTokens,
+    reservedUsdMicros: estimate.reservedUsdMicros }, twoPhase: { ...plan, ...fit },
+    prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready };
 }
 
 async function main() {
@@ -131,6 +187,10 @@ async function main() {
     process.stdout.write(`${JSON.stringify(await runD17Calibration(mode, args.slice(1)))}\n`); return;
   }
   if (mode === '--bundle') { process.stdout.write(`${JSON.stringify(await runD17Bundle(args.slice(1)))}\n`); return; }
+  if (mode === '--dry-run-phases') {
+    const result = await runD17PhaseDryRun(args.slice(1));
+    process.stdout.write(`${JSON.stringify(result)}\n`); if (!result.ready) process.exitCode = 1; return;
+  }
   const modes = { '--dry-run': ['uncalibrated-diagnostic', 2], '--prepare': ['uncalibrated-diagnostic', 3],
     '--dry-run-staged': ['staged', 2], '--prepare-staged': ['staged', 3] };
   if (!modes[mode] || args.length !== modes[mode][1]) throw new Error('usage');
@@ -150,12 +210,21 @@ async function main() {
       [name === 'approvalTemplate' ? 'approval-template' : name, value])));
   }
   const preregistrationDigest = heldoutDigest(prepared.preregistration);
-  process.stdout.write(JSON.stringify({ ...prepared.dryRun, maximumRequestEstimateTokens,
+  // Staged: real per-phase worst cases from projected bytes at the template price, against the template budget on a fresh ledger.
+  let computed = {};
+  if (scope === 'staged') {
+    const staged = await import('../../src/decision/ensemble-study/staged.ts');
+    const plan = await staged.d17TwoPhasePlan(prepared.corpus, prepared.preregistration, { ...planning, priceBound: prepared.approvalTemplate.priceBound });
+    const template = prepared.approvalTemplate, floors = { priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 };
+    computed = { computedPlan: { ...plan, ...staged.d17TwoPhaseFit(plan, staged.d17FreshAllowance({ ...template, ...floors })),
+      budget: template.budget, assumption: 'fresh ledger, zero prior spend; --dry-run-phases checks the real ledger' } };
+  }
+  process.stdout.write(JSON.stringify({ ...prepared.dryRun, ...computed, maximumRequestEstimateTokens,
     corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest,
     approvalTemplateDigest: heldoutDigest(prepared.approvalTemplate), analysisDigest: heldoutDigest(prepared.analysis),
     splitManifestDigest: heldoutDigest(prepared.splitManifest), goldDigest: heldoutDigest(prepared.gold),
     approvalText: scope === 'staged'
-      ? `I, roctinam, approve D17 synthetic-only STAGED D09 calibration preregistration ${preregistrationDigest}, the completed 40-item development review DEVELOPMENT_REVIEW_DIGEST and the separately completed calibration-phase approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; test access requires a separately reviewed calibration set and test-phase approval; no promotion is authorized.`
+      ? `I, roctinam, approve D17 synthetic-only STAGED D09 calibration preregistration ${preregistrationDigest}, the completed 40-item development review DEVELOPMENT_REVIEW_DIGEST (cited in the calibration-phase approval reference) and the separately completed calibration-phase approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; test access requires a separately reviewed calibration set and test-phase approval; no promotion is authorized.`
       : `I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration ${preregistrationDigest} and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.` }) + '\n');
 }
 if (process.argv[1] && resolve(process.argv[1]) === ownPath) main().catch(() => {

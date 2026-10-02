@@ -18,6 +18,9 @@ import { validateD17Artifact } from './artifacts.js';
 import { applyD17Mapping, assertD17Staged, d17AttemptsByRow, d17RawProbabilities, verifyD17CalibrationSet } from './calibration.js';
 import type { D17CalibrationContext } from './calibration.js';
 import { calibrationIdentityDigest } from '../calibration/registry.js';
+import type { PromotionEligibility } from '../calibration/types.js';
+import type { ChampionAliasGateway } from '../ensemble/runtime.js';
+import { canonicalJson } from '../../security/artifact-trust.js';
 
 type ScoreInput = Parameters<HeldoutStudyModule['score']>[0];
 type Prepared = ReturnType<typeof prepareD17Study>;
@@ -161,9 +164,18 @@ export async function scoreD17Study(input: ScoreInput, prepared: Prepared) {
 
 /** Native serialization requires a separately anchored record. It cannot create approval or eligibility. */
 export async function buildD17NativeReport(input: { report: Awaited<ReturnType<typeof scoreD17Study>> | D17StagedReport; prepared: Prepared | StagedPrepared;
-  record: DecisionChampionChallenger; integrity: QualificationIntegrityMetadata; trustedIntegrityDigest: Digest; trustedReportDigest: Digest }) {
+  record: DecisionChampionChallenger; integrity: QualificationIntegrityMetadata; trustedIntegrityDigest: Digest; trustedReportDigest: Digest;
+  /** Staged (v2) only: D09's stored eligibility for `record.eligibilityId`, checked against the registry that will promote. */
+  eligibility?: PromotionEligibility; registry?: Pick<ChampionAliasGateway, 'promotionEligibility'>;
+  /** Staged (v2) only: the anchored extra-cost tradeoff approval an upstream PROMOTE must carry. */
+  tradeoff?: unknown; trustedTradeoffDigest?: Digest }) {
   const staged = input.report.schemaVersion === 'decision-d17-study-report/v2';
   validateD17Artifact(staged ? 'reportV2' : 'report', input.report);
+  if (!staged && (input.eligibility !== undefined || input.tradeoff !== undefined)) throw new Error('D17 diagnostic native report has no promotion route');
+  if (input.eligibility !== undefined) {
+    const stored = input.registry?.promotionEligibility(input.record.eligibilityId) ?? null;
+    if (!stored || canonicalJson(stored) !== canonicalJson(input.eligibility)) throw new Error('D17 native eligibility');
+  }
   if (staged) {
     // AC7/AC14: each role must cite the exact D09 artifact the calibrated report applied to it.
     const calibration = (input.report as D17StagedReport).calibration, record = input.record as DecisionChampionChallenger;
@@ -182,6 +194,7 @@ export async function buildD17NativeReport(input: { report: Awaited<ReturnType<t
     || input.report.statisticsDigest !== heldoutDigest(input.report.statistics)
     || record.preregistration.thresholdsDigest !== pairedThresholdsDigest([...D17_ANALYSIS.native])
     || input.integrity.release_gate.decision === 'PROMOTE'
+      && (!staged || !d17PromotionSupported(input.report as D17StagedReport, input.integrity, input.tradeoff, input.trustedTradeoffDigest))
     || input.report.decision === 'ROLLBACK' && input.integrity.release_gate.decision !== 'ROLLBACK') throw new Error('D17 native report needs anchored HOLD or ROLLBACK');
   const pins = input.report.executionPins;
   if (!pins.binding || !pins.aggregatePolicyDigest || record.champion.ensemblePolicy !== null
@@ -202,7 +215,7 @@ export async function buildD17NativeReport(input: { report: Awaited<ReturnType<t
   const upstream = input.integrity.paired_baseline as Record<string, unknown> | null;
   if (!upstream || heldoutDigest(upstream.championChallengerShadow ?? null) !== heldoutDigest(baseline)
     || upstream.d17StatisticsDigest !== input.report.statisticsDigest) throw new Error('D17 unbound native statistics');
-  return buildEnsembleIntegrityReport({ record, integrity: input.integrity, pairedDeltas: shadow.pairedDeltas, eligibility: null });
+  return buildEnsembleIntegrityReport({ record, integrity: input.integrity, pairedDeltas: shadow.pairedDeltas, eligibility: input.eligibility ?? null });
 }
 
 type Arm = D17ArmMeasurement;
@@ -226,6 +239,7 @@ export async function scoreD17StagedStudy(input: Omit<ScoreInput, 'approvedCalib
     || heldoutDigest(input.preregistration) !== heldoutDigest(prepared.preregistration)
     || heldoutDigest(input.gold) !== prepared.corpus.provenance.goldDigest
     || heldoutDigest(prepared.gold) !== prepared.corpus.provenance.goldDigest) throw new Error('D17 frozen scoring pins');
+  if (!context || typeof context.testPhaseAccessAt !== 'string') throw new Error('D17 staged test access');
   const verified = verifyD17CalibrationSet(prepared, input.approvedCalibration as never, context);
   const integrityProblems = qualificationIntegrityAllowlistProblems(input.integrity);
   if (integrityProblems.includes('integrity-invalid')) throw new Error('D17 invalid integrity');
@@ -335,7 +349,7 @@ export async function scoreD17StagedStudy(input: Omit<ScoreInput, 'approvedCalib
       calibrationPhaseRecordDigest: approved.calibrationPhaseRecordDigest, priorApprovalDigest: approved.priorApprovalDigest,
       member: pin('member'), aggregate: pin('aggregate'), qualifiedAt: verified.qualifiedAt,
       applied: { champion: 'member' as const, challenger: 'aggregate' as const } },
-    developmentReviewDigest: verified.developmentReviewDigest,
+    developmentReviewDigest: verified.developmentReviewDigest, calibrationReviewDigest: verified.calibrationReviewDigest,
     statistics, statisticsDigest: heldoutDigest(statistics), uncalibratedStatistics, pairs, observations,
     accounting: { allSplits: { attempts: input.attempts.length, reservedCostMicros: reservation(input.attempts) },
       test: { championReservedCostMicros: championReservations, challengerReservedCostMicros: challengerReservations,
@@ -404,4 +418,55 @@ export async function d17NativeHandoff(input: { report: D17StagedReport; trusted
     } });
   return { record, pairedBaseline: { championChallengerShadow: championChallengerShadowBaseline(record, shadow),
     d17StatisticsDigest: report.statisticsDigest } };
+}
+
+export interface D17TradeoffApproval {
+  schemaVersion: 'decision-d17-tradeoff-approval/v1'; approved: true; reviewer: string; reportDigest: Digest; statisticsDigest: Digest;
+  netSavingsMicros: number; acceptedAdditionalCostMicros: number; qualityLowerBps: number; approvalReference: string; approvedAt: string;
+}
+
+/**
+ * The preregistered extra-cost tradeoff: an anchored approval of this exact report and statistics that accepts at least the
+ * measured additional reservation cost and records the observed quality lower bound. It approves cost, not quality.
+ */
+export function validateD17Tradeoff(report: D17StagedReport, tradeoff: unknown, trustedDigest: unknown): D17TradeoffApproval {
+  try { validateD17Artifact('calibration', tradeoff); } catch { throw new Error('D17 tradeoff approval'); }
+  const value = tradeoff as unknown as D17TradeoffApproval;
+  if (value.schemaVersion !== 'decision-d17-tradeoff-approval/v1' || typeof trustedDigest !== 'string' || heldoutDigest(value) !== trustedDigest
+    || value.reportDigest !== heldoutDigest(report) || value.statisticsDigest !== report.statisticsDigest
+    || value.netSavingsMicros !== report.statistics.netSavingsMicros || value.acceptedAdditionalCostMicros < Math.max(0, -report.statistics.netSavingsMicros)
+    || value.qualityLowerBps !== report.statistics.quality?.lowerBps) throw new Error('D17 tradeoff approval');
+  return value;
+}
+
+/** A calibrated report supports PROMOTE only with a passing study gate, a positive quality bound and the bound tradeoff. */
+function d17PromotionSupported(report: D17StagedReport, integrity: QualificationIntegrityMetadata, tradeoff: unknown, trustedDigest: unknown): boolean {
+  if (report.gates.statisticalGate !== 'pass' || !report.statistics.benefitSupported) return false;
+  try { validateD17Tradeoff(report, tradeoff, trustedDigest); } catch { return false; }
+  const upstream = integrity.paired_baseline as Record<string, unknown> | null;
+  return upstream?.d17TradeoffApprovalDigest === trustedDigest;
+}
+
+/**
+ * Eval-integrity metadata for the native D17 record. The release gate comes from the locked-snapshot evidence (`base`); a
+ * PROMOTE gate survives only when the calibrated study gate passes, the quality lower bound is positive and an anchored
+ * extra-cost tradeoff approval binds this report. Otherwise PROMOTE is held, with the missing pieces as reasons.
+ */
+export function d17NativeIntegrity(input: { base: QualificationIntegrityMetadata; pairedBaseline: Record<string, unknown>;
+  report: D17StagedReport; tradeoff?: unknown; trustedTradeoffDigest?: Digest | null }): QualificationIntegrityMetadata {
+  const missing: string[] = [];
+  if (input.report.gates.statisticalGate !== 'pass') missing.push('D17 statistical gate did not pass');
+  if (!input.report.statistics.benefitSupported) missing.push('D17 quality lower bound is not positive');
+  let tradeoffDigest: Digest | null = null;
+  if (input.tradeoff === undefined || input.tradeoff === null) missing.push('no anchored extra-cost tradeoff approval');
+  else { validateD17Tradeoff(input.report, input.tradeoff, input.trustedTradeoffDigest); tradeoffDigest = input.trustedTradeoffDigest!; }
+  // The ensemble integrity contract carries only the gate decision and reasons (eval-tool thresholds are dropped).
+  const gate = { decision: input.base.release_gate.decision, reasons: [...input.base.release_gate.reasons] };
+  const release_gate = gate.decision === 'PROMOTE' && missing.length
+    ? { decision: 'HOLD' as const, reasons: [...gate.reasons, ...missing.map(reason => `promotion withheld: ${reason}`)] } : gate;
+  const { sample_n, uncertainty, integrity_mode, fresh_workspace_required, fresh_workspace_verified, integrity_state,
+    trusted_score_source, compromise_labels, weak_signal_reason } = input.base;
+  return { sample_n, uncertainty, paired_baseline: { ...input.pairedBaseline, d17TradeoffApprovalDigest: tradeoffDigest },
+    integrity_mode, fresh_workspace_required, fresh_workspace_verified, integrity_state, trusted_score_source,
+    compromise_labels: [...compromise_labels], weak_signal_reason, release_gate };
 }

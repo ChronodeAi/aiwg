@@ -26,6 +26,7 @@ export interface D17CalibrationMapping {
   schemaVersion: 'decision-d17-calibration-mapping/v1'; role: Role;
   calibrator: { id: string; version: '1' }; method: 'isotonic-pav-laplace-v1'; model: 'jev-1.13.0';
   splitDigest: Digest; definitionDigest: Digest; evidenceDigest: Digest; n: number; rows: number; blocks: D17CalibrationBlock[];
+  qualification: { method: 'slice-stratified-k-fold-out-of-fold'; folds: 5; outOfFold: D17CalibrationMetrics; inSample: D17CalibrationMetrics };
 }
 export interface D17CalibrationPin { artifactId: string; artifactDigest: Digest; mappingDigest: Digest }
 export interface D17CalibrationSet {
@@ -146,46 +147,54 @@ function validateMapping(mapping: unknown, role: Role, prepared: Prepared): asse
     || value.blocks.reduce((sum, block) => sum + block.n, 0) !== value.n
     || value.blocks.some((block, i) => block.n < D17_CALIBRATION.minimumBlockN && value.blocks.length > 1
       || block.probability !== laplace(block.yes, block.n) || block.yes > block.n || block.lower > block.upper
-      || i > 0 && (block.lower <= value.blocks[i - 1]!.upper || block.probability < value.blocks[i - 1]!.probability))) refuse('mapping-pin');
+      || i > 0 && (block.lower <= value.blocks[i - 1]!.upper || block.probability < value.blocks[i - 1]!.probability))
+    || value.qualification.method !== D17_CALIBRATION.qualificationMetrics.method
+    || value.qualification.folds !== D17_CALIBRATION.qualificationMetrics.folds) refuse('mapping-pin');
 }
 
-/** Fits both preregistered calibrators from calibration-split rows only. Tuning and test rows never contribute. */
-export function fitD17Calibration(prepared: Prepared, attempts: readonly HeldoutAttempt[]): Record<Role, D17CalibrationMapping> {
-  assertD17Staged(prepared);
-  const rows = prepared.corpus.rows.filter(row => row.split === D17_CALIBRATION.fitSplit);
-  const members = new Set(rows.map(row => row.id));
-  const used = attempts.filter(attempt => members.has(attempt.rowId)).map(attempt => ({ attempt, digest: heldoutDigest(attempt) }))
-    .sort((a, b) => a.digest < b.digest ? -1 : a.digest > b.digest ? 1 : 0).map(item => item.digest);
-  const grouped = d17AttemptsByRow(attempts);
+type Sample = { score: number; label: 0 | 1 };
+export interface D17CalibrationMetrics {
+  totalSamples: number; perSliceSamples: number; calibrationError: number; selectiveRisk: number;
+  confidenceIntervals: { selectiveRisk: { lower: number; upper: number }; coverage: { lower: number; upper: number } };
+}
+
+/** Library fitting accepts only attempts pinned to this exact D17 study, corpus and preregistration. */
+function assertStudyAttempts(prepared: Prepared, attempts: readonly HeldoutAttempt[]): void {
+  const corpusDigest = heldoutDigest(prepared.corpus), preregistrationDigest = heldoutDigest(prepared.preregistration);
+  if (attempts.some(attempt => attempt.study !== 'D17' || attempt.corpusDigest !== corpusDigest
+    || attempt.preregistrationDigest !== preregistrationDigest)) refuse('attempt-membership');
+}
+
+/** Training samples for one calibrator from the given rows. */
+function samplesFor(role: Role, rows: readonly HeldoutRow[], grouped: Map<string, HeldoutAttempt[]>, prepared: Prepared): Sample[] {
   const label = (row: HeldoutRow) => Number(prepared.gold.labels[row.id] === 'yes') as 0 | 1;
-  const single: Array<{ score: number; label: 0 | 1 }> = [], mean: Array<{ score: number; label: 0 | 1 }> = [];
-  let singleRows = 0, meanRows = 0;
-  for (const row of rows) {
+  return rows.flatMap(row => {
     const raw = d17RawProbabilities(grouped.get(row.id) ?? [], row);
-    const calls = [raw.champion, ...raw.members].filter((value): value is number => value !== null);
-    if (calls.length) singleRows++;
-    for (const score of calls) single.push({ score, label: label(row) });
-    if (raw.mean !== null) { meanRows++; mean.push({ score: raw.mean, label: label(row) }); }
-  }
-  const { minimumTotalSamples } = D17_CALIBRATION.profile;
-  if (singleRows < minimumTotalSamples || meanRows < minimumTotalSamples) refuse('calibration-support');
-  const base = { method: D17_CALIBRATION.method, model: MODEL, splitDigest: prepared.splitManifest.splits.calibration.digest,
-    definitionDigest: heldoutDigest(prepared.corpus.definitions), evidenceDigest: heldoutDigest(used) } as const;
-  const build = (role: Role, samples: typeof single, n: number): D17CalibrationMapping => {
-    const mapping: D17CalibrationMapping = { schemaVersion: 'decision-d17-calibration-mapping/v1', role,
-      calibrator: { id: D17_CALIBRATION.calibrators[role].id, version: '1' }, ...base, n: samples.length, rows: n, blocks: fitD17Isotonic(samples) };
-    validateMapping(mapping, role, prepared); return mapping;
-  };
-  return { member: build('member', single, singleRows), aggregate: build('aggregate', mean, meanRows) };
+    if (role === 'aggregate') return raw.mean === null ? [] : [{ score: raw.mean, label: label(row) }];
+    return [raw.champion, ...raw.members].filter((value): value is number => value !== null).map(score => ({ score, label: label(row) }));
+  });
 }
 
-/** Calibrated quality of each calibrator on the calibration split (in-sample; reported as a limitation). */
-function calibrationMetrics(prepared: Prepared, attempts: readonly HeldoutAttempt[], role: Role, mapping: D17CalibrationMapping) {
+/** Deterministic slice-stratified folds: calibration rows in record-ID order within each slice, index modulo folds. */
+export function d17CalibrationFolds(rows: readonly HeldoutRow[], folds: number = D17_CALIBRATION.qualificationMetrics.folds): Map<string, number> {
+  const assigned = new Map<string, number>();
+  for (const slice of D17_SLICES) {
+    rows.filter(row => row.slice === slice).map(row => row.id).sort().forEach((id, index) => assigned.set(id, index % folds));
+  }
+  return assigned;
+}
+
+/**
+ * Calibrated quality of one calibrator over the calibration split. `probability(row, score)` supplies the calibrated
+ * value for a row's raw score: the full-split mapping (in-sample) or the mapping fitted without the row's fold (out-of-fold).
+ */
+function calibrationMetrics(prepared: Prepared, grouped: Map<string, HeldoutAttempt[]>, role: Role,
+  probability: (row: HeldoutRow, score: number) => number): D17CalibrationMetrics {
   const rows = prepared.corpus.rows.filter(row => row.split === D17_CALIBRATION.fitSplit);
   const splits = (['tuning', 'calibration', 'test'] as const).map(split =>
     freezeQualificationSplit(split, prepared.corpus.rows.filter(row => row.split === split).map(row => row.id)));
   let observed = 0;
-  const perSlice = new Map<string, number>(), grouped = d17AttemptsByRow(attempts);
+  const perSlice = new Map<string, number>();
   const samples: BinaryQualificationSample[] = rows.map(row => {
     const rowAttempts = grouped.get(row.id) ?? [];
     const raw = d17RawProbabilities(rowAttempts, row), score = role === 'member' ? raw.champion : raw.mean;
@@ -194,9 +203,9 @@ function calibrationMetrics(prepared: Prepared, attempts: readonly HeldoutAttemp
     const known = (key: 'inputTokens' | 'outputTokens' | 'providerCostUsd') => own.some(a => a.result?.[key] == null) || !own.length
       ? null : own.reduce((sum, a) => sum + a.result![key]!, 0);
     if (score !== null) { observed++; perSlice.set(row.slice, (perSlice.get(row.slice) ?? 0) + 1); }
-    const probability = score === null ? 0.5 : applyD17Mapping(mapping, score);
-    return { id: row.id, slice: row.slice, label: Number(prepared.gold.labels[row.id] === 'yes') as 0 | 1, probability,
-      accepted: score !== null && probability !== 0.5, latencyMs: own.reduce((sum, a) => sum + (a.result?.latencyMs ?? 0), 0),
+    const p = score === null ? 0.5 : probability(row, score);
+    return { id: row.id, slice: row.slice, label: Number(prepared.gold.labels[row.id] === 'yes') as 0 | 1, probability: p,
+      accepted: score !== null && p !== 0.5, latencyMs: own.reduce((sum, a) => sum + (a.result?.latencyMs ?? 0), 0),
       inputTokens: known('inputTokens'), outputTokens: known('outputTokens'), costUsd: known('providerCostUsd'),
       calls: own.length, retries: own.filter(a => a.ordinal > 1).length, fallbacks: 0 };
   });
@@ -213,7 +222,39 @@ function calibrationMetrics(prepared: Prepared, attempts: readonly HeldoutAttemp
     confidenceIntervals: { selectiveRisk: interval(errors, accepted.length), coverage: interval(accepted.length, samples.length) } };
 }
 
-function artifactFor(prepared: Prepared, attempts: readonly HeldoutAttempt[], role: Role, mapping: D17CalibrationMapping,
+/**
+ * Fits both preregistered calibrators from calibration-split rows only. Tuning and test rows never contribute. The final
+ * mapping uses the full calibration split; its qualification metrics are slice-stratified 5-fold out-of-fold, so a
+ * calibrator is gated on rows it was not fitted on (in-sample metrics are recorded alongside, for comparison only).
+ */
+export function fitD17Calibration(prepared: Prepared, attempts: readonly HeldoutAttempt[]): Record<Role, D17CalibrationMapping> {
+  assertD17Staged(prepared);
+  assertStudyAttempts(prepared, attempts);
+  const rows = prepared.corpus.rows.filter(row => row.split === D17_CALIBRATION.fitSplit);
+  const members = new Set(rows.map(row => row.id));
+  const used = attempts.filter(attempt => members.has(attempt.rowId)).map(attempt => heldoutDigest(attempt)).sort();
+  const grouped = d17AttemptsByRow(attempts.filter(attempt => members.has(attempt.rowId)));
+  const observedRows = (role: Role) => rows.filter(row => samplesFor(role, [row], grouped, prepared).length).length;
+  const { minimumTotalSamples } = D17_CALIBRATION.profile;
+  if (observedRows('member') < minimumTotalSamples || observedRows('aggregate') < minimumTotalSamples) refuse('calibration-support');
+  const folds = d17CalibrationFolds(rows), { qualificationMetrics } = D17_CALIBRATION;
+  const base = { method: D17_CALIBRATION.method, model: MODEL, splitDigest: prepared.splitManifest.splits.calibration.digest,
+    definitionDigest: heldoutDigest(prepared.corpus.definitions), evidenceDigest: heldoutDigest(used) } as const;
+  const build = (role: Role): D17CalibrationMapping => {
+    const samples = samplesFor(role, rows, grouped, prepared), blocks = fitD17Isotonic(samples);
+    const foldBlocks = Array.from({ length: qualificationMetrics.folds }, (_, k) =>
+      fitD17Isotonic(samplesFor(role, rows.filter(row => folds.get(row.id) !== k), grouped, prepared)));
+    const mapping: D17CalibrationMapping = { schemaVersion: 'decision-d17-calibration-mapping/v1', role,
+      calibrator: { id: D17_CALIBRATION.calibrators[role].id, version: '1' }, ...base, n: samples.length, rows: observedRows(role), blocks,
+      qualification: { method: qualificationMetrics.method, folds: qualificationMetrics.folds,
+        outOfFold: calibrationMetrics(prepared, grouped, role, (row, score) => applyD17Mapping({ blocks: foldBlocks[folds.get(row.id)!]! }, score)),
+        inSample: calibrationMetrics(prepared, grouped, role, (_row, score) => applyD17Mapping({ blocks }, score)) } };
+    validateMapping(mapping, role, prepared); return mapping;
+  };
+  return { member: build('member'), aggregate: build('aggregate') };
+}
+
+function artifactFor(role: Role, mapping: D17CalibrationMapping,
   sealedAt: string, seal: { calibrationPhaseRecordDigest: Digest; priorApprovalDigest: Digest; source: string }): CalibrationArtifact {
   const mappingDigest = heldoutDigest(mapping), calibrator = D17_CALIBRATION.calibrators[role];
   const draft: Omit<CalibrationArtifact, 'digest'> = { schemaVersion: 'decision-calibration-artifact/v1',
@@ -224,10 +265,10 @@ function artifactFor(prepared: Prepared, attempts: readonly HeldoutAttempt[], ro
       calibrator: { id: calibrator.id, version: calibrator.version, parametersDigest: mappingDigest } },
     splitProvenance: { id: 'd17-calibration', hash: mapping.splitDigest, holdoutAccessedAt: null },
     profile: structuredClone(D17_CALIBRATION.profile) as CalibrationArtifact['profile'],
-    metrics: calibrationMetrics(prepared, attempts, role, mapping), effectiveAt: sealedAt,
+    metrics: structuredClone(mapping.qualification.outOfFold), effectiveAt: sealedAt,
     limitations: [
       `Synthetic D17 calibration-split fit (${role === 'member' ? 'single fresh call' : 'mean of three ensemble members'}); no production authority.`,
-      'Metrics are in-sample on the fitted calibration split; held-out calibration is measured only on the test phase.',
+      'Metrics are slice-stratified 5-fold out-of-fold on the calibration split; the deployed mapping is fitted on the full split. In-sample metrics are in the mapping, for comparison only.',
       'Decile ECE; selective risk counts calibrated non-tie answers. Wilson intervals describe binomial rates, not ECE.',
       `Observation source: ${seal.source}; calibration evidence: ${mapping.evidenceDigest}.`,
       `Sealed phase: ${seal.calibrationPhaseRecordDigest}; prior approval: ${seal.priorApprovalDigest}.`,
@@ -272,6 +313,17 @@ export function validateD17DevelopmentReview(prepared: Prepared, review: unknown
   return value;
 }
 
+/**
+ * Approvals carry no timestamp, so ordering is proved by digest: the calibration-phase approval reference must cite the
+ * completed development review digest, which therefore existed before the approval that authorized any spend.
+ */
+export function assertD17ReviewBoundToApproval(approval: { approvalReference?: unknown }, trustedDevelopmentReviewDigest: unknown): void {
+  if (typeof trustedDevelopmentReviewDigest !== 'string' || !DIGEST.test(trustedDevelopmentReviewDigest)
+    || typeof approval?.approvalReference !== 'string' || !approval.approvalReference.includes(trustedDevelopmentReviewDigest)) {
+    refuse('development-review-not-bound');
+  }
+}
+
 /** A staged prepared study that reproduces the sealed bundle exactly. */
 function assertSealedStudy(sealed: D17SealedPhase, prepared: Prepared, trustedApprovalDigest: Digest, trustedSealDigest: Digest): void {
   assertD17Staged(prepared);
@@ -289,12 +341,13 @@ export function d17CalibrationHandoffFromSealed(input: { sealed: D17SealedPhase;
   assertSealedStudy(sealed, prepared, trustedApprovalDigest, sealDigest);
   validateD17DevelopmentReview(prepared, input.developmentReview, input.trustedDevelopmentReviewDigest,
     { before: sealed.record.sealedAt, testStagesBlank: true });
+  assertD17ReviewBoundToApproval(sealed.bundle.approval, input.trustedDevelopmentReviewDigest);
   const members = new Set(prepared.corpus.rows.filter(row => row.split === D17_CALIBRATION.fitSplit).map(row => row.id));
   const attempts = sealed.attempts.filter(attempt => members.has(attempt.rowId));
   const mappings = fitD17Calibration(prepared, attempts);
   const seal = { calibrationPhaseRecordDigest: sealDigest, priorApprovalDigest: trustedApprovalDigest, source: sealed.source };
-  const artifacts = { member: artifactFor(prepared, attempts, 'member', mappings.member, sealed.record.sealedAt, seal),
-    aggregate: artifactFor(prepared, attempts, 'aggregate', mappings.aggregate, sealed.record.sealedAt, seal) };
+  const artifacts = { member: artifactFor('member', mappings.member, sealed.record.sealedAt, seal),
+    aggregate: artifactFor('aggregate', mappings.aggregate, sealed.record.sealedAt, seal) };
   const set = calibrationSet(prepared, seal, artifacts, mappings);
   const review = { schemaVersion: 'decision-d17-calibration-review/v1', approved: null, reviewer: null,
     calibrationSetDigest: heldoutDigest(set), memberArtifactDigest: artifacts.member.digest,
@@ -355,40 +408,50 @@ export function registerD17CalibrationFromHandoff(handoff: ReturnType<typeof d17
 }
 
 export interface D17CalibrationContext {
-  set: unknown; trustedCalibrationSetDigest: Digest;
-  artifacts: Record<Role, unknown>; mappings: Record<Role, unknown>;
+  /** The calibration phase, re-read through the verified collector seal (`readHeldoutCalibrationPhase`). */
+  sealed: D17SealedPhase;
+  /** Registered files as anchored by the operator; they must equal the deterministic re-derivation exactly. */
+  registered: { set: unknown; artifacts: Record<Role, unknown>; mappings: Record<Role, unknown> };
+  trustedCalibrationSetDigest: Digest;
+  calibrationReview: unknown; trustedCalibrationReviewDigest: Digest;
   developmentReview: unknown; trustedDevelopmentReviewDigest: Digest;
+  /** First test access recorded by the collector (`frozen.testPhaseAccessAt`); null only before the test phase. */
+  testPhaseAccessAt: string | null;
   /** The scoring clock; qualification (approval, expiry, bounds) is evaluated at this instant. */
   nowEpochMs: number;
 }
 
-/** Test-phase verification: the approved binding, each approved artifact, its mapping and its D09 qualification. */
+/**
+ * Test-phase verification. Nothing in the registered files is trusted: the calibration set is re-derived from the sealed
+ * calibration phase (re-fit, out-of-fold metrics, operator review, approval), and the registered set, artifacts and
+ * mappings must be canonically identical to that derivation and to the approved binding. The scoring clock cannot
+ * precede the calibration review or the recorded first test access, and both artifacts must qualify at that clock.
+ */
 export function verifyD17CalibrationSet(prepared: Prepared, approvedCalibration: HeldoutCalibration, context: D17CalibrationContext) {
   assertD17Staged(prepared);
   const approved = approvedCalibration as Extract<HeldoutCalibration, { phase: 'test' }>;
   if (approved?.mode !== 'staged' || approved.phase !== 'test' || !DIGEST.test(approved.calibrationArtifactDigest)
     || !DIGEST.test(approved.calibrationPhaseRecordDigest) || !DIGEST.test(approved.priorApprovalDigest)) refuse('approved-calibration');
-  if (!context || !Number.isSafeInteger(context.nowEpochMs)) refuse('calibration-context');
-  try { validateD17Artifact('calibration', context.set); } catch { refuse('calibration-set'); }
-  const set = context.set as D17CalibrationSet;
-  if (set.schemaVersion !== 'decision-d17-calibration-set/v1' || heldoutDigest(set) !== context.trustedCalibrationSetDigest
-    || approved.calibrationArtifactDigest !== context.trustedCalibrationSetDigest
-    || set.calibrationPhaseRecordDigest !== approved.calibrationPhaseRecordDigest || set.priorApprovalDigest !== approved.priorApprovalDigest
-    || set.corpusDigest !== heldoutDigest(prepared.corpus) || set.preregistrationDigest !== heldoutDigest(prepared.preregistration)) refuse('calibration-set');
+  if (!context || !Number.isSafeInteger(context.nowEpochMs) || !context.sealed || !context.registered) refuse('calibration-context');
+  if (approved.calibrationArtifactDigest !== context.trustedCalibrationSetDigest) refuse('calibration-set');
+  const derived = registerD17CalibrationFromHandoff(d17CalibrationHandoffFromSealed({ sealed: context.sealed, prepared,
+    trustedApprovalDigest: approved.priorApprovalDigest, trustedCalibrationPhaseRecordDigest: approved.calibrationPhaseRecordDigest,
+    developmentReview: context.developmentReview, trustedDevelopmentReviewDigest: context.trustedDevelopmentReviewDigest }),
+  context.calibrationReview, context.trustedCalibrationReviewDigest);
+  if (derived.calibrationSetDigest !== context.trustedCalibrationSetDigest) refuse('calibration-set');
+  const same = (a: unknown, b: unknown) => heldoutDigest(a) === heldoutDigest(b);
+  const { registered } = context;
+  if (!same(registered.set, derived.set) || (['member', 'aggregate'] as const).some(role =>
+    !same(registered.artifacts?.[role], derived.artifacts[role]) || !same(registered.mappings?.[role], derived.mappings[role]))) {
+    refuse('calibration-registered-mismatch');
+  }
+  const review = context.calibrationReview as D17CalibrationReview;
+  if (!(context.nowEpochMs >= time(review.reviewedAt))) refuse('scoring-clock');
+  if (context.testPhaseAccessAt !== null && !(context.nowEpochMs >= time(context.testPhaseAccessAt))) refuse('scoring-clock');
   const at = new Date(context.nowEpochMs).toISOString(), registry = new CalibrationRegistry();
-  const resolved = (role: Role) => {
-    const artifact = context.artifacts?.[role] as CalibrationArtifact, mapping = context.mappings?.[role];
-    validateMapping(mapping, role, prepared);
-    if (!artifact || artifact.digest !== set[role].artifactDigest || artifact.id !== set[role].artifactId
-      || heldoutDigest(mapping) !== set[role].mappingDigest || artifact.identity?.calibrator?.parametersDigest !== set[role].mappingDigest
-      || artifact.identity.calibrator.id !== D17_CALIBRATION.calibrators[role].id
-      || artifact.identity.definitionDigest !== mapping.definitionDigest || artifact.identity.dataset.hash !== mapping.splitDigest
-      || artifact.identity.actualModel !== MODEL || artifact.approval?.state !== 'approved') refuse('calibration-artifact');
-    return { artifact, mapping, compatibility: qualifyD17Calibration(artifact, at, registry) };
-  };
+  const resolved = (role: Role) => ({ artifact: derived.artifacts[role], mapping: derived.mappings[role],
+    compatibility: qualifyD17Calibration(derived.artifacts[role], at, registry) });
   const member = resolved('member'), aggregate = resolved('aggregate');
-  const review = validateD17DevelopmentReview(prepared, context.developmentReview, context.trustedDevelopmentReviewDigest,
-    { before: member.artifact.effectiveAt });
-  return { set, setDigest: context.trustedCalibrationSetDigest, member, aggregate, qualifiedAt: at,
-    developmentReviewDigest: heldoutDigest(review) };
+  return { set: derived.set, setDigest: derived.calibrationSetDigest, member, aggregate, qualifiedAt: at,
+    developmentReviewDigest: context.trustedDevelopmentReviewDigest, calibrationReviewDigest: context.trustedCalibrationReviewDigest };
 }

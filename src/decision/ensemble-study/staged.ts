@@ -1,5 +1,6 @@
-import { heldoutDigest, validateHeldoutInputs } from '../heldout/contract.js';
-import type { Digest, HeldoutPreregistration } from '../heldout/types.js';
+import { heldoutDigest, heldoutRequestSize, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutInputs } from '../heldout/contract.js';
+import { heldoutCollectionAllowance } from '../heldout/journal.js';
+import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutCorpus, HeldoutPreregistration } from '../heldout/types.js';
 import { d17DryRun, prepareD17Study } from './corpus.js';
 import { D17_ANALYSIS, D17_CALIBRATION } from './protocol.js';
 import { validateD17Artifact } from './artifacts.js';
@@ -35,4 +36,58 @@ export function d17StagedDryRun() {
     missingInputs: ['completed 40-item development review', 'calibration-phase operator approval', 'exact-source CI evidence',
       'provider terms', 'prior study and portfolio spend', 'region and credential resolver pin', 'calibration-phase live observations',
       'fitted and operator-reviewed D09 calibration set', 'test-phase operator approval', 'test-phase live observations', 'blind human review'] };
+}
+
+type PlanApproval = Pick<HeldoutApproval, 'model' | 'region' | 'credentialRef' | 'priceBound'>;
+interface PhasePlan { rows: number; firstAttempts: number; maximumAttempts: number; maximumRequestEstimateTokens: number;
+  reservedTokens: number; reservedUsdMicros: number }
+
+/**
+ * Worst-case reservations for both staged phases from the actual projected request bytes and the approval's price bound,
+ * with every preregistered retry. The collector plans one phase at a time; this bounds the whole study before any spend.
+ */
+export async function d17TwoPhasePlan(corpus: HeldoutCorpus, preregistration: HeldoutPreregistration, approval: PlanApproval) {
+  const sizing = { ...approval, calibration: { mode: 'uncalibrated-diagnostic' } } as unknown as HeldoutApproval;
+  const attemptsPerRequest = 1 + preregistration.providerFailurePolicy.maxRetries;
+  const phase = async (splits: readonly string[]): Promise<PhasePlan> => {
+    const plan: PhasePlan = { rows: 0, firstAttempts: 0, maximumAttempts: 0, maximumRequestEstimateTokens: 0, reservedTokens: 0, reservedUsdMicros: 0 };
+    for (const row of corpus.rows.filter(item => splits.includes(item.split))) {
+      plan.rows++;
+      for (const request of row.requests) {
+        const { estimatedTokens } = await heldoutRequestSize(corpus, preregistration, sizing, row, request);
+        plan.firstAttempts++; plan.maximumAttempts += attemptsPerRequest;
+        plan.maximumRequestEstimateTokens = Math.max(plan.maximumRequestEstimateTokens, estimatedTokens);
+        plan.reservedTokens += attemptsPerRequest * heldoutReservationTokens(preregistration, estimatedTokens);
+        plan.reservedUsdMicros += attemptsPerRequest * heldoutReservationMicros(sizing, estimatedTokens);
+      }
+    }
+    return plan;
+  };
+  const calibration = await phase(D17_CALIBRATION.phaseSplits), test = await phase(['test']);
+  return { calibration, test, combined: { maximumAttempts: calibration.maximumAttempts + test.maximumAttempts,
+    reservedTokens: calibration.reservedTokens + test.reservedTokens, reservedUsdMicros: calibration.reservedUsdMicros + test.reservedUsdMicros } };
+}
+
+/** Both phases must fit the remaining collector allowance (the 80% stop thresholds net of prior charges). */
+export function d17TwoPhaseFit(plan: Awaited<ReturnType<typeof d17TwoPhasePlan>>, allowance: { calls: number; tokens: number; usdMicros: number }) {
+  const headroom = { calls: allowance.calls - plan.combined.maximumAttempts, tokens: allowance.tokens - plan.combined.reservedTokens,
+    usdMicros: allowance.usdMicros - plan.combined.reservedUsdMicros };
+  return { allowance: { ...allowance }, headroom, fits: headroom.calls >= 0 && headroom.tokens >= 0 && headroom.usdMicros >= 0 };
+}
+
+/** A fresh ledger's allowance for an approval: the first approval's thresholds net of its attested prior spend floors. */
+export function d17FreshAllowance(approval: HeldoutApproval) {
+  return heldoutCollectionAllowance(approval, { studyUsdMicros: Math.ceil(approval.priorStudySpendUsd * 1_000_000),
+    portfolioUsdMicros: Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000), studyCalls: 0, studyReservedTokens: 0,
+    counterBlocked: false, attempts: [], journalDigests: [], runs: [] });
+}
+
+/**
+ * The staged corpus is the diagnostic corpus for the same seed. Any attempt in the ledger on this corpus under another
+ * preregistration (for example a diagnostic run that saw test rows) means the seed is spent: use a fresh seed.
+ */
+export function assertD17SeedUnused(attempts: readonly HeldoutAttempt[], approval: Pick<HeldoutApproval, 'corpusDigest' | 'preregistrationDigest'>) {
+  if (attempts.some(attempt => attempt.corpusDigest === approval.corpusDigest && attempt.preregistrationDigest !== approval.preregistrationDigest)) {
+    throw new Error('D17 seed reused: this corpus already has observations under another preregistration');
+  }
 }

@@ -63,9 +63,16 @@ export const D17_CALIBRATION = {
   application: { champion: 'member', challenger: 'aggregate', tie: 'defer',
     acceptance: 'calibrated-yes-probability-not-0.5-and-native-aggregate-accept' },
   metricsArm: { member: 'champion', aggregate: 'challenger' },
+  // Qualification metrics are out-of-fold: each calibration row is scored by calibrators fitted without it.
+  qualificationMetrics: { method: 'slice-stratified-k-fold-out-of-fold', folds: 5,
+    assignment: 'row-id-order-within-slice-modulo-folds', finalMapping: 'full-calibration-split' },
   profile: { minimumTotalSamples: 380, minimumPerSliceSamples: 95, powerRule: null,
     confidenceInterval: { method: 'wilson', level: 0.95 }, maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 },
   developmentReview: { stage: 'development', assessments: 40,
-    requiredFor: ['phase-bundle', 'calibration-fit', 'calibration-registration', 'test-scoring'] },
+    requiredFor: ['phase-bundle', 'calibration-fit', 'calibration-registration', 'test-scoring'],
+    approvalBinding: 'calibration-phase approvalReference cites the development review digest' },
+  promotion: { studyDecision: 'HOLD-or-ROLLBACK', route: 'D09 PromotionEligibility + promoteChampionChallenger',
+    requires: ['locked-snapshot integrity gate PROMOTE', 'statistical gate pass', 'positive quality lower bound',
+      'anchored extra-cost tradeoff approval', 'D09 promotion eligibility'] },
   calibrationSetBinding: 'approval.calibration.calibrationArtifactDigest = heldoutDigest(decision-d17-calibration-set/v1)',
 } as const;

@@ -18,6 +18,9 @@
     },
     {
       "$ref": "#/$defs/reviewTemplate"
+    },
+    {
+      "$ref": "#/$defs/tradeoff"
     }
   ],
   "$defs": {
@@ -34,8 +37,10 @@
         "calibrators",
         "application",
         "metricsArm",
+        "qualificationMetrics",
         "profile",
         "developmentReview",
+        "promotion",
         "calibrationSetBinding"
       ],
       "properties": {
@@ -170,6 +175,30 @@
             }
           }
         },
+        "qualificationMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "folds",
+            "assignment",
+            "finalMapping"
+          ],
+          "properties": {
+            "method": {
+              "const": "slice-stratified-k-fold-out-of-fold"
+            },
+            "folds": {
+              "const": 5
+            },
+            "assignment": {
+              "const": "row-id-order-within-slice-modulo-folds"
+            },
+            "finalMapping": {
+              "const": "full-calibration-split"
+            }
+          }
+        },
         "profile": {
           "type": "object",
           "additionalProperties": false,
@@ -225,7 +254,8 @@
           "required": [
             "stage",
             "assessments",
-            "requiredFor"
+            "requiredFor",
+            "approvalBinding"
           ],
           "properties": {
             "stage": {
@@ -242,11 +272,41 @@
                 "calibration-registration",
                 "test-scoring"
               ]
+            },
+            "approvalBinding": {
+              "const": "calibration-phase approvalReference cites the development review digest"
             }
           }
         },
         "calibrationSetBinding": {
           "const": "approval.calibration.calibrationArtifactDigest = heldoutDigest(decision-d17-calibration-set/v1)"
+        },
+        "promotion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "studyDecision",
+            "route",
+            "requires"
+          ],
+          "properties": {
+            "studyDecision": {
+              "const": "HOLD-or-ROLLBACK"
+            },
+            "route": {
+              "const": "D09 PromotionEligibility + promoteChampionChallenger"
+            },
+            "requires": {
+              "type": "array",
+              "const": [
+                "locked-snapshot integrity gate PROMOTE",
+                "statistical gate pass",
+                "positive quality lower bound",
+                "anchored extra-cost tradeoff approval",
+                "D09 promotion eligibility"
+              ]
+            }
+          }
         }
       }
     },
@@ -264,7 +324,8 @@
         "evidenceDigest",
         "n",
         "rows",
-        "blocks"
+        "blocks",
+        "qualification"
       ],
       "properties": {
         "schemaVersion": {
@@ -359,6 +420,30 @@
                 "exclusiveMinimum": 0,
                 "exclusiveMaximum": 1
               }
+            }
+          }
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "folds",
+            "outOfFold",
+            "inSample"
+          ],
+          "properties": {
+            "method": {
+              "const": "slice-stratified-k-fold-out-of-fold"
+            },
+            "folds": {
+              "const": 5
+            },
+            "outOfFold": {
+              "$ref": "#/$defs/metrics"
+            },
+            "inSample": {
+              "$ref": "#/$defs/metrics"
             }
           }
         }
@@ -592,6 +677,141 @@
         },
         "expiresAfterDays": {
           "const": 30
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalSamples",
+        "perSliceSamples",
+        "calibrationError",
+        "selectiveRisk",
+        "confidenceIntervals"
+      ],
+      "properties": {
+        "totalSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "perSliceSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "calibrationError": {
+          "type": "number",
+          "minimum": 0
+        },
+        "selectiveRisk": {
+          "type": "number",
+          "minimum": 0
+        },
+        "confidenceIntervals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selectiveRisk",
+            "coverage"
+          ],
+          "properties": {
+            "selectiveRisk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lower",
+                "upper"
+              ],
+              "properties": {
+                "lower": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "upper": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "coverage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lower",
+                "upper"
+              ],
+              "properties": {
+                "lower": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "upper": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tradeoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "approved",
+        "reviewer",
+        "reportDigest",
+        "statisticsDigest",
+        "netSavingsMicros",
+        "acceptedAdditionalCostMicros",
+        "qualityLowerBps",
+        "approvalReference",
+        "approvedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-tradeoff-approval/v1"
+        },
+        "approved": {
+          "const": true
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "reportDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "statisticsDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "netSavingsMicros": {
+          "type": "number"
+        },
+        "acceptedAdditionalCostMicros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "qualityLowerBps": {
+          "type": "integer"
+        },
+        "approvalReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "approvedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
         }
       }
     }
