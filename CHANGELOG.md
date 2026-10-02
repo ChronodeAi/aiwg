@@ -9,6 +9,26 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17-MF multi-fact probe (#2850), following the D17
+  calibrated live run's multi-fact degradation. A no-spend diagnosis of the
+  existing observations localized it to missing links written with a
+  contrastive verb (raw 0/73 for `halts`).
+  - The registered generator `d17-multifact/v1` builds a preregistered
+    factorial design: 3 disjoint wording pools × relay hops {1, 3} × outcome
+    (yes, disabled relay, missing link as contrastive verb, explicit negation
+    or unrelated verb), plus D17-faithful control cells. It has 5,772 rows,
+    with key cells at 250 rows.
+  - Off-chain decoy lines equalize every cue class independently of the label,
+    so a D29-style shortcut audit (balanced-accuracy limit 0.60) gates
+    preparation.
+  - Calibrated evaluation applies the registered D17 member calibrator in
+    collector artifact mode. Scoring re-derives the D17 set from its seal and
+    qualifies the artifact at the scoring clock.
+  - The scorer reports per-cell accuracy, calibrated confidence and ECE, and
+    the preregistered H1–H4 verdicts. Its decision is always HOLD.
+  - New study generators register in `src/decision/heldout/study-generators.ts`,
+    so the D17 and D29 generator pins are unchanged.
+  - New schema `D17Multifact.v1`. No live collection is included.
 - Experimental, default-off D17 staged D09 calibration (#2611). `d17-study.mjs`
   adds `--prepare-staged`, which keeps the same corpus, split and gold pins and
   adds a calibrated `staged` preregistration over tuning and calibration plus a
