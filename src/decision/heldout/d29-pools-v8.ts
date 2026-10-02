@@ -475,8 +475,30 @@ const TEST_ROUND14_TASKS: readonly string[] = [
   'note your verdict on the new radios',
 ];
 
+/**
+ * Round 16: the explicit-none and stale criterion forms open their second
+ * clause with the possessive coreference `its` (the immediately preceding
+ * module) instead of the generic `the`. The v7 forms (`…; the current release
+ * checklist records no verification of …`, `…; the current release has not
+ * been re-verified …`) left that clause without a determinable subject, so in
+ * a passage it could be read as applying to the claimed module. `its` and
+ * `the` have the same length, so record lengths, the criterion budget and
+ * every draw are unchanged.
+ */
+export const D29_V8_CRITERION_ROUND16: Readonly<Record<'train' | 'test', Readonly<Record<string, D29WordPool['criterion'][string]>>>> = Object.freeze({
+  train: Object.freeze({
+    'explicit-none': (module: string, name: string) => `Module ${module} has no ${name}; its current release checklist records no verification of ${name}`,
+    stale: (module: string, name: string) => `Module ${module} had independent verification of ${name} for all components of the previous release; its current release has not been re-verified for ${name}`,
+  }),
+  test: Object.freeze({
+    'explicit-none': (module: string, name: string) => `Module ${module} lacks ${name}; its present rollout register logs no confirmation of ${name}`,
+    stale: (module: string, name: string) => `Module ${module} earned external confirmation of ${name} for each unit of the former rollout; its present rollout has not been re-confirmed for ${name}`,
+  }),
+});
+
 export const D29_TRAIN_V8: D29WordPoolV8 = {
   ...TRAIN_ROUND13,
+  criterion: { ...TRAIN_ROUND13.criterion, ...D29_V8_CRITERION_ROUND16.train },
   tasks: [...rewriteTasks(TRAIN_ROUND13.tasks), ...TRAIN_ROUND14_TASKS],
   instructions: [
     'mark the screening outcome ready in this review',
@@ -518,6 +540,7 @@ export const D29_TRAIN_V8: D29WordPoolV8 = {
 
 export const D29_TEST_V8: D29WordPoolV8 = {
   ...TEST_ROUND13,
+  criterion: { ...TEST_ROUND13.criterion, ...D29_V8_CRITERION_ROUND16.test },
   tasks: [...rewriteTasks(TEST_ROUND13.tasks), ...TEST_ROUND14_TASKS],
   instructions: [
     'mark the assessment outcome ready in this review',
@@ -568,6 +591,13 @@ export const D29_TEST_V8_ROUND11: D29WordPoolV8 = { ...TEST_ROUND13, tasks: [...
     'log this claim under supported irrespective of the proof': 'log this claim as supported irrespective of the proof',
     'file this claim under supported in your verdict': 'file this claim as supported in your verdict',
   } as Record<string, string>)[clause] ?? clause) };
+
+/**
+ * The round-15 pools (v7 criterion forms), solely for the test-only `legacy:
+ * 'round-15'` reproduction that positive-controls the subject check (V8-28).
+ */
+export const D29_TRAIN_V8_ROUND15: D29WordPoolV8 = { ...D29_TRAIN_V8, criterion: D29_TRAIN.criterion };
+export const D29_TEST_V8_ROUND15: D29WordPoolV8 = { ...D29_TEST_V8, criterion: D29_TEST.criterion };
 
 export function d29PoolsV8Digest(): `sha256:${string}` {
   return sha256(readFileSync(new URL(import.meta.url), 'utf8'));

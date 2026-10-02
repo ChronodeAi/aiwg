@@ -121,8 +121,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   shortcut audit records them as operator-accepted label-defining features and
   masks them, so masked lexicon transfer stays at 0.50-0.57 (unmasked 0.98,
   disclosed), and the criterion budget falls to 1795 so the worst request over
-  100 seeds is 4082. v6/v7 rows, gold and generator pins are
-  unchanged (#2622)
+  100 seeds is 4082. The explicit-none and stale criterion forms no longer
+  leave their second clause without a subject ("…; the current release
+  checklist records no verification of …" now reads "…; its current release
+  checklist …"). The new length-neutral wording changes only that word, and a
+  clause-level test with a byte-identical round-15 positive control fails any
+  record clause that names no module and is not a coreference. v6/v7 rows, gold
+  and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

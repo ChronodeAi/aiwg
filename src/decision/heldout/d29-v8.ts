@@ -4,7 +4,8 @@ import { d29Baseline, d29WorldV4, drawD29Stream, D29_V4_VARIANTS } from './gener
 import { d29PassageBaseline } from './d29-passage-baseline.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
-import { D29_TEST_V8, D29_TEST_V8_ROUND11, D29_TRAIN_V8, D29_TRAIN_V8_ROUND11, type D29WordPoolV8 } from './d29-pools-v8.js';
+import { D29_TEST_V8, D29_TEST_V8_ROUND11, D29_TEST_V8_ROUND15, D29_TRAIN_V8, D29_TRAIN_V8_ROUND11, D29_TRAIN_V8_ROUND15,
+  type D29WordPoolV8 } from './d29-pools-v8.js';
 import type { HeldoutRow } from './types.js';
 
 /**
@@ -170,14 +171,16 @@ export const D29_V8_MODE_FREE_VARIANTS = Object.freeze(['other-attribute', 'near
  * the row offset. `round-8`: additionally, only a relevant record on the
  * claimed module with a non-claim attribute entered distractor placement, with
  * one to three criterion distractors (V8-22). `round-11`: the benign task pools
- * without the round-12 tasks (V8-26).
+ * without the round-12 tasks (V8-26). `round-15`: the v7 explicit-none and
+ * stale criterion forms, whose second clause names no module (V8-28).
  */
-export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?: 'round-8' | 'round-9' | 'round-11' } = {}) {
+export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?: 'round-8' | 'round-9' | 'round-11' | 'round-15' } = {}) {
   const legacyRelevantPlacement = legacy === 'round-8';
   const prior = legacy === 'round-8' || legacy === 'round-9';
   const base = d29WorldV4(seed, ordinal);
   const train = base.split !== 'test';
-  const pool = legacy ? train ? D29_TRAIN_V8_ROUND11 : D29_TEST_V8_ROUND11 : train ? D29_TRAIN_V8 : D29_TEST_V8;
+  const pool = legacy === 'round-15' ? train ? D29_TRAIN_V8_ROUND15 : D29_TEST_V8_ROUND15
+    : legacy ? train ? D29_TRAIN_V8_ROUND11 : D29_TEST_V8_ROUND11 : train ? D29_TRAIN_V8 : D29_TEST_V8;
   const world = { ...base.world, pool: train ? 'train' as const : 'test' as const };
   const offset = Number(base.familyId.split('-').at(-1));
   const seedKey = sha256(seed);

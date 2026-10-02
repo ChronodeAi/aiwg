@@ -131,7 +131,7 @@ export function recordUnits(row, pools) {
     if (!/Module \d|\b(?:It|it)\b|[Tt]hat module/.test(sentence)) continue;
     if (!continues) { current = []; logical.push(current); }
     continues = false;
-    for (const part of sentence.split(/; (?!now |it |the current release|no independent|the present rollout|no external)/)) {
+    for (const part of sentence.split(/; (?!now |it |its current release|its present rollout|the current release|no independent|the present rollout|no external)/)) {
       const lead = LEAD.exec(part);
       if (lead) { current.push({ lead: lead[1] }); continues = true; } else current.push({ part });
     }
@@ -652,4 +652,40 @@ export function allRecordVariantScores(rows, parsed) {
     }
   }
   return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Round 16: clauses that assert a record but have no determinable subject.
+ *
+ * The visible text (claim or criterion, passage, context) is split into
+ * clauses at `.`, `;`, line breaks, comment delimiters and the note brackets.
+ * A clause asserts a record when it names a criterion, or an attribute noun
+ * together with a value. Such a clause must name a module identifier, or be a
+ * coreference (`it` / `its` / `that module`, or a subject ellipsis opening
+ * with `now`) whose immediately preceding clause names a module or is itself
+ * such a coreference. Returns the offending clauses.
+ */
+const MODULE_ID = /\bModule \d{6}-\d{6}-\d{6}\b/;
+const CRITERION_NAMES = /\b(?:rollback coverage|security review sign-off|migration test coverage)\b/;
+const ATTRIBUTE_NOUN = /\b(?:port|protocol|region|team|major version)\b/;
+const ATTRIBUTE_VALUE = /\b(?:\d+|QUIC|TCP|UDP|SCTP|east|west|north|south|Cedar|Maple|Birch|Aspen)\b/;
+const ANAPHOR = /^(?:it|now)\b|\b(?:it|its|that module)\b/i;
+export function clausesOf(payload) {
+  const text = [payload.claim ?? payload.criterion, payload.source ?? payload.evidence, payload.context].filter(Boolean).join('\n');
+  return text.split(/\.(?=\s|$)|;|\n|<!--|-->|[()[\]]|^>\s/m).map(clause => clause.replace(/^\s*>\s*/, '').trim()).filter(Boolean);
+}
+export function assertsRecord(clause) {
+  return CRITERION_NAMES.test(clause) || (ATTRIBUTE_NOUN.test(clause) && ATTRIBUTE_VALUE.test(clause));
+}
+export function subjectlessClauses(payload) {
+  const clauses = clausesOf(payload), found = [];
+  // A clause has a determinable subject when it names a module, or when it is a
+  // coreference and its immediately preceding clause has one (so `Module N …. It
+  // was released from port V; it is currently bound to port W` resolves to N).
+  const resolved = [];
+  clauses.forEach((clause, i) => {
+    resolved[i] = MODULE_ID.test(clause) || (ANAPHOR.test(clause) && i > 0 && resolved[i - 1]);
+    if (assertsRecord(clause) && !resolved[i]) found.push(clause);
+  });
+  return found;
 }

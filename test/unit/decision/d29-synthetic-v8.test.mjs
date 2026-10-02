@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { D29_TRAIN, D29_TEST, D29_POOL_EXCLUSIVE_MARKERS } from '../../../src/decision/heldout/d29-pools.js';
-import { D29_TRAIN_V8, D29_TEST_V8, D29_V8_REFERENT_PHRASES } from '../../../src/decision/heldout/d29-pools-v8.js';
+import { D29_TRAIN_V8, D29_TEST_V8, D29_V8_REFERENT_PHRASES, D29_TRAIN_V8_ROUND11, D29_TEST_V8_ROUND11, D29_TRAIN_V8_ROUND15,
+  D29_TEST_V8_ROUND15 } from '../../../src/decision/heldout/d29-pools-v8.js';
+/** The wording pools a (legacy) generator option renders with, so structure scans parse each row with its own forms. */
+const poolsFor = ({ legacy } = {}) => legacy === 'round-15' ? { train: D29_TRAIN_V8_ROUND15, test: D29_TEST_V8_ROUND15 }
+  : legacy ? { train: D29_TRAIN_V8_ROUND11, test: D29_TEST_V8_ROUND11 } : { train: D29_TRAIN_V8, test: D29_TEST_V8 };
 
 /** Instruction text outside the operator-accepted label-defining referent phrases (round 15), one segment per gap. */
 const outsideReferents = text => D29_V8_REFERENT_PHRASES.reduce((parts, phrase) => parts.flatMap(part => part.split(phrase)), [text]);
@@ -726,12 +730,11 @@ describe('D29 v8 review round 9', () => {
   it('V8-22 keeps claimed-module distractors (relevant record excluded by rendered position) off every label and variant, and catches the round-8 placement', async () => {
     const { recordUnits, claimedDistractorFeatures, claimedDistractorCounts, countRuleTransfer, blindTree } = await import('./d29-structure-scan.mjs');
     const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
-    const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
     const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
     /** Highest TRAIN→TEST and TEST→TRAIN score of claimed-distractor trees and count rules, pooled over the three seeds. */
     const scan = options => {
       const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
-      const parsed = new Map(rows.map(row => [row, recordUnits(row, pools)]));
+      const parsed = new Map(rows.map(row => [row, recordUnits(row, poolsFor(options))]));
       for (const row of rows) expect(parsed.get(row).units.filter(unit => unit.role === 'relevant'), row.id).toHaveLength(1);
       const sets = new Map(rows.map(row => [row, claimedDistractorFeatures(parsed.get(row))]));
       const found = [];
@@ -764,14 +767,13 @@ describe('D29 v8 review round 9', () => {
 });
 
 describe('D29 v8 review round 10', () => {
-  const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
   const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
   const build = options => {
     const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
-    return { rows, parsed: new Map(rows.map(row => [row, recordUnitsOf(row)])) };
+    return { rows, parsed: new Map(rows.map(row => [row, recordUnitsOf(row, poolsFor(options))])) };
   };
   let recordUnitsOf;
-  beforeAll(async () => { const { recordUnits } = await import('./d29-structure-scan.mjs'); recordUnitsOf = row => recordUnits(row, pools); });
+  beforeAll(async () => { ({ recordUnits: recordUnitsOf } = await import('./d29-structure-scan.mjs')); });
 
   it('V8-23 keeps every non-label-defining relevant-record feature below 0.75 on every variant, and catches the round-9 exact mode', async () => {
     const { relevantOnlyScores } = await import('./d29-structure-scan.mjs');
@@ -885,4 +887,34 @@ describe('D29 v8 review round 14', () => {
       expect(D29_V8_BENIGN_DEIXIS.some(pattern => pattern.test(clause)), clause).toBe(true);
     }
   });
+});
+
+describe('D29 v8 record clause subjects', () => {
+  it('V8-28 gives every record-asserting clause a module or a coreference to the preceding module, and catches the round-15 checklist clause', async () => {
+    const { subjectlessClauses } = await import('./d29-structure-scan.mjs');
+    const scan = options => {
+      const rows = {}, clauses = new Set();
+      for (const seed of [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b']) for (const row of worlds((s, o) => d29WorldV8(s, o, options), seed)) {
+        const found = subjectlessClauses(row.payload);
+        if (!found.length) continue;
+        const key = `${row.world.pool}/${row.world.kind === 'citation' ? 'citation' : 'criterion'}`;
+        rows[key] = (rows[key] ?? 0) + 1;
+        for (const clause of found) clauses.add(clause.replace(/rollback coverage|security review sign-off|migration test coverage/, '<criterion>'));
+      }
+      return { rows, clauses: [...clauses].sort() };
+    };
+    const current = scan({});
+    expect(current.rows).toEqual({});
+    // Positive control: the round-15 head (legacy: 'round-15', byte for byte) renders the v7 explicit-none and
+    // stale forms, whose second clause names no module, in both pools.
+    const round15 = scan({ legacy: 'round-15' });
+    expect(round15.rows['train/criterion']).toBeGreaterThan(100);
+    expect(round15.rows['test/criterion']).toBeGreaterThan(100);
+    expect(round15.clauses).toEqual([
+      'the current release checklist records no verification of <criterion>',
+      'the current release has not been re-verified for <criterion>',
+      'the present rollout has not been re-confirmed for <criterion>',
+      'the present rollout register logs no confirmation of <criterion>',
+    ]);
+  }, MULTI_AUDIT_TIMEOUT);
 });
