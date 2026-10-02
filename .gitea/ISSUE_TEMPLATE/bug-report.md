@@ -21,7 +21,7 @@ node --version                # → fill in Node version below
 
 - [ ] **AIWG version**: `<paste from aiwg version, e.g. 2026.5.2 [stable]>`
 - [ ] **Operating system**: `<paste from uname -a — full line including kernel>`
-- [ ] **Provider** (the AIWG harness you were running): one of `claude-code` / `hermes` / `codex` / `copilot` / `cursor` / `warp` / `factory` / `opencode` / `windsurf` / `openclaw`
+- [ ] **Provider** (the AIWG harness you were running): one of `antigravity` / `claude` / `codex` / `copilot` / `cursor` / `deepseek-harness` / `factory` / `grokbot` / `grok-build` / `hermes` / `muse` / `opencode` / `openclaw` / `openhuman` / `pi` / `omp` / `warp` / `windsurf` / `generic`
 - [ ] **Node version**: `<paste from node --version>`
 - [ ] **Install location**: one of `npm-global` / `linuxbrew` / `local-source` / `project-local`
 

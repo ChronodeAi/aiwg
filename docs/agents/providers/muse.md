@@ -79,7 +79,10 @@ aiwg status --probe --json   # Muse restart copy — never Cursor wording
 aiwg doctor --provider muse
 ```
 
-`aiwg doctor --provider muse` checks the labeled Muse surfaces, the deployed
+`aiwg doctor --provider muse` checks the labeled Muse surfaces, reports a
+"Muse Code native extensions" section (the `muse` CLI version, whether
+`.muse/hooks.json` holds the AIWG-managed group, and whether the user
+settings register the `aiwg` MCP server), the deployed
 `.agents/skills/` listing, and the context/memory firewall scan over the
 muse layout (`AGENTS.md` bridge + project skill root). Muse has no native
 agent surface; the Agents line reports that agents are indexed and reached

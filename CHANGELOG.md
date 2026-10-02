@@ -272,6 +272,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg doctor` reports a "Muse Code native extensions" section (CLI version,
+  managed hooks, MCP registration) for `--provider muse` or Muse-deployed
+  projects, and the bug and tester-report templates list every provider id,
+  including `muse`, `grokbot`, and `grok-build` (#2729).
 - Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
   per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
   bound) and fails the canary on unknown or over-bound reported output, stopping
