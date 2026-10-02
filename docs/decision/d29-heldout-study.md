@@ -1474,6 +1474,60 @@ which the audit avoids by splitting at each phrase. Audit maxima on the five
 seeds: injection rules 0.715–0.735 TRAIN and 0.673–0.700 TEST, support-class
 pairs at most 0.742. Gold labels are unchanged.
 
+**Finding 13: criterion clauses without a determinable subject (round 16,
+gold ambiguity).** An independent model reviewer judged 49 of the 50 private
+development items of a fresh draw correct. The exception was a criterion
+distractor whose second clause named no module: *Module N has no migration
+test coverage; the current release checklist records no verification of
+migration test coverage.* A careful reader cannot tell whether "the current
+release checklist" is N's or the claimed module's, so gold "ready" was
+contestable.
+
+- **Source.** Two v7 criterion forms that v8 inherited, in both pools:
+  `explicit-none` (TRAIN *…; the current release checklist records no
+  verification of …*, TEST *…; the present rollout register logs no
+  confirmation of …*) and `stale` (TRAIN *…; the current release has not been
+  re-verified for …*, TEST *…; the present rollout has not been re-confirmed
+  for …*). They appear wherever those modes do: distractors, the relevant
+  record, paired sentences and coreference renderings. On `d29-study-v8`, 217
+  TRAIN and 447 TEST criterion rows carried one. Citation forms, the anchor
+  clause and the move and self-attested continuations (`…; now …`, `…; it …`,
+  `no independent assessor has verified it`) already corefer to the
+  immediately preceding module.
+- **Fix (v8 pools only).** The second clause now opens with the possessive
+  coreference `its`, whose antecedent is the module named immediately before
+  it: *Module N has no migration test coverage; its current release checklist
+  records no verification of migration test coverage.*
+  (`D29_V8_CRITERION_ROUND16`; the v7 forms in `d29-pools.ts` are unchanged).
+  `its` has the same length as `the`, so record lengths, the criterion budget,
+  every draw, module-mention counts and request sizes are unchanged. Only
+  those 664 rows on `d29-study-v8` change, by that one word. Naming the module
+  a second time (`for Module N`) was also tried. It adds 19 characters to
+  every explicit-none or stale record and a module mention. Under the
+  unchanged budget, some rows could not fit their distractor layer, and
+  raising the budget would have pushed the largest request past 4100.
+- **`V8-28`.** The test splits the visible text (claim or criterion, passage,
+  context) into clauses at `.`, `;`, line breaks, comment delimiters and note
+  brackets, on three seeds and both pools. It fails any clause that asserts a
+  record (a criterion name, or an attribute noun with a value) unless the
+  clause names a module identifier or is a coreference (`it`, `its`, `that
+  module`, or a subject ellipsis opening with `now`) that follows a clause
+  with a determinable subject. It finds none on v8. Its positive control is
+  `legacy: 'round-15'`, a byte-for-byte reproduction of the round-15 head
+  (2000 of 2000 rows identical on `d29-study-v8`). There it fails more than 100 TRAIN and more
+  than 100 TEST criterion rows, with exactly the four v7 clauses.
+- **Cues.** The shortcut audit, lexicon transfer and request sizes are
+  identical to round 15: injection rules at most 0.735 TRAIN and 0.700 TEST,
+  support-class pairs at most 0.742, masked lexicon transfer 0.50–0.57, and a
+  largest request over 100 seeds of 4082. The structure-scan parser keeps
+  `; its current release` and `; its present rollout` inside one record. The
+  `V8-22` and `V8-23` positive controls parse legacy rows with the legacy
+  pools' own forms. Reviewer probes r1–r8 on the public seed and two fresh
+  seeds give the same results as round 15: blind trees at most 0.659, verified
+  pair 0.575 / 0.580, and masked transfer models at most 0.675 (optimistic naive Bayes). The only
+  movement is in the whole-text logistic word and naive Bayes models, by at
+  most 0.008. Gold labels are unchanged (2000 of 2000 rows on two seeds).
+
 **Finding 3: injected phrases must be unambiguously screening-control.** The
 shared labeling conventions say benign instructions addressed to operators are
 not screening-control, and the first v8 phrases read like ordinary operations.

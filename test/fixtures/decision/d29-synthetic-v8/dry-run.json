@@ -1546,7 +1546,7 @@
       }
     }
   },
-  "gateBindingDigest": "sha256:c1d35a8462646063977e246660c5704373cb54797c68b34047d1f633ec434102",
+  "gateBindingDigest": "sha256:453b8a6044ceca44189b21cce41603bc50c095c85db89bf4459835dd0541e5f6",
   "gatePackDigests": [
     {
       "id": "aiwg:decision-engine/absolute-screening",
@@ -1578,7 +1578,7 @@
             "positives": 100,
             "negatives": 100,
             "limit": 0.75,
-            "featureCount": 92705,
+            "featureCount": 92715,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
             "maximumSingleBalancedAccuracy": 0.635,
@@ -1738,7 +1738,7 @@
             "positives": 100,
             "negatives": 400,
             "limit": 0.75,
-            "featureCount": 151684,
+            "featureCount": 151694,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
             "maximumSingleBalancedAccuracy": 0.58375,
@@ -2707,7 +2707,7 @@
             "positives": 300,
             "negatives": 300,
             "limit": 0.75,
-            "featureCount": 178212,
+            "featureCount": 178224,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
             "maximumSingleBalancedAccuracy": 0.63,
@@ -2867,7 +2867,7 @@
             "positives": 300,
             "negatives": 1200,
             "limit": 0.75,
-            "featureCount": 298641,
+            "featureCount": 298651,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
             "maximumSingleBalancedAccuracy": 0.5979166666666667,
@@ -3903,13 +3903,13 @@
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:02cc1a8f098d40e4d70beefd476d8ca63eed058ef24f09a234b13a5a08257d6e",
-  "analysisDigest": "sha256:3f441517623c3072069ff3d61cfb90cd19bf8ea62395bee96bd08f0a7f2096c3",
-  "corpusDigest": "sha256:e089c0a08971eb55c6bd0d56905229e737e9a1e3ee9121b18a2d5b4ebb84b758",
+  "preregistrationDigest": "sha256:68238e8e60ece1d805fe20b30d132fcd22e76fddc2e724eb54d2d1e12ccde828",
+  "analysisDigest": "sha256:607cf30c8086c00b06bde2af10c2dbe505f2c97623a8bb55ca562e8eba619624",
+  "corpusDigest": "sha256:ecf148eaea5e7da9e65e481698e12b7d3ecbc431ded55e61cb2fb97a5f285dcf",
   "goldDigest": "sha256:bcad081be4d60051190c30f7c8275c73a638f4bd2766bcdeadb276ad6f099306",
-  "generatorDigest": "sha256:5f82c0c6f0e5f1c5c8c3f9b79aa60f02a3e1fcfdf9ab5ef2106ca0b118ebe173",
+  "generatorDigest": "sha256:0d61c2230acf585775de66f5a0a04ad232005b144698efada1963f2b796a6f61",
   "scorerDigest": "sha256:5f7d99de6c72c8ef6eb0dcf686e75c7e11990db2d638b08c5e673e4da0ddfc47",
-  "approvalTemplateDigest": "sha256:89782c925d9a9b46e6cd63fc57927fcf0420de41c9413ab63a25ae324b16aa1a",
+  "approvalTemplateDigest": "sha256:17894e7b5066f442a19b81955c9bfea0e6d304235fda6ad2e0d191579a40a541",
   "splitDigests": [
     {
       "name": "tuning",
