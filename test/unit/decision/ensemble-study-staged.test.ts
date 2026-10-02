@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepare, runD17Bundle, runD17Calibration, runD17PhaseDryRun } from '../../../tools/decision/d17-study.mjs';
 import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { readHeldoutCalibrationPhase } from '../../../src/decision/heldout/calibration.js';
@@ -31,10 +31,14 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
     }) };
 });
 
-// Entry admission measures a 1s wall-clock budget; freeze performance.now() so host load never trips it.
-beforeEach(() => { vi.useFakeTimers({ toFake: ['performance'] }); });
+// Entry admission measures a 1s wall-clock budget; freeze only performance.now() for the whole file (as in #2848 and
+// d29-test-support.mjs) so host load never trips it, including during the file-level preparation below.
+const ADMISSION_CLOCK = ['performance'] as const;
+beforeAll(() => { vi.useFakeTimers({ toFake: [...ADMISSION_CLOCK] }); });
+beforeEach(() => { vi.useFakeTimers({ toFake: [...ADMISSION_CLOCK] }); });
+afterAll(() => { vi.useRealTimers(); });
 const dirs: string[] = [];
-afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('d17-staged-offline');
 type Staged = Awaited<ReturnType<typeof prepare>>;
 let staged: Staged, diagnostic: Staged;

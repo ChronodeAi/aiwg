@@ -259,11 +259,12 @@ jobs:
         run: npm run test:integration:artifact-index
 
   # Heavy D29 study suites (multi-seed structure scans, positive controls,
-  # repeated audits; config/test-lanes.mjs d29SlowFiles) run here on every
+  # repeated audits; config/test-lanes.mjs d29SlowFiles) and the heavy D17
+  # staged-calibration suite (d17SlowFiles) run here on every
   # push so they never push the shared test:ci step past its 10m cap. The
   # default lane keeps a fast single-seed D29 v8 smoke file.
   d29-slow:
-    name: D29 study suites
+    name: D29 and D17 study suites
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 30
@@ -272,7 +273,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
       - name: Install locked dependencies
         run: npm ci
-      - name: Run D29 study suites
+      - name: Run D29 and D17 study suites
         # Bounded below the job cap so a hang is reported with a process tree.
         run: node tools/ci/run-with-hang-report.mjs --timeout 25m -- npm run test:d29-slow
 
