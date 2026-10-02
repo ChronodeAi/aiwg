@@ -69,7 +69,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   staged run, and the v8 criterion budget charges the longest relevant
   record, slot note and coreference leads, with one to three length-limited
   benign notes: the worst request over 100 seeds falls from 4249 to 4081
-  (bound 4244). v6/v7 rows, gold and generator pins are unchanged (#2622)
+  (bound 4244). Benign task pools now contain every bigram (and every
+  cross-pool trigram) of the injection instructions in operational senses,
+  two TEST instructions drop "this claim as", and the shortcut audit refuses
+  any injection n-gram lexicon that transfers between wording pools at 0.75
+  or more (0.86 before, 0.56 now). v6/v7 rows, gold and generator pins are
+  unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

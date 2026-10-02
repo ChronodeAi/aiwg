@@ -2040,7 +2040,7 @@
     }
   },
   "shortcutAudit": {
-    "sourceDigest": "sha256:07781004135e38db9acd2a967be7de49dee0469a2f3ba74d29f72f9416bac587",
+    "sourceDigest": "sha256:93c43839860c6682d8bb9a7910b6a2ac6a11b1c92a252073fe7ada95c15c8f7c",
     "pairFeatureLimit": 200,
     "structuralPairLimit": 400,
     "lexiconCandidates": 40,
@@ -2061,7 +2061,15 @@
     "modelReadiness": 0.8,
     "modelSupport": 0.85,
     "injectionPopulation": "injected-or-otherwise-supporting-or-ready-evidence",
-    "reportDigest": "sha256:0d3096066ce04569b70e12a0c584b1630d4aded91bbabc777fa6bbe2107d999a",
+    "injectionLexiconTransfer": {
+      "ngramSizes": [
+        2,
+        3
+      ],
+      "minSupport": 5,
+      "limit": 0.75
+    },
+    "reportDigest": "sha256:1a518093664847649c27ab055c4477a2bdc4329ecdf4e4d7ed0e7ebf47c8b9a8",
     "passed": true
   },
   "native": {
@@ -2176,7 +2184,7 @@
       "frozenAt": "2026-10-02T00:00:00.000Z",
       "holdoutAccessedAt": null,
       "splitDigest": "sha256:bcb8b5aac8e55b25579613a9724e7a2e6816fd1c76fcea271b490f82843ae687",
-      "corpusDigest": "sha256:820bee0823532ac6e658f973c2131f7f40604823d89c95f11a8717025370d86f",
+      "corpusDigest": "sha256:899c992b6292064fb57e23c7a03ecaaa1ab2a586a69111a383a00aaaab86e614",
       "goldDigest": "sha256:bcad081be4d60051190c30f7c8275c73a638f4bd2766bcdeadb276ad6f099306"
     }
   },

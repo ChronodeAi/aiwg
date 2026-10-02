@@ -38,7 +38,36 @@ export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
   injection: LIMITS.injection, readiness: LIMITS.readiness, support: LIMITS.supports,
   modelInjection: MODEL_LIMITS.injection, modelReadiness: MODEL_LIMITS.readiness, modelSupport: MODEL_LIMITS.supports,
   injectionPopulation: 'injected-or-otherwise-supporting-or-ready-evidence',
+  injectionLexiconTransfer: Object.freeze({ ngramSizes: Object.freeze([2, 3]), minSupport: 5, limit: LIMITS.injection }),
 });
+
+/**
+ * Pool-transfer n-gram lexicon for the injection target (round 12). The v5
+ * lexicon is a greedy OR of up to five single tokens, so it missed bigrams that
+ * occurred only in injection instructions: on the round-11 corpus a bigram
+ * lexicon learned on TRAIN rows found TEST injections at 0.86-0.89. Learns
+ * every word n-gram (sizes 2 and 3) present in at least `minSupport` injected
+ * rows and in no non-injected row of the learning pool's injection
+ * population, then scores "any lexicon n-gram present" on the other pool by
+ * balanced accuracy. `rows` carry `{ injected, text }`.
+ */
+export function injectionNgramLexiconTransfer(learnRows, scoreRows, { ngramSizes = [2, 3], minSupport = 5 } = {}) {
+  const grams = text => {
+    const tokens = tokenize(text), out = new Set();
+    for (const n of ngramSizes) for (let i = 0; i + n <= tokens.length; i++) out.add(tokens.slice(i, i + n).join(' '));
+    return out;
+  };
+  const learn = learnRows.map(row => ({ injected: row.injected, grams: grams(row.text) }));
+  const benign = new Set(learn.filter(row => !row.injected).flatMap(row => [...row.grams]));
+  const support = new Map();
+  for (const row of learn.filter(row => row.injected)) for (const gram of row.grams) if (!benign.has(gram)) support.set(gram, (support.get(gram) ?? 0) + 1);
+  const lexicon = new Set([...support].filter(([, n]) => n >= minSupport).map(([gram]) => gram));
+  const scored = scoreRows.map(row => ({ injected: row.injected, hit: [...grams(row.text)].some(gram => lexicon.has(gram)) }));
+  const positives = scored.filter(row => row.injected), negatives = scored.filter(row => !row.injected);
+  const balancedAccuracy = positives.length && negatives.length
+    ? (positives.filter(row => row.hit).length / positives.length + negatives.filter(row => !row.hit).length / negatives.length) / 2 : 0.5;
+  return { terms: lexicon.size, balancedAccuracy };
+}
 
 /**
  * The injection target's population. Injected rows carry only supporting
@@ -544,6 +573,13 @@ export function shortcutAuditV8(corpus, gold) {
   }
   const topRules = pools.flatMap(entry => entry.targets.flatMap(target => [...target.topSingleRules, ...target.topPairRules]
     .map(rule => ({ pool: entry.pool, ...rule })))).sort(compare).slice(0, 10);
+  const lexiconRows = pool => pooled[pool].filter(row => injectionPopulationV8(row.world, row.gold))
+    .map(row => ({ injected: row.world.injected, text: fields(row.payload).all }));
+  const { ngramSizes, minSupport, limit: lexiconLimit } = SHORTCUT_AUDIT_V8_PARAMETERS.injectionLexiconTransfer;
+  const injectionLexiconTransfer = [['train', 'test'], ['test', 'train']].map(([from, to]) => {
+    const result = injectionNgramLexiconTransfer(lexiconRows(from), lexiconRows(to), { ngramSizes, minSupport });
+    return { fromPool: from, toPool: to, ...result, limit: lexiconLimit, passed: result.balancedAccuracy < lexiconLimit };
+  });
   return { schemaVersion: 'decision-d29-shortcut-audit/v5', pools, injectionPopulation: SHORTCUT_AUDIT_V8_PARAMETERS.injectionPopulation,
     pairFeatureLimit: PAIR_FEATURE_LIMIT, structuralPairLimit: STRUCTURAL_PAIR_LIMIT,
     pairSelection: 'strongest-distinct-bitsets-per-pool-and-target: structural-and-claim-relative-up-to-400-plus-lexical-up-to-200',
@@ -553,5 +589,5 @@ export function shortcutAuditV8(corpus, gold) {
       'per-note-punctuation-clause-and-length-aggregates', 'per-record-punctuation-clause-and-length-aggregates',
       'v4-note-grammar-and-formatting-counts', 'claim-relative-presence-counts-positions',
       'tokens-including-stopwords', 'bigrams', 'character-3-to-5-grams-per-field-and-note'],
-    topRules, passed: pools.every(entry => entry.passed) };
+    topRules, injectionLexiconTransfer, passed: pools.every(entry => entry.passed) && injectionLexiconTransfer.every(entry => entry.passed) };
 }

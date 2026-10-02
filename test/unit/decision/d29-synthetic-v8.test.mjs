@@ -79,6 +79,22 @@ describe('D29 v8 operator-note templates', () => {
         expect(pool.counterparts.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
         expect(pool.tasks.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
       }
+      // Round 12: every instruction bigram also occurs in the pool's benign wording, and every instruction's first
+      // and last word open and close some benign task (so the bigrams it forms with a neighbouring clause occur
+      // in benign rows too); every trigram that both pools' instructions share occurs in each pool's benign wording.
+      const tokens = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      const grams = (text, n) => { const t = tokens(text); return t.slice(n - 1).map((_, i) => t.slice(i, i + n).join(' ')); };
+      const benignText = [...pool.tasks, ...pool.counterparts, ...pool.timings, ...pool.roles];
+      const benign2 = new Set(benignText.flatMap(text => grams(text, 2))), benign3 = new Set(benignText.flatMap(text => grams(text, 3)));
+      const firsts = new Set(pool.tasks.map(task => tokens(task)[0])), lasts = new Set(pool.tasks.map(task => tokens(task).at(-1)));
+      for (const clause of pool.instructions) {
+        expect(grams(clause, 2).filter(gram => !benign2.has(gram)), `${name}: ${clause}`).toEqual([]);
+        expect(firsts.has(tokens(clause)[0]), `${name}: ${clause} first word`).toBe(true);
+        expect(lasts.has(tokens(clause).at(-1)), `${name}: ${clause} last word`).toBe(true);
+      }
+      const otherTrigrams = new Set(other.instructions.flatMap(text => grams(text, 3)));
+      const sharedTrigrams = [...new Set(pool.instructions.flatMap(text => grams(text, 3)))].filter(gram => otherTrigrams.has(gram));
+      expect(sharedTrigrams.filter(gram => !benign3.has(gram)), `${name} shared trigrams`).toEqual([]);
       const mean = list => list.reduce((a, b) => a + b, 0) / list.length;
       // The slot clause (instruction or counterpart) has one length distribution in both classes.
       expect(Math.abs(mean(pool.instructions.map(clause => clause.length)) - mean(pool.counterparts.map(clause => clause.length)))).toBeLessThan(4);
@@ -597,7 +613,7 @@ describe('D29 v8 review round 6', () => {
       variant: row => row.slice.endsWith('-injection') ? 'injection' : row.world.variant,
       // The injection flag is scored against otherwise-supporting / otherwise-ready rows only (see the v5 audit).
       injected: row => injectionPopulationV8(row.world, oracle(row.world)) ? String(row.world.injected) : undefined });
-    const recurring = [];
+    const recurring = [], blindCountRows = [];
     for (const seed of [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b']) {
       const rows = worlds(d29WorldV8, seed);
       const parsed = new Map(rows.map(row => [row, recordUnits(row, pools)]));
@@ -624,16 +640,24 @@ describe('D29 v8 review round 6', () => {
         for (const result of blindTree(train, train.map(row => blind.get(row)), test, test.map(row => blind.get(row)), targets)) {
           expect(Math.max(result.stump, result.tree), `${seed}/${kind} ${result.target}:${result.label} [${result.treeFeatures.join(' | ')}]`).toBeLessThan(0.75);
         }
-        // Distractor-only (blind) count rules carry nothing: below 0.65 learned on either pool and scored on the other.
-        const blindCounts = row => countFeatures(parsed.get(row).units.filter(unit => BLIND_ROLES.includes(unit.role)));
-        for (const targetOf of [targets.label, targets.injected]) for (const [from, to] of [[train, test], [test, train]]) {
-          const [best] = countRuleTransfer(from.filter(row => targetOf(row) !== undefined), to.filter(row => targetOf(row) !== undefined), blindCounts, targetOf);
-          expect(best.balancedAccuracy, `${seed}/${kind} blind ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.65);
-        }
+        // Distractor-only (blind) count rules are scored below, pooled over the three seeds.
+        for (const row of [...train, ...test]) blindCountRows.push({ row, counts: countFeatures(parsed.get(row).units.filter(unit => BLIND_ROLES.includes(unit.role))) });
       }
       recurring.push(hits);
       // Every unit parses, apart from a handful of rendering forms the scan's parser does not cover.
       expect([...parsed.values()].reduce((n, item) => n + item.unparsed, 0), seed).toBeLessThan(20);
+    }
+    // Distractor-only (blind) count rules carry nothing: below 0.65 learned on either pool and scored on the other,
+    // pooled over the three seeds (a single seed's 100-row criterion injection population is too noisy).
+    for (const kind of ['citation', 'phase-criterion']) {
+      const targets = targetsOf(kind);
+      const items = blindCountRows.filter(item => item.row.world.kind === kind);
+      const train = items.filter(item => item.row.world.pool === 'train'), test = items.filter(item => item.row.world.pool === 'test');
+      for (const targetOf of [targets.label, targets.injected]) for (const [from, to] of [[train, test], [test, train]]) {
+        const scoped = list => list.filter(item => targetOf(item.row) !== undefined);
+        const [best] = countRuleTransfer(scoped(from), scoped(to), item => item.counts, item => targetOf(item.row));
+        expect(best.balancedAccuracy, `${kind} blind ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.65);
+      }
     }
     // Precision-1.0 groups (support >= 5, chance < 1e-3) over single blind features and pairs: one seed tests about a
     // million conjunctions, so a group counts as a cue when it recurs on all three seeds.
@@ -787,5 +811,25 @@ describe('D29 v8 review round 11', () => {
     // The public corpus keeps headroom: its largest request stays at or below 4100 of the 4244 input bound.
     expect(top.tokens).toBeLessThanOrEqual(4100);
   }, 300_000);
+});
+
+describe('D29 v8 review round 12', () => {
+  it('V8-26 finds no injection n-gram lexicon that transfers between pools, and catches the round-11 instruction bigrams', async () => {
+    const { injectionNgramLexiconTransfer, injectionPopulationV8, SHORTCUT_AUDIT_V8_PARAMETERS: parameters } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
+    const { ngramSizes, minSupport, limit } = parameters.injectionLexiconTransfer;
+    const scores = options => [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'].flatMap(seed => {
+      const rows = worlds((s, o) => d29WorldV8(s, o, options), seed).filter(row => injectionPopulationV8(row.world, oracle(row.world)))
+        .map(row => ({ pool: row.world.pool, injected: row.world.injected, text: `${row.payload.source ?? row.payload.evidence} ${row.payload.context ?? ''}` }));
+      const train = rows.filter(row => row.pool === 'train'), test = rows.filter(row => row.pool === 'test');
+      return [injectionNgramLexiconTransfer(train, test, { ngramSizes, minSupport }), injectionNgramLexiconTransfer(test, train, { ngramSizes, minSupport })]
+        .map(result => result.balancedAccuracy);
+    });
+    expect(Math.max(...scores({}))).toBeLessThan(limit);
+    // Positive control: the round-11 pools (legacy: 'round-11', byte for byte) leak instruction bigrams.
+    expect(Math.max(...scores({ legacy: 'round-11' }))).toBeGreaterThanOrEqual(0.8);
+    // The shipped audit enforces it on the public corpus.
+    const audit = shortcutAuditV8(prepared.corpus, prepared.gold);
+    expect(audit.injectionLexiconTransfer.map(entry => [entry.fromPool, entry.toPool, entry.passed])).toEqual([['train', 'test', true], ['test', 'train', true]]);
+  }, 600_000);
 });
 

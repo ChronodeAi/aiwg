@@ -4,7 +4,7 @@ import { d29Baseline, d29WorldV4, drawD29Stream, D29_V4_VARIANTS } from './gener
 import { d29PassageBaseline } from './d29-passage-baseline.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
-import { D29_TEST_V8, D29_TRAIN_V8, type D29WordPoolV8 } from './d29-pools-v8.js';
+import { D29_TEST_V8, D29_TEST_V8_ROUND11, D29_TRAIN_V8, D29_TRAIN_V8_ROUND11, type D29WordPoolV8 } from './d29-pools-v8.js';
 import type { HeldoutRow } from './types.js';
 
 /**
@@ -168,13 +168,15 @@ export const D29_V8_MODE_FREE_VARIANTS = Object.freeze(['other-attribute', 'near
  * relevant record are exact, and the note count and parser-unseen rows follow
  * the row offset. `round-8`: additionally, only a relevant record on the
  * claimed module with a non-claim attribute entered distractor placement, with
- * one to three criterion distractors (V8-22).
+ * one to three criterion distractors (V8-22). `round-11`: the benign task pools
+ * without the round-12 tasks (V8-26).
  */
-export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?: 'round-8' | 'round-9' } = {}) {
+export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?: 'round-8' | 'round-9' | 'round-11' } = {}) {
   const legacyRelevantPlacement = legacy === 'round-8';
+  const prior = legacy === 'round-8' || legacy === 'round-9';
   const base = d29WorldV4(seed, ordinal);
   const train = base.split !== 'test';
-  const pool = train ? D29_TRAIN_V8 : D29_TEST_V8;
+  const pool = legacy ? train ? D29_TRAIN_V8_ROUND11 : D29_TEST_V8_ROUND11 : train ? D29_TRAIN_V8 : D29_TEST_V8;
   const world = { ...base.world, pool: train ? 'train' as const : 'test' as const };
   const offset = Number(base.familyId.split('-').at(-1));
   const seedKey = sha256(seed);
@@ -191,7 +193,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // by the same offset rule d29WorldV4 uses, so a verbatim claim rendering
   // cannot mark the injected class. Their latent support is unchanged.
   const renderVariant = world.injected ? counterpartVariant(citation, world.claimAttribute, offset) : world.variant;
-  const modeFree = !legacy && !world.injected && D29_V8_MODE_FREE_VARIANTS.includes(world.variant);
+  const modeFree = !prior && !world.injected && D29_V8_MODE_FREE_VARIANTS.includes(world.variant);
   const relevantMode = modes.includes(renderVariant) ? renderVariant : 'exact';
   const identifier = () => Array.from({ length: 3 }, () => String(100000 + random(900000))).join('-');
   type Record8 = { role: 'relevant' | 'carrier' | 'claimed' | 'other'; mode: string; module: string; attribute: string; value: string;
@@ -220,7 +222,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // Benign note count: drawn per offset (round 10; before, 2 + offset % 3).
   const wrap = (text: string, i: number, format: number) => annotation(i === 1 ? `The human runbook says '${text.slice(0, -1)}'.` : text, format);
   let benign: { text: string; placement: number }[];
-  if (legacy) {
+  if (prior) {
     benign = Array.from({ length: 2 + offset % 3 }, (_, i) => {
       const text = note(null), format = layout(5), placement = i ? layout(4) : 0;
       return { text: wrap(text, i, format), placement };
@@ -245,8 +247,8 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // arithmetic that also picks the variant. Their two lead sentences are
   // charged to the criterion length budget (round 11).
   const unseenDraw = drawD29Stream(base.split, `v8:${seedKey}:unseen:${offset}`);
-  const unseen = !train && (legacy ? offset % 2 === 0 : unseenDraw(2) === 0);
-  const leadAt = legacy ? offset % 3 : unseenDraw(3);
+  const unseen = !train && (prior ? offset % 2 === 0 : unseenDraw(2) === 0);
+  const leadAt = prior ? offset % 3 : unseenDraw(3);
   const leadLength = unseen ? coreferenceLeads[leadAt].length + coreferenceLeads[(leadAt + 1) % 3].length + 2 * 30 : 0;
   // The distractor layer: seven records drawn from one distribution that never
   // reads the variant, the label or the relevant record (round-8 review). Its
@@ -282,7 +284,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   const weightedModes = citation ? [...modes, ...modes, 'exact']
     : modes.flatMap(mode => Array.from({ length: CRITERION_MODE_WEIGHTS[mode] ?? 5 }, () => mode));
   const drawMode = (stream: (bound: number) => number) => {
-    if (legacy) { const family = families[familyNames[stream(familyNames.length)]]; return family[stream(family.length)]; }
+    if (prior) { const family = families[familyNames[stream(familyNames.length)]]; return family[stream(family.length)]; }
     return weightedModes[stream(weightedModes.length)];
   };
   const familyMode = () => drawMode(layer);
@@ -301,7 +303,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   const longest = (items: readonly string[]) => Math.max(...items.map(item => item.length));
   const relevantLimit = Math.max(...lengths) + 19;
   const slotNoteLimit = longest(pool.roles) + longest(pool.tasks) + longest([...pool.instructions, ...pool.counterparts]) + longest(pool.timings) + 15;
-  const distractorBudget = citation ? Infinity : legacy ? lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK
+  const distractorBudget = citation ? Infinity : prior ? lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK
     : CRITERION_RECORD_NOTE_BUDGET - benignLength - leadLength - relevantLimit - slotNoteLimit;
   const claimSet: readonly string[] = citation ? attributes : criteria;
   const nonClaim = claimSet.filter(attribute => attribute !== world.claimAttribute);
@@ -328,17 +330,17 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
     : { ...blank, role: 'relevant', mode: 'exact', module: world.claimModule, attribute: nonClaim[drawD29Stream(base.split, `v8:${base.familyId}:reserved`)(nonClaim.length)], value: '' };
   const reservedModes = drawD29Stream(base.split, `v8:${base.familyId}:reserved-mode`);
   const drawReservedMode = () => {
-    if (legacy) return;
+    if (prior) return;
     reserved.mode = drawMode(reservedModes);
   };
-  if (legacy && reserved.mode !== 'exact') throw new Error('generator-reserved-mode');
+  if (prior && reserved.mode !== 'exact') throw new Error('generator-reserved-mode');
   if (modeFree && !relevantOther) {
     // Near-miss / wrong-subject relevant records (another module) draw their
     // mode from the distractor distribution by their own stream.
     const relevantModes = drawD29Stream(base.split, `v8:${base.familyId}:relevant-mode`);
     relevantRecord.mode = drawMode(relevantModes);
   }
-  if (!legacy && relevantOther !== modeFree && !['near-miss-digit', 'near-miss-transposition', 'wrong-subject'].includes(world.variant)) throw new Error('generator-mode-free');
+  if (!prior && relevantOther !== modeFree && !['near-miss-digit', 'near-miss-transposition', 'wrong-subject'].includes(world.variant)) throw new Error('generator-mode-free');
   /**
    * Criterion rows: a criterion shared by two claimed-module records needs
    * compatible (never identical) modes, so the claimed module's own records
@@ -421,7 +423,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
     // surfaces applicable to the attribute (round 10; before, the offset rule,
     // whose arithmetic also picks the variant).
     const surfaces = D29_V4_VARIANTS['citation-supports'].filter(variant => variant !== 'multi-value' || ['port', 'protocol'].includes(world.claimAttribute));
-    const surface = legacy ? counterpartVariant(true, world.claimAttribute, offset)
+    const surface = prior ? counterpartVariant(true, world.claimAttribute, offset)
       : surfaces[drawD29Stream(base.split, `v8:${base.familyId}:claimed-surface`)(surfaces.length)];
     const variantFixed = ['exact', 'paraphrase', 'multi-value'].includes(renderVariant);
     const claimedFact = relevantOnClaimedModule && relevantRecord.attribute === world.claimAttribute;
@@ -521,7 +523,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // suffix) are defined by it, so injected rows keep offset % 4; every other
   // row draws it per offset by its own stream (round 11), so it never follows
   // the offset arithmetic that picks the other variants.
-  const slotPlacement = legacy || world.injected ? offset % 4 : drawD29Stream(base.split, `v8:${seedKey}:slot:${offset}`)(4);
+  const slotPlacement = prior || world.injected ? offset % 4 : drawD29Stream(base.split, `v8:${seedKey}:slot:${offset}`)(4);
   add(annotation(slotText, layout(5)), slotPlacement);
   const frame = pool.framing[citation ? 'citation' : 'criterion'];
   const payload = citation ? { kind: world.kind, claim: `${fact(pool, train, world.claimModule, world.claimAttribute, world.claimValue, '', 'exact')}.`,
