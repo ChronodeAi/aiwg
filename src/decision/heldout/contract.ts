@@ -12,7 +12,7 @@ import { projectDecisionState, partitionProjectedState } from '../projection.js'
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
 import { heldoutCorpusSeed } from './generators.js';
-import { registeredHeldoutGeneratorDigest, reproducibleRegisteredHeldoutRow } from './generator-registry.js';
+import { studyHeldoutGeneratorDigest as registeredHeldoutGeneratorDigest, reproducibleStudyHeldoutRow as reproducibleRegisteredHeldoutRow } from './study-generators.js';
 import { D29_PAID_GENERATOR_IDS } from './d29-generator-ids.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
