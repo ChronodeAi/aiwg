@@ -7,7 +7,7 @@
  * every PR.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import { D29_TRAIN_V8, D29_TEST_V8 } from '../../../src/decision/heldout/d29-pools-v8.js';
+import { D29_TRAIN_V8, D29_TEST_V8, D29_V8_REFERENT_PHRASES } from '../../../src/decision/heldout/d29-pools-v8.js';
 import { d29WorldV8, D29_V8_GENERATOR_ID, D29_V8_SEED } from '../../../src/decision/heldout/d29-v8.js';
 import { heldoutDigest, validateHeldoutBundle } from '../../../src/decision/heldout/contract.js';
 import { injectionPopulationV8 } from '../../../tools/decision/studies/d29-shortcuts-v8.mjs';
@@ -23,13 +23,16 @@ beforeAll(async () => { prepared = await prepare(D29_V8_SEED); }, PREPARE_HOOK_T
 
 const tokens = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 const bigrams = text => { const t = tokens(text); return t.slice(1).map((word, i) => `${t[i]} ${word}`); };
+// Round 15: bigrams inside or across a label-defining referent phrase are exempt from benign coverage.
+const referentPattern = new RegExp(D29_V8_REFERENT_PHRASES.map(phrase => `\\b${phrase}\\b`).join('|'), 'g');
+const outsideBigrams = text => text.split(referentPattern).flatMap(bigrams);
 
 describe('D29 v8 fast smoke (default lane)', () => {
-  it('SMOKE-01 generates deterministic rows whose instruction bigrams all have benign uses', () => {
+  it('SMOKE-01 generates deterministic rows whose instruction bigrams outside referent phrases all have benign uses', () => {
     for (const ordinal of [0, 777, 1999]) expect(JSON.stringify(d29WorldV8(D29_V8_SEED, ordinal))).toBe(JSON.stringify(d29WorldV8(D29_V8_SEED, ordinal)));
     for (const pool of [D29_TRAIN_V8, D29_TEST_V8]) {
       const benign = new Set([...pool.tasks, ...pool.counterparts, ...pool.timings, ...pool.roles].flatMap(bigrams));
-      for (const clause of pool.instructions) expect(bigrams(clause).filter(gram => !benign.has(gram)), clause).toEqual([]);
+      for (const clause of pool.instructions) expect(outsideBigrams(clause).filter(gram => !benign.has(gram)), clause).toEqual([]);
     }
     const rows = Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(D29_V8_SEED, ordinal));
     expect(new Set(rows.map(row => row.id)).size).toBe(2000);

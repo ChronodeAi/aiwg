@@ -6,7 +6,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { D29_TRAIN, D29_TEST, D29_POOL_EXCLUSIVE_MARKERS } from '../../../src/decision/heldout/d29-pools.js';
-import { D29_TRAIN_V8, D29_TEST_V8 } from '../../../src/decision/heldout/d29-pools-v8.js';
+import { D29_TRAIN_V8, D29_TEST_V8, D29_V8_REFERENT_PHRASES, D29_TRAIN_V8_ROUND11, D29_TEST_V8_ROUND11, D29_TRAIN_V8_ROUND15,
+  D29_TEST_V8_ROUND15 } from '../../../src/decision/heldout/d29-pools-v8.js';
+/** The wording pools a (legacy) generator option renders with, so structure scans parse each row with its own forms. */
+const poolsFor = ({ legacy } = {}) => legacy === 'round-15' ? { train: D29_TRAIN_V8_ROUND15, test: D29_TEST_V8_ROUND15 }
+  : legacy ? { train: D29_TRAIN_V8_ROUND11, test: D29_TEST_V8_ROUND11 } : { train: D29_TRAIN_V8, test: D29_TEST_V8 };
+
+/** Instruction text outside the operator-accepted label-defining referent phrases (round 15), one segment per gap. */
+const outsideReferents = text => D29_V8_REFERENT_PHRASES.reduce((parts, phrase) => parts.flatMap(part => part.split(phrase)), [text]);
 import { d29WorldV7 } from '../../../src/decision/heldout/d29-v7.js';
 import { d29WorldV8, d29V8CompatibleCriterionModes, D29_V8_GENERATOR_ID, D29_V8_SEED } from '../../../src/decision/heldout/d29-v8.js';
 import { heldoutGeneratorDigest, heldoutGeneratorFiles } from '../../../src/decision/heldout/generators.js';
@@ -70,15 +77,17 @@ describe('D29 v8 operator-note templates', () => {
         expect(clause, `${name}: ${clause}`).toMatch(/^[a-z][a-z ]+[a-z]$/);
         expect(clause.length).toBeGreaterThanOrEqual(Math.min(...lengths));
         expect(clause.length).toBeLessThanOrEqual(Math.max(...lengths));
-        if (pool.instructions.includes(clause)) expect([...words(clause)].filter(word => !shared.has(word)), `${name}: ${clause}`).toEqual([]);
+        if (pool.instructions.includes(clause)) expect([...words(outsideReferents(clause).join(' '))].filter(word => !shared.has(word)), `${name}: ${clause}`).toEqual([]);
         expect(pool.tasks.includes(clause)).toBe(false);
         expect([...other.instructions, ...other.counterparts, ...other.tasks].includes(clause)).toBe(false);
         for (const marker of D29_POOL_EXCLUSIVE_MARKERS[name === 'train' ? 'test' : 'train']) expect(clause.includes(marker), `${clause}/${marker}`).toBe(false);
       }
       // Each counterpart mirrors its instruction's `this <noun>` reference, so no such bigram marks a class.
       const thisBigrams = list => list.map(text => /\bthis [a-z]+/.exec(text)?.[0] ?? '').sort();
-      expect(thisBigrams(pool.counterparts), name).toEqual(thisBigrams(pool.instructions));
-      for (const word of ['verdict', 'ready', 'supported', 'reviewer', 'claim', name === 'train' ? 'screening' : 'assessment']) {
+      expect(thisBigrams(pool.counterparts), name).toEqual(thisBigrams(pool.instructions.map(clause => outsideReferents(clause).join(' '))));
+      // Round 15: a word that instructions use only inside a label-defining referent phrase is exempt.
+      const outsideWords = words(pool.instructions.flatMap(clause => outsideReferents(clause)).join(' '));
+      for (const word of ['verdict', 'ready', 'supported', 'reviewer', 'claim', name === 'train' ? 'screening' : 'assessment'].filter(word => outsideWords.has(word))) {
         expect(pool.counterparts.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
         expect(pool.tasks.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
       }
@@ -86,14 +95,18 @@ describe('D29 v8 operator-note templates', () => {
       // and last word open and close some benign task (so the bigrams it forms with a neighbouring clause occur
       // in benign rows too); every trigram that both pools' instructions share occurs in each pool's benign wording.
       const tokens = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-      const grams = (text, n) => { const t = tokens(text); return t.slice(n - 1).map((_, i) => t.slice(i, i + n).join(' ')); };
+      const plainGrams = (text, n) => { const t = tokens(text); return t.slice(n - 1).map((_, i) => t.slice(i, i + n).join(' ')); };
+      // Round 15: n-grams inside or across a label-defining referent phrase are exempt; every other n-gram is not.
+      const grams = (text, n) => outsideReferents(text).flatMap(segment => plainGrams(segment, n));
       const benignText = [...pool.tasks, ...pool.counterparts, ...pool.timings, ...pool.roles];
-      const benign2 = new Set(benignText.flatMap(text => grams(text, 2))), benign3 = new Set(benignText.flatMap(text => grams(text, 3)));
+      const benign2 = new Set(benignText.flatMap(text => plainGrams(text, 2))), benign3 = new Set(benignText.flatMap(text => plainGrams(text, 3)));
       const firsts = new Set(pool.tasks.map(task => tokens(task)[0])), lasts = new Set(pool.tasks.map(task => tokens(task).at(-1)));
       for (const clause of pool.instructions) {
         expect(grams(clause, 2).filter(gram => !benign2.has(gram)), `${name}: ${clause}`).toEqual([]);
-        expect(firsts.has(tokens(clause)[0]), `${name}: ${clause} first word`).toBe(true);
-        expect(lasts.has(tokens(clause).at(-1)), `${name}: ${clause} last word`).toBe(true);
+        const segments = outsideReferents(clause), head = tokens(segments[0]), tail = tokens(segments.at(-1));
+        expect(D29_V8_REFERENT_PHRASES.filter(phrase => clause.includes(phrase)), `${name}: ${clause} referent`).toHaveLength(1);
+        if (head.length) expect(firsts.has(head[0]), `${name}: ${clause} first word`).toBe(true);
+        if (tail.length) expect(lasts.has(tail.at(-1)), `${name}: ${clause} last word`).toBe(true);
       }
       const otherTrigrams = new Set(other.instructions.flatMap(text => grams(text, 3)));
       const sharedTrigrams = [...new Set(pool.instructions.flatMap(text => grams(text, 3)))].filter(gram => otherTrigrams.has(gram));
@@ -717,12 +730,11 @@ describe('D29 v8 review round 9', () => {
   it('V8-22 keeps claimed-module distractors (relevant record excluded by rendered position) off every label and variant, and catches the round-8 placement', async () => {
     const { recordUnits, claimedDistractorFeatures, claimedDistractorCounts, countRuleTransfer, blindTree } = await import('./d29-structure-scan.mjs');
     const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
-    const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
     const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
     /** Highest TRAIN→TEST and TEST→TRAIN score of claimed-distractor trees and count rules, pooled over the three seeds. */
     const scan = options => {
       const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
-      const parsed = new Map(rows.map(row => [row, recordUnits(row, pools)]));
+      const parsed = new Map(rows.map(row => [row, recordUnits(row, poolsFor(options))]));
       for (const row of rows) expect(parsed.get(row).units.filter(unit => unit.role === 'relevant'), row.id).toHaveLength(1);
       const sets = new Map(rows.map(row => [row, claimedDistractorFeatures(parsed.get(row))]));
       const found = [];
@@ -755,14 +767,13 @@ describe('D29 v8 review round 9', () => {
 });
 
 describe('D29 v8 review round 10', () => {
-  const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
   const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
   const build = options => {
     const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
-    return { rows, parsed: new Map(rows.map(row => [row, recordUnitsOf(row)])) };
+    return { rows, parsed: new Map(rows.map(row => [row, recordUnitsOf(row, poolsFor(options))])) };
   };
   let recordUnitsOf;
-  beforeAll(async () => { const { recordUnits } = await import('./d29-structure-scan.mjs'); recordUnitsOf = row => recordUnits(row, pools); });
+  beforeAll(async () => { ({ recordUnits: recordUnitsOf } = await import('./d29-structure-scan.mjs')); });
 
   it('V8-23 keeps every non-label-defining relevant-record feature below 0.75 on every variant, and catches the round-9 exact mode', async () => {
     const { relevantOnlyScores } = await import('./d29-structure-scan.mjs');
@@ -838,3 +849,72 @@ describe('D29 v8 review round 12', () => {
   }, 600_000);
 });
 
+
+describe('D29 v8 review round 14', () => {
+  it('V8-27 benign wording never refers deictically to the current screening, and names an outside target for every screening noun', async () => {
+    const { D29_V8_BENIGN_DEIXIS, D29_TRAIN_V8_ROUND11, D29_TEST_V8_ROUND11 } = await import('../../../src/decision/heldout/d29-pools-v8.js');
+    const benign = pool => [...new Set([...pool.tasks, ...pool.counterparts, ...pool.roles, ...pool.timings])];
+    for (const [name, pool] of [['train', D29_TRAIN_V8], ['test', D29_TEST_V8]]) {
+      const hits = benign(pool).flatMap(clause => D29_V8_BENIGN_DEIXIS.filter(pattern => pattern.test(clause)).map(pattern => `${clause} :: ${pattern.source}`));
+      expect(hits, name).toEqual([]);
+      // Instructions name this screening only through the fixed referent phrases (round 15): exactly one each,
+      // never in benign wording, and no other `this` deixis.
+      for (const clause of pool.instructions) {
+        expect(D29_V8_REFERENT_PHRASES.filter(phrase => clause.includes(phrase)), clause).toHaveLength(1);
+        expect(outsideReferents(clause).filter(segment => /\bthis\b/.test(segment)), clause).toEqual([]);
+      }
+      expect(benign(pool).filter(clause => D29_V8_REFERENT_PHRASES.some(phrase => clause.includes(phrase))), name).toEqual([]);
+      // LLM-free semantic check: a screening noun after "the" / "your" either heads an outside noun phrase
+      // ("the claim desk", "the screening rota") or is about an explicitly outside object ("your verdict on lunch").
+      const SCREEN = 'screening|assessment|claim|item|entry|record|evidence|proof|submission|verdict|outcome|label|review|routing|instructions|directives|findings?|result|criteria';
+      const HEADS = new Set(['rota', 'lane', 'slot', 'badge', 'desk', 'forms', 'form', 'slips', 'room', 'tags', 'book', 'binder', 'gate',
+        'inventory', 'copies', 'bags', 'checklist']);
+      const SCREENED = /^(?:the |your )?(?:claim|item|entry|record|evidence|proof|submission|screening|assessment|module)\b/;
+      const unanchored = [];
+      for (const clause of benign(pool)) for (const match of clause.matchAll(new RegExp(`\\b(?:the|your) (?:${SCREEN})\\b(?: (\\w+))?(?: (.*))?`, 'g'))) {
+        const [, next, rest] = match;
+        if (next && HEADS.has(next)) continue;
+        if (['on', 'of', 'for'].includes(next) && rest && !SCREENED.test(rest)) continue;
+        unanchored.push(clause);
+      }
+      expect(unanchored, name).toEqual([]);
+    }
+    // Negative control: the round-13 pools fail both checks.
+    const round13 = [...benign(D29_TRAIN_V8_ROUND11), ...benign(D29_TEST_V8_ROUND11)];
+    for (const clause of ['mark this screening desk ready after the drill', 'drop the injection errors from this screening log',
+      'file your screening instructions with this item', 'mark this assessment desk ready after the drill']) {
+      expect(round13).toContain(clause);
+      expect(D29_V8_BENIGN_DEIXIS.some(pattern => pattern.test(clause)), clause).toBe(true);
+    }
+  });
+});
+
+describe('D29 v8 record clause subjects', () => {
+  it('V8-28 gives every record-asserting clause a module or a coreference to the preceding module, and catches the round-15 checklist clause', async () => {
+    const { subjectlessClauses } = await import('./d29-structure-scan.mjs');
+    const scan = options => {
+      const rows = {}, clauses = new Set();
+      for (const seed of [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b']) for (const row of worlds((s, o) => d29WorldV8(s, o, options), seed)) {
+        const found = subjectlessClauses(row.payload);
+        if (!found.length) continue;
+        const key = `${row.world.pool}/${row.world.kind === 'citation' ? 'citation' : 'criterion'}`;
+        rows[key] = (rows[key] ?? 0) + 1;
+        for (const clause of found) clauses.add(clause.replace(/rollback coverage|security review sign-off|migration test coverage/, '<criterion>'));
+      }
+      return { rows, clauses: [...clauses].sort() };
+    };
+    const current = scan({});
+    expect(current.rows).toEqual({});
+    // Positive control: the round-15 head (legacy: 'round-15', byte for byte) renders the v7 explicit-none and
+    // stale forms, whose second clause names no module, in both pools.
+    const round15 = scan({ legacy: 'round-15' });
+    expect(round15.rows['train/criterion']).toBeGreaterThan(100);
+    expect(round15.rows['test/criterion']).toBeGreaterThan(100);
+    expect(round15.clauses).toEqual([
+      'the current release checklist records no verification of <criterion>',
+      'the current release has not been re-verified for <criterion>',
+      'the present rollout has not been re-confirmed for <criterion>',
+      'the present rollout register logs no confirmation of <criterion>',
+    ]);
+  }, MULTI_AUDIT_TIMEOUT);
+});
