@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider,
+  createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider, screeningProvider,
 } from '../../../src/gates/providers/index.js';
 import { MetricProviderRegistry } from '../../../src/gates/providers/registry.js';
 import { makeBinding } from './helper.js';
 
 describe('gates metric providers', () => {
-  it('registers the four core providers exactly once with stable source digests', () => {
+  it('registers the core providers exactly once with stable source digests', () => {
     const registry = createCoreProviderRegistry();
-    expect(registry.ids()).toEqual(['test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
-    for (const provider of [proportionProvider, pairedProvider, scalarProvider, evidenceProvider]) {
+    expect(registry.ids()).toEqual(['decision.screening/v1', 'test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
+    for (const provider of [proportionProvider, pairedProvider, scalarProvider, evidenceProvider, screeningProvider]) {
       expect(provider.sourceDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     }
     expect(() => registry.register(proportionProvider)).toThrow(/duplicate metric provider/);

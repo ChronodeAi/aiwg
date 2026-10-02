@@ -15,7 +15,7 @@ import {
 import type { ProviderRuntime } from './providers/types.js';
 import { qualifyGateParameter } from './types.js';
 import type {
-  GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateReport,
+  GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateParamRef, GateReport,
   GateStatus, MetricObservation, MetricSeries, ProviderMetrics, Sha256Digest, UpstreamCeiling,
 } from './types.js';
 
@@ -236,17 +236,37 @@ function pairedCells(observation: MetricObservation | null | undefined): {
   return { both, candidateOnly, baselineOnly, neither };
 }
 
+/**
+ * Resolve a literal-or-parameter gate number against the binding's
+ * preregistered values. Null when a `{param}` reference has no resolved
+ * value: callers hold as `parameter-missing`, never promote.
+ */
+function resolveGateNumber(
+  value: number | GateParamRef | undefined,
+  packId: string,
+  parameters: Record<string, number>,
+): number | null {
+  if (value === undefined) return null;
+  if (typeof value === 'number') return value;
+  if (value !== null && typeof value === 'object' && typeof value.param === 'string') {
+    const resolved = parameters[qualifyGateParameter(packId, value.param)];
+    return typeof resolved === 'number' ? resolved : null;
+  }
+  return null;
+}
+
 function evaluateObservation(gate: GateDefinition, observation: MetricObservation | null,
   context: { packId: string; parameters: Record<string, number>; metrics: GateMetricsDocument;
     upstream: UpstreamCeiling | null; nowMs: number; slice: string | null; slices: string[] }): SliceEvaluation {
   const { packId, parameters, metrics, upstream, nowMs, slice, slices } = context;
   const base = { slice, n: supportOf(observation) };
-  const minimumN = gate.minimumN ?? 0;
+  const minimumN = gate.minimumN === undefined ? 0 : resolveGateNumber(gate.minimumN, packId, parameters);
   // Evidence gates observe attestations, not counted support; upstream and predicate
   // gates read the ceiling and the whole document. None of them take an n.
   if (gate.kind !== 'upstream-ceiling' && gate.kind !== 'predicate' && gate.kind !== 'evidence') {
     if (observation === null || observation === undefined) return { ...base, status: 'insufficient', reason: 'metric-missing' };
     if (base.n === null) return { ...base, status: 'insufficient', reason: 'support-unknown' };
+    if (minimumN === null) return { ...base, status: 'insufficient', reason: 'parameter-missing' };
     if (base.n < minimumN) return { ...base, status: 'insufficient', reason: 'below-minimum-n' };
   }
   const thresholdValue = (): number | null => {
@@ -259,7 +279,12 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
   };
   switch (gate.kind) {
     case 'minimum-n': {
-      const passed = (base.n as number) >= (gate.minimumN as number);
+      const target = gate.minimumN === undefined ? null : resolveGateNumber(gate.minimumN, packId, parameters);
+      if (target === null) {
+        return { ...base, status: 'insufficient', reason: 'parameter-missing',
+          statistic: { method: 'support-count' } };
+      }
+      const passed = (base.n as number) >= target;
       return { ...base, status: passed ? 'pass' : 'insufficient', reason: passed ? 'support-met' : 'below-minimum-n',
         statistic: { method: 'support-count' } };
     }
@@ -272,7 +297,8 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
       const target = thresholdValue();
       if (target === null) return { ...base, status: 'insufficient', reason: 'parameter-missing', events };
       const method = gate.statistic?.method ?? 'wilson';
-      const levelBps = gate.statistic?.levelBps as number;
+      const levelBps = resolveGateNumber(gate.statistic?.levelBps, packId, parameters);
+      if (levelBps === null) return { ...base, status: 'insufficient', reason: 'parameter-missing', events };
       let lower: number;
       let upper: number;
       try {
@@ -303,7 +329,8 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
         return { ...base, status: 'insufficient', reason: 'observation-mismatch' };
       }
       const method = gate.statistic?.method ?? 'newcombe';
-      const levelBps = gate.statistic?.levelBps as number;
+      const levelBps = resolveGateNumber(gate.statistic?.levelBps, packId, parameters);
+      if (levelBps === null) return { ...base, status: 'insufficient', reason: 'parameter-missing' };
       let interval;
       try {
         interval = pairedBinaryDifferenceInterval({ counts: cells, levelBps, method: method === 'tango' ? 'tango' : 'newcombe-10' });
@@ -333,9 +360,11 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
       if (differences.length !== base.n) return { ...base, status: 'insufficient', reason: 'observation-mismatch' };
       const target = thresholdValue();
       if (target === null) return { ...base, status: 'insufficient', reason: 'parameter-missing' };
+      const levelBps = resolveGateNumber(gate.statistic?.levelBps, packId, parameters);
+      if (levelBps === null) return { ...base, status: 'insufficient', reason: 'parameter-missing' };
       let interval;
       try {
-        interval = pairedMeanDifferenceBootstrap({ differences, levelBps: gate.statistic?.levelBps as number,
+        interval = pairedMeanDifferenceBootstrap({ differences, levelBps,
           seed: gate.statistic?.seed as number, resamples: gate.statistic?.resamples as number,
           bounds: gate.statistic?.bounds as [number, number] });
       } catch (error) {
@@ -344,7 +373,7 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
       }
       const passed = gate.statistic?.bound === 'upper' ? interval.upperBps <= target : interval.lowerBps >= target;
       return { ...base, status: passed ? 'pass' : 'fail', reason: passed ? 'bound-within-threshold' : 'bound-breaches-threshold',
-        statistic: { method: 'bootstrap', levelBps: gate.statistic?.levelBps, lowerBps: interval.lowerBps,
+        statistic: { method: 'bootstrap', levelBps, lowerBps: interval.lowerBps,
           upperBps: interval.upperBps, estimateBps: interval.estimateBps },
         threshold: { op: gate.threshold?.op as 'lte' | 'gte', ...(gate.threshold?.value !== undefined
           ? { value: gate.threshold.value } : { param: gate.threshold?.param as string }), resolved: target } };

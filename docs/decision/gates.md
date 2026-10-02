@@ -17,7 +17,14 @@ are numerically identical to the pre-move implementations.
 - `src/gates/`: Ajv schema validation (`schema.ts`), namespace registry with
   `extends` monotone-tightening proofs and binding resolution (`registry.ts`),
   a pure deterministic evaluator (`evaluate.ts`), digest-bound report
-  validation (`report.ts`) and four core metric providers (`providers/`).
+  validation (`report.ts`) and five core metric providers (`providers/`),
+  including `decision.screening/v1` (SDLC evidence-screening proportions with
+  the staged-calibration attestation) behind the shipped
+  `aiwg:decision-engine/absolute-screening` pack.
+- D29 is the first migrated study (#2833): preregistered absolute bindings
+  (`d29-synthetic-v6/v7-absolute-gates`, HOLD ceiling) evaluated through
+  `evaluateGates` with project floors, a holdout seal and sealed upstream
+  integrity. See [the D29 study](d29-heldout-study.md).
 - `src/gates/providers/loader.ts` (#2831 rework, experimental default-off):
   addon/extension bundle providers declared in the bundle manifest
   (`gateProviders`, Zod in `src/extensions/manifest.ts`) run ONLY in a
@@ -74,7 +81,10 @@ pack, so a loosened parent always moves the child's composed digest and
 breaks old pins. A child may only tighten: thresholds move in their declared
 direction (a literal threshold may never be rewritten as a bindable
 parameter, and parameters may never be renamed), `minimumN` and `levelBps`
-only rise, `onFail` only HOLD-to-ROLLBACK while `onInsufficient` is always
+only rise (both accept a literal or a `{param}` reference to a `count` /
+`level` parameter; a literal may never be rewritten as a reference, references
+may never be renamed, and an unresolvable reference holds as
+`parameter-missing`), `onFail` only HOLD-to-ROLLBACK while `onInsufficient` is always
 HOLD (a ROLLBACK there is a load error), scope changes only when monotone
 per kind (`listed` may only widen, `pooled` sets are fixed, `listed -> each`
 widens to the inventory minus exceptions that must exclude none of the
@@ -171,16 +181,17 @@ also hold `providers`, the bundle-provider allowlist (P3 trust root; see
 validate against the closed GatePack schema at config load; pack-reference
 versions and authored digests are verified at resolution and composed
 through the pure `extends` chain, so a loosened parent moves the composed
-digest and breaks the pin. Every floor gate that binds a threshold
-parameter must declare a default for it: the default is the enforced
-minimum. An inline floor gate with id `integrity-ceiling` must be an
+digest and breaks the pin. Every floor gate that binds a threshold,
+`minimumN` or `levelBps` parameter must declare a default for it: the default
+is the enforced minimum. An inline floor gate with id `integrity-ceiling` must be an
 all-scoped `upstream-ceiling` gate, or config validation flags it.
 
 Resolution refuses a binding that omits a floor gate or loosens any floor
 gate's threshold, parameter value, scope or outcome, reusing the per-kind
-`assertGateTightens` validator and the scope-superset rule. Binding threshold
-parameters are resolved to their preregistered values before comparison, so
-the check is value-against-minimum in the gate's declared direction. A
+`assertGateTightens` validator and the scope-superset rule. Binding threshold,
+`minimumN` and `levelBps` parameters are resolved to their preregistered
+values before comparison, so the check is value-against-minimum in the gate's
+declared direction. A
 binding whose ceiling sits below its configured ceiling (per-study key, else
 the `'*'` default) is refused; tighter ceilings resolve.
 `resolveGateBinding` and `GateRegistry.resolveBinding` take floors as a
@@ -313,20 +324,20 @@ Live Jev calls, real held-out data, human reviewers and production rollout:
 addon/extension provider loading exists only as the experimental,
 default-off isolated runner with config-allowlist trust and records
 reproduction (#2831 rework; CLI re-runs from a records file are still
-pending) — and no study migrates to bindings (#2833+). Rule `enforcedBy`
+pending) — and D29 is the only study migrated to bindings (#2833, offline
+only). Rule `enforcedBy`
 coverage stays a stub (#2839). The discovery relevance fixture covers the
 shipped integrity-ceiling pack plus the `coverage-floor` conformance fixture
 pack (`test/conformance/gates-v1/fixtures/`); live discovery ranking against
 a full index is not asserted. No live criterion is met; the harness above is
 what those phases build on.
 
-there is no CLI (`aiwg gates`, #2830) and no study migrates to bindings
-(#2833+). Addon/extension provider loading (#2831) is implemented as an
+there is no CLI (`aiwg gates`, #2830) and D29 is the only study migrated to
+bindings (#2833). Addon/extension provider loading (#2831) is implemented as an
 experimental default-off offline harness (code digests, mandatory review,
 sealed sections, timeouts); live provider qualification, real held-out
 provider data, human review sign-off beyond the fixture attestation and
 production rollout remain pending. Project floors in `aiwg.config` (#2832)
 are implemented as a trusted registry/evaluator input with the default
-integrity-ceiling floor, but no shipped floor pack exists yet and no study
-resolves with floors. No live criterion is met; the harness above is what
-those phases build on.
+integrity-ceiling floor; D29 resolves with those floors offline. No live
+criterion is met; the harness above is what those phases build on.

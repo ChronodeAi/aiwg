@@ -20,6 +20,13 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
   return { ...module, assertContextLiveSource: vi.fn(async () => { if (preflight.failSource) throw new Error('dirty'); }),
     assertContextArtifactRoot: vi.fn(async (_source: string, root: string) => { if (root !== preflight.canonical) throw new Error('root'); }) };
 });
+// Test-only allowlist: the shared-collector spend and phase fixtures relabel lamp rows as D29 to exercise
+// D29 study caps. Production code reads the frozen D29_PAID_GENERATOR_IDS; only this file's module graph
+// sees the widened list, and the D29 paid-generator rule itself is tested in d29-synthetic-v8.test.mjs.
+vi.mock('../../../src/decision/heldout/d29-generator-ids.js', async original => {
+  const module = await original<typeof import('../../../src/decision/heldout/d29-generator-ids.js')>();
+  return { ...module, D29_PAID_GENERATOR_IDS: [...module.D29_PAID_GENERATOR_IDS, 'heldout-lamp/v1', 'heldout-lamp-splits/v1'] };
+});
 const dirs: string[] = [];
 afterEach(async () => { preflight.failSource = false; vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('offline-fixture');
@@ -746,6 +753,26 @@ describe('held-out calibration scope and two-phase approval', () => {
     const report = await scoreRun(c, summary, score);
     expect(score.mock.calls[0][0].approvedCalibration).toEqual((c.bundle.approval as any).calibration);
     expect(report).toMatchObject({ calibrated: null, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed' });
+  });
+  it('round 11 sizes every split at the calibration phase and refuses an oversized test row before any call', async () => {
+    const { heldoutRequestSize } = await import('../../../src/decision/heldout/contract.js');
+    const c = await scoped();
+    // A two-digit, "off" test row renders three bytes longer than the calibration-phase rows; set the bound between them.
+    c.bundle.corpus.rows[2] = generateHeldoutRow('heldout-lamp-splits/v1', 'fresh-example:11:single:test'); c.refresh();
+    const size = async (row: any) => (await heldoutRequestSize(c.bundle.corpus, c.bundle.preregistration, c.bundle.approval, row, row.requests[0])).estimatedTokens;
+    const calibrationMax = Math.max(await size(c.bundle.corpus.rows[0]), await size(c.bundle.corpus.rows[1]));
+    expect(await size(c.bundle.corpus.rows[2])).toBeGreaterThan(calibrationMax);
+    c.bundle.preregistration.perRequestTokenBound = calibrationMax + c.bundle.preregistration.outputAndHiddenTokenAllowance; c.refresh();
+    // The calibration-phase plan never dispatches the test row, yet sizes and refuses it, naming only its index.
+    await expect(planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).rejects.toThrow('payload-bound) at row 2');
+    const transport = fake();
+    const refusal = String(await c.run(transport).catch(error => error));
+    expect(refusal).toContain('payload-bound) at row 2'); expect(refusal).not.toContain('lamp');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    expect(await readdir(c.root)).toEqual([]);
+    // Unstaged (D17 / lamp) runs: every row was already in scope, so sizing is unchanged and a fitting corpus still runs.
+    const d17 = await setup(2); const d17Transport = fake();
+    expect(await d17.run(d17Transport)).toMatchObject({ completedRows: 2 }); expect(d17Transport).toHaveBeenCalledTimes(2);
   });
   it('AC1/2 dry-run estimates only declared phase rows and forbids test requests in calibration', async () => {
     const c = await scoped();

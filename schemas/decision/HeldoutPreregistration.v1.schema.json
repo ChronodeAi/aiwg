@@ -45,6 +45,32 @@
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
+    "regeneration": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "collectorCommit", "priorLiveObservations"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1 },
+            "collectorCommit": { "type": "string", "pattern": "^[a-f0-9]{9,40}$" },
+            "priorLiveObservations": { "const": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "previousCorpusDigest", "previousPreregistrationDigest", "previousApprovalTemplateDigest", "liveObservationsAtRegeneration"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1 },
+            "previousCorpusDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "previousPreregistrationDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "previousApprovalTemplateDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "liveObservationsAtRegeneration": { "const": false }
+          }
+        }
+      ]
+    },
     "providerFailurePolicy": {
       "type": "object",
       "additionalProperties": false,
@@ -100,18 +126,6 @@
       "minimum": 0,
       "maximum": 64000,
       "default": 512
-    },
-    "regeneration": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["reason", "previousCorpusDigest", "previousPreregistrationDigest", "previousApprovalTemplateDigest", "liveObservationsAtRegeneration"],
-      "properties": {
-        "reason": { "type": "string", "minLength": 1 },
-        "previousCorpusDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "previousPreregistrationDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "previousApprovalTemplateDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "liveObservationsAtRegeneration": { "const": false }
-      }
     },
     "calibration": {
       "oneOf": [

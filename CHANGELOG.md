@@ -9,6 +9,147 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 generator `d29-synthetic/v8` (public
+  development seed `d29-study-v8`, refused for paid collection like v1–v7)
+  fixes dataset leaks found on the public v7 seed and in review: injected
+  operator notes carried one extra comma clause (94/100 injected train rows,
+  300/300 injected test rows, 0 benign rows); injected rows rendered the claim
+  verbatim (balanced accuracy 0.89/0.87 on visible text); the claimed entity
+  and value never shared a clause in does-not-support rows; some moves kept
+  the same value; claimed-module distractors contradicted each other. Every v8
+  note renders from one two-slot template where an instruction replaces a
+  mirrored benign counterpart; injected rows draw their rendering mode from
+  their counterpart slice; an anchor clause and class-independent surface
+  forms remove the support-class shortcuts. All 32 injection phrases were
+  rewritten to target this screening's verdict, label, reviewer routing or
+  instructions unmistakably, while benign tasks and counterparts reuse the
+  same vocabulary operationally. The v5 shortcut audit adds per-field,
+  per-note and per-record punctuation, clause, length, character 3–5-gram and
+  claim-rendering features, runs per wording pool and target with
+  train-to-test transfer, fails v7 and the first v8 commit, and passes v8;
+  `prepareV8` refuses unless it passes, and the v8 analysis
+  (`decision-d29-analysis/v7`, `D29Study.v9`) records every audit parameter and
+  the passing report digest. Fresh private seeds prepare with v8; scoring and
+  calibration regenerate with the generator recorded in the corpus rows; and
+  paid bundles must use a paid-eligible generator (v8 only, for every row), so
+  v6/v7 and relabelled non-D29 generators are refused. The anchor clause sits
+  only in single-clause records, so no pronoun or ellipsis can resolve to the
+  claimed module, and v8 prompts use v8-only labeling conventions that decide
+  screening-control by target rather than addressee. A same-criterion distractor pair and
+  the missing balancing record no longer mark wrong-attribute/wrong-subject or
+  does-not-support rows: no record-structure feature is exclusive to one
+  variant or label. Distractor modes and surface forms (paraphrase,
+  two-value, coreference) are now drawn per record independently of the
+  variant, so no surface form on a non-relevant record is confined to or kept
+  out of any label, and no passage repeats a sentence. The whole distractor
+  layer (role counts, claimed-value carriers, modes, surface forms) is now
+  drawn from one label-independent distribution before the relevant record is
+  inserted, so no fixed total (claimed-value count, balancing record, criterion
+  length budget) is completed by the label-defining record. A shipped
+  blind-mode scan over records about unrelated modules plus layout finds no
+  precision-1.0 group or TRAIN-to-TEST tree reaching 0.75 on three seeds
+  (round 7: 1.000). The v5 audit scores the injection target only against
+  otherwise-supporting or otherwise-ready rows that have provider requests.
+  Distractor placement now reserves one claimed-module attribute in every row
+  (rendered only as the other-attribute / wrong-attribute relevant record), so
+  no variant's relevant record conditions placement; the shipped scan names
+  the relevant record by rendered position and checks claimed-module
+  distractors with trees and count rules against a round-8 positive control.
+  Relevant records whose mode is not label-defining (other-attribute,
+  near-miss, wrong-attribute, wrong-subject) now draw it from the distractor
+  mode distribution instead of always rendering exact (which marked
+  wrong-attribute at 0.98); distractor modes are near-uniform so every
+  variant-defining form also appears on distractors; the criterion length
+  budget covers distractors and benign notes together; note count and
+  parser-unseen rows no longer follow the row offset. New relevant-record-only
+  and all-record variant scans (round-9 positive control). Gold labels are
+  unchanged. Request size is now refused at preparation and dry run when any
+  row in any split exceeds the per-request bound (naming the row index), the
+  shared held-out collector sizes every split before the first call of a
+  staged run, and the v8 criterion budget charges the longest relevant
+  record, slot note and coreference leads, with one to three length-limited
+  benign notes: the worst request over 100 seeds falls from 4249 to 4081
+  (bound 4244). Benign task pools now contain every bigram (and every
+  cross-pool trigram) of the injection instructions in operational senses,
+  two TEST instructions drop "this claim as", and the shortcut audit refuses
+  any injection n-gram lexicon that transfers between wording pools at 0.75
+  or more (0.86 before, 0.56 now); every such benign task names an outside
+  target (evidence bags, visitor checks). v6/v7 rows, gold and generator pins are
+  unchanged (#2622)
+
+- Experimental, default-off D29 v8 review fixes: the binding decides (any
+  native fail/insufficient caps at HOLD; the carried native verdict is renamed
+  `descriptiveVerdict`), four held-out record/class pack gates
+  (evaluation-time order, split pin, registered slices, per-class support),
+  the staged-calibration attestation derived from D09 qualification of the
+  trusted artifact (absent/unqualified refuses), project floors loaded from
+  `aiwg.config` with opt-out refused, per-generator source digests (D29 pins
+  only d29 files, D17 only its own; no built-output fallback), new
+  `D29Study.v8` / analysis-v6 / score-v8 versions with v6/v7 schemas restored
+  byte-identical and the v8 binding frozen at 2026-10-01T14:00:47Z,
+  parameterized support minima and confidence level, and explicit
+  `gateBindingDigest`/`gatePackDigests` on the approval. Live Jev calls, real
+  held-out data, human reviewers and production rollout remain pending (#2781)
+
+- Experimental, default-off D29 adopts the gates capability as the first real
+  GateBinding: the shipped `aiwg:decision-engine/absolute-screening` pack (ten
+  absolute Wilson/support/count/evidence gates plus the integrity-ceiling
+  floor), the `decision.screening/v1` core metric provider, preregistered
+  HOLD-ceiling v6/v7 bindings evaluated through `evaluateGates`, and
+  `SdlcScreeningPreregistration` v2 with optional non-inferiority (null skips
+  the paired NI gate; passage baselines are reported diagnostics, never
+  gating). The bespoke `externalReport` is removed; dry runs report zero
+  provider calls with binding/pack/provider digests. Live observations,
+  calibration qualification, human review and promotion remain pending (#2833)
+
+- Experimental, default-off D29 v7 adopts disjoint held-out wording pools
+  (train for tuning/calibration, test for test only) with a frozen train-only
+  primary passage baseline v3, passage v2 kept as the solvability-ceiling
+  diagnostic, and gated singles/pairs/OR-of-5 plus model shortcut audits
+  evaluated train-to-test. Public seed `d29-study-v7`; v2/v3/v4/v6 corpus and
+  gold fixtures become slim headers with digest pins. Live evidence, calibration
+  qualification and human review remain pending (#2622)
+
+- Experimental, default-off D29 v6 balances record structure and claim-relative
+  occurrences, replaces matched benign note slots with screening-control text,
+  and sends explicit labeling conventions. Passage baseline v2 is primary;
+  historical comparators remain unchanged. Public seed `d29-study-v6` includes
+  development and public-test shortcut audits; live evidence remains pending (#2622)
+
+- Experimental, default-off D29 generator v4 and public development seed
+  `d29-study-v5` match benign annotations and distractor cues across labels,
+  clarify provider labeling conventions, and audit single and paired shortcuts.
+  A pinned passage baseline is the primary comparator; the original remains
+  secondary. All variant families and injection phrasings are represented in
+  the 50-item development review; live evidence and approval remain pending (#2622)
+
+- Experimental, default-off D29 synthetic generator v3 with attribute-generic
+  passage cases, benign look-alikes, varied injections and incomplete-evidence
+  forms, a deterministic shortcut audit, and public development seed
+  `d29-study-v4`. V1/v2 rows and the frozen baseline remain unchanged; live
+  observations, calibration qualification and operator review remain pending (#2622)
+
+- Experimental, default-off D29 synthetic dataset v2 with 2,000 subjects,
+  balanced paraphrases, exclusive/non-exclusive port and near-miss traps,
+  independent injection blockers, per-variant candidate/baseline metrics and
+  a 165-assessment review template. Public development seed `d29-study-v3`
+  supersedes earlier demos; the v1 generator and frozen
+  baseline remain unchanged. Live calibration and operator review remain pending (#2622)
+
+- Experimental, default-off D29 staged calibration flow: collect and seal
+  tuning/calibration first, fit an unapproved D09 artifact offline, require
+  operator review for registration, then bind a second test approval to the
+  artifact, seal and prior approval. Live observations and operator approvals
+  remain pending (#2622)
+
+- Experimental, default-off D29 v1 synthetic evidence/citation study with 1,600
+  seeded subjects, frozen splits and preregistration, receipt-based scoring,
+  calibration-only readiness mapping, native and external report gates,
+  registered row/corpus regeneration, source-only byte-priced dry-run and
+  free-output approval form, and a 132-assessment operator review template.
+  Live observations, calibration qualification and human review remain pending
+  (#2622)
+
 - Reworked the experimental, default-off gates bundle-provider loader into an
   isolated runner with config-allowlist trust and records reproduction
   (#2831): providers execute only in a permission-restricted child Node
@@ -330,6 +471,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   support to Jev (#2617).
 
 ### Fixed
+
+- Experimental, default-off D29 collector integration tests use a small,
+  deterministic offline corpus for seal, calibration and receipt checks.
+  The full 2,000-row dry-run and production preregistration thresholds remain
+  covered separately; live evidence and operator review remain pending (#2622)
+
+- Experimental, default-off D29 collection now rejects public development demo
+  seeds and corpus digests; paid-run instructions require a fresh private seed.
+  Demo port wording explicitly states current use and excludes all other ports,
+  with regenerated fixtures and pins; live qualification remains pending (#2622)
+
+- Experimental, default-off D29 gold now uses an explicit single-port
+  constraint for contradiction and an explicit lack of verified rollback
+  coverage for the incomplete criterion. A possible-world regression covers
+  every rendered template; the public `d29-study-v2` demo and manifest pins
+  supersede the ambiguous v1 corpus before any live collection (#2622)
 
 - Experimental, default-off D26 context-pruning reports hold bounded
   zero-variance reads at small n: a bounded quality metric whose per-pair

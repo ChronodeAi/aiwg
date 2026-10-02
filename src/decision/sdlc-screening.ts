@@ -23,7 +23,10 @@ import { canonicalJson } from '../security/artifact-trust.js';
 
 export const SDLC_SCREENING_SCHEMA_VERSION = 'decision-sdlc-evidence-screening/v1' as const;
 export const SDLC_SCREENING_PREREGISTRATION_VERSION = 'decision-sdlc-screening-preregistration/v1' as const;
+export const SDLC_SCREENING_PREREGISTRATION_VERSION_V2 = 'decision-sdlc-screening-preregistration/v2' as const;
 export const SDLC_SCREENING_RELEASE_VERSION = 'decision-sdlc-screening-release/v1' as const;
+/** Release reports over a v2 preregistration (nullable NI); v1 stays bound to v1 preregistrations. */
+export const SDLC_SCREENING_RELEASE_VERSION_V2 = 'decision-sdlc-screening-release/v2' as const;
 export const SDLC_SCREENING_HELDOUT_RECORDS_VERSION = 'decision-sdlc-screening-heldout-records/v1' as const;
 export const SDLC_SCREENING_HELDOUT_REPORT_VERSION = 'decision-sdlc-screening-heldout-report/v1' as const;
 export const SDLC_GATE_EVIDENCE_POLICY_KIND = 'SdlcGateEvidencePolicy' as const;
@@ -244,6 +247,16 @@ export interface SdlcScreeningPreregistration {
   efficiencyClaim: { enabled: boolean; minimumPositiveTotalEconomicsUsd: number | null };
 }
 
+/**
+ * v2 preregistration: paired non-inferiority is optional. A null margin skips
+ * the NI gate entirely (no NI reasons); passage baselines stay reported
+ * diagnostics and never gate. Every other field is v1-identical.
+ */
+export interface SdlcScreeningPreregistrationV2 extends Omit<SdlcScreeningPreregistration, 'schemaVersion' | 'qualityNonInferiorityBps'> {
+  schemaVersion: typeof SDLC_SCREENING_PREREGISTRATION_VERSION_V2;
+  qualityNonInferiorityBps: number | null;
+}
+
 /** One adjudicated held-out item with the paired baseline outcome on the same item. */
 export interface SdlcScreeningHeldoutSample {
   id: string;
@@ -322,8 +335,8 @@ export interface SdlcScreeningPreregistrationResult {
 }
 
 export interface SdlcScreeningReleaseReport {
-  schemaVersion: typeof SDLC_SCREENING_RELEASE_VERSION;
-  preregistration: SdlcScreeningPreregistration;
+  schemaVersion: typeof SDLC_SCREENING_RELEASE_VERSION | typeof SDLC_SCREENING_RELEASE_VERSION_V2;
+  preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2;
   preregistrationDigest: `sha256:${string}`;
   trustedPreregistrationDigest: `sha256:${string}`;
   heldout: SdlcScreeningHeldoutReport | null;
@@ -1166,13 +1179,14 @@ export function sdlcScreeningReviewInputFromReceipt(
 }
 
 /** Canonical digest a host anchors separately before held-out access. */
-export function sdlcScreeningPreregistrationDigest(preregistration: SdlcScreeningPreregistration): `sha256:${string}` {
+export function sdlcScreeningPreregistrationDigest(preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2): `sha256:${string}` {
   return digest(preregistration);
 }
 
-function validatePreregistration(preregistration: SdlcScreeningPreregistration): number {
+function validatePreregistration(preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2): number {
   const invalid = (message = 'Invalid screening preregistration'): never => { throw new SdlcScreeningValidationError(message); };
-  if (!isRecord(preregistration) || preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION
+  if (!isRecord(preregistration) || (preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION
+      && preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION_V2)
     || !isNonEmptyString(preregistration.planId) || !isDigest(preregistration.heldoutSplitDigest)) invalid();
   rejectUnknownKeys(preregistration, ['schemaVersion', 'planId', 'frozenAt', 'heldoutSplitDigest', 'slices', 'gateBlockingSlices',
     'maximumFalseSupportRateBps', 'maximumFalseReadyRateBps', 'minimumTotalSupport', 'minimumSliceSupport',
@@ -1191,6 +1205,11 @@ function validatePreregistration(preregistration: SdlcScreeningPreregistration):
     ['maximumFalseReadyRateBps', preregistration.maximumFalseReadyRateBps],
     ['qualityNonInferiorityBps', preregistration.qualityNonInferiorityBps],
   ] as const) {
+    if (value === null) {
+      if (label !== 'qualityNonInferiorityBps'
+        || preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION_V2) invalid(`Invalid basis points: ${label}`);
+      continue;
+    }
     if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) invalid(`Invalid basis points: ${label}`);
   }
   if (!isRecord(preregistration.confidenceInterval) || !['wilson', 'exact-binomial'].includes(preregistration.confidenceInterval.method)
@@ -1358,7 +1377,7 @@ function reasonDisposition(reason: string): 'fail' | 'insufficient-evidence' {
  * Structurally invalid preregistrations throw; every evidence problem is a reason code.
  */
 export function evaluateSdlcScreeningPreregistration(
-  preregistration: SdlcScreeningPreregistration,
+  preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2,
   trustedPreregistrationDigest: `sha256:${string}`,
   records: SdlcScreeningHeldoutRecords | null,
   nowEpochMs: number,
@@ -1419,11 +1438,15 @@ export function evaluateSdlcScreeningPreregistration(
   // Paired non-inferiority of per-item readiness correctness against the baseline screening path.
   // The preregistered margin is a tolerated loss in bps; the helper's margin is candidate minus
   // baseline, so it is negated (200 bps tolerated loss => marginBps -200).
-  const nonInferiority = report.paired.interval
-    ? pairedNonInferiority({ interval: report.paired.interval, marginBps: -preregistration.qualityNonInferiorityBps })
-    : { decision: 'insufficient' as const, reason: 'interval-unavailable' };
-  if (nonInferiority.decision === 'not-non-inferior') reasons.push('quality-not-non-inferior');
-  else if (nonInferiority.decision !== 'non-inferior') reasons.push('quality-non-inferiority-insufficient');
+  // A null v2 margin skips the NI gate entirely: the paired contrast stays a
+  // reported diagnostic and contributes no gate reason.
+  if (preregistration.qualityNonInferiorityBps !== null) {
+    const nonInferiority = report.paired.interval
+      ? pairedNonInferiority({ interval: report.paired.interval, marginBps: -preregistration.qualityNonInferiorityBps })
+      : { decision: 'insufficient' as const, reason: 'interval-unavailable' };
+    if (nonInferiority.decision === 'not-non-inferior') reasons.push('quality-not-non-inferior');
+    else if (nonInferiority.decision !== 'non-inferior') reasons.push('quality-non-inferiority-insufficient');
+  }
   if (preregistration.efficiencyClaim.enabled) {
     const net = report.costUsd.netSavings;
     if (net === null) reasons.push('total-economics-unknown');
@@ -1434,7 +1457,7 @@ export function evaluateSdlcScreeningPreregistration(
 }
 
 export function buildSdlcScreeningReleaseReport(input: {
-  preregistration: SdlcScreeningPreregistration;
+  preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2;
   trustedPreregistrationDigest: `sha256:${string}`;
   heldout: SdlcScreeningHeldoutRecords | null;
   integrity: QualificationIntegrityMetadata;
@@ -1450,7 +1473,8 @@ export function buildSdlcScreeningReleaseReport(input: {
     : readable && integrityProblems.length === 0 && preregistered.decision === 'pass'
       && input.integrity.release_gate.decision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
   const unsigned = {
-    schemaVersion: SDLC_SCREENING_RELEASE_VERSION,
+    schemaVersion: input.preregistration.schemaVersion === SDLC_SCREENING_PREREGISTRATION_VERSION_V2
+      ? SDLC_SCREENING_RELEASE_VERSION_V2 : SDLC_SCREENING_RELEASE_VERSION,
     preregistration: input.preregistration,
     preregistrationDigest: sdlcScreeningPreregistrationDigest(input.preregistration),
     trustedPreregistrationDigest: input.trustedPreregistrationDigest,

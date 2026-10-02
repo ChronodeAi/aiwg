@@ -240,14 +240,16 @@ operator approval, durable freeze or collected evaluation:
 
 | Artifact | Digest |
 | --- | --- |
-| Corpus | `sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804` |
+| Corpus | `sha256:5af15c96869d09ab57bef405bff242d8b655e6b5d9a636c1ee6a697660221987` |
 | Preregistration | source-derived: emitted by `--dry-run` at the approved source commit |
 | Unapproved priced template | source-derived: emitted by `--dry-run` at the approved source commit |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
 | Analysis | source-derived: emitted by `--dry-run` at the approved source commit |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
-Corpus, split and gold are data pins and stay fixed. Preregistration, the
+Corpus rows, split and gold are data pins and stay fixed; the corpus digest moves
+only through provenance.generatorDigest, which pins the shared generator registry.
+Preregistration, the
 priced template and analysis embed the digest of every source byte the study
 runs, so they change with any shared decision-source change; they are bound at
 approval time to the exact approved source commit, and the test suite checks

@@ -31,7 +31,7 @@ export {
   evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
 export { validateGateReport, type GateReportValidation } from './report.js';
-export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider } from './providers/index.js';
+export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider, screeningProvider } from './providers/index.js';
 export type { MetricProvider } from './providers/index.js';
 export { MetricProviderRegistry } from './providers/index.js';
 export {

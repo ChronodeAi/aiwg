@@ -40,11 +40,16 @@ export type StatisticKind = 'interval-bound' | 'paired-difference' | 'bootstrap-
 
 export type StatisticMethod = 'wilson' | 'clopper-pearson' | 'newcombe' | 'tango' | 'bootstrap';
 
+/** Reference to a named pack parameter, resolved against the binding's preregistered values. */
+export interface GateParamRef {
+  param: string;
+}
+
 export interface GateStatistic {
   kind: StatisticKind;
   method?: StatisticMethod;
   bound?: 'upper' | 'lower';
-  levelBps?: number;
+  levelBps?: number | GateParamRef;
   mode?: 'non-inferiority' | 'superiority';
   marginBps?: number;
   seed?: number;
@@ -78,7 +83,7 @@ export interface GateDefinition {
   metric?: { provider: string; name: string };
   statistic?: GateStatistic;
   threshold?: GateThreshold;
-  minimumN?: number;
+  minimumN?: number | GateParamRef;
   scope: GateScope;
   /** Outcome when the gate fails. Never PROMOTE. */
   onFail: GateFailOutcome;

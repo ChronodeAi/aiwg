@@ -11,7 +11,9 @@ import { JEV_ENDPOINT, compileJevQuestion } from '../adapters/jev.js';
 import { projectDecisionState, partitionProjectedState } from '../projection.js';
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
-import { heldoutGeneratorDigest, heldoutCorpusSeed, reproducibleHeldoutRow } from './generators.js';
+import { heldoutCorpusSeed } from './generators.js';
+import { registeredHeldoutGeneratorDigest, reproducibleRegisteredHeldoutRow } from './generator-registry.js';
+import { D29_PAID_GENERATOR_IDS } from './d29-generator-ids.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
 
@@ -19,11 +21,34 @@ export { sha256 as heldoutDigest };
 export const HELDOUT_CAP_USD: Readonly<Record<Study, number>> = Object.freeze({ D17: 8, D29: 6 });
 export const HELDOUT_PORTFOLIO_CAP_USD = 48;
 export const HELDOUT_ENV_GATE = 'AIWG_DECISION_HELDOUT_LIVE';
+const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7', 'd29-study-v8']);
+// Canonical corpus digests, including the public version before the wording correction.
+// Slim corpus headers stay refused alongside the full corpora they pin: both are committed demo bytes.
+const D29_PUBLIC_DEMO_CORPORA = new Set([
+  'sha256:6bb4c5990c2d039841074bfb099e8c1ad5c6c40b5bd334817cb897bc320fd744',
+  'sha256:4a0833e7a82d3809cb3b9448af1fbe5eae0ebeb1ee4d8055ae67b9c24f05baca',
+  'sha256:505283a46217e158b39ba93f61e17c28c39c582cad857f7090f38e8844a6794a',
+  'sha256:35ecc8936b7a251d1c34cf630e9b09ed82eff0d05f96c901c01edfa0f9849934',
+  'sha256:372cb180f129938280751bf3db76e4f9bc142ef85e68f38370b88aeec5602963',
+  'sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604',
+  'sha256:d5b722d175903aefe1b98c3db0c5310df35c0807eb8b7682ebd852f566e28ebc',
+  'sha256:53dea2a1008af107c1634c4d35c663fc18a9412a82a662141a50b0c8bbbdaf64',
+  'sha256:018912caaae0102593be0196fa86f0721edded8b2bed625b5a32b4df260b8a6e',
+  'sha256:6f5834c418810e5d89ce37185b13063ce0c8922220becbb43ae7253678d2da23',
+  'sha256:76186887d4753a8fd011b6abf438f467d19e3b11b15881522fc59d6f0c7cc7d6',
+  'sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855',
+  // v8 per-generator pins: the same public v6/v7 corpora after the generator digest change.
+  'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
+  'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
+  // Generator d29-synthetic/v8 public development corpus (seed d29-study-v8); refused preemptively.
+  'sha256:ce5642f156003c3a29c28dd9ad7208964e6ced5ea0fd1f3ebd7bc04dacd40c64',
+]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
 const validators = new Map<string, ValidateFunction>();
 export class HeldoutError extends Error {
-  constructor(readonly category: string) { super(`Held-out collector refused (${category})`); }
+  /** `detail` names where (for example a corpus row index), never row content. */
+  constructor(readonly category: string, readonly detail?: string) { super(`Held-out collector refused (${category})${detail ? ` at ${detail}` : ''}`); }
 }
 export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline' | 'SpendEvent' | 'SpendHead' | 'CalibrationPhase', value: unknown): void {
   admitEntry(value, limits);
@@ -44,7 +69,29 @@ export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approva
 }
 export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPreregistration): void {
   checkHeldoutSchema('Corpus', corpus); checkHeldoutSchema('Preregistration', plan);
-  if (corpus.provenance.generatorDigest !== heldoutGeneratorDigest() || corpus.provenance.seed !== heldoutCorpusSeed(corpus.rows)) {
+  // Every row pins its own generator family: the corpus digest must equal the
+  // single family digest all rows resolve to, so no row rides on another study's pin.
+  // Null means unknown, so an unregistered generator or mixed families fail closed.
+  const familyDigests = new Map<string, `sha256:${string}`>();
+  const digestOf = (generatorId: string): `sha256:${string}` => {
+    const cached = familyDigests.get(generatorId);
+    if (cached !== undefined) return cached;
+    try {
+      const digest = registeredHeldoutGeneratorDigest(generatorId);
+      familyDigests.set(generatorId, digest);
+      return digest;
+    } catch {
+      throw new HeldoutError('corpus-provenance');
+    }
+  };
+  let familyDigest: string | null = null;
+  for (const row of corpus.rows) {
+    const digest = digestOf(row.provenance.generatorId);
+    if (familyDigest === null) familyDigest = digest;
+    else if (familyDigest !== digest) throw new HeldoutError('corpus-provenance');
+  }
+  if (familyDigest === null || corpus.provenance.generatorDigest !== familyDigest
+    || corpus.provenance.seed !== heldoutCorpusSeed(corpus.rows)) {
     throw new HeldoutError('corpus-provenance');
   }
   const ids = new Set<string>(), families = new Map<string, string>(), payloads = new Set<string>();
@@ -53,7 +100,7 @@ export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPrereg
   if (definitions.size !== corpus.definitions.length || plan.study !== corpus.study || plan.corpusDigest !== sha256(corpus)
     || plan.outputAndHiddenTokenAllowance >= plan.perRequestTokenBound) throw new HeldoutError('input-pins');
   for (const row of corpus.rows) {
-    if (!reproducibleHeldoutRow(row)) throw new HeldoutError('generator-output');
+    if (!reproducibleRegisteredHeldoutRow(row)) throw new HeldoutError('generator-output');
     if (ids.has(row.id) || families.has(row.familyId) && families.get(row.familyId) !== row.split
       || payloads.has(sha256(row.input)) || new Set(row.requests.map(r => r.id)).size !== row.requests.length
       || row.requests.some(r => !definitions.has(r.definitionId)) || !row.requests.length && row.localOutcome === null) {
@@ -89,6 +136,18 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   admitEntry(bundle, limits);
   if (Object.keys(bundle).sort().join(',') !== 'approval,corpus,preregistration') throw new HeldoutError('bundle-fields');
   const { corpus, preregistration: plan, approval: a } = bundle;
+  if (corpus?.study === 'D29') {
+    if (D29_PUBLIC_DEMO_CORPORA.has(sha256(corpus))) throw new HeldoutError('public-demo-corpus');
+    if (D29_PUBLIC_DEMO_SEEDS.has(corpus.provenance?.seed)) throw new HeldoutError('public-demo-seed');
+    // A D29 bundle is paid-eligible only when every row comes from the current
+    // paid-eligible D29 generator. Older D29 generators (v1–v7) reproduce public
+    // development corpora only, and no other generator (lamp, D17) may be
+    // relabelled as D29.
+    const rows: unknown[] = Array.isArray(corpus.rows) ? corpus.rows : [];
+    if (!rows.length || rows.some(row => !D29_PAID_GENERATOR_IDS.includes((row as HeldoutRow)?.provenance?.generatorId))) {
+      throw new HeldoutError('paid-generator');
+    }
+  }
   validateHeldoutInputs(corpus, plan);
   if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');
   checkHeldoutSchema('Approval', a);
@@ -124,6 +183,15 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   if (!heldoutRowsInScope({ corpus, preregistration: plan, approval }).some(item => item.id === row.id && sha256(item) === sha256(row))) {
     throw new HeldoutError('calibration-phase-row');
   }
+  return heldoutRequestSize(corpus, plan, approval, row, request);
+}
+/**
+ * The request a row would send and its preregistered size bound, for any row
+ * of the corpus whatever the current phase. Only sizing and planning call it
+ * directly; dispatch goes through heldoutRequest, which also checks the phase.
+ */
+export async function heldoutRequestSize(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval,
+  row: HeldoutRow, request: HeldoutRequest) {
   const execution = heldoutExecution(corpus, plan, approval, request);
   const projected = await projectDecisionState(row.input, execution.projection);
   const wire = { state: partitionProjectedState(projected.state, projected.evidence), model: approval.model,
@@ -135,8 +203,24 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   if (redactStructured(projected.state).sensitivity !== 'none') throw new HeldoutError('credential-material');
   return { execution, requestDigest: sha256(wire), requestBytes, estimatedTokens: inputTokenBound };
 }
+/**
+ * Sizes every request of every corpus row, in every split, against the
+ * preregistered per-request bound and refuses (`payload-bound`, naming the row
+ * index) before any provider call. A staged run therefore learns at its
+ * calibration phase, before any spend, that a later phase could not dispatch.
+ */
+export async function assertHeldoutRequestBounds(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval) {
+  for (const [index, row] of corpus.rows.entries()) for (const request of row.requests) {
+    try { await heldoutRequestSize(corpus, plan, approval, row, request); }
+    catch (error) {
+      if (error instanceof HeldoutError && error.category === 'payload-bound') throw new HeldoutError('payload-bound', `row ${index}`);
+      throw error;
+    }
+  }
+}
 export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
   validateHeldoutBundle(bundle, digest);
+  await assertHeldoutRequestBounds(bundle.corpus, bundle.preregistration, bundle.approval);
   let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0;
   const rows = heldoutRowsInScope(bundle);
   for (const row of rows) for (const request of row.requests) {

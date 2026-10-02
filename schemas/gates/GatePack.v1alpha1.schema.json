@@ -100,6 +100,15 @@
         "name": { "type": "string", "minLength": 1 }
       }
     },
+    "parameterRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["param"],
+      "description": "Reference to a named pack parameter, resolved against the binding's preregistered values.",
+      "properties": {
+        "param": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" }
+      }
+    },
     "statistic": {
       "type": "object",
       "additionalProperties": false,
@@ -108,7 +117,7 @@
         "kind": { "enum": ["interval-bound", "paired-difference", "bootstrap-bound"] },
         "method": { "enum": ["wilson", "clopper-pearson", "newcombe", "tango", "bootstrap"] },
         "bound": { "enum": ["upper", "lower"] },
-        "levelBps": { "type": "integer", "minimum": 5001, "maximum": 9998 },
+        "levelBps": { "anyOf": [{ "type": "integer", "minimum": 5001, "maximum": 9998 }, { "$ref": "#/$defs/parameterRef" }] },
         "mode": { "enum": ["non-inferiority", "superiority"] },
         "marginBps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
         "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
@@ -191,7 +200,7 @@
         "metric": { "$ref": "#/$defs/metricReference" },
         "statistic": { "$ref": "#/$defs/statistic" },
         "threshold": { "$ref": "#/$defs/threshold" },
-        "minimumN": { "type": "integer", "minimum": 0 },
+        "minimumN": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/parameterRef" }] },
         "scope": { "$ref": "#/$defs/scope" },
         "onFail": { "enum": ["HOLD", "ROLLBACK"] },
         "onInsufficient": { "const": "HOLD", "description": "Insufficient evidence always holds; ROLLBACK needs an observed blocking failure." },

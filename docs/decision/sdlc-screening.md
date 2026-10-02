@@ -112,8 +112,10 @@ dispatched twice by repeated resume.
 The repository includes closed schemas for:
 
 - `SdlcEvidenceScreening.v1` (the request)
-- `SdlcScreeningPreregistration.v1`
-- `SdlcScreeningRelease.v1`
+- `SdlcScreeningPreregistration.v1` (paired non-inferiority required)
+- `SdlcScreeningPreregistration.v2` (paired non-inferiority optional: a null
+  margin skips the NI gate; passage baselines stay reported diagnostics)
+- `SdlcScreeningRelease.v1` (carries a v1 or v2 preregistration)
 
 The preregistration pins the held-out test split digest, the preregistered
 slices and gate-blocking slices, maximum false-support and false-ready rates,
@@ -135,7 +137,8 @@ are bounded by the upper limit of the Wilson score interval
 (`wilsonScoreInterval`) at the preregistered level.
 
 Quality is a paired non-inferiority test against the baseline screening path on
-the same items. An item is correct when the readiness route matches gold and,
+the same items (v1, or v2 with a numeric margin; a null v2 margin skips this
+test and contributes no gate reason). An item is correct when the readiness route matches gold and,
 for citations, the support label also matches gold; each record's
 `baseline.correct` must use the same definition. The paired table
 (both / candidate-only / baseline-only / neither correct) goes to
@@ -204,3 +207,13 @@ held-out false-support/false-ready bounds, production latency/cost, or reviewer
 time savings. Those require a frozen held-out corpus, adjudication guide,
 reviewer identities/rationales, live provider credentials, deployment egress
 approval and positive total-economics evidence.
+
+## Synthetic study module
+
+The [D29 study runbook](d29-heldout-study.md) describes source-only preparation,
+frozen tuning/calibration/test splits, the deterministic oracle and visible-text
+baseline, native receipt mapping and the additional coverage/conditional-rate
+report. Its 132-item operator template is unfilled. Live model observations,
+a compatible D09 artifact, protected integrity/access records and actual
+operator review remain required. No measured synthetic or representative
+SDLC-quality result is claimed by the module's offline fixtures.

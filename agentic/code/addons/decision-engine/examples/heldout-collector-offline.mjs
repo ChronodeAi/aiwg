@@ -13,7 +13,7 @@ export async function prepare(seed) {
       required: ['payload'], additionalProperties: false }, question: 'Is the fictional lamp on?', answer: { kind: 'choice',
       options: [{ id: 'yes', description: 'On' }, { id: 'no', description: 'Off' }] }, requiredCapabilities: ['choice'] } };
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D17', syntheticOnly: true,
-    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(), seed, goldDigest: heldoutDigest(gold) }, definitions: [definition],
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest('heldout-lamp/v1'), seed, goldDigest: heldoutDigest(gold) }, definitions: [definition],
     rows: [0, 1].map(i => generateHeldoutRow('heldout-lamp/v1', `${seed}:${i}:example`)) };
   return { corpus, gold, preregistration: { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: '2026-09-30T00:00:00Z', corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest({ exampleOnly: true }),

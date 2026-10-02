@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "decision-d29-gold-header/v1",
+  "study": "D29",
+  "version": "v2",
+  "seed": "d29-study-v3",
+  "rowCount": 2000,
+  "goldVersion": "decision-d29-gold/v2",
+  "pins": {
+    "fullGoldDigest": "sha256:ed8d6cbf61e142670e017b2fa3433b7eb2c8d28e34656b90ed5b25d159559194",
+    "goldRowsDigest": "sha256:e79bc010b5f68c5e6b5fd77055f4cb0dc1466de40eeb1c20fcf3d399321ad831"
+  }
+}

@@ -18,6 +18,7 @@ describe('gates disabled-by-default regression', () => {
     expect(new Set(Object.keys(quality))).toEqual(new Set([
       'freezeBinaryBenchmarkPlan', 'verifyBinaryBenchmarkPlanDigest', 'evaluatePreregisteredBinaryBenchmark',
       'evaluateBinaryHeldout', 'evaluateOrdinalHeldout', 'evaluateRankingHeldout', 'measurePairedMovement',
+      'evaluateBinaryCalibration',
       'freezeQualificationSplit', 'verifyQualificationSplits', 'PairedDifferenceError', 'normalQuantile',
       'pairedBinaryDifferenceInterval', 'pairedMeanDifferenceBootstrap', 'pairedNonInferiority',
       'wilsonScoreInterval', 'clopperPearsonInterval',

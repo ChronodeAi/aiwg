@@ -467,7 +467,7 @@ describe('gates bundle providers', () => {
       else process.env.AIWG_GATES_BUNDLE_PROVIDERS = previous;
     }
     const core = createCoreProviderRegistry();
-    expect(core.ids()).toEqual(['test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
+    expect(core.ids()).toEqual(['decision.screening/v1', 'test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
     // A code-digest pin for a core provider refuses: core providers carry no
     // code digest, so bundle pins never silently verify.
     const { provider } = await loadExample();

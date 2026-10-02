@@ -3,7 +3,7 @@ import { artifactDigest } from '../decision/validate.js';
 import type { MetricProviderRegistry } from './providers/registry.js';
 import { validateGateDocument } from './schema.js';
 import type {
-  ArtifactPinLike, GateBinding, GateDefinition, GateOutcome, GatePack, GateParameter, Sha256Digest,
+  ArtifactPinLike, GateBinding, GateDefinition, GateOutcome, GatePack, GateParameter, GateParamRef, Sha256Digest,
 } from './types.js';
 import { qualifyGateParameter } from './types.js';
 import { INTEGRITY_CEILING_FLOOR_PACK_ID, assertCeilingDefaults, projectCeilingSatisfied } from './floors.js';
@@ -80,8 +80,47 @@ function checkThresholdBlock(gate: GateDefinition, params: Record<string, GatePa
   }
 }
 
+const isParamRef = (value: unknown): value is GateParamRef =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  && typeof (value as GateParamRef).param === 'string';
+
+/**
+ * Resolve a literal-or-parameter number against pack parameter defaults.
+ * Returns the default for a `{param}` reference, or null when the reference
+ * names an unknown parameter, the type mismatches, or no default pins it.
+ */
+export function resolveNumberDefault(
+  value: number | GateParamRef | undefined,
+  params: Record<string, GateParameter>,
+  expectedType: GateParameter['type'],
+): number | null {
+  if (value === undefined) return null;
+  if (typeof value === 'number') return value;
+  if (!isParamRef(value)) return null;
+  const declared = params[value.param];
+  if (declared === undefined || declared.type !== expectedType) return null;
+  return declared.default ?? null;
+}
+
+/** A literal-or-parameter reference names a known parameter of the expected type. */
+function checkParamRef(
+  gateId: string,
+  value: number | GateParamRef | undefined,
+  params: Record<string, GateParameter>,
+  expectedType: GateParameter['type'],
+  what: string,
+): void {
+  if (value === undefined || typeof value === 'number') return;
+  if (!isParamRef(value) || params[value.param] === undefined) {
+    fail(`gate ${gateId} ${what} references unknown parameter '${(value as GateParamRef)?.param}'`);
+  }
+  if (params[value.param]!.type !== expectedType) {
+    fail(`gate ${gateId} ${what} parameter '${value.param}' must have type ${expectedType}`);
+  }
+}
+
 /** Statistic coherence per kind. Irrelevant statistic fields are rejected so confused authoring fails at load. */
-function checkStatisticBlock(gate: GateDefinition): void {
+function checkStatisticBlock(gate: GateDefinition, params: Record<string, GateParameter>): void {
   const statistic = gate.statistic;
   if (statistic === undefined) {
     if ((STATISTICAL_KINDS as readonly string[]).includes(gate.kind)) {
@@ -100,6 +139,7 @@ function checkStatisticBlock(gate: GateDefinition): void {
     }
     if (bound !== 'upper' && bound !== 'lower') fail(`gate ${gate.id} interval-bound requires bound upper|lower`);
     if (levelBps === undefined) fail(`gate ${gate.id} interval-bound requires levelBps`);
+    checkParamRef(gate.id, levelBps, params, 'level', 'levelBps');
     if (mode !== undefined || marginBps !== undefined || seed !== undefined || resamples !== undefined || bounds !== undefined) {
       fail(`gate ${gate.id} interval-bound must not carry mode, margin, seed, resamples or bounds`);
     }
@@ -109,6 +149,7 @@ function checkStatisticBlock(gate: GateDefinition): void {
     }
     if (bound !== undefined) fail(`gate ${gate.id} paired-difference must not carry bound`);
     if (levelBps === undefined) fail(`gate ${gate.id} paired-difference requires levelBps`);
+    checkParamRef(gate.id, levelBps, params, 'level', 'levelBps');
     const resolvedMode = mode ?? 'non-inferiority';
     if (resolvedMode !== 'non-inferiority' && resolvedMode !== 'superiority') fail(`gate ${gate.id} unknown paired mode`);
     if (resolvedMode === 'non-inferiority' && marginBps === undefined) fail(`gate ${gate.id} non-inferiority requires marginBps`);
@@ -127,6 +168,7 @@ function checkStatisticBlock(gate: GateDefinition): void {
     if (levelBps === undefined || seed === undefined || resamples === undefined || bounds === undefined) {
       fail(`gate ${gate.id} bootstrap-bound requires levelBps, seed, resamples and bounds`);
     }
+    checkParamRef(gate.id, levelBps, params, 'level', 'levelBps');
     if (mode !== undefined || marginBps !== undefined) fail(`gate ${gate.id} bootstrap-bound must not carry mode or margin`);
   }
 }
@@ -185,11 +227,23 @@ export function validateResolvedPack(pack: GatePack, providers: MetricProviderRe
       fail(`gate ${gate.id} of kind ${gate.kind} requires a ${expectedKind} metric`);
     }
     checkThresholdBlock(gate, params);
-    checkStatisticBlock(gate);
+    checkStatisticBlock(gate, params);
+    checkParamRef(gate.id, gate.minimumN, params, 'count', 'minimumN');
     if (gate.kind === 'minimum-n') {
-      if (gate.minimumN === undefined || gate.minimumN < 1) fail(`gate ${gate.id} minimum-n requires minimumN >= 1`);
+      if (gate.minimumN === undefined) fail(`gate ${gate.id} minimum-n requires minimumN >= 1`);
+      // A default is the enforced minimum, so a defaulted reference must pin
+      // at least 1; a defaultless reference is supplied by the binding and an
+      // unresolvable value holds at evaluation, never promotes.
+      const resolved = resolveNumberDefault(gate.minimumN, params, 'count');
+      if (typeof gate.minimumN === 'number' && gate.minimumN < 1) {
+        fail(`gate ${gate.id} minimum-n requires minimumN >= 1`);
+      }
+      if (isParamRef(gate.minimumN) && params[gate.minimumN.param]?.default !== undefined && (resolved ?? 0) < 1) {
+        fail(`gate ${gate.id} minimum-n requires minimumN >= 1`);
+      }
       if (metricKind === 'evidence') fail(`gate ${gate.id} minimum-n cannot observe an evidence metric`);
-    } else if (gate.minimumN !== undefined && (!Number.isSafeInteger(gate.minimumN) || gate.minimumN < 0)) {
+    } else if (gate.minimumN !== undefined && typeof gate.minimumN === 'number'
+      && (!Number.isSafeInteger(gate.minimumN) || gate.minimumN < 0)) {
       fail(`gate ${gate.id} minimumN must be a non-negative integer`);
     }
     if (gate.kind === 'evidence' && (gate.evidence === undefined || !gate.evidence.required.length)) {
@@ -291,8 +345,23 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
   if (canonicalJson({ ...parentStatistic, levelBps: 0 }) !== canonicalJson({ ...childStatistic, levelBps: 0 })) {
     fail(`gate ${child.id} may not change its statistic (levelBps aside)`);
   }
-  if ((childStatistic?.levelBps ?? parentStatistic?.levelBps) !== undefined
-    && (childStatistic?.levelBps ?? 0) < (parentStatistic?.levelBps ?? 0)) {
+  // A literal level is a pinned bound: rewriting it as a parameter hands the
+  // bound to the binding, whose allowed range is wider than the literal.
+  const parentLevel = parentStatistic?.levelBps;
+  const childLevel = childStatistic?.levelBps;
+  if (typeof parentLevel === 'number' && isParamRef(childLevel)) {
+    fail(`gate ${child.id} may not convert a literal levelBps into a parameter`);
+  }
+  if (isParamRef(parentLevel) && isParamRef(childLevel) && parentLevel.param !== childLevel.param) {
+    fail(`gate ${child.id} may not rename its levelBps parameter`);
+  }
+  const levelBefore = parentLevel === undefined ? undefined : resolveNumberDefault(parentLevel, params, 'level');
+  const levelAfter = childLevel === undefined ? undefined : resolveNumberDefault(childLevel, params, 'level');
+  if (levelBefore === null || levelAfter === null) {
+    if (canonicalJson(parentLevel ?? null) !== canonicalJson(childLevel ?? null)) {
+      fail(`gate ${child.id} levelBps change is unresolvable without parameter defaults`);
+    }
+  } else if ((levelAfter ?? levelBefore) !== undefined && (levelAfter ?? 0) < (levelBefore ?? 0)) {
     fail(`gate ${child.id} may only raise levelBps`);
   }
   if ((parentStatistic?.mode ?? 'non-inferiority') !== (childStatistic?.mode ?? 'non-inferiority')) {
@@ -324,7 +393,21 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
   } else if (child.direction === 'lower-is-stricter' ? after > before : after < before) {
     fail(`gate ${child.id} threshold ${before} -> ${after} loosens direction ${child.direction}`);
   }
-  if ((child.minimumN ?? 0) < (parent.minimumN ?? 0)) fail(`gate ${child.id} may only raise minimumN`);
+  if (typeof parent.minimumN === 'number' && isParamRef(child.minimumN)) {
+    fail(`gate ${child.id} may not convert a literal minimumN into a parameter`);
+  }
+  if (isParamRef(parent.minimumN) && isParamRef(child.minimumN) && parent.minimumN.param !== child.minimumN.param) {
+    fail(`gate ${child.id} may not rename its minimumN parameter`);
+  }
+  const minimumBefore = parent.minimumN === undefined ? 0 : resolveNumberDefault(parent.minimumN, params, 'count');
+  const minimumAfter = child.minimumN === undefined ? 0 : resolveNumberDefault(child.minimumN, params, 'count');
+  if (minimumBefore === null || minimumAfter === null) {
+    if (canonicalJson(parent.minimumN ?? null) !== canonicalJson(child.minimumN ?? null)) {
+      fail(`gate ${child.id} minimumN change is unresolvable without parameter defaults`);
+    }
+  } else if (minimumAfter < minimumBefore) {
+    fail(`gate ${child.id} may only raise minimumN`);
+  }
   if (parent.onFail === 'ROLLBACK' && child.onFail !== 'ROLLBACK') {
     fail(`gate ${child.id} may not demote onFail ROLLBACK -> HOLD`);
   }
@@ -522,10 +605,14 @@ export function expandFloorPacks(
     const composed = pack.spec.extends === undefined ? pack : composeGatePack(pack, lookupAuthored);
     validateResolvedPack(composed, providers);
     for (const gate of composed.spec.gates) {
-      if (gate.threshold?.param !== undefined
-        && composed.spec.parameters?.[gate.threshold.param]?.default === undefined) {
-        throw new GateRegistryError(
-          `project floor gate '${gate.id}' parameter '${gate.threshold.param}' requires a default: it is the enforced minimum`);
+      const level = gate.statistic?.levelBps;
+      const refs = [gate.threshold?.param, isParamRef(gate.minimumN) ? gate.minimumN.param : undefined,
+        isParamRef(level) ? level.param : undefined];
+      for (const name of refs) {
+        if (name !== undefined && composed.spec.parameters?.[name]?.default === undefined) {
+          throw new GateRegistryError(
+            `project floor gate '${gate.id}' parameter '${name}' requires a default: it is the enforced minimum`);
+        }
       }
     }
     return {
@@ -562,12 +649,24 @@ function synthesizeFloorCandidate(
   packId: string,
   parameters: Record<string, number>,
 ): GateDefinition {
-  if (gate.threshold?.param === undefined) return gate;
-  const value = parameters[qualifyGateParameter(packId, gate.threshold.param)];
-  if (value === undefined) {
-    throw new GateRegistryError(`binding gate '${gate.id}' parameter '${gate.threshold.param}' has no resolved value`);
+  const materialize = (ref: { param: string }): number => {
+    const value = parameters[qualifyGateParameter(packId, ref.param)];
+    if (value === undefined) {
+      throw new GateRegistryError(`binding gate '${gate.id}' parameter '${ref.param}' has no resolved value`);
+    }
+    return value;
+  };
+  let candidate = gate;
+  if (gate.threshold !== undefined && gate.threshold.param !== undefined) {
+    const { op, param } = gate.threshold;
+    candidate = { ...candidate, threshold: { op, value: materialize({ param }) } };
   }
-  return { ...gate, threshold: { op: gate.threshold.op, value } };
+  if (isParamRef(gate.minimumN)) candidate = { ...candidate, minimumN: materialize(gate.minimumN) };
+  const statistic = gate.statistic;
+  if (statistic !== undefined && isParamRef(statistic.levelBps)) {
+    candidate = { ...candidate, statistic: { ...statistic, levelBps: materialize(statistic.levelBps) } };
+  }
+  return candidate;
 }
 
 /**

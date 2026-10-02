@@ -578,7 +578,7 @@ describe('P5: bundle providers need an explicit option and an allowlist entry', 
     await expect(loadGateBundleProviders(output.dir, output.manifest, {
       allowBundleProviders: true, now: NOW, allowlist: [],
     })).rejects.toMatchObject({ name: 'GateProviderError' });
-    expect(providers.ids()).toEqual(['test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
+    expect(providers.ids()).toEqual(['decision.screening/v1', 'test.evidence/v1', 'test.paired/v1', 'test.proportion/v1', 'test.scalar/v1']);
   });
 });
 
