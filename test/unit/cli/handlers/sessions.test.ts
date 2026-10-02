@@ -121,10 +121,10 @@ describe('sessions CLI contracts', () => {
       });
     expect(output.data.providers.find((item: any) => item.provider === 'muse'))
       .toMatchObject({
-        disposition: 'manual-only',
-        supportedOperations: ['inspect', 'stream'],
-        acquisitionModes: ['manual-export'],
-        reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+        disposition: 'implemented',
+        supportedOperations: ['discover', 'inspect', 'stream'],
+        acquisitionModes: ['manual-export', 'jsonl'],
+        reasonCode: null,
       });
     expect(output.data.providers.find((item: any) => item.provider === 'pi'))
       .toMatchObject({ disposition: 'implemented', supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'] });

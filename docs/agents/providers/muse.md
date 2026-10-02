@@ -90,10 +90,12 @@ via `aiwg discover` / `aiwg show`.
 Muse keeps one directory per session under
 `$XDG_DATA_HOME/muse/sessions/YYYY/MM/DD/<session-id>/` (default
 `~/.local/share/muse/sessions`), with the event log in `session.jsonl` and
-CLI diagnostics in `cli-*.log`. That log format is internal, so session
-import is **export-first**: run `muse export --session <id-or-session.jsonl>`
-and pass the exported JSON to `aiwg sessions import`. No `~/.muse` root
-exists or is assumed. Details: [Muse sessions](../../providers/muse-sessions.md).
+CLI diagnostics in `cli-*.log`. Import a session either from an explicit
+`muse export --session <id-or-session.jsonl>` document, or discover native
+logs for a workspace with
+`aiwg sessions discover --workspace <path> --muse-root ~/.local/share/muse/sessions`.
+Native discovery needs that explicit root, matches workspaces only from
+workspace facts recorded in the log, and never assumes a `~/.muse` root. Details: [Muse sessions](../../providers/muse-sessions.md).
 
 ## Models
 

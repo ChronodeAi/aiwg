@@ -1,8 +1,13 @@
+import {
+  mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   MUSE_ADAPTER_VERSION,
   MUSE_EXPORT_SCHEMA_VERSION,
+  MUSE_NATIVE_LOCATOR_CLASS,
   MuseSessionAdapter,
   SessionSourceAdapterRegistry,
   type SelectedSource,
@@ -20,6 +25,16 @@ function selected(name: string, sourceId: string, locatorClass = 'manual-export'
   };
 }
 
+function selectedPath(locator: string, sourceId: string, root: string, locatorClass = MUSE_NATIVE_LOCATOR_CLASS): SelectedSource {
+  return {
+    provider: 'muse',
+    locator,
+    locatorClass,
+    sourceId,
+    authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [root] },
+  };
+}
+
 async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
   const items: T[] = [];
   for await (const value of values) items.push(value);
@@ -28,8 +43,13 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 
 describe('Muse Code session adapter', () => {
   const adapter = new MuseSessionAdapter();
+  const temporaryRoots: string[] = [];
 
-  it('is manual-only and rejects automatic discovery without probing homes', async () => {
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('is root-gated and rejects automatic discovery without probing homes', async () => {
     const registry = new SessionSourceAdapterRegistry();
     registry.register(adapter);
     expect(registry.report('muse', {
@@ -43,15 +63,13 @@ describe('Muse Code session adapter', () => {
       reason: 'native session root unverified',
       remediation: 'select an authorized muse export trajectory file',
     })).toMatchObject({
-      classification: 'manual-only',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
+      classification: 'implemented',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'jsonl'],
     });
-    expect(() => registry.assertOperation('muse', 'discover'))
-      .toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }));
     await expect(collect(adapter.discover({
       workspaceId: 'workspace-fixture',
-      allowedRoots: [fixturesRoot],
+      allowedRoots: [],
     }))).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
   });
 
@@ -86,6 +104,71 @@ describe('Muse Code session adapter', () => {
       exporterVersion: 'Muse Code 1.4.0 (04f5eb2e6e)',
       redaction: 'redacted',
     });
+  });
+
+  it('discovers only well-shaped native session logs under an explicit Muse root', async () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'aiwg-muse-native-'));
+    temporaryRoots.push(root);
+    const sessionRoot = resolve(root, '2026/09/25/00000000-0000-4000-8000-000000000002');
+    mkdirSync(sessionRoot, { recursive: true });
+    writeFileSync(resolve(sessionRoot, 'session.jsonl'), '{"schema_version":1,"sequence":1}\n');
+    mkdirSync(resolve(root, '2026/09/25/wrong-depth/extra'), { recursive: true });
+    writeFileSync(resolve(root, '2026/09/25/wrong-depth/extra/session.jsonl'), '{}\n');
+    mkdirSync(resolve(root, '2026/9/25/bad-month'), { recursive: true });
+    writeFileSync(resolve(root, '2026/09/25/00000000-0000-4000-8000-000000000002/junk.jsonl'), '{}\n');
+    symlinkSync(sessionRoot, resolve(root, '2026/09/25/symlink-session'));
+
+    const sources = await collect(adapter.discover({
+      workspaceId: 'workspace-fixture',
+      allowedRoots: [root],
+    }));
+    expect(sources).toEqual([{
+      provider: 'muse',
+      locator: resolve(sessionRoot, 'session.jsonl'),
+      locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
+    }]);
+  });
+
+  it('streams native logs by decoding retained frames and skipping omission markers', async () => {
+    const root = resolve(fixturesRoot, 'native');
+    const locator = resolve(root, '2026/09/25/00000000-0000-4000-8000-000000000002/session.jsonl');
+    await expect(adapter.inspect(selectedPath(locator, 'muse-native-fixture', root))).resolves.toEqual({
+      sourceSchemaVersion: '1.0.0',
+      consistency: 'complete',
+      operationalState: 'available',
+    });
+    const events = await collect(adapter.stream(selectedPath(locator, 'muse-native-fixture', root)));
+    expect(events).toHaveLength(14);
+    expect(events[0]).toMatchObject({
+      nativeSessionId: '00000000-0000-4000-8000-000000000002',
+      kind: 'runtime.session.permission_format_declared',
+      rawReference: { locatorClass: MUSE_NATIVE_LOCATOR_CLASS, sequence: 0 },
+    });
+    expect(events[0].text).toContain('muse native session log event');
+    expect(events[0].extensions['native.muse']).toMatchObject({
+      acquisition: MUSE_NATIVE_LOCATOR_CLASS,
+      retainedFrame: 'session_permission_transaction',
+      retainedChildIndex: 0,
+      diagnostics: {
+        omitted_records: 1,
+        omitted_live_only: 1,
+        retained_frames: 1,
+        retained_frame_children: 2,
+      },
+    });
+    expect(events.map((event) => event.kind)).not.toContain('omitted_record');
+  });
+
+  it('fails closed for malformed native JSONL lines', async () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'aiwg-muse-malformed-'));
+    temporaryRoots.push(root);
+    const sessionRoot = resolve(root, '2026/09/25/00000000-0000-4000-8000-000000000002');
+    mkdirSync(sessionRoot, { recursive: true });
+    const locator = resolve(sessionRoot, 'session.jsonl');
+    writeFileSync(locator, '{"schema_version":1,"sequence":1}\n{not json}\n');
+    const source = selectedPath(locator, 'muse-native-malformed', root);
+    await expect(adapter.inspect(source)).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
+    await expect(collect(adapter.stream(source))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
   });
 
   it('preserves approval, tool, and model-lifecycle events with provenance', async () => {
