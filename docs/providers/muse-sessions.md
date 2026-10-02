@@ -1,13 +1,13 @@
 # Muse Code session ingestion
 
-AIWG registers `muse` as a **manual-export** session provider. The adapter
-ingests only explicit `muse export` trajectory JSON documents supplied by the
-operator, gated on the document's `export_schema_version` major (currently
-`1`); unknown majors fail closed with `UNKNOWN_SCHEMA_MAJOR`, as with peer
-native-export adapters. The native log root is verified on disk (see
-[Native log root](#native-log-root-verified-2026-09-25)), but its line format is
-internal, so auto-discovery stays unsupported: AIWG does not scrape home
-directories for this provider. Locate a session there, then export it.
+AIWG registers `muse` with explicit export import and evidence-gated native
+discovery. The adapter ingests explicit `muse export` trajectory JSON documents
+supplied by the operator, gated on the document's `export_schema_version` major
+(currently `1`); unknown majors fail closed with `UNKNOWN_SCHEMA_MAJOR`, as
+with peer native-export adapters. Native discovery is available only when the
+operator explicitly authorizes the verified sessions root with `--muse-root`.
+AIWG does not scrape home directories for this provider, does not assume a
+default root, and never probes `~/.muse`.
 
 ## How to import
 
@@ -23,8 +23,33 @@ directories for this provider. Locate a session there, then export it.
    `muse` and locator class `manual-export`.
 3. Keep the export under an authorized workspace root.
 
-Inspect and stream succeed only for that authorized file. Discovery throws
-`UNSUPPORTED_OPERATION` with remediation to select a file explicitly.
+Inspect and stream succeed only for that authorized file. Calling the Muse
+adapter's `discover()` without an explicitly authorized root throws
+`UNSUPPORTED_OPERATION` with remediation to select a file explicitly or pass
+`--muse-root`.
+
+## Native discovery
+
+`aiwg sessions discover --workspace <path> --muse-root <path>` explicitly
+authorizes a Muse sessions root such as `~/.local/share/muse/sessions`. When
+authorized, discovery enumerates only this bounded shape:
+
+```text
+<muse-root>/YYYY/MM/DD/<session-id>/session.jsonl
+```
+
+Discovery does not follow symlinks and skips junk files, nested subagent logs,
+wrong-depth files, and directories that do not match the date/session layout.
+Discovered native sources use locator class `muse-native-session-log`.
+
+Workspace matching is evidence-only. AIWG matches a native Muse log to the
+requested workspace only from workspace facts inside the log, currently
+`payload.record.workspace_root` from `runtime.session.metadata` or
+`session.workspace_branch.observed`, and `payload.record.cwd` from
+`runtime.session.route_facts`. `session.opened` records are useful identity
+evidence but do not carry a path, so they are not sufficient. If a log has no
+workspace/cwd/root evidence, discovery does not guess from the file path and the
+source is not selected for that workspace.
 
 ## Trajectory shape
 
@@ -44,10 +69,11 @@ does not invent fields the docs don't show:
   only when the stream block is absent. Gap markers carry `"envelope": null`
   and are skipped.
 - Muse Code 1.4.0 writes `recorded_at` as epoch microseconds (converted to
-  RFC 3339 on import) and `causation_id` as a string or `null`. Its
+  RFC 3339 on import) and `causation_id` as a string or `null`. Export
   `retained_frame` events carry a transaction frame (`children`,
   `transaction_id`, `content_sha256`) instead of a record envelope; like gap
-  markers, they are skipped.
+  markers, they are skipped. Native `session.jsonl` retained frames decode
+  `children[].record_json` and emit those record envelopes.
 
 ## Preserved provenance
 
@@ -123,16 +149,20 @@ line shapes: record envelopes (the same envelope `muse export` and
 `muse exec --json` emit), omission markers (`omitted_record`,
 `retained_marker: "omitted_live_only"`) for ephemeral records that were not
 persisted, and retained transaction frames whose children are
-JSON-encoded record strings. Because that format is internal, AIWG imports
-the documented export instead:
+JSON-encoded record strings. Because that format is internal, native import is
+evidence-gated: it is available only for an explicitly authorized
+`--muse-root`, and it parses fail-closed. Record-envelope lines are mapped like
+export records; retained frames decode `children[].record_json`; omission
+markers are skipped and counted in provenance diagnostics. The documented
+export remains supported:
 
 ```bash
 muse export --session ~/.local/share/muse/sessions/2026/09/25/<session-id>/session.jsonl --out trajectory.json
 ```
 
 No `~/.muse` (or similar) root exists or is assumed. An evidence-gated
-`--muse-root` discover path, analogous to `--codex-root`, remains future work
-(#222 PR B).
+`--muse-root` discover path, analogous to `--codex-root`, is the only native
+discovery entry point.
 
 ## Tested contract
 
@@ -142,8 +172,10 @@ AIWG adapter contract: `1.0.0`. Synthetic fixtures cover:
   runs, and lifecycle events preserved with provenance
 - malformed opaque input (`malformed.json` → `MALFORMED_SOURCE`)
 - unknown schema major (`unknown-major.json` → `UNKNOWN_SCHEMA_MAJOR`)
-- rejection of non-`manual-export` locator classes
-- discover unsupported without filesystem probes
+- rejection of unsupported locator classes
+- discover unsupported without an explicit `--muse-root`
+- explicit `--muse-root` native discovery using locator class
+  `muse-native-session-log`, with workspace matching only from log evidence
 - cursor-based resume across streamed events
 - live multi-stream shape (`multistream-v1.json`, replicating the real
   1.3.0 export) — per-event `envelope.stream.id` attribution, null-envelope

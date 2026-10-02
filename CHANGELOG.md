@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Evidence-gated Muse Code native session discovery (#222 PR B). `aiwg
+  sessions discover` accepts `--muse-root` for an explicitly authorized
+  `$XDG_DATA_HOME/muse/sessions` root, emits `muse-native-session-log`
+  sources, matches workspaces only from log-record `workspace_root`/`cwd`
+  evidence, and still assumes no default Muse home or `~/.muse` root.
 - Experimental, default-off D17-MF multi-fact probe (#2850), following the D17
   calibrated live run's multi-fact degradation. A no-spend diagnosis of the
   existing observations localized it to missing links written with a

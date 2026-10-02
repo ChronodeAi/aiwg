@@ -412,8 +412,9 @@
     {
       "provider": "muse",
       "issue": 232,
-      "status": "manual-only",
+      "status": "implemented",
       "operations": [
+        "discover",
         "inspect",
         "stream"
       ],
@@ -422,6 +423,7 @@
       "documentation": "docs/providers/muse-sessions.md",
       "conformance": {
         "locatorClass": "manual-export",
+        "nativeLocatorClass": "muse-native-session-log",
         "malformed": [
           "malformed.json",
           "MALFORMED_SOURCE"
@@ -431,7 +433,7 @@
           "UNKNOWN_SCHEMA_MAJOR"
         ],
         "exceptions": {
-          "discovery": "export-first: the native root $XDG_DATA_HOME/muse/sessions is verified but its log format is internal; no home-directory scrape and no invented ~/.muse root"
+          "discovery": "native discovery is evidence-gated by explicit --muse-root only; workspace matching uses workspace_root/cwd facts inside session.jsonl and does not guess from paths; no default root and no invented ~/.muse root"
         }
       }
     },

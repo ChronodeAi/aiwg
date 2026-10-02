@@ -180,6 +180,7 @@ Options:
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
+  --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
@@ -1389,6 +1390,8 @@ async function discoverWorkspace(
       : undefined,
     ompRoot: args.values.has('--omp-root')
       ? resolve(ctx.cwd, args.values.get('--omp-root')!) : undefined,
+    museRoot: args.values.has('--muse-root')
+      ? resolve(ctx.cwd, args.values.get('--muse-root')!) : undefined,
     dshRoot: args.values.has('--dsh-root')
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     codexRoot: args.values.has('--codex-root')
@@ -1682,14 +1685,14 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
   }
   if (provider === 'muse') {
     return {
-      provider, disposition: 'manual-only', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
-      reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
-      remediation: 'Run `muse export --session <id-or-session.jsonl>` and explicitly select the trajectory JSON; sessions live under $XDG_DATA_HOME/muse/sessions, but that native log format is internal, so auto-discover is unsupported.',
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Import an explicit `muse export` trajectory JSON, or pass `--muse-root` with an explicitly authorized $XDG_DATA_HOME/muse/sessions root for evidence-gated native discovery.',
       evidence: {
         adapterVersion: MUSE_ADAPTER_VERSION,
-        verifiedAt: '2026-09-24',
+        verifiedAt: '2026-10-02',
         documentation: 'docs/providers/muse-sessions.md',
       },
     };
@@ -1807,7 +1810,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

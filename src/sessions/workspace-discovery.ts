@@ -9,6 +9,7 @@ import { ClaudeSessionAdapter } from './adapters/claude.js';
 import { CodexSessionAdapter } from './adapters/codex.js';
 import { CursorSessionAdapter } from './adapters/cursor.js';
 import { FactorySessionAdapter } from './adapters/factory.js';
+import { MuseSessionAdapter, museNativeSourceMatchesWorkspace } from './adapters/muse.js';
 import { OmpSessionAdapter, readOmpSessionHeader } from './adapters/omp.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { PiSessionAdapter } from './adapters/pi.js';
@@ -71,19 +72,20 @@ export interface DiscoverWorkspaceOptions {
   operatorHome?: string;
   codexRoot?: string;
   ompRoot?: string;
+  museRoot?: string;
   dshRoot?: string;
   createdAt?: string;
 }
 
 interface DiscoverableProvider {
-  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness';
+  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse';
   adapter: SessionSourceAdapter;
   roots: string[];
 }
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
   'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grokbot', 'grok-build',
-  'warp', 'devin-desktop', 'muse', 'generic',
+  'warp', 'devin-desktop', 'generic',
 ]);
 
 export async function discoverWorkspaceHistories(
@@ -101,6 +103,8 @@ export async function discoverWorkspaceHistories(
     { provider: 'omp', adapter: new OmpSessionAdapter(), roots: options.ompRoot
       ? [resolve(options.ompRoot)] : options.providerHome
         ? [resolveOmpPaths({ home: resolve(options.providerHome), cwd: workspacePath }).sessionsDir] : [] },
+    { provider: 'muse', adapter: new MuseSessionAdapter(), roots: options.museRoot
+      ? [resolve(options.museRoot)] : [] },
     {
       provider: 'claude',
       adapter: new ClaudeSessionAdapter(),
@@ -153,7 +157,8 @@ export async function discoverWorkspaceHistories(
       if (await pathExists(root)) availableRoots.push(await canonicalPath(root));
     }
     if (availableRoots.length === 0) {
-      const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp' || entry.provider === 'deepseek-harness')
+      const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp'
+        || entry.provider === 'deepseek-harness' || entry.provider === 'muse')
         && entry.roots.length === 0;
       reports.set(entry.provider, providerReport(
         entry.provider,
@@ -178,6 +183,12 @@ export async function discoverWorkspaceHistories(
       const locator = await canonicalPath(descriptor.locator);
       if (entry.provider === 'codex'
         && !await codexSourceMatchesWorkspace(locator, workspacePath)) continue;
+      if (entry.provider === 'muse'
+        && !await museNativeSourceMatchesWorkspace({
+          ...descriptor,
+          sourceId: 'discovery',
+          authorizedScope: scope,
+        }, workspacePath)) continue;
       const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
       if (ompHeader && resolve(ompHeader.cwd) !== workspacePath) continue;
       const details = await stat(locator);

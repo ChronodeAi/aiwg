@@ -18,6 +18,10 @@ import {
   FactorySessionAdapter,
 } from './adapters/factory.js';
 import {
+  MUSE_ADAPTER_VERSION,
+  MuseSessionAdapter,
+} from './adapters/muse.js';
+import {
   SESSION_CONTRACT_VERSION,
   SessionContractError,
   SessionSourceSchema,
@@ -325,6 +329,7 @@ function adapterFor(provider: DiscoveryManifestSource['provider']): SessionSourc
   if (provider === 'codex') return new CodexSessionAdapter();
   if (provider === 'cursor') return new CursorSessionAdapter();
   if (provider === 'factory') return new FactorySessionAdapter();
+  if (provider === 'muse') return new MuseSessionAdapter();
   throw new SessionContractError(
     'UNSUPPORTED_OPERATION',
     `batch discovery import is not implemented for ${provider}`,
@@ -360,6 +365,7 @@ function adapterVersion(provider: DiscoveryManifestSource['provider']): string {
   if (provider === 'codex') return CODEX_ADAPTER_VERSION;
   if (provider === 'cursor') return CURSOR_ADAPTER_VERSION;
   if (provider === 'factory') return FACTORY_ADAPTER_VERSION;
+  if (provider === 'muse') return MUSE_ADAPTER_VERSION;
   return '1.0.0';
 }
 
@@ -377,6 +383,7 @@ function providerProfile(
       : 'cli-stream-json';
   }
   if (provider === 'factory') return 'documented-project-jsonl';
+  if (provider === 'muse') return 'muse-native-session-log-v1';
   return 'manual-interchange';
 }
 
