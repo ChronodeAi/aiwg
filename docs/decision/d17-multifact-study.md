@@ -53,6 +53,8 @@ the pool's **contrastive verb**.
   - the raw native answer (P(yes) > 0.5) per cell, with a Wilson 95% interval;
   - the AUROC of the raw P(yes) between yes rows and missing-link rows, per
     pool × hops (pooled and per encoding), with a Hanley–McNeil 95% interval.
+    The Hanley–McNeil interval collapses to zero width at an AUROC of 0 or 1,
+    so it is report-only: no decision rule uses it.
 - **Calibrated metrics** (accuracy, mean confidence, decile ECE through the
   registered D17 member calibrator) serve only the calibration-under-shift
   rule. That calibrator was fitted on the pool-b grammar, so calibrated answers
@@ -117,7 +119,9 @@ imports.
 
 The non-connective verbs come from unrelated semantic fields. Each matches its
 link verb's length and shares no letter position with the contrastive verb
-except the final "s".
+except the final "s". They are semantically odd between abstract entities, so an
+H3a "contrastive-specific" result could partly reflect how implausible the verb
+is rather than its contrastive meaning alone.
 
 **Rule.** Every equalized item states an exhaustive, link-only rule:
 
@@ -203,9 +207,16 @@ first and last fact lines.
 | Run | Maximum balanced accuracy |
 | --- | --- |
 | Public demo seed `d17mf-public-demo` | 0.552 |
-| 24 sweep seeds `d17mf-sweep-0` … `d17mf-sweep-23` | at most 0.594 (median 0.566); all pass the 0.60 limit |
+| 64 sweep seeds `d17mf-sweep-0` … `d17mf-sweep-63` | at most 0.5994 (median about 0.567, minimum 0.526); all pass the 0.60 limit |
+| 4 random private-format seeds | 3 pass; 1 refused at preparation |
 | Positive control: the earlier chain-first line order | > 0.60, fails (regression-tested) |
 | D17-faithful control (audited separately) | 1.0: D17's rendering is cue-solvable |
+
+The margin under the limit is thin, so preparation occasionally refuses a fresh
+seed (1 of the 68 seeds tried so far). The operator then draws another
+fresh seed. The refusal depends only on the generated text, never on Jev's
+answers, so redrawing does not select on outcomes; the number of refused seeds
+is recorded in the run notes.
 
 ## Calibrated evaluation
 
@@ -224,17 +235,36 @@ is qualified at three points:
 2. at collection end;
 3. at the scoring clock.
 
-The artifact expires **2026-11-01T10:02:38Z**, so collection and scoring must
-finish before then. The probe reuses the D17 DecisionDefinition byte-identically
+The artifact expires **2026-11-01T10:02:34.263Z** (its `effectiveAt`,
+2026-10-02T10:02:34.263Z, plus the profile's 30 days), so collection and scoring
+must finish before then. The CLI checks that the registered artifact's expiry
+equals the bound pinned in source. The probe reuses the D17 DecisionDefinition byte-identically
 (asserted in tests).
 
-**Scoring clock.** The collector records no per-attempt wall-clock time. Its
-only recorded time is each session's `qualification.json` `generatedAt`, the
-collector's clock at the end of the session; it is not independently anchored.
-`--score` therefore requires `evaluatedAt` to be:
+**Dispatch window.** The collector enforces the expiry itself, keyed on the
+`d17-multifact/v1` generator, so a hand-built bundle cannot skip it:
 
-- at least the latest such end across the run lineage;
+- a session starts only if its start plus the preregistered session limit is no
+  later than the expiry;
+- before every call it checks that the call's timeout also ends before the
+  expiry, and stops with `calibration-expired` otherwise.
+
+`--dry-run-ledger` reports `sessionWindowOpen` and is not ready when the window
+has closed.
+
+**Scoring clock.** Attempts carry no wall-clock time, and `qualification.json`
+is not covered by the evidence digest, so neither is used. The collector writes
+each session's start into `frozen.json` as `collectionStartedAt`. The trusted
+evidence digest covers that file, and the scorer checks the digests of the run
+and of every prior run. Collection end is bounded by the latest session start
+plus the preregistered session limit, which the collector never dispatches past.
+`--score` requires `evaluatedAt` to be:
+
+- at least that bound across the run lineage;
 - at most now.
+
+The member calibrator is qualified at the bound and at `evaluatedAt`. A run
+recorded without a session start cannot be scored.
 
 Collection and scoring run at the exact approved source commit:
 
@@ -246,12 +276,24 @@ Collection and scoring run at the exact approved source commit:
 
 **Seeds.**
 
-- Public and review seeds can regenerate gold from source, so `--bundle` and
-  `--dry-run-ledger` refuse them. The list covers `d17mf-offline`,
-  `d17mf-public-demo`, `d17mf-smoke`, the review seeds, and the prefixes
-  `review-` and `d17mf-offline|public|smoke|sweep|demo`.
-- Use a fresh private seed. `--dry-run-ledger` also refuses a seed whose corpus
-  already has observations under another preregistration in the ledger.
+- Public and review seeds can regenerate gold from source. The rule is enforced
+  at the collector boundary (`validateHeldoutBundle`, keyed on the
+  `d17-multifact/v1` generator) as well as by `--dev-review-material`,
+  `--bundle` and `--dry-run-ledger`.
+  - It refuses the committed seeds (`d17mf-offline`, `d17mf-public-demo`,
+    `d17mf-smoke`, `d17mf-7f3a9c2e1b` and the review seeds) and the prefixes
+    `review-` and `d17mf-offline|public|smoke|sweep|demo`.
+  - A private seed must also contain at least 24 lowercase hex characters of
+    fresh randomness, for example `d17mf-$(openssl rand -hex 16)`. Memorable
+    and near-variant seeds are therefore refused.
+- The bundle must use artifact-mode calibration.
+- Seed reuse is refused at the collector:
+  - a corpus that already has observations under another preregistration
+    (`changed-preregistration`);
+  - a seed already frozen in the ledger under a different corpus, for example
+    after a generator revision (`seed-reused`).
+
+  `--dry-run-ledger` checks the first case before any spend.
 
 **Budget.**
 
@@ -271,7 +313,10 @@ Collection and scoring run at the exact approved source commit:
 ```bash
 nice -n 19 node tools/decision/d17-multifact.mjs --dry-run FRESH_PRIVATE_SEED
 nice -n 19 node tools/decision/d17-multifact.mjs --prepare FRESH_PRIVATE_SEED PREPARED_DIR
-# Complete the 40 development assessments in reviewTemplate.json; anchor DEV_REVIEW_DIGEST.
+nice -n 19 node tools/decision/d17-multifact.mjs --dev-review-material PREPARED_DIR DEV_REVIEW_MATERIAL.json
+# The material file is private: it must be under the artifact root, it is written mode 600, and it contains gold. Each item has `blind.payload`, then
+#   `unblind { goldLabel, textOracleLabel, variant/cell, factors, latentWorld }`.
+# Review blind first, then unblind. Record the results in reviewTemplate.json; anchor DEV_REVIEW_DIGEST.
 # Complete approval-template.json:
 #   - calibration { mode: 'artifact', calibrationArtifactDigest: REGISTERED_D17_SET_DIGEST }
 #   - the attested floors

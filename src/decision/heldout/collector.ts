@@ -15,6 +15,7 @@ import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReserva
 import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile, validateHeldoutJournal, heldoutCollectionAllowance } from './journal.js';
 import { readHeldoutFrozen, sealHeldoutCalibrationPhase, validateHeldoutPhaseAccess } from './calibration.js';
+import { D17_MULTIFACT_CALIBRATION_NOT_AFTER, usesD17MultifactGenerator } from './study-generators.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
 
@@ -77,13 +78,25 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     const latest = new Map<string, HeldoutAttempt>();
     for (const attempt of old) if (attempt.ordinal >= (latest.get(key(attempt))?.ordinal ?? 0)) latest.set(key(attempt), attempt);
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
+    // D17-MF (#2850) is scored only through the registered D17 member calibrator: a session whose whole dispatch window
+    // (start plus the preregistered session limit) does not end before the calibrator expires never starts. A seed
+    // already frozen in the ledger under a different corpus (for example a revised generator) is never collected again;
+    // the same corpus under another preregistration is refused above (changed-preregistration).
+    const notAfter = usesD17MultifactGenerator(corpus.rows) ? Date.parse(D17_MULTIFACT_CALIBRATION_NOT_AFTER) : null;
+    if (notAfter !== null) {
+      if (!Number.isSafeInteger(started) || started + plan.sessionLimitMs > notAfter) throw new HeldoutError('calibration-expired');
+      for (const other of prior.runs) {
+        const recorded = await readHeldoutFile(join(heldoutRunsRoot(options.artifactRoot), other.runId, 'frozen.json')) as { bundle?: HeldoutBundle };
+        if (recorded.bundle?.corpus?.provenance?.seed === corpus.provenance.seed && other.corpusDigest !== a.corpusDigest) throw new HeldoutError('seed-reused');
+      }
+    }
     const testPhaseAccessAt = a.calibration.mode === 'staged' && a.calibration.phase === 'test' ? new Date(started).toISOString() : null;
     await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
     if (testPhaseAccessAt !== null) await planHeldoutCollection(bundle, options.trustedApprovalDigest);
     const rows = heldoutRowsInScope(bundle);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
-    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, testPhaseAccessAt, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, testPhaseAccessAt, collectionStartedAt: new Date(started).toISOString(), digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
     const events: HeldoutEvent[] = [];
     const allowance = heldoutCollectionAllowance(a, prior);
     let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;
@@ -119,6 +132,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); }
           catch { reason = 'source-drift'; break; }
+          if (notAfter !== null && now() + plan.requestTimeoutMs > notAfter) { reason = 'calibration-expired'; break; }
           const { execution, requestDigest, requestBytes, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
           const reserveMicros = heldoutReservationMicros(a, inputTokenBound);
           const reserveTokens = heldoutReservationTokens(plan, inputTokenBound);

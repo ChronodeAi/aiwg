@@ -31,7 +31,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   - The calibrator is re-derived from the D17 seal and qualified at bundle time,
     collection end and the scoring clock. That clock cannot precede the
     recorded collection end.
-  - Public seeds and seed reuse are refused. The decision is always HOLD.
+  - Public seeds and seed reuse are refused at the collector boundary, keyed on
+    the generator, as well as by the CLI. A private seed needs at least 24 hex
+    characters of fresh randomness. The decision is always HOLD.
+  - The collector never dispatches a D17-MF session past the registered
+    calibrator's expiry. Each session start is bound into `frozen.json`
+    (`collectionStartedAt`, covered by the evidence digest), and the scoring
+    clock is bounded by it rather than by the undigested `qualification.json`
+    time.
+  - `tools/decision/d17-multifact.mjs --dev-review-material` writes private (mode 600)
+    blind-then-unblind development review material in the D17 format.
   - New study generators register in `src/decision/heldout/study-generators.ts`,
     so the D17 and D29 generator pins are unchanged.
   - New schema `D17Multifact.v1`. No live collection is included.

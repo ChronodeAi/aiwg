@@ -12,7 +12,7 @@ if (!file) throw new Error('D17-MF schema is unavailable');
 const schema = JSON.parse(readFileSync(file, 'utf8'));
 const ajv = new Ajv2020({ strict: true, allowUnionTypes: true });
 ajv.addSchema(schema);
-const KINDS = ['analysis', 'reviewTemplate', 'review', 'report', 'audit'] as const;
+const KINDS = ['analysis', 'reviewTemplate', 'review', 'report', 'audit', 'reviewMaterial'] as const;
 const validators = Object.fromEntries(KINDS.map(kind => [kind, ajv.getSchema(`${schema.$id}#/$defs/${kind}`)!])) as Record<typeof KINDS[number], ValidateFunction>;
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 16_777_216, properties: 500_000, entries: 1_000_000, arrayLength: 20_000, memoryBytes: 67_108_864 };
 export function validateD17MultifactArtifact(kind: typeof KINDS[number], value: unknown): void {

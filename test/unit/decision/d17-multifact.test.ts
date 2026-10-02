@@ -3,22 +3,23 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { prepare, runBundle } from '../../../tools/decision/d17-multifact.mjs';
+import { prepare, runBundle, runDevReviewMaterial } from '../../../tools/decision/d17-multifact.mjs';
 import { prepare as prepareD17 } from '../../../tools/decision/d17-study.mjs';
-import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
+import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle, validateHeldoutInputs } from '../../../src/decision/heldout/contract.js';
-import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
+import { heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { registeredHeldoutGeneratorDigest } from '../../../src/decision/heldout/generator-registry.js';
-import { D17_MULTIFACT_GENERATOR_ID, studyHeldoutGeneratorDigest } from '../../../src/decision/heldout/study-generators.js';
+import { D17_MULTIFACT_CALIBRATION_NOT_AFTER, D17_MULTIFACT_GENERATOR_ID, generateStudyHeldoutRow, studyHeldoutGeneratorDigest } from '../../../src/decision/heldout/study-generators.js';
+import { readHeldoutFrozen } from '../../../src/decision/heldout/calibration.js';
 import type { HeldoutAttempt, HeldoutBundle } from '../../../src/decision/heldout/types.js';
 import { calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
 import type { CalibrationArtifact } from '../../../src/decision/calibration/types.js';
 import { fitD17Isotonic } from '../../../src/decision/ensemble-study/calibration.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { D17_CALIBRATION } from '../../../src/decision/ensemble-study/protocol.js';
 import { D17MF_CELLS, D17MF_POOLS, D17MF_POOL_IDS, D17MF_ROWS, cellKey, d17MfGenerateCase, d17MfTextOracle } from '../../../src/decision/ensemble-study/multifact.js';
-import { D17MF_BUDGET, D17MF_PROTOCOL, assertD17MultifactPrivateSeed, auroc, d17MultifactFit, d17MultifactFreshAllowance, d17MultifactPlan, d17MultifactShortcutAudit,
-  holmAdjust, newcombeDifference, scoreD17Multifact, twoProportionP, validateD17MultifactReview } from '../../../src/decision/ensemble-study/multifact-study.js';
+import { D17MF_BUDGET, D17MF_PROTOCOL, assertD17MultifactPrivateSeed, auroc, d17MultifactDevReviewMaterial, d17MultifactFit, d17MultifactFreshAllowance, d17MultifactPlan, d17MultifactShortcutAudit,
+  d17MultifactCollectionEnd, holmAdjust, newcombeDifference, scoreD17Multifact, twoProportionP, validateD17MultifactReview } from '../../../src/decision/ensemble-study/multifact-study.js';
 import { assertD17ReviewBoundToApproval } from '../../../src/decision/ensemble-study/calibration.js';
 import type { QualificationIntegrityMetadata } from '../../../src/decision/qualification/release.js';
 
@@ -184,10 +185,34 @@ describe('D17-MF preregistration and shortcut audit', () => {
     }
     expect(() => validateD17MultifactReview(prepared, value, pin)).toThrow('development-review');
   });
+  it('builds blind-then-unblind development review material in the D17 format, and the CLI refuses public seeds', async () => {
+    const material = d17MultifactDevReviewMaterial(prepared, { preparedDirectory: '/prepared' });
+    expect(material.items).toHaveLength(40);
+    expect(material.reviewTemplateDigest).toBe(heldoutDigest(prepared.reviewTemplate));
+    material.items.forEach((item, i) => {
+      const expected = prepared.reviewTemplate.assessments[i]!;
+      expect(Object.keys(item.blind)).toEqual(['payload']);
+      expect(item.blind.payload).toBe(expected.payload);
+      expect(item.unblind.goldLabel).toBe(prepared.gold.labels[item.rowId]);
+      expect(item.unblind.textOracleLabel).toBe(item.unblind.goldLabel);
+      expect(item.unblind.variant).toBe(expected.cell);
+      expect(cellKey(item.unblind.factors)).toBe(expected.cell);
+      expect(prepared.corpus.rows.find(row => row.id === item.rowId)!.split).toBe('tuning');
+    });
+    expect(new Set(material.items.map(item => item.unblind.factors.outcome)).size).toBe(6);
+    const dir = await root(), dirPrepared = join(dir, 'prepared');
+    const { writeHeldoutFile } = await import('../../../src/decision/heldout/journal.js');
+    await mkdir(dirPrepared);
+    for (const name of ['corpus', 'preregistration', 'gold'] as const) await writeHeldoutFile(join(dirPrepared, `${name}.json`), prepared[name]);
+    await expect(runDevReviewMaterial([dirPrepared, join(dir, 'material.json')])).rejects.toThrow('public-seed');
+    await expect(readFile(join(dir, 'material.json'))).rejects.toThrow();
+    await expect(runDevReviewMaterial([dirPrepared])).rejects.toThrow('usage');
+  }, 120_000);
+
   it('refuses public seeds and gates bundles on the cited review and a plan that fits the allowance', async () => {
     expect(() => assertD17MultifactPrivateSeed('d17mf-offline')).toThrow('public-seed');
     expect(() => assertD17MultifactPrivateSeed('review-sweep-3')).toThrow('public-seed');
-    expect(() => assertD17MultifactPrivateSeed('d17mf-7f3a9c2e1b')).not.toThrow();
+    expect(() => assertD17MultifactPrivateSeed(privateSeed())).not.toThrow();
     const dir = await root(), dirPrepared = join(dir, 'prepared');
     const { writeHeldoutFile } = await import('../../../src/decision/heldout/journal.js');
     await mkdir(dirPrepared);
@@ -210,14 +235,103 @@ describe('D17-MF preregistration and shortcut audit', () => {
   }, 120_000);
 });
 
+/** A fresh private seed per call: committed seeds are public and refused at the collector boundary. */
+const privateSeed = () => `unit-${randomBytes(12).toString('hex')}`;
+/** A one-row D17-MF corpus for a private seed, at the allocation index of the `nth` row of `split`. */
+function privateSmall(seed = privateSeed(), split = 'test', nth = 0) {
+  const index = prepared.corpus.rows.map((row, i) => row.split === split ? i : -1).filter(i => i >= 0)[nth]!;
+  const small = structuredClone(prepared);
+  small.corpus.rows = [generateStudyHeldoutRow(D17_MULTIFACT_GENERATOR_ID, `${seed}:${index}:single`)];
+  small.corpus.provenance.seed = seed;
+  small.preregistration.corpusDigest = heldoutDigest(small.corpus);
+  return small;
+}
+function offline(transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init))) {
+  return { transport, host: { resolveCredential: async () => new TextEncoder().encode('fake-d17mf-reader'), dispose: () => {} } };
+}
+async function collectAt(dir: string, bundle: HeldoutBundle, startMs: number, transport?: ReturnType<typeof vi.fn>) {
+  let time = startMs;
+  return collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: heldoutDigest(bundle.approval), artifactRoot: dir, sourceRoot: process.cwd(),
+    offline: offline(transport as any), now: () => time, sleep: async (ms: number) => { time += ms; } });
+}
+
+describe('D17-MF collector-boundary guards', () => {
+  it('refuses public, committed and low-entropy seeds and non-artifact calibration in validateHeldoutBundle, before any call', async () => {
+    const pub = { corpus: prepared.corpus, preregistration: prepared.preregistration } as HeldoutBundle;
+    pub.approval = approval(pub, 'd17mf-pub', pin);
+    expect(() => validateHeldoutBundle(pub, heldoutDigest(pub.approval))).toThrow('public-demo-seed');
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
+    await expect(collectAt(await root(), pub, Date.parse('2026-10-05T00:00:00Z'), transport)).rejects.toThrow('public-demo-seed');
+    expect(transport).not.toHaveBeenCalled();
+    for (const seed of ['d17mf-offline', 'd17mf-offline2', 'd17mf-0ffline', 'd17mfoffline', 'd17-mf-offline', 'offline-d17mf', 'review-x', 'reviewx',
+      'd17mf-7f3a9c2e1b', 'd17mf-01', 'd17mf-template', `review-${randomBytes(12).toString('hex')}`, `d17mf-sweep-${randomBytes(12).toString('hex')}`]) {
+      expect(() => assertD17MultifactPrivateSeed(seed), seed).toThrow('public-seed');
+    }
+    expect(() => assertD17MultifactPrivateSeed(`d17mf-${randomBytes(12).toString('hex')}`)).not.toThrow();
+    const small = privateSmall(), ok = { corpus: small.corpus, preregistration: small.preregistration } as HeldoutBundle;
+    ok.approval = approval(ok, 'd17mf-ok', pin);
+    expect(() => validateHeldoutBundle(ok, heldoutDigest(ok.approval))).not.toThrow();
+    const staged = structuredClone(ok); (staged.approval as any).calibration = { mode: 'uncalibrated-diagnostic' };
+    staged.approval.executionDigest = heldoutExecutionDigest(staged.corpus, staged.preregistration, staged.approval);
+    expect(() => validateHeldoutBundle(staged, heldoutDigest(staged.approval))).toThrow('calibration-scope');
+  }, 120_000);
+
+  it('never dispatches past the calibrator expiry, and refuses a private seed already frozen under another corpus', async () => {
+    const notAfter = Date.parse(D17_MULTIFACT_CALIBRATION_NOT_AFTER), limit = prepared.preregistration.sessionLimitMs;
+    for (const start of [Date.parse('2026-11-05T12:00:00Z'), notAfter - limit + 1]) {
+      const small = privateSmall(), bundle = { corpus: small.corpus, preregistration: small.preregistration } as HeldoutBundle;
+      bundle.approval = approval(bundle, 'd17mf-late', pin);
+      const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)), dir = await root();
+      await expect(collectAt(dir, bundle, start, transport)).rejects.toThrow('calibration-expired');
+      expect(transport).not.toHaveBeenCalled();
+    }
+    const seed = privateSeed(), dir = await root();
+    const first = privateSmall(seed, 'test', 0), a = { corpus: first.corpus, preregistration: first.preregistration } as HeldoutBundle;
+    a.approval = approval(a, 'd17mf-seed-a', pin);
+    expect(await collectAt(dir, a, notAfter - limit - 60_000)).toMatchObject({ status: 'complete', completedRows: 1 });
+    const second = privateSmall(seed, 'test', 1), b = { corpus: second.corpus, preregistration: second.preregistration } as HeldoutBundle;
+    b.approval = approval(b, 'd17mf-seed-b', pin);
+    await expect(collectAt(dir, b, Date.parse('2026-10-05T00:00:00Z'))).rejects.toThrow('seed-reused');
+  }, 120_000);
+
+  it('bounds collection end by digest-covered session starts: rewriting qualification.json cannot move it, rewriting frozen.json breaks the evidence pin', async () => {
+    const small = privateSmall(), bundle = { corpus: small.corpus, preregistration: small.preregistration } as HeldoutBundle;
+    bundle.approval = approval(bundle, 'd17mf-clock', pin);
+    const dir = await root(), start = Date.parse('2026-10-20T12:00:00Z');
+    const summary = await collectAt(dir, bundle, start) as { evidenceDigest: string };
+    const run = join(heldoutRunsRoot(dir), 'd17mf-clock');
+    const bound = d17MultifactCollectionEnd([await readHeldoutFrozen(run)]);
+    expect(bound).toBe(new Date(start + small.preregistration.sessionLimitMs).toISOString());
+    // The review probe: backdate (and forward-date) the undigested qualification.json time; the bound does not move.
+    for (const generatedAt of ['2026-10-03T00:00:00.000Z', '2026-12-01T00:00:00.000Z']) {
+      const path = join(run, 'qualification.json'), q = JSON.parse(await readFile(path, 'utf8'));
+      await writeFile(path, JSON.stringify({ ...q, generatedAt }));
+      expect(d17MultifactCollectionEnd([await readHeldoutFrozen(run)])).toBe(bound);
+    }
+    // Moving the bound needs a frozen.json edit, which the trusted evidence digest detects at scoring.
+    const frozenPath = join(run, 'frozen.json'), frozen = JSON.parse(await readFile(frozenPath, 'utf8'));
+    await writeFile(frozenPath, JSON.stringify({ ...frozen, collectionStartedAt: '2026-10-03T00:00:00.000Z' }));
+    expect(await heldoutEvidenceDigest(run, await readHeldoutJournal(run))).not.toBe(summary.evidenceDigest);
+    const integrity = { sample_n: 1, uncertainty: null, paired_baseline: null, integrity_mode: 'standard', fresh_workspace_required: false,
+      fresh_workspace_verified: false, integrity_state: 'not-assessed', trusted_score_source: 'local-unverified', compromise_labels: [],
+      weak_signal_reason: 'offline-control', release_gate: { decision: 'HOLD', reasons: ['offline-control'] } } as QualificationIntegrityMetadata;
+    const score = vi.fn(async () => ({ calibrated: true }));
+    await expect(scoreHeldoutStudy({ run, trustedEvidenceDigest: summary.evidenceDigest as any, trustedApprovalDigest: heldoutDigest(bundle.approval),
+      module: { prepare: async () => small, score } as any, moduleDigest: small.preregistration.scorerDigest, gold: small.gold, integrity,
+      trustedIntegrityDigest: heldoutDigest(integrity) })).rejects.toThrow('evidence-pin');
+    expect(score).not.toHaveBeenCalled();
+    // A run recorded without a session start (before #2850) has no bound and cannot be scored.
+    expect(() => d17MultifactCollectionEnd([{ bundle: small }])).toThrow('collection-clock');
+  }, 120_000);
+});
+
+
 describe('D17-MF calibrated scoring', () => {
   let template: HeldoutAttempt;
   beforeAll(async () => {
     // One real receipt from an offline collection through the shared collector (artifact mode, new generator).
     const dir = await root();
-    const small = structuredClone(prepared);
-    small.corpus.rows = [small.corpus.rows.find(r => r.split === 'test')!];
-    small.preregistration.corpusDigest = heldoutDigest(small.corpus);
+    const small = privateSmall();
     const bundle = { corpus: small.corpus, preregistration: small.preregistration, approval: approval(small, 'd17mf-template', pin) } as HeldoutBundle;
     let time = Date.parse('2026-10-02T20:00:00Z');
     const summary = await collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: heldoutDigest(bundle.approval), artifactRoot: dir,
@@ -326,7 +440,7 @@ describe('D17-MF CLI', () => {
   it('describes its modes and refuses unknown or open configs', async () => {
     const help = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--help'], { encoding: 'utf8', timeout: 20000 });
     expect(help.status, help.stderr).toBe(0);
-    for (const word of ['--dry-run', '--prepare', '--bundle', '--dry-run-ledger', '--score', 'd17CalibrationRun', 'exact approved source commit']) expect(help.stdout).toContain(word);
+    for (const word of ['--dry-run', '--prepare', '--dev-review-material', '--bundle', '--dry-run-ledger', '--score', 'd17CalibrationRun', 'exact approved source commit']) expect(help.stdout).toContain(word);
     const dir = await root(), config = join(dir, 'config.json');
     await writeFile(config, JSON.stringify({ run: dir, unexpected: true }));
     const refused = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--score', config, join(dir, 'out.json')], { encoding: 'utf8', timeout: 20000 });

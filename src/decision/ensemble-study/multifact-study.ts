@@ -6,7 +6,8 @@ import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutCorpus, HeldoutPre
 import type { CalibrationArtifact } from '../calibration/types.js';
 import type { QualificationIntegrityMetadata } from '../qualification/release.js';
 import { wilsonScoreInterval } from '../qualification/quality.js';
-import { D17_MULTIFACT_GENERATOR_ID, studyHeldoutGeneratorDigest } from '../heldout/study-generators.js';
+import { D17_MULTIFACT_CALIBRATION_NOT_AFTER, D17_MULTIFACT_GENERATOR_ID, D17_MULTIFACT_PUBLIC_SEEDS, d17MultifactPublicSeed,
+  studyHeldoutGeneratorDigest } from '../heldout/study-generators.js';
 import { applyD17Mapping, d17AttemptsByRow, d17NativeYes, qualifyD17Calibration, type D17CalibrationMapping } from './calibration.js';
 import { D17_CALIBRATION } from './protocol.js';
 import { D17MF_CELLS, D17MF_DEFINITION, D17MF_HOPS, D17MF_OUTCOMES, D17MF_POOL_IDS, D17MF_POOLS, D17MF_ROWS, D17MF_TEST_COUNTS,
@@ -26,7 +27,8 @@ import { validateD17MultifactArtifact } from './multifact-artifacts.js';
  * miscalibration under shift this probe measures. The calibrator is re-derived from the D17 seal and qualified at bundle
  * time, at collection end and at the scoring clock; it is never trusted unverified and never skipped.
  */
-export const D17MF_ARTIFACT_EXPIRY = '2026-11-01T10:02:38.000Z';
+/** The registered D17 member calibrator's expiry: effectiveAt 2026-10-02T10:02:34.263Z plus the profile's 30 days. */
+export const D17MF_ARTIFACT_EXPIRY = D17_MULTIFACT_CALIBRATION_NOT_AFTER;
 export const D17MF_PROTOCOL = Object.freeze({
   schemaVersion: 'decision-d17mf-protocol/v2', issue: 'roctinam/aiwg#2850', study: 'D17', generator: D17_MULTIFACT_GENERATOR_ID,
   design: Object.freeze({ pools: D17MF_POOL_IDS, hops: D17MF_HOPS, outcomes: D17MF_OUTCOMES, layouts: ['equalized', 'd17-faithful'],
@@ -51,7 +53,7 @@ export const D17MF_PROTOCOL = Object.freeze({
   interval: Object.freeze({ cell: 'wilson', difference: 'newcombe-hybrid-score-independent', auroc: 'hanley-mcneil', levelBps: 9500 }),
   multiplicity: Object.freeze({ method: 'holm', alpha: 0.05, test: 'two-sided two-proportion z (pooled)', families: ['H1 pool-pair contrasts', 'H4 per-pool layout contrasts'] }),
   coverage: Object.freeze({ minimumObservedFraction: 0.95, rule: 'every preregistered test cell must reach it; otherwise the report is incomplete and every verdict is "insufficient"' }),
-  scoringClock: 'evaluatedAt is at least the latest collection end recorded by the collector (qualification.json generatedAt across the run lineage) and at most now; scoring happens at the exact approved source commit',
+  scoringClock: 'collection end is bounded by the latest session start bound into frozen.json (digest-covered evidence) plus the preregistered session limit, across the run lineage; evaluatedAt is at least that bound and at most now; the collector refuses any session whose window passes the calibrator expiry; scoring happens at the exact approved source commit',
   hypotheses: Object.freeze([
     Object.freeze({ id: 'H1', name: 'wording', claim: 'Missing-link raw accuracy depends on the wording pool at fixed hops and encoding.' }),
     Object.freeze({ id: 'H2', name: 'depth', claim: 'Raw accuracy falls from one relay hop to three at fixed pool, outcome and failure position (first or last).' }),
@@ -81,9 +83,10 @@ export const D17MF_PROTOCOL = Object.freeze({
 });
 
 /** Public and review seeds can regenerate gold from source; they never back a paid collection. */
-export const D17MF_PUBLIC_SEEDS: readonly string[] = ['d17mf-offline', 'd17mf-public-demo', 'd17mf-smoke', 'review-throwaway-a1', 'review-throwaway-b2'];
-export function assertD17MultifactPrivateSeed(seed: string): void {
-  if (D17MF_PUBLIC_SEEDS.includes(seed) || /^(review-|d17mf-(offline|public|smoke|sweep|demo))/.test(seed)) refuse('public-seed');
+export const D17MF_PUBLIC_SEEDS = D17_MULTIFACT_PUBLIC_SEEDS;
+/** The same rule `validateHeldoutBundle` enforces at the collector boundary (shared in study-generators.ts). */
+export function assertD17MultifactPrivateSeed(seed: unknown): void {
+  if (d17MultifactPublicSeed(seed)) refuse('public-seed');
 }
 
 type Prepared = ReturnType<typeof prepareD17MultifactStudy>;
@@ -316,6 +319,44 @@ export function validateD17MultifactReview(prepared: Prepared, review: unknown, 
   return value;
 }
 
+/**
+ * Blind-then-unblind material for the 40 development assessments, in the D17 development review material format: each item
+ * carries `blind.payload` (shown first) and `unblind` (generator gold, independent text-oracle label, cell, latent world).
+ * Development (`tuning`) rows only; it contains gold and must stay private (the CLI writes it mode 600).
+ */
+export function d17MultifactDevReviewMaterial(prepared: Prepared, options: { preparedDirectory: string }) {
+  const rows = new Map(prepared.corpus.rows.map(row => [row.id, row]));
+  const items = prepared.reviewTemplate.assessments.map(item => {
+    const row = rows.get(item.rowId), world = prepared.gold.worlds[item.rowId], label = prepared.gold.labels[item.rowId];
+    if (!row || row.split !== 'tuning' || !world || !label || heldoutDigest(row.input) !== item.inputDigest) refuse('development-review-material');
+    return { assessmentId: item.assessmentId, rowId: item.rowId, cell: item.cell, inputDigest: item.inputDigest,
+      blind: { payload: item.payload },
+      unblind: { goldLabel: label, textOracleLabel: d17MfTextOracle(item.payload), variant: item.cell, cell: item.cell,
+        factors: { pool: world.pool, hops: world.hops, outcome: world.outcome, layout: world.layout, rule: world.rule },
+        latentWorld: { chain: [...world.chain], decoys: [...world.decoys], failureKind: world.failureKind, failurePosition: world.failurePosition,
+          targets: { ...world.targets }, day: world.day, quantity: world.quantity } } };
+  });
+  const material = { schemaVersion: 'd17mf-development-review-material/v1', study: 'D17-MF', scope: 'multi-fact probe development review (#2850)',
+    preparedDirectory: options.preparedDirectory, seedDigest: heldoutDigest(prepared.corpus.provenance.seed),
+    reviewTemplateDigest: heldoutDigest(prepared.reviewTemplate), corpusDigest: heldoutDigest(prepared.corpus), goldDigest: heldoutDigest(prepared.gold),
+    preregistrationDigest: heldoutDigest(prepared.preregistration),
+    splitOfItems: 'tuning (development) only; no test rows', itemCount: items.length,
+    protocol: ['Show only `blind.payload`; the reviewer records a label (yes/no), ambiguity flag, rationale and review time.',
+      'Then unblind `unblind` (generator gold, independent text-oracle label, cell, factors, latent world) and compare.',
+      'Any ambiguous or incorrect gold, or gold/oracle disagreement, stops the probe: revise the generator and use a new seed.',
+      'Record results in reviewTemplate.json (goldAuditLabel, goldAmbiguousOrIncorrect, rationale, reviewedAt), add reviewer and preregistrationReview, and anchor its digest.'],
+    guide: { population: 'Closed fictional worlds: each payload states facts and, last, the reachability rule; nothing outside the payload counts.',
+      yes: 'The rule, applied to the stated facts alone, makes the queried destination reachable from the queried entity.',
+      no: 'The stated facts do not satisfy the rule: a required link is not stated in the link form (contrastive, negated, non-connective or absent), or an entity in between is not in the enabled state.',
+      authority: 'The latent world defines gold; the text oracle re-derives the label from the payload independently.',
+      invalidGold: 'Mark goldAmbiguousOrIncorrect=true when a careful reader could defend the other label from the payload, or gold contradicts the stated rule.',
+      timing: 'Review blind before unblinding; reviewedAt must precede the approval anchoring.',
+      independence: 'The reviewer did not author the generator change under review.' },
+    items };
+  validateD17MultifactArtifact('reviewMaterial', material);
+  return material;
+}
+
 // ---------- statistics ----------
 export function newcombeDifference(k1: number, n1: number, k2: number, n2: number, levelBps = 9500) {
   if (!n1 || !n2) return null;
@@ -358,9 +399,24 @@ export interface D17MfScoringContext {
   /** The registered D17 calibration set and its member artifact and mapping, already re-derived from the D17 seal by the host. */
   set: { member: { artifactId: string; artifactDigest: Digest; mappingDigest: Digest } }; trustedCalibrationSetDigest: Digest;
   member: { artifact: CalibrationArtifact; mapping: D17CalibrationMapping };
-  /** Latest collection end the collector recorded across the run lineage; the scoring clock may not precede it. */
+  /** Collection-end bound from `d17MultifactCollectionEnd` over the run lineage; the scoring clock may not precede it. */
   collectionEndedAt: string;
   nowEpochMs: number;
+}
+/**
+ * Upper bound on the end of collection across a run lineage, from digest-covered evidence only: each session's
+ * `collectionStartedAt` (bound into frozen.json, hence into the trusted evidence digest) plus the preregistered session
+ * limit, which the collector never dispatches past. `qualification.json` times are not used: they are not digest-covered.
+ */
+export function d17MultifactCollectionEnd(frozen: ReadonlyArray<{ collectionStartedAt?: unknown; bundle: { preregistration: HeldoutPreregistration } }>): string {
+  if (!frozen.length) refuse('collection-clock');
+  const ends = frozen.map(record => {
+    const started = typeof record.collectionStartedAt === 'string' ? Date.parse(record.collectionStartedAt) : NaN;
+    const limit = record.bundle.preregistration.sessionLimitMs;
+    if (!Number.isSafeInteger(started) || !Number.isSafeInteger(limit) || limit <= 0) refuse('collection-clock');
+    return started + limit;
+  });
+  return new Date(Math.max(...ends)).toISOString();
 }
 type Position = 'first' | 'interior' | 'last' | null;
 interface RowResult { id: string; key: string; split: string; pool: D17MfPoolId; hops: number; outcome: D17MfOutcome; layout: string; gold: D17MfLabel;

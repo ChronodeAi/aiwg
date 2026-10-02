@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** D17-MF calibrated multi-fact probe (#2850). Offline by default; collection uses tools/decision/heldout-study.mjs. */
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { register } from 'tsx/esm/api';
@@ -14,6 +14,7 @@ const D17_CONTEXT_KEYS = ['d17CalibrationDir', 'd17CalibrationReviewFile', 'd17C
   'trustedD17CalibrationReviewDigest', 'trustedD17DevelopmentReviewDigest'];
 const USAGE = 'D17-MF (#2850) experimental/default-off. --dry-run SEED; --prepare SEED NEW_DIR; '
   + '--bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json D17_CALIBRATION_CONTEXT.json; '
+  + '--dev-review-material PREPARED_DIR NEW_OUTPUT.json (private seed; output under the artifact root, contains gold, mode 600); '
   + '--dry-run-ledger BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT D17_CALIBRATION_CONTEXT.json; --score CONFIG.json OUTPUT.json.\n'
   + `D17 calibration context: ${D17_CONTEXT_KEYS.join(', ')}.\n`
   + 'Score config: run, trustedEvidenceDigest, trustedApprovalDigest, goldFile, integrityFile, trustedIntegrityDigest, evaluatedAt and the D17 calibration context keys.\n'
@@ -83,6 +84,12 @@ export async function deriveD17Calibration(contextConfig, bindingDigest, nowEpoc
     calibrationReview: await json(contextConfig.d17CalibrationReviewFile), trustedCalibrationReviewDigest: contextConfig.trustedD17CalibrationReviewDigest,
     developmentReview: await json(contextConfig.d17DevelopmentReviewFile), trustedDevelopmentReviewDigest: contextConfig.trustedD17DevelopmentReviewDigest,
     testPhaseAccessAt: null, nowEpochMs });
+  // The collector's dispatch bound is pinned in source; it must be exactly this registered artifact's expiry.
+  const { D17MF_ARTIFACT_EXPIRY } = await import('../../src/decision/ensemble-study/multifact-study.ts');
+  const member = verified.member.artifact;
+  if (new Date(Date.parse(member.effectiveAt) + member.profile.expiresAfterDays * 86_400_000).toISOString() !== D17MF_ARTIFACT_EXPIRY) {
+    throw new Error('D17-MF calibrator expiry does not match the pinned dispatch bound');
+  }
   return { set: verified.set, trustedCalibrationSetDigest: verified.setDigest, member: { artifact: verified.member.artifact, mapping: verified.member.mapping } };
 }
 
@@ -90,6 +97,24 @@ export async function deriveD17Calibration(contextConfig, bindingDigest, nowEpoc
  * Bundle only for a private seed, after the 40-item development review is complete and cited by the approval, with the
  * registered D17 calibrator re-derived and qualified now, and with a plan that fits the allowance.
  */
+/** Development review material (blind payload, then gold, oracle label, cell and latent world); contains gold, so private seeds only. */
+export async function runDevReviewMaterial([preparedDir, output, ...extra]) {
+  if (!preparedDir || !output || extra.length) throw new Error('usage');
+  const directory = resolve(preparedDir), prepared = await preparedFrom(directory);
+  const study = await import('../../src/decision/ensemble-study/multifact-study.ts');
+  const { heldoutDigest } = await import('../../src/decision/heldout/contract.ts');
+  study.assertD17MultifactPrivateSeed(prepared.corpus.provenance.seed);
+  const material = study.d17MultifactDevReviewMaterial(prepared, { preparedDirectory: directory });
+  const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
+  await assertContextArtifactRoot(root, dirname(resolve(output)), 'within');
+  await writeFile(resolve(output), `${JSON.stringify(material, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  const byOutcome = {};
+  for (const item of material.items) byOutcome[item.unblind.factors.outcome] = (byOutcome[item.unblind.factors.outcome] ?? 0) + 1;
+  return { providerCalls: 0, items: material.items.length, byOutcome,
+    goldOracleAgreement: material.items.filter(item => item.unblind.goldLabel === item.unblind.textOracleLabel).length,
+    reviewTemplateDigest: material.reviewTemplateDigest, materialDigest: heldoutDigest(material) };
+}
+
 export async function runBundle([preparedDir, approvalPath, devReview, devReviewDigest, output, calibrationContext, ...extra]) {
   if (!preparedDir || !approvalPath || !devReview || !devReviewDigest || !output || !calibrationContext || extra.length) throw new Error('usage');
   const prepared = await preparedFrom(resolve(preparedDir));
@@ -130,9 +155,11 @@ export async function runLedgerDryRun([bundlePath, approvalDigest, artifactRoot,
   assertD17SeedUnused(prior.attempts, bundle.approval);
   await deriveD17Calibration(await json(calibrationContext), bundle.approval.calibration.calibrationArtifactDigest, Date.now());
   const fit = study.d17MultifactFit(await study.d17MultifactPlan(bundle, bundle.approval), heldoutCollectionAllowance(bundle.approval, prior));
-  const ready = fit.fits && estimate.fitsBeforeStop && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
+  // The collector refuses a session whose window (start plus the preregistered session limit) passes the calibrator expiry.
+  const windowOpen = Date.now() + bundle.preregistration.sessionLimitMs <= Date.parse(study.D17MF_ARTIFACT_EXPIRY);
+  const ready = windowOpen && fit.fits && estimate.fitsBeforeStop && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
   return { providerCalls: 0, plan: { maximumAttempts: estimate.maximumAttempts, reservedTokens: estimate.reservedTokens, reservedUsdMicros: estimate.reservedUsdMicros },
-    ledger: fit, prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready };
+    ledger: fit, sessionWindowOpen: windowOpen, prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready };
 }
 
 /**
@@ -154,10 +181,12 @@ export async function runScore([configPath, output, ...extra]) {
   await assertContextArtifactRoot(root, dirname(resolve(output)), 'within');
   const run = resolve(config.run), frozen = await readHeldoutFrozen(run, config.trustedApprovalDigest);
   if (frozen.bundle.approval.calibration.mode !== 'artifact') throw new Error('config');
-  const ends = [];
-  for (const dir of [run, ...frozen.priorRuns.map(prior => join(dirname(run), prior.runId))]) ends.push(Date.parse((await json(join(dir, 'qualification.json'))).generatedAt));
-  if (ends.some(t => !Number.isFinite(t))) throw new Error('collection clock');
-  const collectionEndedAt = new Date(Math.max(...ends)).toISOString();
+  // Session starts come from frozen.json, which the trusted evidence digests cover (scoreHeldoutStudy checks the run's and every
+  // prior run's evidence digest); qualification.json times are not digest-covered and are not used.
+  const lineage = [frozen];
+  for (const prior of frozen.priorRuns) lineage.push(await readHeldoutFrozen(join(dirname(run), prior.runId)));
+  const study = await import('../../src/decision/ensemble-study/multifact-study.ts');
+  const collectionEndedAt = study.d17MultifactCollectionEnd(lineage);
   if (nowEpochMs < Date.parse(collectionEndedAt)) throw new Error('scoring clock');
   const derived = await deriveD17Calibration(config, frozen.bundle.approval.calibration.calibrationArtifactDigest, nowEpochMs);
   const scored = await scoreHeldoutStudy({ run, trustedEvidenceDigest: config.trustedEvidenceDigest,
@@ -171,6 +200,7 @@ async function main() {
   const args = process.argv.slice(2), mode = args[0] ?? '--help';
   if (mode === '--help') { process.stdout.write(USAGE); return; }
   if (mode === '--bundle') { process.stdout.write(`${JSON.stringify(await runBundle(args.slice(1)))}\n`); return; }
+  if (mode === '--dev-review-material') { process.stdout.write(`${JSON.stringify(await runDevReviewMaterial(args.slice(1)))}\n`); return; }
   if (mode === '--score') { process.stdout.write(`${JSON.stringify(await runScore(args.slice(1)))}\n`); return; }
   if (mode === '--dry-run-ledger') {
     const result = await runLedgerDryRun(args.slice(1));

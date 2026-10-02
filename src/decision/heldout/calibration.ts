@@ -7,6 +7,8 @@ import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutCalibrationPhase, He
 interface Frozen {
   approval: { runId: string; study: string }; source: 'injected-transport' | 'provider';
   bundle: HeldoutBundle; digest: Digest; priorRuns: HeldoutPriorRun[]; testPhaseAccessAt: string | null;
+  /** Session start on the collector clock, bound into the evidence digest with frozen.json (absent before #2850). */
+  collectionStartedAt?: string;
 }
 export async function readHeldoutFrozen(run: string, trustedApprovalDigest?: Digest): Promise<Frozen> {
   const frozen = await readHeldoutFile(join(run, 'frozen.json')) as Frozen;
