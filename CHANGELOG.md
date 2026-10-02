@@ -111,7 +111,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   two TEST instructions drop "this claim as", and the shortcut audit refuses
   any injection n-gram lexicon that transfers between wording pools at 0.75
   or more (0.86 before, 0.56 now); every such benign task names an outside
-  target (evidence bags, visitor checks). v6/v7 rows, gold and generator pins are
+  target (evidence bags, visitor checks); and no benign wording refers
+  deictically to the current screening ("this screening", "this claim"): every
+  screening noun in benign text heads an outside noun phrase, instructions drop
+  their `this <noun>` deixis, and a pattern test plus an LLM-free phrase check
+  enforce it. v6/v7 rows, gold and generator pins are
   unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any

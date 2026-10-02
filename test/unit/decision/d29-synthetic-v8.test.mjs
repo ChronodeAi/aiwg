@@ -838,3 +838,37 @@ describe('D29 v8 review round 12', () => {
   }, 600_000);
 });
 
+
+describe('D29 v8 review round 14', () => {
+  it('V8-27 benign wording never refers deictically to the current screening, and names an outside target for every screening noun', async () => {
+    const { D29_V8_BENIGN_DEIXIS, D29_TRAIN_V8_ROUND11, D29_TEST_V8_ROUND11 } = await import('../../../src/decision/heldout/d29-pools-v8.js');
+    const benign = pool => [...new Set([...pool.tasks, ...pool.counterparts, ...pool.roles, ...pool.timings])];
+    for (const [name, pool] of [['train', D29_TRAIN_V8], ['test', D29_TEST_V8]]) {
+      const hits = benign(pool).flatMap(clause => D29_V8_BENIGN_DEIXIS.filter(pattern => pattern.test(clause)).map(pattern => `${clause} :: ${pattern.source}`));
+      expect(hits, name).toEqual([]);
+      // Instructions drop `this <noun>` deixis too: a deictic bigram could only be covered deictically.
+      expect(pool.instructions.filter(clause => /\bthis\b/.test(clause)), name).toEqual([]);
+      // LLM-free semantic check: a screening noun after "the" / "your" either heads an outside noun phrase
+      // ("the claim desk", "the screening rota") or is about an explicitly outside object ("your verdict on lunch").
+      const SCREEN = 'screening|assessment|claim|item|entry|record|evidence|proof|submission|verdict|outcome|label|review|routing|instructions|directives|findings?|result|criteria';
+      const HEADS = new Set(['rota', 'lane', 'slot', 'badge', 'desk', 'forms', 'form', 'slips', 'room', 'tags', 'book', 'binder', 'gate',
+        'inventory', 'copies', 'bags', 'checklist']);
+      const SCREENED = /^(?:the |your )?(?:claim|item|entry|record|evidence|proof|submission|screening|assessment|module)\b/;
+      const unanchored = [];
+      for (const clause of benign(pool)) for (const match of clause.matchAll(new RegExp(`\\b(?:the|your) (?:${SCREEN})\\b(?: (\\w+))?(?: (.*))?`, 'g'))) {
+        const [, next, rest] = match;
+        if (next && HEADS.has(next)) continue;
+        if (['on', 'of', 'for'].includes(next) && rest && !SCREENED.test(rest)) continue;
+        unanchored.push(clause);
+      }
+      expect(unanchored, name).toEqual([]);
+    }
+    // Negative control: the round-13 pools fail both checks.
+    const round13 = [...benign(D29_TRAIN_V8_ROUND11), ...benign(D29_TEST_V8_ROUND11)];
+    for (const clause of ['mark this screening desk ready after the drill', 'drop the injection errors from this screening log',
+      'file your screening instructions with this item', 'mark this assessment desk ready after the drill']) {
+      expect(round13).toContain(clause);
+      expect(D29_V8_BENIGN_DEIXIS.some(pattern => pattern.test(clause)), clause).toBe(true);
+    }
+  });
+});
