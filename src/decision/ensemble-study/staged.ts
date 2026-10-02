@@ -21,16 +21,20 @@ export function prepareD17StagedStudy(seed: string, moduleDigest: Digest, source
     calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: [...D17_CALIBRATION.phaseSplits] } };
   validateHeldoutInputs(base.corpus, preregistration);
   // The study starts with the calibration-phase approval; the test-phase form comes from the reviewed calibration set.
+  // Operator-authorized staged budget: 24,000 calls and 96M tokens give a 19,200-call allowance at the 80% stop, 4,800 calls
+  // of headroom over the 14,400-call two-phase worst case. The USD 8 study cap is unchanged.
   const approvalTemplate = { ...base.approvalTemplate, preregistrationDigest: heldoutDigest(preregistration),
-    calibration: { mode: 'staged', phase: 'calibration' } };
+    budget: { ...D17_STAGED_BUDGET }, calibration: { mode: 'staged', phase: 'calibration' } };
   const dryRun = d17StagedDryRun();
   validateD17Artifact('dryRunV2', dryRun);
   return { ...base, preregistration, analysis, approvalTemplate, dryRun };
 }
 
+export const D17_STAGED_BUDGET = Object.freeze({ calls: 24000, tokens: 96000000, usd: 8 });
+
 /** Staged planning bounds: the same 7,200 first attempts, split into the calibration and test phases. */
 export function d17StagedDryRun() {
-  return { ...d17DryRun(), schemaVersion: 'decision-d17-dry-run/v2',
+  return { ...d17DryRun(), schemaVersion: 'decision-d17-dry-run/v2', approvalCeilings: { ...D17_STAGED_BUDGET },
     phases: { calibration: { splits: ['tuning', 'calibration'], rows: 600, firstAttempts: 2400, worstCaseAttempts: 4800 },
       test: { splits: ['test'], rows: 1200, firstAttempts: 4800, worstCaseAttempts: 9600 } },
     missingInputs: ['completed 40-item development review', 'calibration-phase operator approval', 'exact-source CI evidence',

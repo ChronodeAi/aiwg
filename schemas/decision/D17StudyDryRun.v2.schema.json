@@ -125,10 +125,10 @@
       ],
       "properties": {
         "calls": {
-          "const": 18000
+          "const": 24000
         },
         "tokens": {
-          "const": 72000000
+          "const": 96000000
         },
         "usd": {
           "const": 8

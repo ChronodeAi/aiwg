@@ -389,10 +389,12 @@ export function registerD17CalibrationFromHandoff(handoff: ReturnType<typeof d17
   if (value?.schemaVersion !== 'decision-d17-calibration-review/v1' || value.approved !== true || typeof trustedReviewDigest !== 'string'
     || heldoutDigest(value) !== trustedReviewDigest || value.calibrationSetDigest !== handoff.calibrationSetDigest
     || value.memberArtifactDigest !== handoff.artifacts.member.digest || value.aggregateArtifactDigest !== handoff.artifacts.aggregate.digest
-    || !(time(value.reviewedAt) >= time(handoff.artifacts.member.effectiveAt))) refuse('calibration-review');
+    || !(time(value.reviewedAt) >= time(handoff.artifacts.member.effectiveAt))
+    // The reviewer must be the reviewer the approvals name; the identity is bound into each approved artifact below.
+    || value.reviewer !== handoff.approval.reviewer) refuse('calibration-review');
   const approve = (artifact: CalibrationArtifact): CalibrationArtifact => {
     const { digest: _observed, ...payload } = structuredClone(artifact);
-    payload.approval = { state: 'approved', reference: value.approvalReference };
+    payload.approval = { state: 'approved', reference: `reviewer=${value.reviewer}; ${value.approvalReference}` };
     return { ...payload, digest: calibrationArtifactDigest(payload) };
   };
   const artifacts = { member: approve(handoff.artifacts.member), aggregate: approve(handoff.artifacts.aggregate) };

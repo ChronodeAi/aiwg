@@ -143,7 +143,7 @@ async function stagedFlow(yes: YesFn = observedYes) {
   const handoffInput = { sealed, prepared: staged, trustedApprovalDigest: heldoutDigest(phaseApproval),
     trustedCalibrationPhaseRecordDigest: heldoutDigest(record), developmentReview: review, trustedDevelopmentReviewDigest: heldoutDigest(review) };
   const observed = d17CalibrationHandoffFromSealed(handoffInput);
-  const calibrationReview = { ...observed.reviewTemplate, approved: true, reviewer: 'roctinam', approvalReference: 'offline-fixture-only', reviewedAt };
+  const calibrationReview = { ...observed.reviewTemplate, approved: true, reviewer: phaseApproval.reviewer, approvalReference: 'offline-fixture-only', reviewedAt };
   const registered = registerD17CalibrationFromHandoff(observed, calibrationReview, heldoutDigest(calibrationReview));
   const context = { sealed, registered: { set: registered.set, artifacts: registered.artifacts, mappings: registered.mappings },
     trustedCalibrationSetDigest: registered.calibrationSetDigest, calibrationReview, trustedCalibrationReviewDigest: heldoutDigest(calibrationReview),
@@ -173,8 +173,9 @@ describe('D17 staged D09 preparation', () => {
       assignment: 'row-id-order-within-slice-modulo-folds', finalMapping: 'full-calibration-split' });
     expect(diagnostic.analysis.schemaVersion).toBe('decision-d17-analysis/v1');
     expect(staged.approvalTemplate).toMatchObject({ approved: false, calibration: { mode: 'staged', phase: 'calibration' },
-      preregistrationDigest: heldoutDigest(staged.preregistration), budget: { calls: 18000, tokens: 72000000, usd: 8 } });
+      preregistrationDigest: heldoutDigest(staged.preregistration), budget: { calls: 24000, tokens: 96000000, usd: 8 } });
     expect(staged.dryRun).toMatchObject({ schemaVersion: 'decision-d17-dry-run/v2', providerCalls: 0,
+      approvalCeilings: { calls: 24000, tokens: 96000000, usd: 8 },
       phases: { calibration: { rows: 600, firstAttempts: 2400 }, test: { rows: 1200, firstAttempts: 4800 } } });
     // New versions never widen the v1 contracts.
     expect(() => validateD17Artifact('analysis', staged.analysis)).toThrow('invalid analysis');
@@ -200,12 +201,13 @@ describe('D17 staged D09 preparation', () => {
     expect(plan.combined.maximumAttempts).toBe(14400);
     expect(plan.combined.reservedTokens).toBeLessThan(57_600_000);
     const template = { ...staged.approvalTemplate, priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 } as any;
-    // The 18,000-call budget leaves exactly the 14,400-call worst case at the 80% stop: no call headroom.
-    expect(d17TwoPhaseFit(plan, d17FreshAllowance(template))).toMatchObject({ fits: true, headroom: { calls: 0 } });
+    // The operator-authorized 24,000-call / 96M-token budget gives a 19,200-call allowance: 4,800 calls of headroom.
+    expect(d17TwoPhaseFit(plan, d17FreshAllowance(template))).toMatchObject({ fits: true,
+      allowance: { calls: 19200, tokens: 76800000, usdMicros: 6400000 }, headroom: { calls: 4800 } });
     expect(d17TwoPhaseFit(plan, d17FreshAllowance({ ...template, priorStudySpendUsd: 0.099052 })).fits).toBe(true);
+    // The previous 18,000-call budget left exactly zero headroom; one call fewer cannot hold both phases.
+    expect(d17TwoPhaseFit(plan, d17FreshAllowance({ ...template, budget: { ...template.budget, calls: 18000 } }))).toMatchObject({ headroom: { calls: 0 } });
     expect(d17TwoPhaseFit(plan, d17FreshAllowance({ ...template, budget: { ...template.budget, calls: 17999 } })).fits).toBe(false);
-    // The ledger in which 904 diagnostic calls were already charged cannot hold the two-phase worst case.
-    expect(d17TwoPhaseFit(plan, { ...d17FreshAllowance(template), calls: 14400 - 904 })).toMatchObject({ fits: false, headroom: { calls: -904 } });
   }, 120_000);
 });
 
@@ -255,10 +257,10 @@ describe('D17 development review precondition', () => {
     for (const name of ['corpus', 'preregistration', 'gold'] as const) await writeHeldoutFile(join(preparedDir, `${name}.json`), staged[name]);
     const review = developmentReview(staged), reviewDigest = heldoutDigest(review);
     const uncited = approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' });
-    const fullBudget = { budget: { calls: 18000, tokens: 72000000, usd: 8 } };
+    const fullBudget = { budget: { calls: 24000, tokens: 96000000, usd: 8 } };
     const uncitedFull = { ...uncited, ...fullBudget };
     const cited = { ...approval(staged, 'd17-calibration-01', { mode: 'staged', phase: 'calibration' }, `approval citing ${reviewDigest}`), ...fullBudget };
-    const tooSmall = { ...cited, budget: { ...cited.budget, calls: 17999 } };
+    const tooSmall = { ...cited, budget: { ...cited.budget, calls: 17999, tokens: 72000000 } };
     for (const [name, value] of [['uncited', uncitedFull], ['cited', cited], ['small', tooSmall]] as const) {
       await writeFile(join(dir, `${name}.json`), JSON.stringify(value));
     }
@@ -402,7 +404,7 @@ describe('D17 calibration fit, registration and calibrated test-phase scoring', 
         metrics: { totalSamples: 400, perSliceSamples: 100 } });
       expect(() => qualifyD17Calibration(artifact, reviewedAt)).toThrow('calibration-unqualified');
       expect(registered.compatibility[role]).toMatchObject({ action: 'allow', state: 'exact' });
-      expect(registered.artifacts[role].approval).toEqual({ state: 'approved', reference: 'offline-fixture-only' });
+      expect(registered.artifacts[role].approval).toEqual({ state: 'approved', reference: 'reviewer=fixture-reviewer; offline-fixture-only' });
       // C: the registry refuses an artifact before it takes effect, so a back-dated clock cannot qualify it.
       expect(() => qualifyD17Calibration(registered.artifacts[role], '2026-10-01T01:00:00Z')).toThrow('calibration-unqualified');
     }
@@ -410,7 +412,7 @@ describe('D17 calibration fit, registration and calibrated test-phase scoring', 
       calibrationArtifactDigest: observed.calibrationSetDigest } });
     expect(registered.approval.calibration).toMatchObject({ calibrationArtifactDigest: heldoutDigest(registered.set) });
     for (const changed of [{ ...calibrationReview, memberArtifactDigest: pin }, { ...calibrationReview, reviewedAt: '2026-09-30T00:00:00Z' },
-      { ...calibrationReview, approved: null }]) {
+      { ...calibrationReview, approved: null }, { ...calibrationReview, reviewer: 'someone-else' }]) {
       expect(() => registerD17CalibrationFromHandoff(observed, changed, heldoutDigest(changed))).toThrow('calibration-review');
     }
     expect(() => registerD17CalibrationFromHandoff(observed, calibrationReview, pin)).toThrow('calibration-review');
@@ -473,6 +475,9 @@ describe('D17 calibration fit, registration and calibrated test-phase scoring', 
       [{ trustedCalibrationSetDigest: pin }, 'calibration-set'],
       [{ trustedCalibrationReviewDigest: pin }, 'calibration-review'],
       [{ calibrationReview: { ...context.calibrationReview, approvalReference: 'changed' } }, 'calibration-review'],
+      // Reviewer identity is bound: the same reference and time under another reviewer, even anchored, is refused.
+      [{ calibrationReview: { ...context.calibrationReview, reviewer: 'someone-else' },
+        trustedCalibrationReviewDigest: heldoutDigest({ ...context.calibrationReview, reviewer: 'someone-else' }) }, 'calibration-review'],
       // P2: a clock before the calibration review, or before the recorded first test access, is refused.
       [{ nowEpochMs: Date.parse(sealedAt) + 60_000 }, 'scoring-clock'],
       [{ nowEpochMs: Date.parse(reviewedAt) + 60_000 }, 'scoring-clock'],
