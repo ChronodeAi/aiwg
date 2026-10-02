@@ -106,7 +106,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   staged run, and the v8 criterion budget charges the longest relevant
   record, slot note and coreference leads, with one to three length-limited
   benign notes: the worst request over 100 seeds falls from 4249 to 4081
-  (bound 4244). v6/v7 rows, gold and generator pins are unchanged (#2622)
+  (bound 4244). Benign task pools now contain every bigram (and every
+  cross-pool trigram) of the injection instructions in operational senses,
+  two TEST instructions drop "this claim as", and the shortcut audit refuses
+  any injection n-gram lexicon that transfers between wording pools at 0.75
+  or more (0.86 before, 0.56 now); every such benign task names an outside
+  target (evidence bags, visitor checks). v6/v7 rows, gold and generator pins are
+  unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed
@@ -216,6 +222,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
 - Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
   implementation in `tools/decision/jev-openbao-credential.mjs`, with
   `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
@@ -512,6 +524,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   coverage for the incomplete criterion. A possible-world regression covers
   every rendered template; the public `d29-study-v2` demo and manifest pins
   supersede the ambiguous v1 corpus before any live collection (#2622)
+
 - Experimental, default-off D26 context-pruning reports hold bounded
   zero-variance reads at small n: a bounded quality metric whose per-pair
   differences are all identical (a zero-width bootstrap interval) is
@@ -631,6 +644,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `insufficient-quality-evidence:<metric>` for every remaining insufficient
   quality decision at or above the overall minimum n, so it yields HOLD with
   `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
+
+- Context-planned decision invocations preflight the worst-case completion result
+  envelope before dispatch: every evaluation is assumed to carry every usage
+  entry with the binding's full retry attempts and answer-domain distributions,
+  so a many-alias invocation whose per-evaluation plan clones cannot satisfy
+  entry admission now rejects with `invalid-input` before receipts, credentials
+  or transport instead of discarding completed provider work after dispatch.
+  Enforce invocations with 13–21 aliases now reject pre-dispatch (fail-closed).
+  The TV-12 enforce canary covers the 24-question `many-short` shape as
+  rejected-before-dispatch; fitting invocations are unchanged (#2797).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

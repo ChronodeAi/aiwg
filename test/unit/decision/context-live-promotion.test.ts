@@ -28,7 +28,7 @@ const MODEL = 'jev-pinned-fixture';
 let generated: ContextLiveCorpus | undefined;
 
 /** Fake Jev: reports actual input as `factor` times the planner estimate of the exact wire. */
-function transport(factor: number) {
+function transport(factor: number, outputTokens: number | null = 8) {
   let calls = 0;
   const fetch = vi.fn(async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(init.body as string);
@@ -36,7 +36,7 @@ function transport(factor: number) {
     return new Response(JSON.stringify({ model: MODEL, answers: Object.fromEntries(Object.entries(body.questions).map(([id, q]: [string, any]) => [id,
       q.type === 'choice' ? { type: 'choice', choice: Object.keys(q.criteria)[0], confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map((key, i) => [key, i ? 0 : 1])) }
         : { type: 'score', score: 0, confidence: 1, probabilities: Object.fromEntries(q.criteria.map((_: unknown, i: number) => [String(i), i ? 0 : 1])), legend: Object.fromEntries(q.criteria.map((v: unknown, i: number) => [String(i), v])) }])),
-    usage: { input_tokens: Math.ceil(estimate * factor), output_tokens: 8 } }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': `offline-${++calls}` } });
+    usage: { input_tokens: Math.ceil(estimate * factor), output_tokens: outputTokens } }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': `offline-${++calls}` } });
   });
   return fetch;
 }
@@ -130,7 +130,7 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     const s = await setup(caseIds);
     const record = await recordContextQualification({ approval: s.approval, corpus: s.corpus, records: s.declared, review: s.review });
     const plan: ContextCanaryPlan = { schemaVersion: 'context-canary-plan/v1', caseIds, rollback: 'observe-only',
-      budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 }, perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-bound' } };
+      budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 }, perRequestBound: { totalTokens: 72_000, outputTokens: 128, usd: 0.0072, approvalReference: 'offline-bound' } };
     adjust(plan);
     const approval: ContextCanaryApproval = { schemaVersion: 'context-canary-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
       runId: 'offline-canary', sourceCommit: '', exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
@@ -155,7 +155,9 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     const c = await canary(['aggregate-raw-2', 'longest-raw-2', 'dominant']);
     try {
       const expected = await contextCanaryDispatches(c.approval.plan.caseIds, c.s.corpus, c.record);
-      expect(expected).toEqual([{ caseId: 'aggregate-raw-2', enforce: expect.any(Number), rollback: 4 }, { caseId: 'longest-raw-2', enforce: 0, rollback: 0 }, { caseId: 'dominant', enforce: 1, rollback: 2 }]);
+      expect(expected).toEqual([{ caseId: 'aggregate-raw-2', enforce: expect.any(Number), rollback: 4, enforceRejection: null, rollbackRejection: null },
+        { caseId: 'longest-raw-2', enforce: 0, rollback: 0, enforceRejection: 'oversized-state', rollbackRejection: 'oversized-state' },
+        { caseId: 'dominant', enforce: 1, rollback: 2, enforceRejection: null, rollbackRejection: null }]);
       expect(expected[0]!.enforce).toBeGreaterThan(1);
       const summary = await c.run();
       expect(summary).toMatchObject({ source: 'synthetic', canaryPassed: true, stopped: null, oversizedDispatches: 0, rollbackExercised: true, rollbackNativeDispatches: 0, cases: 6 });
@@ -190,6 +192,59 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     } finally { await c.cleanup(); }
   });
 
+  it('passes reported output at the approved per-call ceiling', async () => {
+    const c = await canary(['dominant']);
+    try {
+      const summary = await c.run({ offlineTransport: transport(1.1, 128) as typeof globalThis.fetch });
+      expect(summary).toMatchObject({ canaryPassed: true, stopped: null, outputOversizedDispatches: 0 });
+      const row = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'dominant-enforce.json'), 'utf8'));
+      expect(row).toMatchObject({ pass: true, outputOversizedDispatches: 0 });
+    } finally { await c.cleanup(); }
+  });
+
+  it('fails the canary when reported output exceeds the ceiling and stops further dispatch', async () => {
+    const c = await canary(['dominant']);
+    try {
+      const fetch = transport(1.1, 129);
+      const summary = await c.run({ offlineTransport: fetch as typeof globalThis.fetch });
+      expect(summary).toMatchObject({ canaryPassed: false, stopped: 'canary-check-failed', cases: 1, outputOversizedDispatches: 1 });
+      // The over-bound enforce dispatch is the only request sent; rollback never starts.
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const row = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'dominant-enforce.json'), 'utf8'));
+      expect(row).toMatchObject({ pass: false, outputOversizedDispatches: 1 });
+    } finally { await c.cleanup(); }
+  });
+
+  it('fails the canary when a rollback single reports output over the ceiling', async () => {
+    const c = await canary(['dominant']);
+    try {
+      const within = transport(1.1, 8);
+      const over = transport(1.1, 129);
+      let calls = 0;
+      const fetch = vi.fn(async (url: unknown, init: RequestInit) => {
+        calls++;
+        return (calls === 1 ? within : over)(url, init);
+      });
+      const summary = await c.run({ offlineTransport: fetch as typeof globalThis.fetch });
+      expect(summary).toMatchObject({ canaryPassed: false, stopped: 'canary-check-failed', cases: 2, outputOversizedDispatches: 2 });
+      // Enforce passes its single dispatch; both rollback singles dispatch, then the run stops.
+      expect(fetch).toHaveBeenCalledTimes(3);
+      const row = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'dominant-rollback.json'), 'utf8'));
+      expect(row).toMatchObject({ pass: false, outputOversizedDispatches: 2 });
+    } finally { await c.cleanup(); }
+  });
+
+  it('fails the canary closed when reported output is unknown', async () => {
+    const c = await canary(['dominant']);
+    try {
+      const fetch = transport(1.1, null);
+      const summary = await c.run({ offlineTransport: fetch as typeof globalThis.fetch });
+      expect(summary).toMatchObject({ canaryPassed: false, stopped: 'canary-check-failed', cases: 1 });
+      expect(summary.outputOversizedDispatches).toBeGreaterThan(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally { await c.cleanup(); }
+  });
+
   it('reserves each phase before dispatch and stops at eighty percent of the plan budget', async () => {
     const c = await canary(['aggregate-raw-2'], plan => { plan.budget.requests = 5; });
     try {
@@ -214,9 +269,37 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     } finally { await c.cleanup(); }
   });
 
+  it('admits the many-short shape in the canary approval (#2797)', async () => {
+    const c = await canary(['dominant', 'many-short']);
+    try {
+      // The envelope preflight rejects many-short before dispatch, so the approval carries it.
+      expect(() => validateContextCanaryApproval(c.approval, c.s.corpus, c.record)).not.toThrow();
+      expect(await contextCanaryDispatches(c.approval.plan.caseIds, c.s.corpus, c.record)).toEqual([
+        { caseId: 'dominant', enforce: 1, rollback: 2, enforceRejection: null, rollbackRejection: null },
+        { caseId: 'many-short', enforce: 0, rollback: 0, enforceRejection: 'invalid-input', rollbackRejection: 'invalid-input' }]);
+    } finally { await c.cleanup(); }
+  });
+
+  it('covers the many-short shape as rejected-before-dispatch without provider work', async () => {
+    const c = await canary(['many-short']);
+    try {
+      const summary = await c.run();
+      expect(summary).toMatchObject({ source: 'synthetic', canaryPassed: true, stopped: null, oversizedDispatches: 0,
+        enforceDispatches: 0, rollbackExercised: true, rollbackNativeDispatches: 0, cases: 2 });
+      expect(summary.reserved).toMatchObject({ requests: 0 });
+      expect(c.fetch).not.toHaveBeenCalled(); expect(c.resolver).not.toHaveBeenCalled();
+      const enforce = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'many-short-enforce.json'), 'utf8'));
+      expect(enforce).toMatchObject({ rejectedBeforeDispatch: true, dispatches: 0, pass: true });
+      const rollback = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'many-short-rollback.json'), 'utf8'));
+      expect(rollback).toMatchObject({ rejectedBeforeDispatch: true, dispatches: 0, pass: true });
+    } finally { await c.cleanup(); }
+  });
+
   it.each([
-    ['a many-question case whose result exceeds entry limits', (a: ContextCanaryApproval) => { a.plan.caseIds = ['dominant', 'many-short']; }],
+    ['an unknown case id', (a: ContextCanaryApproval) => { a.plan.caseIds = ['no-such-case']; }],
     ['a plan budget above the issue cap', (a: ContextCanaryApproval) => { a.plan.budget.usd = 2.5; }],
+    ['a per-request bound without an output ceiling', (a: ContextCanaryApproval) => { delete (a.plan.perRequestBound as unknown as Record<string, unknown>).outputTokens; }],
+    ['an output ceiling above the total bound', (a: ContextCanaryApproval) => { a.plan.perRequestBound.outputTokens = a.plan.perRequestBound.totalTokens + 1; }],
   ])('rejects %s in the canary approval', async (_label, mutate) => {
     const c = await canary(['dominant', 'many-short']);
     try {
