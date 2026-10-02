@@ -4,7 +4,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { heldoutDigest, heldoutApprovalTemplate, heldoutRequest, heldoutReservationMicros,
-  heldoutReservationTokens, validateHeldoutInputs, validateHeldoutAttempt } from '../../../src/decision/heldout/contract.ts';
+  heldoutReservationTokens, validateHeldoutInputs, validateHeldoutAttempt, assertHeldoutRequestBounds, HeldoutError } from '../../../src/decision/heldout/contract.ts';
 import { generateHeldoutRow, heldoutGeneratorDigest, d29Baseline, drawD29Stream, D29_V4_VARIANTS as D29_VARIANTS } from '../../../src/decision/heldout/generators.ts';
 import { freezeQualificationSplit, wilsonScoreInterval, pairedBinaryDifferenceInterval } from '../../../src/decision/qualification/quality.ts';
 import { qualificationIntegrityAllowlistProblems } from '../../../src/decision/qualification/release.ts';
@@ -409,8 +409,25 @@ export async function prepareV8(seed) {
     requestTimeoutMs: 30000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };
   validateHeldoutInputs(corpus, preregistration);
   validateStudyArtifact(gold); validateStudyArtifact(analysis);
-  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold),
-    approval: approvalWithGatePins(approvalTemplate(corpus, preregistration), analysis) };
+  const approval = approvalWithGatePins(approvalTemplate(corpus, preregistration), analysis);
+  // Fail closed on size too: every request of every split must fit the
+  // preregistered per-request bound, or no v8 corpus is prepared.
+  await assertD29RequestBounds({ corpus, preregistration, approval });
+  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold), approval };
+}
+
+/**
+ * Refuses (`payload-bound at row <index>`) when any request of any row, in
+ * any split, exceeds the preregistered per-request bound. Names the row index,
+ * never its content.
+ */
+export async function assertD29RequestBounds(prepared) {
+  const planningApproval = { ...prepared.approval, region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev' };
+  try { await assertHeldoutRequestBounds(prepared.corpus, prepared.preregistration, planningApproval); }
+  catch (error) {
+    if (error instanceof HeldoutError && error.category === 'payload-bound') refuse(`payload-bound at ${error.detail}`);
+    throw error;
+  }
 }
 
 /** v5 audit memoized by corpus and gold digest: preparation, scoring and the dry run share one run per process. */
@@ -549,6 +566,7 @@ export async function dryRunV8(prepared) {
 
 /** Zero-call budget plan shared by the v7 and v8 dry runs; the audit is computed by the caller. */
 async function plannedDryRun(prepared, audit) {
+  await assertD29RequestBounds(prepared);
   const phases = Object.fromEntries(['calibration', 'test'].map(phase => {
     const rows = prepared.corpus.rows.filter(row => phase === 'test' ? row.split === 'test' : row.split !== 'test');
     return [phase, { subjects: rows.length, initialCalls: rows.reduce((n, row) => n + row.requests.length, 0) }];

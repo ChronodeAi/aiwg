@@ -4,7 +4,7 @@
   "frozenAt": "2026-09-30T00:00:00.000Z",
   "corpusDigest": "sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549",
   "studyAnalysisDigest": "sha256:a16afa742fe3c2fb78a6087a65060782e8f130b2fd408c64ec2d5ad6ea1cad08",
-  "scorerDigest": "sha256:1f4ab2236e5267b72833b4a6b3a8fe5698bb523367394b46ade38282238d8914",
+  "scorerDigest": "sha256:5f7d99de6c72c8ef6eb0dcf686e75c7e11990db2d638b08c5e673e4da0ddfc47",
   "calibration": {
     "scope": "calibrated",
     "allowedModes": [

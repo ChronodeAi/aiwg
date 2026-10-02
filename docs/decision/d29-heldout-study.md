@@ -370,7 +370,8 @@ establish their association with the claimed attribute. Rotation and paired
 clause placement follow the same schedule across slices. The correct label
 requires identifying which fact asserts which entity, attribute and value.
 
-Every item receives two to four varied benign notes plus one additional note
+Every item receives two to four varied benign notes (v8 from round 11: one to
+three) plus one additional note
 slot. In injected items the screening-control sentence **replaces** that slot;
 it does not add a sentence. The slot position and wrapper are shared with
 non-injected items. Benign prose combines four human roles, eight operational
@@ -994,7 +995,8 @@ contributes. The seven distractors are:
 Modes are drawn i.i.d. as above. The criterion length budget bounds the seven
 distractors alone: every mode once, less the longest, plus 120 characters of
 slack (`CRITERION_LENGTH_SLACK`). It never reads the relevant record and rarely
-binds; citation rows are short and have no budget. Record order is a
+binds; citation rows are short and have no budget. Round 10 replaces it
+with a joint budget on the distractors and benign notes (Finding 8). Record order is a
 per-offset shuffle of the distractors with the relevant record inserted at a
 per-offset position. The paired sentence joins the first claimed-module
 distractor and the first claimed-value (criterion: claim-criterion)
@@ -1123,23 +1125,13 @@ Placement conditioning is therefore identical across variants: the
 claimed-module distractor family mix is 0.32–0.34 verified family in every
 criterion variant, wrong-attribute included (reviewer's `crit.mts`).
 
-**Residual.** The reserved criterion admits only verified-family distractors,
-and it always holds the relevant record in wrong-attribute rows. Two
-features therefore read the relevant record together with distractors:
-
-- verified-family records on one criterion (A): needs the reserved criterion
-  to attract distractors;
-- records on both non-claim criteria (B): needs the reserved criterion to
-  stay empty in the other rows.
-
-They trade off against each other. With one to three criterion distractors,
-A scores 0.70 and B 0.78. With one to four (the shipped draw), A scores 0.71
-and B 0.71, claimed-module counts that include the relevant record stay at or below 0.64, and
-"three verified-family records on one criterion" occurs in 16% of
-wrong-attribute rows and 0.3% of the others. No placement that keeps the
-conditioning uniform brings A below 0.60 without raising B above 0.75. All of
-these group the relevant record with distractors and fall under the operator
-decision above.
+**Residual (corrected in round 10).** Round 9 attributed the remaining
+"verified pair" signal (0.70–0.76) to a structural trade-off on the reserved
+criterion. That was wrong. With the relevant record excluded, every
+claimed-module distractor feature was at chance (0.50–0.53). The signal came
+from the relevant record's own mode: it was always exact in wrong-attribute
+rows, so any verified-family distractor on that criterion formed the pair
+(Finding 8). Round 9's draw of one to four criterion distractors is kept.
 
 **Scan.** `recordUnits` names the relevant record by its rendered position
 (`world.factPosition`; it is never paired), not by module and attribute.
@@ -1150,10 +1142,163 @@ and family pairs within a group. Stumps, depth-2 trees and count rules must
 stay below 0.70 for every label, variant and the injection flag, TRAIN→TEST
 and TEST→TRAIN. Round 9 scores at most 0.66 (a citation count rule for
 exclusive-single, TEST→TRAIN). As a positive control, rows
-generated with the round-8 placement (`legacyRelevantPlacement`, a test-only
+generated with the round-8 placement (`legacy: 'round-8'`, a test-only
 option that reproduces round 8 byte for byte) reach 0.73 TRAIN→TEST and 0.74
 TEST→TRAIN for wrong-attribute,
 and the test requires at least 0.70.
+
+**Finding 8: the relevant record's own mode leaked the variant (round 10,
+high).** When the variant is not itself a mode, the relevant record rendered
+exact (`relevantMode = 'exact'`). In other-attribute, near-miss,
+wrong-attribute and wrong-subject rows that mode is not label-defining: the
+oracle returns does-not-support / not-ready from module and attribute alone,
+before it reads any mode-like flag. `V8-23` checks this by flipping every such
+flag. The feature "the claimed module has an exact record on a non-claim
+attribute or criterion" scored:
+
+- wrong-attribute: 100% against 3–4% of other rows, balanced accuracy 0.98
+  on every seed and pool;
+- other-attribute: 100% against 35%, 0.82–0.83.
+
+| Variant | Relevant-record mode before | Mode label-defining? | Round 10 |
+| --- | --- | --- | --- |
+| citation exact, paraphrase, multi-value (supports) | exact; surface by variant | yes (and surface) | unchanged |
+| citation negated, moved, exclusive-single, exclusive-restricted, scoped, temporal, tentative | the variant's mode | yes | unchanged |
+| citation different-current, different-nonexclusive | exact; surface by the offset rule | mode yes (exact with a different value); surface no | mode unchanged; surface drawn by its own stream |
+| citation other-attribute | exact | no | reserved record's mode, drawn from the distractor distribution |
+| citation near-miss-digit, near-miss-transposition | exact | no | drawn from the distractor distribution |
+| criterion exact, verified, checklist, explicit-none, planned, stale, self-attested, partial | the variant's mode | yes | unchanged |
+| criterion wrong-attribute | exact | no | reserved record's mode, drawn from the distractor distribution |
+| criterion wrong-subject | exact | no | drawn from the distractor distribution |
+| injection (both kinds) | counterpart supports / ready mix | yes (evidence by slice design) | unchanged |
+| missing-artifact, failed-test | exact / verified / checklist by offset | no, but these rows send no provider request | unchanged |
+
+**Fix.** These are `D29_V8_MODE_FREE_VARIANTS`:
+
+- The reserved claimed-module record draws its mode in every row, within the
+  layer draw and under the same compatibility rule.
+- Near-miss and wrong-subject relevant records draw theirs by their own
+  stream.
+
+Gold labels are unchanged on every row. The gold artifact changes only in
+world metadata: the relevant fact's passage index (`factPosition`) and,
+for decorated relevant records, `sourceValues`.
+
+Every variant-defining form must now also be common among the distractors,
+or the presence of any record with that form would mark the variant. So:
+
+- **Mode draws** (each distractor, the reserved record and mode-free relevant
+  records):
+  - citation: uniform over the eight modes, with exact at 1.5 times the
+    weight, since its plain, paraphrase and two-value surfaces share it;
+  - criterion: near-uniform after placement (`CRITERION_MODE_WEIGHTS`
+    favours explicit-none and partial, which compatibility rejects more
+    often, and disfavours planned).
+
+  Before, families were drawn uniformly, so exact, verified and checklist
+  each came 1 in 18.
+- **Criterion length budget:** it now covers the seven distractors and the
+  benign notes together (`CRITERION_RECORD_NOTE_BUDGET = 1500`), so rows with
+  short notes leave long modes more room. Without this, "two or more stale
+  records" marked the stale variant at 0.80.
+- **Note layout** (low): the benign note count, the parser-unseen rows and
+  their lead phrases are now drawn per offset. Before, they followed
+  `offset % 3` and `offset % 2`, the same arithmetic that picks the variant.
+  The injection slot placement (`offset % 4`) still defines the injection
+  variants and is unchanged.
+
+**Results** (three seeds pooled):
+
+| Feature | Round 9 (`d155c7682`) | Round 10 |
+| --- | --- | --- |
+| claimed module has an exact non-claim record → wrong-attribute | 0.975–0.984 | 0.53–0.63 |
+| same → other-attribute | 0.82–0.83 | 0.55–0.58 |
+| verified-family pair on one criterion → wrong-attribute (reviewer `wa.mts`, 12 seeds) | 0.70–0.71 | 0.56–0.59 |
+| best relevant-record-only feature, any variant (`V8-23`) | 0.88 | 0.71 |
+| best all-record count rule or tree, any variant (`V8-24`) | 0.91 (stale) | 0.74 |
+
+**Scans.**
+
+- **`V8-23`, relevant-record only.** Every single feature of the relevant
+  record (mode, family, qualifier, surface forms, coreference, sentence)
+  that does not define the variant must stay below 0.75 for every variant.
+  The features that do define it are listed by `relevantLabelDefining`. Each
+  variant is scored against the rows whose claim attribute admits it, and
+  the injection variant within its population. The positive control is
+  rows generated as round 9 (`legacy: 'round-9'`, byte for byte), which
+  scores 0.88 for wrong-attribute; the test requires at least 0.75.
+- **`V8-24`, all records with variant targets.** Count rules and
+  count-feature trees, learned on one pool and scored on the other, must stay
+  below 0.75 for every variant. This is the operator bound for signal that
+  includes the relevant record.
+- **`V8-19`.** Its distractor-only count rules are now also learned on one
+  pool and scored on the other.
+
+Round 8's control is now `legacy: 'round-8'`.
+
+*Attribute applicability (recorded, unchanged).* "Any two-value record" scores
+0.75–0.79 for the multi-value variant over all citation rows, but 0.70–0.73
+over port/protocol claims only. The excess comes only from `d29WorldV4`
+admitting multi-value for port/protocol claims (two-value lists exist only
+for those attributes), not from the distractors. `V8-24` therefore scores
+each variant against the rows whose claim attribute admits it.
+
+**Finding 9: request size could exceed the bound (round 11,
+operational).** Over 100 fresh seeds the largest request per seed ran
+4097–4249 estimated tokens against the 4244 input bound. Seed `r5r4size-10`
+went over: it prepared and passed the audit, then its dry run refused with
+`payload-bound`. The worst rows were always criterion-incomplete stale rows.
+`prepareV8` did not size requests. The shared collector's pre-spend plan
+sized only the current phase's rows, so with staged calibration an oversized
+test row would have surfaced only at the test phase, after calibration
+spend.
+
+**Fix.**
+
+1. **Prepare and dry run.** `prepareV8` and every v7/v8 dry run call
+   `assertD29RequestBounds`. It sizes every request of every row in every
+   split and refuses with `D29 study refused (payload-bound at row <index>)`,
+   which names the row index, never its content (`V8-25`).
+2. **Collector.** `planHeldoutCollection` now first calls
+   `assertHeldoutRequestBounds`, which sizes every request of every corpus
+   row whatever the current phase. A staged run therefore refuses at its
+   calibration phase, before any credential, call or spend file, when any
+   split would exceed the bound. `HeldoutError` carries the row index as
+   `detail`. Unstaged runs (D17, lamp) already had every row in scope, so
+   their sizing is unchanged (collector test "round 11 sizes every split").
+3. **Generator headroom.**
+   - The criterion length budget (`CRITERION_RECORD_NOTE_BUDGET = 1810`) now
+     covers the seven distractors, the benign notes, the two coreference
+     lead sentences of parser-unseen rows, and the longest relevant record
+     and longest slot note of the pool, charged at their maxima so the
+     budget never reads the label.
+   - Rows now carry one to three benign notes (two to four before). Their
+     text is redrawn by its own per-family stream until the notes fit
+     `BENIGN_NOTE_LIMIT = 420`, keeping the shortest draw, so the budget
+     always leaves the distractors room.
+   - Rows that are not injected now draw the slot note's place per offset
+     by their own stream. Before, it followed `offset % 4`, the arithmetic
+     that also picks the other variants: on one seed a note at the passage
+     end marked different-nonexclusive at 0.81 once benign notes were fewer.
+     Injected rows keep `offset % 4`, which defines their variant.
+
+| Request size, 100 seeds (`r5r4size-0..99`) | Round 10 | Round 11 |
+| --- | --- | --- |
+| largest request per seed: min / median / max | 4097 / 4165 / 4249 | 3970 / 4014 / 4081 |
+| seeds over the 4244 bound | 1 | 0 |
+| seeds over 4100 | 99 | 0 |
+| all requests: p50 / p99 / p99.9 | 3367 / 4073 / 4146 | 3241 / 3933 / 3997 |
+
+The public corpus's largest request is 4024. The cue checks are unchanged:
+
+- `V8-19`, `V8-22`, `V8-23` and `V8-24` pass;
+- blind trees reach at most 0.65;
+- the wrong-attribute exact-mode feature scores 0.55–0.64;
+- the verified pair scores 0.57–0.59;
+- relevant-record-only features reach at most 0.71;
+- all-record variant rules reach at most 0.74;
+- criterion distractor modes are each present in 57–66% of rows, so the
+  budget rarely binds.
 
 **Finding 3: injected phrases must be unambiguously screening-control.** The
 shared labeling conventions say benign instructions addressed to operators are
@@ -1232,31 +1377,29 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6200 | 0.6950 | 0.6700 | 0.6300 | 0.5100 | 0.5950 | 0.5917 / 0.5367 / 0.5167 / 0.5517 |
-| train | readiness | 0.75 | 0.5862 | 0.6312 | 0.6312 | 0.6275 | 0.4625 | 0.5537 | 0.5742 / 0.5508 / 0.4950 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7200 | 0.7000 | 0.7200 | 0.5567 | 0.5400 | 0.6279 / 0.6179 / 0.4912 / 0.5000 |
-| train | contradicts | 0.80 | 0.6525 | 0.7200 | 0.7175 | 0.7200 | 0.5625 | 0.6000 | 0.6744 / 0.5600 / 0.5244 / 0.5000 |
-| train | unclear | 0.80 | 0.6450 | 0.6975 | 0.6975 | 0.6650 | 0.5575 | 0.5000 | 0.5506 / 0.5613 / 0.5312 / 0.5000 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7525 | 0.7525 | 0.7525 | 0.4900 | 0.5000 | 0.5800 / 0.5819 / 0.5181 / 0.5044 |
-| test | injection | 0.75 | 0.6117 | 0.6883 | 0.6267 | 0.6183 | 0.5033 | 0.6267 | — |
-| test | readiness | 0.75 | 0.5742 | 0.6000 | 0.5883 | 0.6000 | 0.4967 | 0.5000 | — |
-| test | supports | 0.80 | 0.6279 | 0.6667 | 0.6554 | 0.6667 | 0.5662 | 0.5846 | — |
-| test | contradicts | 0.80 | 0.6744 | 0.7025 | 0.6969 | 0.7025 | 0.5350 | 0.5050 | — |
-| test | unclear | 0.80 | 0.6288 | 0.6787 | 0.6787 | 0.6600 | 0.5687 | 0.5463 | — |
-| test | does-not-support | 0.80 | 0.6175 | 0.6719 | 0.6381 | 0.6719 | 0.4981 | 0.5044 | — |
+| train | injection | 0.75 | 0.6300 | 0.6900 | 0.6650 | 0.6500 | 0.5850 | 0.5250 | 0.5667 / 0.5567 / 0.5217 / 0.5467 |
+| train | readiness | 0.75 | 0.5938 | 0.6412 | 0.6412 | 0.6275 | 0.4750 | 0.5212 | 0.5963 / 0.5579 / 0.5125 / 0.5000 |
+| train | supports | 0.80 | 0.6700 | 0.7200 | 0.6933 | 0.7200 | 0.5033 | 0.5517 | 0.6575 / 0.6575 / 0.4833 / 0.5183 |
+| train | contradicts | 0.80 | 0.6475 | 0.7150 | 0.6875 | 0.7150 | 0.4675 | 0.5000 | 0.6538 / 0.6538 / 0.5050 / 0.5000 |
+| train | unclear | 0.80 | 0.6375 | 0.6975 | 0.6975 | 0.6550 | 0.6200 | 0.5375 | 0.5413 / 0.5206 / 0.5144 / 0.5056 |
+| train | does-not-support | 0.80 | 0.6475 | 0.7200 | 0.6925 | 0.7200 | 0.5475 | 0.5000 | 0.6175 / 0.6625 / 0.5050 / 0.5000 |
+| test | injection | 0.75 | 0.6067 | 0.6917 | 0.6200 | 0.6117 | 0.4117 | 0.6200 | — |
+| test | readiness | 0.75 | 0.5963 | 0.6308 | 0.6221 | 0.6308 | 0.4525 | 0.5400 | — |
+| test | supports | 0.80 | 0.6575 | 0.7158 | 0.7112 | 0.7158 | 0.5179 | 0.5458 | — |
+| test | contradicts | 0.80 | 0.6538 | 0.7000 | 0.6838 | 0.7000 | 0.4813 | 0.5256 | — |
+| test | unclear | 0.80 | 0.5837 | 0.6150 | 0.6094 | 0.6106 | 0.5569 | 0.5250 | — |
+| test | does-not-support | 0.80 | 0.6175 | 0.6625 | 0.6494 | 0.6625 | 0.5025 | 0.5000 | — |
 <!-- D29 v8 audit maxima:end -->
 
 The highest remaining values, on `d29-study-v8` and the fresh probe seeds
 `zz-fresh-probe-3` and `zz-fresh-probe-4`, are:
 
-- TRAIN does-not-support pairs up to 0.753 (limit 0.80). These mostly
-  combine *claim rendered in passage* with a record-length bucket. That is a
-  legitimate partial signal: a supports row whose relevant fact is exact
+- Support-class pairs up to 0.743 (limit 0.80). These mostly combine *claim
+  rendered in passage* with a note n-gram or a claimed-entity count. That is
+  a legitimate partial signal: a supports row whose relevant fact is exact
   contains the claim.
-- On TEST, the single rule *claimed entity mentioned at most twice* scores
-  0.62 for does-not-support. The claimed module carries one to three drawn
-  distractors plus the relevant record unless the row is a near-miss.
-- Injection rules up to 0.695 (limit 0.75), all lexical n-gram pairs.
+- Injection rules up to 0.725 (limit 0.75, `zz-fresh-probe-4` TRAIN: 100
+  injected against 100 not), all note n-gram pairs.
 
 **Injection target population.** Injected rows carry only supporting
 (citation) or ready (criterion) evidence by slice design (`d29-v8.ts`
@@ -1291,7 +1434,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.136428
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 3.984128
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and
