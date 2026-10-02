@@ -9,6 +9,41 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17-MF multi-fact probe (#2850), following the D17
+  calibrated live run's multi-fact degradation. A no-spend diagnosis of the
+  existing observations localized it to missing links written with a
+  contrastive verb (raw 0/73 for `halts`).
+  - The registered generator `d17-multifact/v1` builds a preregistered
+    factorial design: 3 disjoint wording pools × relay hops {1, 3} × outcome
+    (yes, disabled relay, missing link as contrastive verb, explicit negation
+    or non-connective verb, plus pure absence at three hops), plus D17-faithful
+    control cells. It has 5,778 rows, with key cells at 220 rows.
+  - Every equalized item states an exhaustive link-only rule, balances every cue
+    class with off-chain decoys and shuffles all fact lines uniformly.
+  - A D29-style shortcut audit gates preparation, including line-order and
+    position features (limit 0.60; 24 sweep seeds at most 0.594). A positive
+    control shows that the earlier chain-first order fails it.
+  - The primary metrics are the raw native answer and the raw-score AUROC.
+    Calibrated metrics, through the registered D17 member calibrator in
+    collector artifact mode, are used only for calibration under shift.
+  - H1 and H4 are Holm-adjusted, and H2 and H4 are matched on failure position.
+    A per-cell coverage gate and a seeded dispatch order are preregistered.
+  - The calibrator is re-derived from the D17 seal and qualified at bundle time,
+    collection end and the scoring clock. That clock cannot precede the
+    recorded collection end.
+  - Public seeds and seed reuse are refused at the collector boundary, keyed on
+    the generator, as well as by the CLI. A private seed needs at least 24 hex
+    characters of fresh randomness. The decision is always HOLD.
+  - The collector never dispatches a D17-MF session past the registered
+    calibrator's expiry. Each session start is bound into `frozen.json`
+    (`collectionStartedAt`, covered by the evidence digest), and the scoring
+    clock is bounded by it rather than by the undigested `qualification.json`
+    time.
+  - `tools/decision/d17-multifact.mjs --dev-review-material` writes private (mode 600)
+    blind-then-unblind development review material in the D17 format.
+  - New study generators register in `src/decision/heldout/study-generators.ts`,
+    so the D17 and D29 generator pins are unchanged.
+  - New schema `D17Multifact.v1`. No live collection is included.
 - Experimental, default-off D17 staged D09 calibration (#2611). `d17-study.mjs`
   adds `--prepare-staged`, which keeps the same corpus, split and gold pins and
   adds a calibrated `staged` preregistration over tuning and calibration plus a

@@ -1,0 +1,1851 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17Multifact.v1.schema.json",
+  "title": "D17Multifact",
+  "description": "D17-MF calibrated multi-fact probe (#2850): analysis and protocol, development review (template and completed), shortcut audit and report.",
+  "$defs": {
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "protocol",
+        "sourceDigests",
+        "auditDigest",
+        "dispatchOrderDigest",
+        "cells"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-analysis/v2"
+        },
+        "protocol": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "issue",
+            "study",
+            "generator",
+            "design",
+            "metrics",
+            "calibration",
+            "interval",
+            "multiplicity",
+            "coverage",
+            "scoringClock",
+            "hypotheses",
+            "decisionRules",
+            "shortcutAudit",
+            "budget",
+            "promotion"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "decision-d17mf-protocol/v2"
+            },
+            "issue": {
+              "const": "roctinam/aiwg#2850"
+            },
+            "study": {
+              "const": "D17"
+            },
+            "generator": {
+              "const": "d17-multifact/v1"
+            },
+            "design": {
+              "type": "object"
+            },
+            "metrics": {
+              "type": "object"
+            },
+            "calibration": {
+              "type": "object"
+            },
+            "interval": {
+              "type": "object"
+            },
+            "multiplicity": {
+              "type": "object"
+            },
+            "coverage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "minimumObservedFraction",
+                "rule"
+              ],
+              "properties": {
+                "minimumObservedFraction": {
+                  "const": 0.95
+                },
+                "rule": {
+                  "type": "string"
+                }
+              }
+            },
+            "scoringClock": {
+              "type": "string"
+            },
+            "hypotheses": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5
+            },
+            "decisionRules": {
+              "type": "object"
+            },
+            "shortcutAudit": {
+              "type": "object"
+            },
+            "budget": {
+              "type": "string"
+            },
+            "promotion": {
+              "const": "none: a diagnostic probe of the provider; the study decision is always HOLD"
+            }
+          }
+        },
+        "sourceDigests": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        },
+        "auditDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "dispatchOrderDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "cells": {
+          "type": "array",
+          "minItems": 78,
+          "maxItems": 78,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "split",
+              "key",
+              "rule",
+              "count"
+            ],
+            "properties": {
+              "split": {
+                "enum": [
+                  "tuning",
+                  "test"
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "rule": {
+                "enum": [
+                  "exhaustive",
+                  "d17"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "reviewTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "reviewer",
+        "preregistrationReview",
+        "assessments",
+        "instructions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-review/v1"
+        },
+        "reviewer": {
+          "const": null
+        },
+        "preregistrationReview": {
+          "const": null
+        },
+        "assessments": {
+          "type": "array",
+          "minItems": 40,
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "rowId",
+              "cell",
+              "inputDigest",
+              "payload",
+              "reviewedAt",
+              "goldAuditLabel",
+              "goldAmbiguousOrIncorrect",
+              "rationale"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "pattern": "^mf-assessment-[0-9]{2}$"
+              },
+              "rowId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "cell": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "inputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "payload": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "reviewedAt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+                  }
+                ]
+              },
+              "goldAuditLabel": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  }
+                ]
+              },
+              "goldAmbiguousOrIncorrect": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "reviewer",
+        "preregistrationReview",
+        "assessments",
+        "instructions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-review/v1"
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "preregistrationReview": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "assessments": {
+          "type": "array",
+          "minItems": 40,
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "rowId",
+              "cell",
+              "inputDigest",
+              "payload",
+              "reviewedAt",
+              "goldAuditLabel",
+              "goldAmbiguousOrIncorrect",
+              "rationale"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "pattern": "^mf-assessment-[0-9]{2}$"
+              },
+              "rowId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "cell": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "inputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "payload": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "reviewedAt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+                  }
+                ]
+              },
+              "goldAuditLabel": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  }
+                ]
+              },
+              "goldAmbiguousOrIncorrect": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "issue",
+        "scope",
+        "calibrated",
+        "primaryMetric",
+        "calibration",
+        "corpusDigest",
+        "preregistrationDigest",
+        "analysisDigest",
+        "integrityDigest",
+        "auditDigest",
+        "coverage",
+        "overall",
+        "cells",
+        "byFailurePosition",
+        "auroc",
+        "hypotheses",
+        "decision",
+        "promotion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-report/v2"
+        },
+        "issue": {
+          "const": "roctinam/aiwg#2850"
+        },
+        "scope": {
+          "const": "synthetic-calibrated-probe"
+        },
+        "calibrated": {
+          "const": true
+        },
+        "primaryMetric": {
+          "type": "string"
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "calibrationSetDigest",
+            "memberArtifactDigest",
+            "mappingDigest",
+            "compatibility",
+            "qualifiedAt",
+            "collectionEndedAt",
+            "expiresAt"
+          ],
+          "properties": {
+            "mode": {
+              "const": "artifact"
+            },
+            "calibrationSetDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "memberArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "compatibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "state"
+              ],
+              "properties": {
+                "action": {
+                  "const": "allow"
+                },
+                "state": {
+                  "enum": [
+                    "exact",
+                    "approved-compatible"
+                  ]
+                }
+              }
+            },
+            "qualifiedAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            },
+            "collectionEndedAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            },
+            "expiresAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            }
+          }
+        },
+        "corpusDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "preregistrationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "analysisDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "integrityDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "auditDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "testRows",
+            "observed",
+            "developmentRows",
+            "minimumObservedFraction",
+            "complete"
+          ],
+          "properties": {
+            "testRows": {
+              "type": "integer"
+            },
+            "observed": {
+              "type": "integer"
+            },
+            "developmentRows": {
+              "type": "integer"
+            },
+            "minimumObservedFraction": {
+              "type": "number"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "overall": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "observed",
+            "coverage",
+            "raw",
+            "calibrated"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "coverage": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "raw": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "correct",
+                "accuracy",
+                "wilson95",
+                "saidYesRate"
+              ],
+              "properties": {
+                "correct": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "accuracy": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "wilson95": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "items": {
+                        "type": "number"
+                      }
+                    }
+                  ]
+                },
+                "saidYesRate": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              }
+            },
+            "calibrated": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "correct",
+                "accuracy",
+                "wilson95",
+                "meanConfidence",
+                "confidenceMinusAccuracy",
+                "ece",
+                "calibrationUnreliable"
+              ],
+              "properties": {
+                "correct": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "accuracy": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "wilson95": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "items": {
+                        "type": "number"
+                      }
+                    }
+                  ]
+                },
+                "meanConfidence": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "confidenceMinusAccuracy": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "ece": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "calibrationUnreliable": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "cells": {
+          "type": "object",
+          "minProperties": 39,
+          "maxProperties": 39,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "observed",
+              "coverage",
+              "raw",
+              "calibrated"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "observed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "coverage": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "raw": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "correct",
+                  "accuracy",
+                  "wilson95",
+                  "saidYesRate"
+                ],
+                "properties": {
+                  "correct": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "wilson95": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    ]
+                  },
+                  "saidYesRate": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                }
+              },
+              "calibrated": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "correct",
+                  "accuracy",
+                  "wilson95",
+                  "meanConfidence",
+                  "confidenceMinusAccuracy",
+                  "ece",
+                  "calibrationUnreliable"
+                ],
+                "properties": {
+                  "correct": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "wilson95": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    ]
+                  },
+                  "meanConfidence": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "confidenceMinusAccuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "ece": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "calibrationUnreliable": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "byFailurePosition": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "observed",
+              "coverage",
+              "raw",
+              "calibrated"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "observed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "coverage": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "raw": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "correct",
+                  "accuracy",
+                  "wilson95",
+                  "saidYesRate"
+                ],
+                "properties": {
+                  "correct": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "wilson95": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    ]
+                  },
+                  "saidYesRate": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                }
+              },
+              "calibrated": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "correct",
+                  "accuracy",
+                  "wilson95",
+                  "meanConfidence",
+                  "confidenceMinusAccuracy",
+                  "ece",
+                  "calibrationUnreliable"
+                ],
+                "properties": {
+                  "correct": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "wilson95": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    ]
+                  },
+                  "meanConfidence": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "confidenceMinusAccuracy": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "ece": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "calibrationUnreliable": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "auroc": {
+          "type": "array"
+        },
+        "hypotheses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "H1",
+            "H2",
+            "H3",
+            "H3a",
+            "H4",
+            "replication",
+            "calibrationUnderShift"
+          ],
+          "properties": {
+            "H1": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byEncoding",
+                "tests"
+              ],
+              "properties": {
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "const": "insufficient"
+                    }
+                  ]
+                },
+                "byEncoding": {
+                  "type": "array"
+                },
+                "tests": {
+                  "type": "array"
+                }
+              }
+            },
+            "H2": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byOutcome"
+              ],
+              "properties": {
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "const": "insufficient"
+                    }
+                  ]
+                },
+                "byOutcome": {
+                  "type": "array"
+                }
+              }
+            },
+            "H3": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byPool"
+              ],
+              "properties": {
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "const": "insufficient"
+                    }
+                  ]
+                },
+                "byPool": {
+                  "type": "array"
+                }
+              }
+            },
+            "H3a": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byPool"
+              ],
+              "properties": {
+                "verdict": {
+                  "enum": [
+                    "contrastive-specific",
+                    "general",
+                    "mixed",
+                    "insufficient"
+                  ]
+                },
+                "byPool": {
+                  "type": "array"
+                }
+              }
+            },
+            "H4": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byPool",
+                "differences"
+              ],
+              "properties": {
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "const": "insufficient"
+                    }
+                  ]
+                },
+                "byPool": {
+                  "type": "array"
+                },
+                "differences": {
+                  "type": "array",
+                  "minItems": 4,
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "replication": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "cell"
+              ],
+              "properties": {
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "const": "insufficient"
+                    }
+                  ]
+                },
+                "cell": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "observed",
+                    "coverage",
+                    "raw",
+                    "calibrated"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "observed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "coverage": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "raw": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "correct",
+                        "accuracy",
+                        "wilson95",
+                        "saidYesRate"
+                      ],
+                      "properties": {
+                        "correct": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "accuracy": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "wilson95": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 2,
+                              "items": {
+                                "type": "number"
+                              }
+                            }
+                          ]
+                        },
+                        "saidYesRate": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "calibrated": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "correct",
+                        "accuracy",
+                        "wilson95",
+                        "meanConfidence",
+                        "confidenceMinusAccuracy",
+                        "ece",
+                        "calibrationUnreliable"
+                      ],
+                      "properties": {
+                        "correct": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "accuracy": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "wilson95": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "array",
+                              "minItems": 2,
+                              "maxItems": 2,
+                              "items": {
+                                "type": "number"
+                              }
+                            }
+                          ]
+                        },
+                        "meanConfidence": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "confidenceMinusAccuracy": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "ece": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "calibrationUnreliable": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "boolean"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "calibrationUnderShift": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "unreliableCells"
+              ],
+              "properties": {
+                "unreliableCells": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "decision": {
+          "const": "HOLD"
+        },
+        "promotion": {
+          "const": "none: diagnostic probe"
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "limit",
+        "folds",
+        "groups",
+        "equalizedPasses",
+        "equalizedMax",
+        "controlMax"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-shortcut-audit/v2"
+        },
+        "limit": {
+          "const": 0.6
+        },
+        "folds": {
+          "const": 5
+        },
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "group",
+              "n",
+              "yes",
+              "scores",
+              "max",
+              "passes"
+            ],
+            "properties": {
+              "group": {
+                "type": "string"
+              },
+              "n": {
+                "type": "integer"
+              },
+              "yes": {
+                "type": "integer"
+              },
+              "scores": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "scalarThreshold",
+                  "tokenThreshold",
+                  "depth2Tree",
+                  "logistic"
+                ],
+                "properties": {
+                  "scalarThreshold": {
+                    "type": "number"
+                  },
+                  "tokenThreshold": {
+                    "type": "number"
+                  },
+                  "depth2Tree": {
+                    "type": "number"
+                  },
+                  "logistic": {
+                    "type": "number"
+                  }
+                }
+              },
+              "max": {
+                "type": "number"
+              },
+              "passes": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "equalizedPasses": {
+          "type": "boolean"
+        },
+        "equalizedMax": {
+          "type": "number"
+        },
+        "controlMax": {
+          "type": "number"
+        }
+      }
+    },
+    "reviewMaterial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "study",
+        "scope",
+        "preparedDirectory",
+        "seedDigest",
+        "reviewTemplateDigest",
+        "corpusDigest",
+        "goldDigest",
+        "preregistrationDigest",
+        "splitOfItems",
+        "itemCount",
+        "protocol",
+        "guide",
+        "items"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "d17mf-development-review-material/v1"
+        },
+        "study": {
+          "const": "D17-MF"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "preparedDirectory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "seedDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "reviewTemplateDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "corpusDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "goldDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "preregistrationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "splitOfItems": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "itemCount": {
+          "const": 40
+        },
+        "protocol": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "guide": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "population",
+            "yes",
+            "no",
+            "authority",
+            "invalidGold",
+            "timing",
+            "independence"
+          ],
+          "properties": {
+            "population": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "yes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "no": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "invalidGold": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "timing": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "independence": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          }
+        },
+        "items": {
+          "type": "array",
+          "minItems": 40,
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "rowId",
+              "cell",
+              "inputDigest",
+              "blind",
+              "unblind"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "pattern": "^mf-assessment-[0-9]{2}$"
+              },
+              "rowId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "cell": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "inputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "blind": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "payload"
+                ],
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                }
+              },
+              "unblind": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "goldLabel",
+                  "textOracleLabel",
+                  "variant",
+                  "cell",
+                  "factors",
+                  "latentWorld"
+                ],
+                "properties": {
+                  "goldLabel": {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  },
+                  "textOracleLabel": {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "cell": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "factors": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pool",
+                      "hops",
+                      "outcome",
+                      "layout",
+                      "rule"
+                    ],
+                    "properties": {
+                      "pool": {
+                        "enum": [
+                          "pool-a",
+                          "pool-b",
+                          "pool-c"
+                        ]
+                      },
+                      "hops": {
+                        "enum": [
+                          1,
+                          3
+                        ]
+                      },
+                      "outcome": {
+                        "enum": [
+                          "yes",
+                          "relay-off",
+                          "missing-contrastive",
+                          "missing-negation",
+                          "missing-unrelated",
+                          "missing-absence"
+                        ]
+                      },
+                      "layout": {
+                        "enum": [
+                          "equalized",
+                          "d17-faithful"
+                        ]
+                      },
+                      "rule": {
+                        "enum": [
+                          "exhaustive",
+                          "d17"
+                        ]
+                      }
+                    }
+                  },
+                  "latentWorld": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "chain",
+                      "decoys",
+                      "failureKind",
+                      "failurePosition",
+                      "targets",
+                      "day",
+                      "quantity"
+                    ],
+                    "properties": {
+                      "chain": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
+                        }
+                      },
+                      "decoys": {
+                        "type": "array",
+                        "minItems": 0,
+                        "maxItems": 16,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
+                        }
+                      },
+                      "failureKind": {
+                        "enum": [
+                          "link",
+                          "relay",
+                          null
+                        ]
+                      },
+                      "failurePosition": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 8
+                          }
+                        ]
+                      },
+                      "targets": {
+                        "type": "object",
+                        "maxProperties": 16,
+                        "additionalProperties": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 64
+                        }
+                      },
+                      "day": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000
+                      },
+                      "quantity": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/analysis"
+    },
+    {
+      "$ref": "#/$defs/reviewTemplate"
+    },
+    {
+      "$ref": "#/$defs/review"
+    },
+    {
+      "$ref": "#/$defs/report"
+    },
+    {
+      "$ref": "#/$defs/audit"
+    },
+    {
+      "$ref": "#/$defs/reviewMaterial"
+    }
+  ]
+}

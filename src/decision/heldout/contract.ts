@@ -12,7 +12,8 @@ import { projectDecisionState, partitionProjectedState } from '../projection.js'
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
 import { heldoutCorpusSeed } from './generators.js';
-import { registeredHeldoutGeneratorDigest, reproducibleRegisteredHeldoutRow } from './generator-registry.js';
+import { studyHeldoutGeneratorDigest as registeredHeldoutGeneratorDigest, reproducibleStudyHeldoutRow as reproducibleRegisteredHeldoutRow,
+  D17_MULTIFACT_GENERATOR_ID, d17MultifactPublicSeed, usesD17MultifactGenerator } from './study-generators.js';
 import { D29_PAID_GENERATOR_IDS } from './d29-generator-ids.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
@@ -147,6 +148,12 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
     if (!rows.length || rows.some(row => !D29_PAID_GENERATOR_IDS.includes((row as HeldoutRow)?.provenance?.generatorId))) {
       throw new HeldoutError('paid-generator');
     }
+  }
+  if (usesD17MultifactGenerator(corpus?.rows)) {
+    // D17-MF (#2850): only its own generator, only D17, only a private seed, only the registered calibrator (artifact mode).
+    if (corpus.study !== 'D17' || corpus.rows.some(row => row?.provenance?.generatorId !== D17_MULTIFACT_GENERATOR_ID)) throw new HeldoutError('paid-generator');
+    if (d17MultifactPublicSeed(corpus.provenance?.seed)) throw new HeldoutError('public-demo-seed');
+    if (a?.calibration?.mode !== 'artifact') throw new HeldoutError('calibration-scope');
   }
   validateHeldoutInputs(corpus, plan);
   if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');

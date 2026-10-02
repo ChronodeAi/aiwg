@@ -35,6 +35,8 @@ export const nodeFiles = [
 // files keep fast coverage in the default lane.
 export const d17SlowFiles = [
   'test/unit/decision/ensemble-study-staged.test.ts',
+  // D17-MF probe (#2850): full 5,772-row preparation, shortcut audit, bundle planning and calibrated scoring (about 22 s).
+  'test/unit/decision/d17-multifact.test.ts',
 ];
 export const d29SlowFiles = [
   'test/unit/decision/d29-synthetic-v8.test.mjs',
