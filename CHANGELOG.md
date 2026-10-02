@@ -25,6 +25,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `D17StudyReport.v2`, `D17StudyCalibration.v1`) leave the v1 diagnostic
   contracts unchanged. Decisions stay HOLD or ROLLBACK; no live collection
   is included.
+- Experimental, default-off D17 staged calibration hardening (#2611).
+  - Test scoring re-derives the calibration set from the sealed calibration
+    phase: re-fit, out-of-fold metrics and both anchored reviews. It refuses
+    registered files that differ.
+  - The scoring clock may not precede the calibration review or the first test
+    access, and the D09 registry refuses resolution before an artifact's
+    `effectiveAt`.
+  - Qualification metrics are slice-stratified 5-fold out-of-fold.
+  - The calibration-phase approval must cite the development review digest.
+  - A seed whose corpus has diagnostic observations is refused.
+  - `--bundle` and `--dry-run-phases` check that both phases fit before spend.
+  - The staged native path has a preregistered promotion route. Its
+    locked-snapshot integrity gate needs an anchored extra-cost tradeoff
+    approval, and D09 eligibility is passed to `promoteChampionChallenger`. The
+    v1 diagnostic route still refuses promotion.
+  - The shared `scoreHeldoutStudy` wrapper reports a staged scorer's validation
+    of the exact approved binding; D29 output is unchanged.
 - Experimental, default-off D29 generator `d29-synthetic/v8` (public
   development seed `d29-study-v8`, refused for paid collection like v1–v7)
   fixes dataset leaks found on the public v7 seed and in review: injected

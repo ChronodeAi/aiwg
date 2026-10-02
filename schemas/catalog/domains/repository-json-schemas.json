@@ -484,6 +484,86 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.d17studyanalysis.v2",
+      "id": "https://aiwg.io/schemas/decision/D17StudyAnalysis.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D17StudyAnalysis.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.d17studycalibration.v1",
+      "id": "https://aiwg.io/schemas/decision/D17StudyCalibration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D17StudyCalibration.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.d17studydryrun.v2",
+      "id": "https://aiwg.io/schemas/decision/D17StudyDryRun.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D17StudyDryRun.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.d17studyreport.v2",
+      "id": "https://aiwg.io/schemas/decision/D17StudyReport.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D17StudyReport.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.d29study.v1",
       "id": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json",
       "version": "1.0.0",
