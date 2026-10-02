@@ -49,6 +49,13 @@ interface FrameworkRegistry {
   }>;
 }
 
+function flagValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  if (index >= 0) return args[index + 1];
+  const prefix = `${flag}=`;
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
 /**
  * Read the installed frameworks from the on-disk registry.
  */
@@ -562,6 +569,19 @@ export const doctorHandler: CommandHandler = {
       for (const diagnostic of native.diagnostics) console.log(`  ⚠ ${diagnostic}`);
     } catch (error) {
       console.log(`\n── Grok Build native extensions ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      const projectDir = ctx.cwd || process.cwd();
+      const provider = flagValue(ctx.args, '--provider');
+      const requested = provider === 'muse' || ctx.args.includes('--all-providers');
+      const { inspectMuseNative, isMuseDeployedProject } = await import('../../mcp/muse-native-config.mjs');
+      if (requested || await isMuseDeployedProject(projectDir)) {
+        const native = await inspectMuseNative({ projectDir });
+        console.log(`\n── Muse Code native extensions ──\n  CLI: ${native.cli}\n  Hooks: ${native.hooks}\n  MCP: ${native.mcp}`);
+      }
+    } catch (error) {
+      console.log(`\n── Muse Code native extensions ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     try {
