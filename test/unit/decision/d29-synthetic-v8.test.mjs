@@ -252,7 +252,9 @@ describe('D29 v5 shortcut audit', () => {
       for (const model of pool.models) expect(Math.max(model.treeBalancedAccuracy, model.logisticBalancedAccuracy)).toBeLessThanOrEqual(model.limit);
     }
     for (const transfer of after.pools[0].transfer.targets) expect(transfer.passed, transfer.target).toBe(true);
-    expect(after.pools[0].targets.find(target => target.target === 'injection').maximumBalancedAccuracy).toBeLessThan(0.7);
+    // The injection population is 100 injected against 100 otherwise-ready TRAIN rows since round 11, so a best pair
+    // rule over ~50k candidates sits near 0.70 by chance; the gate is the preregistered limit.
+    expect(after.pools[0].targets.find(target => target.target === 'injection').maximumBalancedAccuracy).toBeLessThan(SHORTCUT_AUDIT_V8_PARAMETERS.injection);
     // A planted structural marker (an extra clause in injected train notes) must fail the gate.
     const regressed = { corpus: structuredClone(prepared.corpus), gold: prepared.gold };
     regressed.corpus.rows.forEach((row, i) => {

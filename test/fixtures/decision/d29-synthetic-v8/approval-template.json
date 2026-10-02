@@ -14,8 +14,8 @@
   "region": null,
   "credentialRef": null,
   "credentialResolverDigest": null,
-  "corpusDigest": "sha256:899c992b6292064fb57e23c7a03ecaaa1ab2a586a69111a383a00aaaab86e614",
-  "preregistrationDigest": "sha256:954ba425b4337b8f1c8c253702173b77b6c257da6b0dc12d0f21e04d9ec16bb7",
+  "corpusDigest": "sha256:ce5642f156003c3a29c28dd9ad7208964e6ced5ea0fd1f3ebd7bc04dacd40c64",
+  "preregistrationDigest": "sha256:f3e12aa87e6869270de978afefe940da7df996216ae02423497e54bc74354487",
   "executionDigest": null,
   "calibration": {
     "mode": "staged",
@@ -40,7 +40,7 @@
   },
   "priorStudySpendUsd": null,
   "priorPortfolioSpendUsd": null,
-  "gateBindingDigest": "sha256:e889eff6985baf046a09fb0973e10afd310f62cc80099a3af8757875569acf87",
+  "gateBindingDigest": "sha256:7acdbb4ecb0c9e790d21f13f0edabd4c75884785f22a95e349a8405645c1c0a6",
   "gatePackDigests": [
     {
       "id": "aiwg:decision-engine/absolute-screening",

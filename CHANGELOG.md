@@ -73,7 +73,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   cross-pool trigram) of the injection instructions in operational senses,
   two TEST instructions drop "this claim as", and the shortcut audit refuses
   any injection n-gram lexicon that transfers between wording pools at 0.75
-  or more (0.86 before, 0.56 now). v6/v7 rows, gold and generator pins are
+  or more (0.86 before, 0.56 now); every such benign task names an outside
+  target (evidence bags, visitor checks). v6/v7 rows, gold and generator pins are
   unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
