@@ -2040,7 +2040,7 @@
     }
   },
   "shortcutAudit": {
-    "sourceDigest": "sha256:93c43839860c6682d8bb9a7910b6a2ac6a11b1c92a252073fe7ada95c15c8f7c",
+    "sourceDigest": "sha256:d747a2a1e799d069b06547eee49ee6bf1d11ebc498dd1e8d81312a74566d6ff4",
     "pairFeatureLimit": 200,
     "structuralPairLimit": 400,
     "lexiconCandidates": 40,
@@ -2069,7 +2069,14 @@
       "minSupport": 5,
       "limit": 0.75
     },
-    "reportDigest": "sha256:26c8acf982bc9d48b6bdf8462bd753de1558b8c9401766e9def604cf4b084514",
+    "labelDefiningPhrases": [
+      "the item under review",
+      "the claim under review",
+      "the evidence under review",
+      "in this review",
+      "from this review"
+    ],
+    "reportDigest": "sha256:652e298250cb2e5eaa257af4c4f5017e6ec8cf1eb6a6e0200601b59c3ebf6994",
     "passed": true
   },
   "native": {
@@ -2184,7 +2191,7 @@
       "frozenAt": "2026-10-02T00:00:00.000Z",
       "holdoutAccessedAt": null,
       "splitDigest": "sha256:bcb8b5aac8e55b25579613a9724e7a2e6816fd1c76fcea271b490f82843ae687",
-      "corpusDigest": "sha256:ce5642f156003c3a29c28dd9ad7208964e6ced5ea0fd1f3ebd7bc04dacd40c64",
+      "corpusDigest": "sha256:e089c0a08971eb55c6bd0d56905229e737e9a1e3ee9121b18a2d5b4ebb84b758",
       "goldDigest": "sha256:bcad081be4d60051190c30f7c8275c73a638f4bd2766bcdeadb276ad6f099306"
     }
   },

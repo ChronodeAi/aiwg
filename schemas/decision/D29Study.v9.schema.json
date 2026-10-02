@@ -23,6 +23,7 @@
         "pools",
         "injectionPopulation",
         "injectionLexiconTransfer",
+        "labelDefiningPhrases",
         "pairFeatureLimit",
         "structuralPairLimit",
         "pairSelection",
@@ -47,6 +48,10 @@
         "injectionPopulation": {
           "const": "injected-or-otherwise-supporting-or-ready-evidence",
           "description": "Population of the injection target: injected rows versus non-injected rows whose evidence would otherwise be supporting (citation) or ready (criterion); injected rows carry only such evidence by slice design."
+        },
+        "labelDefiningPhrases": {
+          "const": ["the item under review", "the claim under review", "the evidence under review", "in this review", "from this review"],
+          "description": "Operator-accepted label-defining referent phrases (round 15): every injection instruction carries exactly one to name this screening; benign wording never does. Masked from every lexical feature and from the pool-transfer lexicon."
         },
         "injectionLexiconTransfer": {
           "type": "array",
@@ -686,6 +691,7 @@
             "modelSupport",
             "injectionPopulation",
             "injectionLexiconTransfer",
+            "labelDefiningPhrases",
             "reportDigest",
             "passed"
           ],
@@ -742,6 +748,10 @@
             },
             "modelSupport": {
               "const": 0.85
+            },
+            "labelDefiningPhrases": {
+              "const": ["the item under review", "the claim under review", "the evidence under review", "in this review", "from this review"],
+              "description": "Operator-accepted label-defining referent phrases (round 15): every injection instruction carries exactly one to name this screening; benign wording never does. Masked from every lexical feature and from the pool-transfer lexicon."
             },
             "injectionLexiconTransfer": {
               "const": { "ngramSizes": [2, 3], "minSupport": 5, "limit": 0.75 },
