@@ -14,9 +14,12 @@ import type { HeldoutAttempt, HeldoutBundle } from '../../../src/decision/heldou
 import { calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
 import type { CalibrationArtifact } from '../../../src/decision/calibration/types.js';
 import { fitD17Isotonic } from '../../../src/decision/ensemble-study/calibration.js';
+import { createHash } from 'node:crypto';
 import { D17_CALIBRATION } from '../../../src/decision/ensemble-study/protocol.js';
 import { D17MF_CELLS, D17MF_POOLS, D17MF_POOL_IDS, D17MF_ROWS, cellKey, d17MfGenerateCase, d17MfTextOracle } from '../../../src/decision/ensemble-study/multifact.js';
-import { D17MF_BUDGET, D17MF_PROTOCOL, newcombeDifference, scoreD17Multifact, validateD17MultifactReview } from '../../../src/decision/ensemble-study/multifact-study.js';
+import { D17MF_BUDGET, D17MF_PROTOCOL, assertD17MultifactPrivateSeed, auroc, d17MultifactFit, d17MultifactFreshAllowance, d17MultifactPlan, d17MultifactShortcutAudit,
+  holmAdjust, newcombeDifference, scoreD17Multifact, twoProportionP, validateD17MultifactReview } from '../../../src/decision/ensemble-study/multifact-study.js';
+import { assertD17ReviewBoundToApproval } from '../../../src/decision/ensemble-study/calibration.js';
 import type { QualificationIntegrityMetadata } from '../../../src/decision/qualification/release.js';
 
 const preflight = vi.hoisted(() => ({ canonical: '' }));
@@ -65,11 +68,12 @@ function review(reviewedAt = '2026-10-02T00:00:00Z') {
 
 describe('D17-MF generator', () => {
   it('allocates the preregistered factorial cells and the text oracle reproduces every gold label', () => {
-    expect(D17MF_ROWS).toBe(5772);
+    expect(D17MF_ROWS).toBe(5778);
     const test = D17MF_CELLS.filter(c => c.split === 'test');
-    expect(test.filter(c => c.outcome.startsWith('missing') && c.layout === 'equalized').every(c => c.count === 250)).toBe(true);
-    expect(test.filter(c => c.layout === 'equalized')).toHaveLength(30);
-    expect(test.filter(c => c.layout === 'd17-faithful').map(c => c.count)).toEqual([50, 50, 50, 50, 50, 50]);
+    expect(test.filter(c => c.outcome.startsWith('missing') && c.layout === 'equalized').every(c => c.count === 220)).toBe(true);
+    expect(test.filter(c => c.layout === 'equalized')).toHaveLength(33);
+    expect(test.filter(c => c.outcome === 'missing-absence').map(c => c.hops)).toEqual([3, 3, 3]);
+    expect(test.filter(c => c.layout === 'd17-faithful').map(c => c.count)).toEqual([30, 30, 30, 30, 30, 30]);
     const counts = new Map<string, number>();
     for (const row of prepared.corpus.rows) {
       expect(d17MfTextOracle(String(row.input.payload))).toBe(prepared.gold.labels[row.id]);
@@ -79,6 +83,16 @@ describe('D17-MF generator', () => {
     // Deterministic: regeneration from the row seed is byte-identical.
     const row = prepared.corpus.rows[1234]!;
     expect(heldoutDigest(d17MfGenerateCase(row.provenance.seed).row)).toBe(row.provenance.outputDigest);
+    // Absence breaks an interior link only; equalized rules are exhaustive and link-only; names have distinct two-letter prefixes.
+    for (const r of prepared.corpus.rows) {
+      const world = prepared.gold.worlds[r.id]!, payload = String(r.input.payload);
+      if (world.outcome === 'missing-absence') expect([1, 2]).toContain(world.failurePosition);
+      if (world.layout === 'equalized') {
+        expect(payload).toContain('; no other relation counts.');
+        const names = [...new Set(payload.match(/\b[A-Z][a-z]\d{3}\b/g))];
+        expect(new Set(names.map(n => n.slice(0, 2))).size).toBe(names.length);
+      }
+    }
   });
   it('keeps pools disjoint, paired words length-matched and cue counts independent of the label', () => {
     const words = D17MF_POOL_IDS.map(id => { const p = D17MF_POOLS[id]; return [p.relation, p.base, p.contrastive, p.unrelated, p.enabled, p.disabled]; });
@@ -86,6 +100,8 @@ describe('D17-MF generator', () => {
     for (const id of D17MF_POOL_IDS) {
       const p = D17MF_POOLS[id];
       expect(new Set([p.relation.length, p.contrastive.length, p.unrelated.length]).size).toBe(1);
+      // The non-connective verb shares no letter position with the contrastive verb except a final "s".
+      expect([...p.unrelated.slice(0, -1)].filter((ch, i) => p.contrastive[i] === ch)).toEqual([]);
       expect(p.enabled.length).toBe(p.disabled.length);
     }
     // Equalized rows: the fact-line count is exactly the sum of the label-independent cue targets (plus the rule), and the
@@ -122,16 +138,43 @@ describe('D17-MF preregistration and shortcut audit', () => {
     expect(prepared.preregistration.studyAnalysisDigest).toBe(heldoutDigest(prepared.analysis));
     expect(prepared.approvalTemplate).toMatchObject({ approved: false, budget: D17MF_BUDGET, calibration: { mode: 'artifact', calibrationArtifactDigest: null } });
     expect(D17MF_PROTOCOL.hypotheses.map(h => h.id)).toEqual(['H1', 'H2', 'H3', 'H3a', 'H4']);
+    expect(D17MF_PROTOCOL.multiplicity).toMatchObject({ method: 'holm', alpha: 0.05 });
+    expect(D17MF_PROTOCOL.metrics.primary[0]).toContain('raw native answer');
     expect(prepared.audit.equalizedPasses).toBe(true);
     expect(prepared.audit.equalizedMax).toBeLessThanOrEqual(0.6);
     // The D17-faithful control reproduces D17's rendering, where the contrastive verb alone gives the answer away.
     expect(prepared.audit.controlMax).toBeGreaterThan(0.9);
     expect(prepared.analysis.auditDigest).toBe(heldoutDigest(prepared.audit));
+    // Dispatch interleaves cells: the first 200 test rows already cover most test cells, in the preregistered order.
+    const firstTest = prepared.corpus.rows.filter(r => r.split === 'test').slice(0, 200);
+    expect(new Set(firstTest.map(r => r.slice)).size).toBeGreaterThan(30);
+    expect(prepared.analysis.dispatchOrderDigest).toBe(heldoutDigest(prepared.corpus.rows.map(r => r.id)));
   });
+  it('positive control: the earlier chain-first line order fails the audit through its order features', () => {
+    // Re-impose the head-of-round layout: chain links in order, then relay states, then decoys spliced at seeded positions.
+    const corpus = structuredClone(prepared.corpus);
+    for (const row of corpus.rows) {
+      const world = prepared.gold.worlds[row.id]!;
+      if (world.layout !== 'equalized' || row.split !== 'test') continue;
+      const payload = String(row.input.payload), [head, rest] = payload.split('\nFacts:\n'), [factBlock, question] = rest!.split('\nQuestion:');
+      const lines = factBlock!.split('\n'), rule = lines.pop()!, chain = world.chain;
+      const words = (l: string) => l.replace(/\.$/, '').split(' ');
+      const linkIndex = (l: string) => { const w = words(l); const a = chain.indexOf(w[0]!), b = chain.indexOf(w.at(-1)!); return a >= 0 && b === a + 1 ? a : -1; };
+      const stateIndex = (l: string) => { const w = words(l); return w[1] === 'is' && chain.indexOf(w[0]!) > 0 ? chain.indexOf(w[0]!) : -1; };
+      const links = lines.filter(l => linkIndex(l) >= 0).sort((a, b) => linkIndex(a) - linkIndex(b));
+      const states = lines.filter(l => linkIndex(l) < 0 && stateIndex(l) >= 0).sort((a, b) => stateIndex(a) - stateIndex(b));
+      const decoys = lines.filter(l => linkIndex(l) < 0 && stateIndex(l) < 0), facts = [...links, ...states];
+      decoys.forEach((line, k) => facts.splice(createHash('sha256').update(`${row.id}:${k}`).digest().readUInt32BE(0) % (facts.length + 1), 0, line));
+      row.input = { payload: `${head}\nFacts:\n${[...facts, rule].join('\n')}\nQuestion:${question}` };
+    }
+    const audit = d17MultifactShortcutAudit(corpus, prepared.gold as any);
+    expect(audit.equalizedPasses).toBe(false);
+    expect(audit.equalizedMax).toBeGreaterThan(0.6);
+  }, 120_000);
   it('requires a complete development review that agrees with gold and the oracle', () => {
     const value = review(), digest = heldoutDigest(value);
     expect(() => validateD17MultifactReview(prepared, value, digest)).not.toThrow();
-    expect(new Set(value.assessments.map((a: any) => prepared.gold.worlds[a.rowId]!.outcome)).size).toBe(5);
+    expect(new Set(value.assessments.map((a: any) => prepared.gold.worlds[a.rowId]!.outcome)).size).toBe(6);
     expect(value.assessments.every((a: any) => prepared.corpus.rows.find(r => r.id === a.rowId)!.split === 'tuning')).toBe(true);
     for (const [mutate, reason] of [[(v: any) => { v.assessments[0].goldAmbiguousOrIncorrect = true; }, 'development-gold-invalid'],
       [(v: any) => { v.assessments[1].goldAuditLabel = v.assessments[1].goldAuditLabel === 'yes' ? 'no' : 'yes'; }, 'development-review-incomplete'],
@@ -141,21 +184,29 @@ describe('D17-MF preregistration and shortcut audit', () => {
     }
     expect(() => validateD17MultifactReview(prepared, value, pin)).toThrow('development-review');
   });
-  it('bundles only with a cited review, artifact-mode binding and a plan that fits the allowance', async () => {
+  it('refuses public seeds and gates bundles on the cited review and a plan that fits the allowance', async () => {
+    expect(() => assertD17MultifactPrivateSeed('d17mf-offline')).toThrow('public-seed');
+    expect(() => assertD17MultifactPrivateSeed('review-sweep-3')).toThrow('public-seed');
+    expect(() => assertD17MultifactPrivateSeed('d17mf-7f3a9c2e1b')).not.toThrow();
     const dir = await root(), dirPrepared = join(dir, 'prepared');
     const { writeHeldoutFile } = await import('../../../src/decision/heldout/journal.js');
     await mkdir(dirPrepared);
     for (const name of ['corpus', 'preregistration', 'gold'] as const) await writeHeldoutFile(join(dirPrepared, `${name}.json`), prepared[name]);
     const value = review(), digest = heldoutDigest(value);
-    await writeFile(join(dir, 'review.json'), JSON.stringify(value));
-    const forms = { uncited: approval(prepared, 'd17mf-01', pin), cited: approval(prepared, 'd17mf-01', pin, `approval citing ${digest}`) };
-    const small = { ...forms.cited, budget: { ...forms.cited.budget, calls: 1000 } };
-    for (const [name, form] of Object.entries({ ...forms, small })) await writeFile(join(dir, `${name}.json`), JSON.stringify(form));
-    const bundle = (form: string, out = 'refused.json') => runBundle([dirPrepared, join(dir, form), join(dir, 'review.json'), digest, join(dir, out)]);
-    await expect(bundle('uncited.json')).rejects.toThrow('development-review-not-bound');
-    await expect(bundle('small.json')).rejects.toThrow('exceeds the approval allowance');
-    await expect(readFile(join(dir, 'refused.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await bundle('cited.json', 'bundle.json')).toMatchObject({ providerCalls: 0, approvalDigest: heldoutDigest(forms.cited), freshLedger: { fits: true } });
+    await writeFile(join(dir, 'review.json'), JSON.stringify(value)); await writeFile(join(dir, 'context.json'), '{}');
+    const cited = approval(prepared, 'd17mf-01', pin, `approval citing ${digest}`);
+    await writeFile(join(dir, 'cited.json'), JSON.stringify(cited));
+    // The CLI refuses this public test seed before any review, calibration or plan work.
+    await expect(runBundle([dirPrepared, join(dir, 'cited.json'), join(dir, 'review.json'), digest, join(dir, 'b.json'), join(dir, 'context.json')]))
+      .rejects.toThrow('public-seed');
+    await expect(readFile(join(dir, 'b.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // The gates it applies for a private seed: review binding and the allowance fit.
+    expect(() => assertD17ReviewBoundToApproval(approval(prepared, 'd17mf-01', pin), digest)).toThrow('development-review-not-bound');
+    expect(() => assertD17ReviewBoundToApproval(cited, digest)).not.toThrow();
+    const plan = await d17MultifactPlan(prepared, cited);
+    expect(d17MultifactFit(plan, d17MultifactFreshAllowance(cited)).fits).toBe(true);
+    expect(d17MultifactFit(plan, d17MultifactFreshAllowance({ ...cited, budget: { ...cited.budget, calls: 1000 } })).fits).toBe(false);
+    expect(plan).toMatchObject({ rows: 5778, firstAttempts: 5778, maximumAttempts: 11556 });
   }, 120_000);
 });
 
@@ -208,26 +259,39 @@ describe('D17-MF calibrated scoring', () => {
       return attempt;
     });
   }
-  const integrity: QualificationIntegrityMetadata = { sample_n: 5772, uncertainty: null, paired_baseline: null, integrity_mode: 'standard',
+  const integrity: QualificationIntegrityMetadata = { sample_n: 5778, uncertainty: null, paired_baseline: null, integrity_mode: 'standard',
     fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'not-assessed', trusted_score_source: 'local-unverified',
     compromise_labels: [], weak_signal_reason: 'offline-control', release_gate: { decision: 'HOLD', reasons: ['offline-control'] } };
   it('applies the registered member calibrator, reports every cell and evaluates the preregistered hypotheses', async () => {
     const cal = calibrator(), all = attempts();
-    const context = { set: cal.set as any, trustedCalibrationSetDigest: cal.setDigest, member: { artifact: cal.artifact, mapping: cal.mapping }, nowEpochMs: Date.parse('2026-10-03T00:00:00Z') };
+    const context = { set: cal.set as any, trustedCalibrationSetDigest: cal.setDigest, member: { artifact: cal.artifact, mapping: cal.mapping },
+      collectionEndedAt: '2026-10-02T23:00:00.000Z', nowEpochMs: Date.parse('2026-10-03T00:00:00Z') };
     const input = { corpus: prepared.corpus, preregistration: prepared.preregistration, attempts: all, gold: prepared.gold, integrity,
       approvedCalibration: { mode: 'artifact', calibrationArtifactDigest: cal.setDigest }, calibrated: null };
     const report = await scoreD17Multifact(input, prepared, context);
-    expect(report).toMatchObject({ schemaVersion: 'decision-d17mf-report/v1', calibrated: true, decision: 'HOLD',
-      calibration: { mode: 'artifact', memberArtifactDigest: cal.artifact.digest, compatibility: { action: 'allow' } },
-      coverage: { testRows: 5700, observed: 5700, developmentRows: 72 } });
-    expect(Object.keys(report.cells)).toHaveLength(36);
-    expect(report.cells['pool-c_h1_missing-contrastive_equalized']).toMatchObject({ accuracy: 0, saidYesRate: 1 });
-    expect(report.cells['pool-c_h1_missing-negation_equalized']).toMatchObject({ accuracy: 1 });
-    expect(report.hypotheses.H1.supported).toBe(true);
-    expect(report.hypotheses.H2.supported).toBe(false);
+    expect(report).toMatchObject({ schemaVersion: 'decision-d17mf-report/v2', calibrated: true, decision: 'HOLD',
+      calibration: { mode: 'artifact', memberArtifactDigest: cal.artifact.digest, compatibility: { action: 'allow' }, collectionEndedAt: '2026-10-02T23:00:00.000Z' },
+      coverage: { testRows: 5700, observed: 5700, developmentRows: 78, complete: true } });
+    expect(Object.keys(report.cells)).toHaveLength(39);
+    expect(report.cells['pool-c_h1_missing-contrastive_equalized']).toMatchObject({ raw: { accuracy: 0, saidYesRate: 1 } });
+    expect(report.cells['pool-c_h1_missing-negation_equalized']).toMatchObject({ raw: { accuracy: 1 } });
+    expect(report.cells['pool-c_h3_missing-absence_equalized']).toMatchObject({ raw: { accuracy: 1 } });
+    expect(report.hypotheses.H1.verdict).toBe(true);
+    expect(report.hypotheses.H1.tests.every((t: any) => t.holmP === null || t.holmP + 1e-6 >= t.p)).toBe(true);
+    expect(report.hypotheses.H2.verdict).toBe(false);
     expect(report.hypotheses.H3a.verdict).toBe('contrastive-specific');
-    expect(report.hypotheses.replication.replicated).toBe(true);
-    expect(report.cells['pool-c_h1_missing-contrastive_equalized']!.calibrationUnreliable).toBe(true);
+    expect(report.hypotheses.replication.verdict).toBe(true);
+    expect(report.hypotheses.calibrationUnderShift.unreliableCells).toContain('pool-c_h1_missing-contrastive_equalized');
+    expect(report.hypotheses.H4.byPool.every((p: any) => p.matchedPosition === 'last link')).toBe(true);
+    const c1 = report.auroc.find((a: any) => a.pool === 'pool-c' && a.hops === 1)!;
+    expect(c1.byEncoding['missing-contrastive']).toMatchObject({ auroc: 0.5 });
+    expect(c1.byEncoding['missing-negation']).toMatchObject({ auroc: 1 });
+    expect(Object.keys(report.byFailurePosition).some(k => k.endsWith(':interior'))).toBe(true);
+    // Coverage gate: an under-covered cell withholds every verdict.
+    const pcRows = new Set(prepared.corpus.rows.filter(r => r.slice === 'pool-c_h1_missing-negation_equalized' && r.split === 'test').map(r => r.id));
+    const thin = await scoreD17Multifact({ ...input, attempts: all.filter((a, i) => !pcRows.has(a.rowId) || i % 2 === 0) }, prepared, context);
+    expect(thin.coverage.complete).toBe(false);
+    expect(thin.hypotheses.H1.verdict).toBe('insufficient'); expect(thin.hypotheses.H3a.verdict).toBe('insufficient');
     // Refusals: the binding, the artifact, its definition, the clock and the scope.
     const refusals: Array<[Record<string, unknown>, string]> = [
       [{ approvedCalibration: { mode: 'artifact', calibrationArtifactDigest: pin } }, 'approved-calibration'],
@@ -236,9 +300,20 @@ describe('D17-MF calibrated scoring', () => {
     const unapproved = { ...cal.artifact, approval: { state: 'observed', reference: null } } as CalibrationArtifact;
     await expect(scoreD17Multifact(input, prepared, { ...context, member: { ...context.member, artifact: unapproved } })).rejects.toThrow('calibration-artifact');
     await expect(scoreD17Multifact(input, prepared, { ...context, nowEpochMs: Date.parse('2026-12-01T00:00:00Z') })).rejects.toThrow('calibration-unqualified');
-    await expect(scoreD17Multifact(input, prepared, { ...context, nowEpochMs: Date.parse('2026-10-01T00:00:00Z') })).rejects.toThrow('calibration-unqualified');
+    // The scoring clock may not precede the recorded collection end; an expired calibrator at collection end refuses too.
+    await expect(scoreD17Multifact(input, prepared, { ...context, nowEpochMs: Date.parse('2026-10-02T22:00:00Z') })).rejects.toThrow('scoring-clock');
+    await expect(scoreD17Multifact(input, prepared, { ...context, collectionEndedAt: '2026-11-02T00:00:00.000Z', nowEpochMs: Date.parse('2026-11-03T00:00:00Z') }))
+      .rejects.toThrow('calibration-unqualified');
     await expect(scoreD17Multifact({ ...input, gold: { ...prepared.gold, labels: {} } }, prepared, context)).rejects.toThrow('frozen-pins');
   }, 120_000);
+  it('computes Holm adjustments, two-proportion p-values and Hanley-McNeil AUROC intervals', () => {
+    expect(holmAdjust([0.01, 0.04, null, 0.03])).toEqual([0.03, 0.06, null, 0.06]);
+    expect(twoProportionP(50, 100, 50, 100)).toBeCloseTo(1, 6);
+    expect(twoProportionP(10, 100, 50, 100)!).toBeLessThan(1e-6);
+    expect(auroc([0.9, 0.8], [0.1, 0.2])).toMatchObject({ auroc: 1 });
+    expect(auroc([0.5], [0.5])).toMatchObject({ auroc: 0.5 });
+    expect(auroc([], [0.1])).toBeNull();
+  });
   it('computes Newcombe hybrid-score intervals for independent proportions', () => {
     expect(newcombeDifference(0, 250, 250, 250)).toMatchObject({ difference: -1 });
     const d = newcombeDifference(200, 250, 150, 250)!;
@@ -251,7 +326,7 @@ describe('D17-MF CLI', () => {
   it('describes its modes and refuses unknown or open configs', async () => {
     const help = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--help'], { encoding: 'utf8', timeout: 20000 });
     expect(help.status, help.stderr).toBe(0);
-    for (const word of ['--dry-run', '--prepare', '--bundle', '--score', 'd17CalibrationRun']) expect(help.stdout).toContain(word);
+    for (const word of ['--dry-run', '--prepare', '--bundle', '--dry-run-ledger', '--score', 'd17CalibrationRun', 'exact approved source commit']) expect(help.stdout).toContain(word);
     const dir = await root(), config = join(dir, 'config.json');
     await writeFile(config, JSON.stringify({ run: dir, unexpected: true }));
     const refused = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--score', config, join(dir, 'out.json')], { encoding: 'utf8', timeout: 20000 });

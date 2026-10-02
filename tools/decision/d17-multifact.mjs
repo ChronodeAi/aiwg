@@ -10,10 +10,14 @@ const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const json = async path => JSON.parse(await readFile(resolve(path), 'utf8'));
+const D17_CONTEXT_KEYS = ['d17CalibrationDir', 'd17CalibrationReviewFile', 'd17CalibrationRun', 'd17DevelopmentReviewFile',
+  'trustedD17CalibrationReviewDigest', 'trustedD17DevelopmentReviewDigest'];
 const USAGE = 'D17-MF (#2850) experimental/default-off. --dry-run SEED; --prepare SEED NEW_DIR; '
-  + '--bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json; --score CONFIG.json OUTPUT.json.\n'
-  + 'Score config: run, trustedEvidenceDigest, trustedApprovalDigest, goldFile, integrityFile, trustedIntegrityDigest, evaluatedAt, '
-  + 'd17CalibrationRun, d17CalibrationDir, d17CalibrationReviewFile, trustedD17CalibrationReviewDigest, d17DevelopmentReviewFile, trustedD17DevelopmentReviewDigest.\n'
+  + '--bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json D17_CALIBRATION_CONTEXT.json; '
+  + '--dry-run-ledger BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT D17_CALIBRATION_CONTEXT.json; --score CONFIG.json OUTPUT.json.\n'
+  + `D17 calibration context: ${D17_CONTEXT_KEYS.join(', ')}.\n`
+  + 'Score config: run, trustedEvidenceDigest, trustedApprovalDigest, goldFile, integrityFile, trustedIntegrityDigest, evaluatedAt and the D17 calibration context keys.\n'
+  + 'Collection and scoring run at the exact approved source commit.\n'
   + 'Live collection: tools/decision/heldout-study.mjs --collect-approved, only after operator approval.\n';
 
 async function sourceDigests() {
@@ -57,68 +61,110 @@ async function preparedFrom(directory) {
   return prepared;
 }
 
-/** Bundle only after the 40-item development review is complete and cited by the approval, and the plan fits the allowance. */
-export async function runBundle([preparedDir, approvalPath, devReview, devReviewDigest, output, ...extra]) {
-  if (!preparedDir || !approvalPath || !devReview || !devReviewDigest || !output || extra.length) throw new Error('usage');
+/**
+ * Re-derives the registered D17 calibration set bound by the approval from its sealed calibration phase (re-fit,
+ * out-of-fold metrics, both reviews) and qualifies the member artifact at `nowEpochMs`; returns the scorer context.
+ */
+export async function deriveD17Calibration(contextConfig, bindingDigest, nowEpochMs) {
+  if (!contextConfig || D17_CONTEXT_KEYS.some(k => typeof contextConfig[k] !== 'string')) throw new Error('D17 calibration context');
+  const { readHeldoutCalibrationPhase } = await import('../../src/decision/heldout/calibration.ts');
+  const { verifyD17CalibrationSet } = await import('../../src/decision/ensemble-study/calibration.ts');
+  const { heldoutDigest } = await import('../../src/decision/heldout/contract.ts');
+  const { prepare: prepareD17 } = await import('./d17-study.mjs');
+  const dir = resolve(contextConfig.d17CalibrationDir), set = await json(join(dir, 'calibration-set.json'));
+  if (heldoutDigest(set) !== bindingDigest) throw new Error('D17-MF calibration binding');
+  const sealed = await readHeldoutCalibrationPhase(resolve(contextConfig.d17CalibrationRun), set.priorApprovalDigest, set.calibrationPhaseRecordDigest);
+  const d17Prepared = await prepareD17(sealed.bundle.corpus.provenance.seed, 'staged');
+  const verified = verifyD17CalibrationSet(d17Prepared, { mode: 'staged', phase: 'test', calibrationArtifactDigest: bindingDigest,
+    calibrationPhaseRecordDigest: set.calibrationPhaseRecordDigest, priorApprovalDigest: set.priorApprovalDigest }, {
+    sealed, registered: { set, artifacts: { member: await json(join(dir, 'member-artifact.json')), aggregate: await json(join(dir, 'aggregate-artifact.json')) },
+      mappings: { member: await json(join(dir, 'member-mapping.json')), aggregate: await json(join(dir, 'aggregate-mapping.json')) } },
+    trustedCalibrationSetDigest: bindingDigest,
+    calibrationReview: await json(contextConfig.d17CalibrationReviewFile), trustedCalibrationReviewDigest: contextConfig.trustedD17CalibrationReviewDigest,
+    developmentReview: await json(contextConfig.d17DevelopmentReviewFile), trustedDevelopmentReviewDigest: contextConfig.trustedD17DevelopmentReviewDigest,
+    testPhaseAccessAt: null, nowEpochMs });
+  return { set: verified.set, trustedCalibrationSetDigest: verified.setDigest, member: { artifact: verified.member.artifact, mapping: verified.member.mapping } };
+}
+
+/**
+ * Bundle only for a private seed, after the 40-item development review is complete and cited by the approval, with the
+ * registered D17 calibrator re-derived and qualified now, and with a plan that fits the allowance.
+ */
+export async function runBundle([preparedDir, approvalPath, devReview, devReviewDigest, output, calibrationContext, ...extra]) {
+  if (!preparedDir || !approvalPath || !devReview || !devReviewDigest || !output || !calibrationContext || extra.length) throw new Error('usage');
   const prepared = await preparedFrom(resolve(preparedDir));
   const study = await import('../../src/decision/ensemble-study/multifact-study.ts');
   const { heldoutDigest, validateHeldoutBundle } = await import('../../src/decision/heldout/contract.ts');
   const { assertD17ReviewBoundToApproval } = await import('../../src/decision/ensemble-study/calibration.ts');
   const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
   const { writeHeldoutFile } = await import('../../src/decision/heldout/journal.ts');
+  study.assertD17MultifactPrivateSeed(prepared.corpus.provenance.seed);
   const approval = await json(approvalPath);
   if (approval?.calibration?.mode !== 'artifact') throw new Error('D17-MF approval must bind the registered D17 calibration set (artifact mode)');
   study.validateD17MultifactReview(prepared, await json(devReview), devReviewDigest);
   assertD17ReviewBoundToApproval(approval, devReviewDigest);
   const bundle = { corpus: prepared.corpus, preregistration: prepared.preregistration, approval };
   validateHeldoutBundle(bundle, heldoutDigest(approval));
+  await deriveD17Calibration(await json(calibrationContext), approval.calibration.calibrationArtifactDigest, Date.now());
   const fit = study.d17MultifactFit(await study.d17MultifactPlan(prepared, approval), study.d17MultifactFreshAllowance(approval));
   if (!fit.fits) throw new Error('D17-MF plan exceeds the approval allowance');
   await assertContextArtifactRoot(root, resolve(output, '..'), 'within');
   await writeHeldoutFile(resolve(output), bundle);
   return { providerCalls: 0, approvalDigest: heldoutDigest(approval), corpusDigest: heldoutDigest(prepared.corpus),
-    preregistrationDigest: heldoutDigest(prepared.preregistration), developmentReviewDigest: devReviewDigest, freshLedger: fit };
+    preregistrationDigest: heldoutDigest(prepared.preregistration), developmentReviewDigest: devReviewDigest, calibratorQualifiedAt: new Date().toISOString(), freshLedger: fit };
 }
 
-/** Re-derives the registered D17 calibration set from its sealed phase, then scores through the shared collector boundary. */
+/** Pre-spend check against the real ledger: shared plan, remaining allowance, seed reuse, private seed and a qualified calibrator now. */
+export async function runLedgerDryRun([bundlePath, approvalDigest, artifactRoot, calibrationContext, ...extra]) {
+  if (!bundlePath || !approvalDigest || !artifactRoot || !calibrationContext || extra.length) throw new Error('usage');
+  const bundle = await json(bundlePath);
+  const study = await import('../../src/decision/ensemble-study/multifact-study.ts');
+  const { planHeldoutCollection } = await import('../../src/decision/heldout/contract.ts');
+  const { scanHeldoutSpend, heldoutCollectionAllowance } = await import('../../src/decision/heldout/journal.ts');
+  const { assertD17SeedUnused } = await import('../../src/decision/ensemble-study/staged.ts');
+  const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
+  study.assertD17MultifactPrivateSeed(bundle?.corpus?.provenance?.seed);
+  await assertContextArtifactRoot(root, resolve(artifactRoot));
+  const estimate = await planHeldoutCollection(bundle, approvalDigest);
+  const prior = await scanHeldoutSpend(resolve(artifactRoot), 'D17', bundle.approval);
+  assertD17SeedUnused(prior.attempts, bundle.approval);
+  await deriveD17Calibration(await json(calibrationContext), bundle.approval.calibration.calibrationArtifactDigest, Date.now());
+  const fit = study.d17MultifactFit(await study.d17MultifactPlan(bundle, bundle.approval), heldoutCollectionAllowance(bundle.approval, prior));
+  const ready = fit.fits && estimate.fitsBeforeStop && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
+  return { providerCalls: 0, plan: { maximumAttempts: estimate.maximumAttempts, reservedTokens: estimate.reservedTokens, reservedUsdMicros: estimate.reservedUsdMicros },
+    ledger: fit, prior: { studyUsdMicros: prior.studyUsdMicros, portfolioUsdMicros: prior.portfolioUsdMicros, studyCalls: prior.studyCalls }, ready };
+}
+
+/**
+ * Scores at a clock no earlier than the latest collection end the collector recorded (qualification.json across the run
+ * lineage) and no later than now; the registered D17 calibrator is re-derived and qualified at collection end and now.
+ */
 export async function runScore([configPath, output, ...extra]) {
   if (!configPath || !output || extra.length) throw new Error('usage');
   const config = await json(configPath);
-  const keys = ['d17CalibrationDir', 'd17CalibrationReviewFile', 'd17CalibrationRun', 'd17DevelopmentReviewFile', 'evaluatedAt', 'goldFile', 'integrityFile', 'run',
-    'trustedApprovalDigest', 'trustedD17CalibrationReviewDigest', 'trustedD17DevelopmentReviewDigest', 'trustedEvidenceDigest', 'trustedIntegrityDigest'];
+  const keys = [...D17_CONTEXT_KEYS, 'evaluatedAt', 'goldFile', 'integrityFile', 'run', 'trustedApprovalDigest', 'trustedEvidenceDigest', 'trustedIntegrityDigest'].sort();
   if (Object.keys(config).sort().join(',') !== keys.join(',')) throw new Error('config');
   const nowEpochMs = Date.parse(config.evaluatedAt);
   if (!Number.isSafeInteger(nowEpochMs) || nowEpochMs > Date.now()) throw new Error('config');
-  const { readHeldoutFrozen, readHeldoutCalibrationPhase } = await import('../../src/decision/heldout/calibration.ts');
-  const { verifyD17CalibrationSet } = await import('../../src/decision/ensemble-study/calibration.ts');
-  const { prepare: prepareD17 } = await import('./d17-study.mjs');
+  const { readHeldoutFrozen } = await import('../../src/decision/heldout/calibration.ts');
   const { scoreHeldoutStudy } = await import('../../src/decision/heldout/collector.ts');
   const { writeHeldoutFile } = await import('../../src/decision/heldout/journal.ts');
   const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
   const { heldoutDigest } = await import('../../src/decision/heldout/contract.ts');
   await assertContextArtifactRoot(root, dirname(resolve(output)), 'within');
-  const frozen = await readHeldoutFrozen(resolve(config.run), config.trustedApprovalDigest);
-  const binding = frozen.bundle.approval.calibration;
-  if (binding.mode !== 'artifact' || typeof frozen.testPhaseAccessAt === 'string' && nowEpochMs < Date.parse(frozen.testPhaseAccessAt)) throw new Error('config');
-  const dir = resolve(config.d17CalibrationDir), set = await json(join(dir, 'calibration-set.json'));
-  if (heldoutDigest(set) !== binding.calibrationArtifactDigest) throw new Error('D17-MF calibration binding');
-  const sealed = await readHeldoutCalibrationPhase(resolve(config.d17CalibrationRun), set.priorApprovalDigest, set.calibrationPhaseRecordDigest);
-  const d17Prepared = await prepareD17(sealed.bundle.corpus.provenance.seed, 'staged');
-  const verified = verifyD17CalibrationSet(d17Prepared, { mode: 'staged', phase: 'test', calibrationArtifactDigest: binding.calibrationArtifactDigest,
-    calibrationPhaseRecordDigest: set.calibrationPhaseRecordDigest, priorApprovalDigest: set.priorApprovalDigest }, {
-    sealed, registered: { set, artifacts: { member: await json(join(dir, 'member-artifact.json')), aggregate: await json(join(dir, 'aggregate-artifact.json')) },
-      mappings: { member: await json(join(dir, 'member-mapping.json')), aggregate: await json(join(dir, 'aggregate-mapping.json')) } },
-    trustedCalibrationSetDigest: binding.calibrationArtifactDigest,
-    calibrationReview: await json(config.d17CalibrationReviewFile), trustedCalibrationReviewDigest: config.trustedD17CalibrationReviewDigest,
-    developmentReview: await json(config.d17DevelopmentReviewFile), trustedDevelopmentReviewDigest: config.trustedD17DevelopmentReviewDigest,
-    testPhaseAccessAt: null, nowEpochMs });
-  const context = { set: verified.set, trustedCalibrationSetDigest: verified.setDigest,
-    member: { artifact: verified.member.artifact, mapping: verified.member.mapping }, nowEpochMs };
-  const scored = await scoreHeldoutStudy({ run: resolve(config.run), trustedEvidenceDigest: config.trustedEvidenceDigest,
-    trustedApprovalDigest: config.trustedApprovalDigest, module: studyModule(context), moduleDigest: byteDigest(await readFile(ownPath)),
+  const run = resolve(config.run), frozen = await readHeldoutFrozen(run, config.trustedApprovalDigest);
+  if (frozen.bundle.approval.calibration.mode !== 'artifact') throw new Error('config');
+  const ends = [];
+  for (const dir of [run, ...frozen.priorRuns.map(prior => join(dirname(run), prior.runId))]) ends.push(Date.parse((await json(join(dir, 'qualification.json'))).generatedAt));
+  if (ends.some(t => !Number.isFinite(t))) throw new Error('collection clock');
+  const collectionEndedAt = new Date(Math.max(...ends)).toISOString();
+  if (nowEpochMs < Date.parse(collectionEndedAt)) throw new Error('scoring clock');
+  const derived = await deriveD17Calibration(config, frozen.bundle.approval.calibration.calibrationArtifactDigest, nowEpochMs);
+  const scored = await scoreHeldoutStudy({ run, trustedEvidenceDigest: config.trustedEvidenceDigest,
+    trustedApprovalDigest: config.trustedApprovalDigest, module: studyModule({ ...derived, collectionEndedAt, nowEpochMs }), moduleDigest: byteDigest(await readFile(ownPath)),
     gold: await json(config.goldFile), integrity: await json(config.integrityFile), trustedIntegrityDigest: config.trustedIntegrityDigest });
   await writeHeldoutFile(resolve(output), scored);
-  return { providerCalls: 0, decision: scored.decision, complete: scored.complete, reportDigest: heldoutDigest(scored.diagnostics) };
+  return { providerCalls: 0, decision: scored.decision, complete: scored.complete, collectionEndedAt, reportDigest: heldoutDigest(scored.diagnostics) };
 }
 
 async function main() {
@@ -126,6 +172,10 @@ async function main() {
   if (mode === '--help') { process.stdout.write(USAGE); return; }
   if (mode === '--bundle') { process.stdout.write(`${JSON.stringify(await runBundle(args.slice(1)))}\n`); return; }
   if (mode === '--score') { process.stdout.write(`${JSON.stringify(await runScore(args.slice(1)))}\n`); return; }
+  if (mode === '--dry-run-ledger') {
+    const result = await runLedgerDryRun(args.slice(1));
+    process.stdout.write(`${JSON.stringify(result)}\n`); if (!result.ready) process.exitCode = 1; return;
+  }
   if (!['--dry-run', '--prepare'].includes(mode) || args.length !== (mode === '--prepare' ? 3 : 2)) throw new Error('usage');
   const prepared = await prepare(args[1]);
   const study = await import('../../src/decision/ensemble-study/multifact-study.ts');

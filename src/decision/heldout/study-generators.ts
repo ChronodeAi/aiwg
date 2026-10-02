@@ -14,7 +14,8 @@ import type { HeldoutRow } from './types.js';
  * only: corpus data cannot register code or supply a module path.
  */
 export const D17_MULTIFACT_GENERATOR_ID = 'd17-multifact/v1';
-const D17_MULTIFACT_SOURCES = ['src/decision/ensemble-study/multifact.ts'] as const;
+// The generator and the hash it imports for draws and record digests.
+const D17_MULTIFACT_SOURCES = ['src/decision/ensemble-study/multifact.ts', 'src/decision/compile-cache/identity.ts'] as const;
 
 export function generateStudyHeldoutRow(generatorId: string, seed: string): HeldoutRow {
   if (generatorId !== D17_MULTIFACT_GENERATOR_ID) return generateRegisteredHeldoutRow(generatorId, seed);

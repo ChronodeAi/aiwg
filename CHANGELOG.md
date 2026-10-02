@@ -16,16 +16,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   - The registered generator `d17-multifact/v1` builds a preregistered
     factorial design: 3 disjoint wording pools × relay hops {1, 3} × outcome
     (yes, disabled relay, missing link as contrastive verb, explicit negation
-    or unrelated verb), plus D17-faithful control cells. It has 5,772 rows,
-    with key cells at 250 rows.
-  - Off-chain decoy lines equalize every cue class independently of the label,
-    so a D29-style shortcut audit (balanced-accuracy limit 0.60) gates
-    preparation.
-  - Calibrated evaluation applies the registered D17 member calibrator in
-    collector artifact mode. Scoring re-derives the D17 set from its seal and
-    qualifies the artifact at the scoring clock.
-  - The scorer reports per-cell accuracy, calibrated confidence and ECE, and
-    the preregistered H1–H4 verdicts. Its decision is always HOLD.
+    or non-connective verb, plus pure absence at three hops), plus D17-faithful
+    control cells. It has 5,778 rows, with key cells at 220 rows.
+  - Every equalized item states an exhaustive link-only rule, balances every cue
+    class with off-chain decoys and shuffles all fact lines uniformly.
+  - A D29-style shortcut audit gates preparation, including line-order and
+    position features (limit 0.60; 24 sweep seeds at most 0.594). A positive
+    control shows that the earlier chain-first order fails it.
+  - The primary metrics are the raw native answer and the raw-score AUROC.
+    Calibrated metrics, through the registered D17 member calibrator in
+    collector artifact mode, are used only for calibration under shift.
+  - H1 and H4 are Holm-adjusted, and H2 and H4 are matched on failure position.
+    A per-cell coverage gate and a seeded dispatch order are preregistered.
+  - The calibrator is re-derived from the D17 seal and qualified at bundle time,
+    collection end and the scoring clock. That clock cannot precede the
+    recorded collection end.
+  - Public seeds and seed reuse are refused. The decision is always HOLD.
   - New study generators register in `src/decision/heldout/study-generators.ts`,
     so the D17 and D29 generator pins are unchanged.
   - New schema `D17Multifact.v1`. No live collection is included.
