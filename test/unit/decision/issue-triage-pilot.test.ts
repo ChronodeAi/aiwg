@@ -874,7 +874,8 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
 
   it('TRIAGE-REDACT-02 (G) redacts encrypted PEM keys and Stripe keys and refuses structured metadata values', async () => {
     const pemBody = 'MIIFHzBJBgkqhkiG9w0BBQ0wPDAbencryptedcanary';
-    const stripe = 'sk_live_51Hcanary0123456789abcdefABCDEF';
+    // Assembled at runtime so no live-key literal sits in source (#2856).
+    const stripe = ['sk', 'live', '51Hcanary0123456789abcdefABCDEF'].join('_');
     const leaky: IssueTriageIssueRecord = {
       ...issue(),
       body: `-----BEGIN ENCRYPTED PRIVATE KEY-----\n${pemBody}\n-----END ENCRYPTED PRIVATE KEY-----\nstripe ${stripe}`,
