@@ -7,6 +7,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.0] - 2026-10-02 - "Muse Code stable, gates and decision studies"
+
+### Changed
+
+- Muse Code (`muse`) is promoted from `experimental` to `stable` (#231), with a Linux PUW on Muse Code
+  1.4.2, a path security review, and release notes. macOS and Windows/WSL verification were waived by the
+  maintainer.
+
 ### Added
 
 - Evidence-gated Muse Code native session discovery (#222 PR B). `aiwg
@@ -274,127 +282,6 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   stays disabled by default and byte-identical. Project floors (#2832),
   addon/extension provider loading (#2831), study adoption (#2833+) and any
   live, held-out, human-review or production evidence remain pending (#2830)
-
-### Fixed
-
-- `aiwg use all --provider muse` now installs the managed `.muse/hooks.json` group and an opted-in `--mcp`
-  profile. The kernel-only `use all` deploy was treated as skills-only, so both were silently skipped (#231).
-- Factory deploys no longer corrupt the user-global `~/.factory/settings.json`.
-  The shared JSONC comment stripper was regex-only: it collapsed glob
-  matchers inside strings (`"src/**/*.ts"` became `"src*.ts"`) before the
-  hooks merge wrote the file back, and it rejected settings containing a URL.
-  It now tracks string literals, the Muse hooks merge reuses it, and the
-  Factory hook writer backs up a hand-edited settings file before rewriting
-  it.
-- `aiwg doctor` reports a "Muse Code native extensions" section (CLI version,
-  managed hooks, MCP registration) for `--provider muse` or Muse-deployed
-  projects, and the bug and tester-report templates list every provider id,
-  including `muse`, `grokbot`, and `grok-build` (#2729).
-- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
-  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
-  bound) and fails the canary on unknown or over-bound reported output, stopping
-  further dispatch. Jev exposes no request-level output cap, so enforcement is
-  after dispatch, fail-closed. Offline coverage only; live evidence remains
-  pending (#2799)
-- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
-  implementation in `tools/decision/jev-openbao-credential.mjs`, with
-  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
-  live-run paths keep their logical-reference and approval-pin checks, the D12
-  resolver file stays loadable through its digest-pinned import, and the TV-12
-  resolver is unchanged. Live qualification remains approval-gated and no live
-  run was performed (#2798)
-
-- Tightened the experimental, default-off gates core addendum: every scope
-  transition now requires the child to cover a superset of the parent's
-  slices under every slice universe (`listed -> each` must except none of
-  the parent's listed slices, `all -> each` allows no exceptions),
-  `onInsufficient` is HOLD-only in schema and runtime (ROLLBACK needs an
-  observed blocking failure), and the D17 source dry-run pins are refreshed
-  for the resulting source digest while the corpus and split/gold pins are
-  unchanged. Live CLI, project floors, provider loading and study adoption
-  remain pending (#2824)
-
-- Hardened the experimental, default-off gates core fix round 2: the
-  evaluator re-resolves through pure `resolveGateBinding`/`composeGatePack`/
-  `applyGateExtends` over a standalone authored-pack snapshot and rejects
-  non-`GateRegistry` registries, so subclassed or duck-typed registries cannot
-  empty gates or loosen parameters; holdout inputs are sealed
-  `sealGateHoldout` records with re-derived digests, null allowed only when
-  the binding declares no held-out split, and the report records the sealed
-  holdout; benchmark and release builders emit canonical-only `/v2` records
-  with legacy allowlisted only for `/v1` pre-migration evidence; child-drops-
-  default is documented as P7 binding freedom with project floors as the
-  future check. Live CLI, project floors, provider loading and study adoption
-  remain pending (#2824)
-
-- Hardened the experimental, default-off gates core against independent review
-  findings: the evaluator resolves the binding internally and refuses
-  caller-supplied resolution, `extends` is a full parent pin with the composed
-  pack digest pinned in bindings and reports, holdout freeze comes only from
-  required trusted inputs, reports must re-derive byte-identically, per-gate
-  `onFail`/`onInsufficient` replace severity with insufficient defaulting to
-  HOLD and ceiling gates mirroring upstream, parameters are namespaced per
-  pack, unpinned providers and vacuous scopes fail closed, and evidence
-  digests verify canonical-only by default with an explicit pre-migration
-  legacy allowlist. Live CLI, project floors, provider loading and study
-  adoption remain pending (#2824)
-
-- Hardened the experimental, default-off gates discovery, CLI and floors
-  against review findings: `--pack-dir` files are always `project:` packs
-  (`aiwg:` stays reserved for the installed tree, never the cwd;
-  `addon:`/`framework:`/`extension:` load only from manifest-declared
-  bundles), manifest `gatePacks` dirs are contained by realpath with symlinks
-  rejected and a 256 KiB pre-read cap, CLI evaluation requires a
-  caller-asserted `--trusted-binding-digest` plus already-sealed holdout and
-  upstream files (no auto-sealing), a missing upstream refuses instead of
-  downgrading to HOLD, CLI reports carry `attestation: 'offline-cli'`,
-  project floors are a required evaluator input loaded from `aiwg.config`
-  (unreadable or invalid config refuses evaluation; reads only warn), the
-  default floor is the shipped integrity-ceiling pack itself (suppressed only
-  by a tightening all-scoped upstream-ceiling floor gate), ceilings gain a
-  project-wide `'*'` default that per-study keys may only tighten, and the
-  discovery fixture gains a second pack with same-type hard negatives and
-  paraphrase queries. Provider loading, study adoption and any live,
-  held-out, human-review or production evidence remain pending (#2830)
-
-- Refreshed experimental, default-off D17 source dry-run pins after the gates
-  phase 1 core moved the qualification statistics and canonicalised evidence
-  digests; the corpus and split/gold pins are unchanged. Live evidence and
-  approval remain pending (#2824)
-
-- The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
-  ran `npm pack` with no timeout, so a wedged pack held the CI job until the
-  runner timeout. The call is now bounded at 5 minutes, overridable with
-  `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
-  timed-out pack fails the gate with an error naming the bound (#2802)
-
-- Documented the text-only scope of experimental, default-off D24 input
-  binding: numeric, boolean, and null values sit outside text-leaf binding and
-  are never compared against lineage text, while their object keys remain
-  text-bearing member positions that still need binding or
-  `nonLineagePointers` coverage. No runtime behavior changes (#2784)
-
-- Refreshed experimental, default-off D17 source dry-run pins after the shared
-  acceptance threshold fix entered the source digest; the corpus and split/gold
-  pins are unchanged. Live evidence and approval remain pending (#2611)
-
-- Experimental, default-off D17 schema loading now resolves source and compiled
-  layouts, so building the CLI no longer breaks the mandatory SQLite session
-  regression suite. Refreshed uncollected source pins; live evidence remains
-  pending (#2611)
-
-- Experimental, default-off D17 held-out study now permits only the explicit
-  uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
-  rejects calibrated approvals and forbids D09 qualification, calibrated gates
-  or promotion claims; AC7/AC14 remain pending genuine D09 evidence (#2611)
-
-- Experimental, default-off D17 synthetic study no longer leaks gold through
-  ordinal record IDs, label parity, authority notes or payload lengths.
-  Regenerated uncollected corpus, preregistration and approval-template pins;
-  live evidence and operator approval remain pending (#2611)
-
-### Added
-
 - Experimental, default-off addon/extension bundle metric providers for gates:
   `gateProviders` bundle-manifest declarations (Zod plus TS) loaded only
   through the gates registry from bundle-relative paths, code digests over
@@ -577,6 +464,121 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg use all --provider muse` now installs the managed `.muse/hooks.json` group and an opted-in `--mcp`
+  profile. The kernel-only `use all` deploy was treated as skills-only, so both were silently skipped (#231).
+- Factory deploys no longer corrupt the user-global `~/.factory/settings.json`.
+  The shared JSONC comment stripper was regex-only: it collapsed glob
+  matchers inside strings (`"src/**/*.ts"` became `"src*.ts"`) before the
+  hooks merge wrote the file back, and it rejected settings containing a URL.
+  It now tracks string literals, the Muse hooks merge reuses it, and the
+  Factory hook writer backs up a hand-edited settings file before rewriting
+  it.
+- `aiwg doctor` reports a "Muse Code native extensions" section (CLI version,
+  managed hooks, MCP registration) for `--provider muse` or Muse-deployed
+  projects, and the bug and tester-report templates list every provider id,
+  including `muse`, `grokbot`, and `grok-build` (#2729).
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
+- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
+  implementation in `tools/decision/jev-openbao-credential.mjs`, with
+  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
+  live-run paths keep their logical-reference and approval-pin checks, the D12
+  resolver file stays loadable through its digest-pinned import, and the TV-12
+  resolver is unchanged. Live qualification remains approval-gated and no live
+  run was performed (#2798)
+
+- Tightened the experimental, default-off gates core addendum: every scope
+  transition now requires the child to cover a superset of the parent's
+  slices under every slice universe (`listed -> each` must except none of
+  the parent's listed slices, `all -> each` allows no exceptions),
+  `onInsufficient` is HOLD-only in schema and runtime (ROLLBACK needs an
+  observed blocking failure), and the D17 source dry-run pins are refreshed
+  for the resulting source digest while the corpus and split/gold pins are
+  unchanged. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core fix round 2: the
+  evaluator re-resolves through pure `resolveGateBinding`/`composeGatePack`/
+  `applyGateExtends` over a standalone authored-pack snapshot and rejects
+  non-`GateRegistry` registries, so subclassed or duck-typed registries cannot
+  empty gates or loosen parameters; holdout inputs are sealed
+  `sealGateHoldout` records with re-derived digests, null allowed only when
+  the binding declares no held-out split, and the report records the sealed
+  holdout; benchmark and release builders emit canonical-only `/v2` records
+  with legacy allowlisted only for `/v1` pre-migration evidence; child-drops-
+  default is documented as P7 binding freedom with project floors as the
+  future check. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core against independent review
+  findings: the evaluator resolves the binding internally and refuses
+  caller-supplied resolution, `extends` is a full parent pin with the composed
+  pack digest pinned in bindings and reports, holdout freeze comes only from
+  required trusted inputs, reports must re-derive byte-identically, per-gate
+  `onFail`/`onInsufficient` replace severity with insufficient defaulting to
+  HOLD and ceiling gates mirroring upstream, parameters are namespaced per
+  pack, unpinned providers and vacuous scopes fail closed, and evidence
+  digests verify canonical-only by default with an explicit pre-migration
+  legacy allowlist. Live CLI, project floors, provider loading and study
+  adoption remain pending (#2824)
+
+- Hardened the experimental, default-off gates discovery, CLI and floors
+  against review findings: `--pack-dir` files are always `project:` packs
+  (`aiwg:` stays reserved for the installed tree, never the cwd;
+  `addon:`/`framework:`/`extension:` load only from manifest-declared
+  bundles), manifest `gatePacks` dirs are contained by realpath with symlinks
+  rejected and a 256 KiB pre-read cap, CLI evaluation requires a
+  caller-asserted `--trusted-binding-digest` plus already-sealed holdout and
+  upstream files (no auto-sealing), a missing upstream refuses instead of
+  downgrading to HOLD, CLI reports carry `attestation: 'offline-cli'`,
+  project floors are a required evaluator input loaded from `aiwg.config`
+  (unreadable or invalid config refuses evaluation; reads only warn), the
+  default floor is the shipped integrity-ceiling pack itself (suppressed only
+  by a tightening all-scoped upstream-ceiling floor gate), ceilings gain a
+  project-wide `'*'` default that per-study keys may only tighten, and the
+  discovery fixture gains a second pack with same-type hard negatives and
+  paraphrase queries. Provider loading, study adoption and any live,
+  held-out, human-review or production evidence remain pending (#2830)
+
+- Refreshed experimental, default-off D17 source dry-run pins after the gates
+  phase 1 core moved the qualification statistics and canonicalised evidence
+  digests; the corpus and split/gold pins are unchanged. Live evidence and
+  approval remain pending (#2824)
+
+- The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
+  ran `npm pack` with no timeout, so a wedged pack held the CI job until the
+  runner timeout. The call is now bounded at 5 minutes, overridable with
+  `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
+  timed-out pack fails the gate with an error naming the bound (#2802)
+
+- Documented the text-only scope of experimental, default-off D24 input
+  binding: numeric, boolean, and null values sit outside text-leaf binding and
+  are never compared against lineage text, while their object keys remain
+  text-bearing member positions that still need binding or
+  `nonLineagePointers` coverage. No runtime behavior changes (#2784)
+
+- Refreshed experimental, default-off D17 source dry-run pins after the shared
+  acceptance threshold fix entered the source digest; the corpus and split/gold
+  pins are unchanged. Live evidence and approval remain pending (#2611)
+
+- Experimental, default-off D17 schema loading now resolves source and compiled
+  layouts, so building the CLI no longer breaks the mandatory SQLite session
+  regression suite. Refreshed uncollected source pins; live evidence remains
+  pending (#2611)
+
+- Experimental, default-off D17 held-out study now permits only the explicit
+  uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
+  rejects calibrated approvals and forbids D09 qualification, calibrated gates
+  or promotion claims; AC7/AC14 remain pending genuine D09 evidence (#2611)
+
+- Experimental, default-off D17 synthetic study no longer leaks gold through
+  ordinal record IDs, label parity, authority notes or payload lengths.
+  Regenerated uncollected corpus, preregistration and approval-template pins;
+  live evidence and operator approval remain pending (#2611)
 - Experimental, default-off D29 collector integration tests use a small,
   deterministic offline corpus for seal, calibration and receipt checks.
   The full 2,000-row dry-run and production preregistration thresholds remain
@@ -768,10 +770,6 @@ qualification each one still needs is tracked in the follow-up issues named
 in the entry.
 
 ### Changed
-
-- Muse Code (`muse`) is promoted from `experimental` to `stable` (#231), with a Linux PUW on Muse Code
-  1.4.2, a path security review, and release notes. macOS and Windows/WSL verification were waived by the
-  maintainer.
 
 - **Breaking (decision runtime):** state projection is now mandatory for
   network egress. `evaluateDecisionRuleset` denies dispatch to any adapter that
