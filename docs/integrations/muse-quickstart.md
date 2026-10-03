@@ -1,6 +1,6 @@
 # Connect AIWG to Muse Code
 
-> **Status:** Experimental.
+> **Status:** Stable.
 
 For the complete first-time journey, start with [Install, Connect, and
 Verify](../getting-started/install-connect-verify.md).
@@ -52,7 +52,11 @@ installed frameworks, and one useful next action.
 Try one small task immediately after verification:
 
 ```text
-Review this project's README and getting-started docs for unclear positioning, missing setup steps, or unsupported claims. Save the three highest-priority fixes with file references and a recommended next edit at .aiwg/marketing/brand/audit/readme-review.md. Leave the reviewed files unchanged.
+Review this project's README and getting-started docs for unclear positioning,
+missing setup steps, or unsupported claims. Save the three highest-priority
+fixes with file references and a recommended next edit at
+.aiwg/marketing/brand/audit/readme-review.md. Leave the reviewed files
+unchanged.
 ```
 
 Success means Muse Code names the intended project, follows the AIWG bootstrap into `WORKSPACE.md`

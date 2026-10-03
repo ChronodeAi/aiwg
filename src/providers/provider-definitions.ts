@@ -948,7 +948,8 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     displayName: 'Muse Code',
     // #225: ADR fixes the canonical id as `muse` with no aliases.
     aliases: [],
-    status: 'experimental',
+    // #231: promoted stable — Linux PUW + security review; maintainer Linux-only waiver 2026-10-02.
+    status: 'stable',
     builtIn: true,
     surfaces: {
       primary: 'muse',

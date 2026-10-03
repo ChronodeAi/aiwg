@@ -488,12 +488,13 @@ providers:
 
   muse:
     display_name: Muse Code
-    status: experimental
+    status: stable
     # Meta's terminal/CI coding agent (Muse Spark-powered). Explicitly not a
     # model-API surface: Glimmer/Image/Voice are out of scope.
     # Skill writer (.agents/skills + XDG user root), discover-first AGENTS.md
     # bridge, managed .muse/hooks.json, and opt-in MCP settings profile.
     # ADR: docs/architecture/adr-muse-provider-target.md · epic #223.
+    # #231: promoted stable — Linux PUW + security review; maintainer Linux-only waiver 2026-10-02.
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:

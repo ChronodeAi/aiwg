@@ -588,6 +588,20 @@ describe('muse writer hooks/MCP wiring (#228)', () => {
     expect(fs.readFileSync(outside, 'utf8')).toBe('operator file\n');
   });
 
+  it('postDeploy installs hooks for the kernel-only deploy that `aiwg use all` runs', async () => {
+    const target = path.join(tmpRoot, 'use-all');
+    fs.mkdirSync(target, { recursive: true });
+    await postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false, skillsOnly: true, kernelOnly: true });
+    expect(readJson(hooksPath(target)).hooks.SessionStart).toHaveLength(1);
+  });
+
+  it('postDeploy still skips hooks for an explicit --skills-only deploy', async () => {
+    const target = path.join(tmpRoot, 'skills-only');
+    fs.mkdirSync(target, { recursive: true });
+    await postDeploy(target, { quiet: true, srcRoot: repoRoot, dryRun: false, skillsOnly: true });
+    expect(fs.existsSync(hooksPath(target))).toBe(false);
+  });
+
   it('postDeploy skips hooks with hooks: false (--no-hooks)', () => {
     const target = path.join(tmpRoot, 'no-hooks');
     fs.mkdirSync(target, { recursive: true });

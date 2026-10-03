@@ -93,11 +93,11 @@ describe('provider definition registry', () => {
   });
 
 
-  it('registers experimental muse with no aliases and fail-closed detection', () => {
+  it('registers stable muse with no aliases and fail-closed detection', () => {
     const muse = getProviderDefinition('muse');
     expect(muse).toBeDefined();
     expect(muse?.displayName).toBe('Muse Code');
-    expect(muse?.status).toBe('experimental');
+    expect(muse?.status).toBe('stable');
     expect(muse?.aliases).toEqual([]);
     expect(normalizeProviderDefinitionId('muse')).toBe('muse');
     // ADR: canonical id is `muse` with no aliases. Rejected spellings are
