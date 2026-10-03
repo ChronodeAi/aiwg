@@ -14,7 +14,7 @@ const MUSE_VERSION_TIMEOUT_MS = 5_000;
 
 /**
  * JSONC-tolerant parse. String-aware twin of `stripJsonComments` in
- * tools/agents/providers/muse-hooks.mjs: `//` in URLs and `/*` in glob
+ * tools/agents/providers/base.mjs: `//` in URLs and `/*` in glob
  * matchers survive.
  */
 function parseJson(raw) {
