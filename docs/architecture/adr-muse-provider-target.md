@@ -8,6 +8,12 @@
 stable promotion)  
 **Related:** #222 (sessions export-first), #232–#238 (session catalog, schemas, allowlists, smoke harness)
 
+**Current provider status:** Stable as of 2026-10-02 under
+[#231](https://github.com/jmagly/aiwg/issues/231). Linux PUW and path security
+review satisfied the promotion gate; maintainers waived macOS/Windows PUW for
+this promotion. This note records the status flip without changing the original
+ADR decision history below.
+
 ## Context
 
 **Muse Code** is Meta's terminal/CI coding agent built on Muse Spark. It is a high-leverage AIWG peer: native `AGENTS.md`
@@ -129,8 +135,8 @@ Session adapter implementation itself is out of scope here (Phase 4 / #222, cata
 
 ### Headless Ralph
 
-A headless Ralph/loop adapter over `muse exec` is **optional and post-experimental** (PR7/#230). It does not block the
-experimental cut (#225–#229) or stable promotion (#231), and no `muse exec` contract may be assumed until evidenced
+A headless Ralph/loop adapter over `muse exec` is **optional** (PR7/#230). It does not block the
+provider cut (#225–#229) or stable promotion (#231), and no `muse exec` contract may be assumed until evidenced
 against the installed CLI surface.
 
 ### Explicit exclusions
@@ -144,8 +150,8 @@ Out of provider scope, now and for all child issues unless a new ADR re-opens th
 
 ## Consequences
 
-- Dual registries (provider definitions + deploy agents) plus the capability matrix gain a `muse` row at `experimental`
-  without inventing filesystem facts (#225).
+- Dual registries (provider definitions + deploy agents) plus the capability matrix initially gained a `muse` row
+  without inventing filesystem facts (#225); #231 promoted it to stable.
 - Doctor, setup choices, install-connect-verify, model catalog / provider-policy schema, and wizard/discovery allowlists
   gain Muse Code entries against the locked roots (#229, #233–#236, #238).
 - Operators stop overloading `--provider cursor` for Muse fleets; Cursor IDE fleets stay on `cursor`.

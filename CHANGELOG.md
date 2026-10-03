@@ -277,6 +277,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg use all --provider muse` now installs the managed `.muse/hooks.json` group and an opted-in `--mcp`
+  profile. The kernel-only `use all` deploy was treated as skills-only, so both were silently skipped (#231).
+
 - `aiwg doctor` reports a "Muse Code native extensions" section (CLI version,
   managed hooks, MCP registration) for `--provider muse` or Muse-deployed
   projects, and the bug and tester-report templates list every provider id,
@@ -759,6 +762,10 @@ qualification each one still needs is tracked in the follow-up issues named
 in the entry.
 
 ### Changed
+
+- Muse Code (`muse`) is promoted from `experimental` to `stable` (#231), with a Linux PUW on Muse Code
+  1.4.2, a path security review, and release notes. macOS and Windows/WSL verification were waived by the
+  maintainer.
 
 - **Breaking (decision runtime):** state projection is now mandatory for
   network egress. `evaluateDecisionRuleset` denies dispatch to any adapter that

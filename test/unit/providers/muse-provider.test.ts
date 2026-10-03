@@ -52,12 +52,12 @@ describe('muse provider registration (#225)', () => {
     }
   });
 
-  it('registers experimental Muse Code with fail-closed detection', () => {
+  it('registers stable Muse Code with fail-closed detection', () => {
     const muse = getProviderDefinition('muse');
     expect(muse).toBeDefined();
     expect(muse?.id).toBe('muse');
     expect(muse?.displayName).toBe('Muse Code');
-    expect(muse?.status).toBe('experimental');
+    expect(muse?.status).toBe('stable');
     expect(muse?.builtIn).toBe(true);
     expect(muse?.aliases).toEqual([]);
     expect(muse?.surfaces.primary).toBe('muse');
@@ -87,7 +87,7 @@ describe('muse provider registration (#225)', () => {
     const caps = getProviderCapabilities('muse');
     expect(caps).toBeDefined();
     expect(caps?.display_name).toBe('Muse Code');
-    expect(caps?.status).toBe('experimental');
+    expect(caps?.status).toBe('stable');
     expect(caps?.daemon_tier).toBe('unsupported');
     expect(caps?.deploy_target).toBe('mixed');
     // ADR posture: skills native, rules via AGENTS.md, mcp true,

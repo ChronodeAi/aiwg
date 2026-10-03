@@ -37,7 +37,7 @@ authenticated.
   `test/unit/sessions/pi-adapter.test.ts`) green in CI. Required for stable:
   the above plus a passing `npm run smoke:pi:live` against the pinned Pi
   version recorded per release.
-- **Muse status: experimental (optional, #230).** Headless `muse exec --json`
+- **Muse provider status: stable; Ralph adapter optional (#230).** Headless `muse exec --json`
   with resume via `--session-id` and transcripts via `muse export`; contract
   tests in `test/unit/ralph/muse-adapter.test.mjs` (`npm run test:node`) run
   against the recorded fixture stub only — no live Meta auth in CI. Disable

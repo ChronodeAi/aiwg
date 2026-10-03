@@ -1,5 +1,5 @@
 /**
- * Muse Code provider (experimental).
+ * Muse Code provider (stable).
  *
  * Muse-native skill roots (docs/architecture/adr-muse-provider-target.md):
  *   - Project scope: `<target>/.agents/skills/<id>/SKILL.md`
@@ -221,7 +221,10 @@ function assertSafeAgentsMd(target) {
 }
 
 export async function postDeploy(targetDir, opts = {}) {
-  const fullDeploy = !opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly;
+  // `aiwg use all` deploys in kernel-only mode, which deploy-agents also
+  // reports as skillsOnly. That is still a whole-provider deploy, so the
+  // bridge, managed hooks, and an opted-in MCP profile must not be skipped.
+  const fullDeploy = !opts.commandsOnly && !opts.rulesOnly && (!opts.skillsOnly || opts.kernelOnly === true);
   if (opts.createAgentsMd || fullDeploy) {
     createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
@@ -273,7 +276,7 @@ export async function deploy(opts = {}) {
   } = opts;
 
   if (!opts.quiet) {
-    console.log(`\n=== Muse Code Provider (experimental) ===`);
+    console.log(`\n=== Muse Code Provider (stable) ===`);
     console.log(`Target: ${target}`);
     console.log(`Mode: ${mode}`);
     if (opts.dryRun) console.log('Dry-run: no filesystem mutations');
