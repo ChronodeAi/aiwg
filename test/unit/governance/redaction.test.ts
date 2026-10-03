@@ -255,7 +255,9 @@ describe('private key and payment key coverage (#2618)', () => {
       expect(result.text, variant || 'plain').not.toContain(body);
       expect(result.findings.map(finding => finding.class), variant || 'plain').toContain('private-key');
     }
-    for (const key of ['sk_live_51Hcanary0123456789abcdef', 'sk_test_51Hcanary0123456789abcdef', 'rk_live_51Hcanary0123456789abcdef']) {
+    // Stripe-shaped canaries are assembled at runtime so no live-key literal sits in
+    // source; GitHub push protection blocks those (#2856).
+    for (const key of [['sk', 'live', '51Hcanary0123456789abcdef'].join('_'), ['sk', 'test', '51Hcanary0123456789abcdef'].join('_'), ['rk', 'live', '51Hcanary0123456789abcdef'].join('_')]) {
       const result = redactText(`stripe ${key} configured`);
       expect(result.text).not.toContain(key);
       expect(result.findings.map(finding => finding.class)).toContain('provider-token');
