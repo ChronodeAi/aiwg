@@ -277,6 +277,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Factory deploys no longer corrupt the user-global `~/.factory/settings.json`.
+  The shared JSONC comment stripper was regex-only: it collapsed glob
+  matchers inside strings (`"src/**/*.ts"` became `"src*.ts"`) before the
+  hooks merge wrote the file back, and it rejected settings containing a URL.
+  It now tracks string literals, the Muse hooks merge reuses it, and the
+  Factory hook writer backs up a hand-edited settings file before rewriting
+  it.
+
 - `aiwg doctor` reports a "Muse Code native extensions" section (CLI version,
   managed hooks, MCP registration) for `--provider muse` or Muse-deployed
   projects, and the bug and tester-report templates list every provider id,
