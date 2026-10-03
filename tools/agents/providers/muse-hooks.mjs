@@ -53,40 +53,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { stripJsonComments } from './base.mjs';
 import { resolveMuseXdgSkillsDir, museXdgSkillsDirRemediation } from './muse-paths.mjs';
 
 // ---------------------------------------------------------------------------
 // Shared JSON helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Strip JSON comments (JSONC) before parsing. Comments are *read* tolerance
- * only: merged files are written back as canonical JSON. The scanner tracks
- * string literals so `//` in a URL or `/*` in a glob matcher is preserved.
- */
-function stripJsonComments(jsonc) {
-  const text = String(jsonc);
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '"') {
-      let j = i + 1;
-      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
-      out += text.slice(i, j + 1);
-      i = j + 1;
-    } else if (ch === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') i++;
-    } else if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      i = end === -1 ? text.length : end + 2;
-    } else {
-      out += ch;
-      i++;
-    }
-  }
-  return out;
-}
 
 /**
  * Parse a JSON/JSONC document, failing closed with a coded error.

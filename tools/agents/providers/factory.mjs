@@ -785,8 +785,16 @@ export function deployFactoryHooks(dryRun) {
       fs.mkdirSync(settingsDir, { recursive: true });
     }
 
-    // Since we've successfully parsed the JSON, safe to write back
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+    // Parsed successfully, so the merge is safe to write back. It is written
+    // as canonical JSON, which drops operator comments and formatting, so
+    // keep a timestamped copy of a hand-edited user-global file first.
+    const updatedContent = JSON.stringify(settings, null, 2) + '\n';
+    if (hasExistingFile && originalContent !== JSON.stringify(JSON.parse(stripJsonComments(originalContent)), null, 2) + '\n') {
+      const backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      fs.copyFileSync(settingsPath, backupPath);
+      console.log(`Backed up ${settingsPath} to ${backupPath} (comments and formatting are not preserved)`);
+    }
+    fs.writeFileSync(settingsPath, updatedContent, 'utf8');
     console.log(`Deployed SessionStart hook to ${settingsPath}`);
     console.log('Hook: aiwg sync --dry-run --quiet (runs on every new Factory session)');
   }

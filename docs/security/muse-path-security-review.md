@@ -21,7 +21,7 @@ provider `muse`
 | Operator skill deletion | Mitigated in `tools/agents/providers/muse.mjs`: managed markers bound stale-prune cleanup. |
 | Unmanaged hook install | `tools/agents/providers/muse-hooks.mjs` manages only sidecar-tracked groups. |
 | Destructive hook rewrite | `muse-hooks.mjs` preserves operator groups and backs up hand-edited files. |
-| JSONC parse corrupting strings on rewrite | `muse-hooks.mjs` strips comments with a string-aware scanner, so URLs and glob matchers survive. |
+| JSONC parse corrupting strings on rewrite | `muse-hooks.mjs` uses the string-aware `stripJsonComments` in `base.mjs`, so URLs and globs survive. |
 | Symlinked `.muse` escape | Mitigated in `muse-hooks.mjs`: `assertMuseDirNotSymlink()` refuses hook writes. |
 | Malformed hook JSON clobber | Mitigated in `muse-hooks.mjs`: invalid JSON/shape aborts the merge with zero writes. |
 | MCP settings clobber | Mitigated in `muse-hooks.mjs`: `--mcp` is opt-in and backups precede writes. |

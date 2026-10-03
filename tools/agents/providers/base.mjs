@@ -592,15 +592,34 @@ export function toKebabCase(str) {
 }
 
 /**
- * Strip JSON comments (JSONC) for parsing
- * Used by Factory provider for settings.json
+ * Strip JSON comments (JSONC) for parsing. Used by the Factory and Muse
+ * settings and hooks merges, which write the parsed document back, so the
+ * scanner tracks string literals: `//` in a URL or a slash-star sequence in
+ * a glob matcher is data, not a comment. A regex-only stripper collapsed glob
+ * matchers inside strings and rejected any settings file containing a URL.
  */
 export function stripJsonComments(jsonc) {
-  // Remove single-line comments
-  let result = jsonc.replace(/\/\/.*$/gm, '');
-  // Remove multi-line comments
-  result = result.replace(/\/\*[\s\S]*?\*\//g, '');
-  return result;
+  const text = String(jsonc);
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
 }
 
 // ============================================================================
