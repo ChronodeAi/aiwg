@@ -16,6 +16,9 @@ triggers:
   - "clean up stale AIWG files"
   - "fix AIWG discovery"
   - "clean up AIWG issues"
+  - "help me set up jev"
+  - "use my jev token"
+  - "offload decisions to jev"
 ---
 
 # steward
@@ -53,6 +56,7 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 | Rules not being honored | "the agent ignored an AIWG rule and cited harness instructions" | Check `aiwg doctor` → "Workspace context graph". A missing or superseded precedence means the bootstrap never asserted rule authority; `aiwg regenerate` restores it |
 | Stale discovery | "discover cannot find a known skill" | Rebuild and sync the framework index, then re-run discovery |
 | Issue cleanup | "clean up stale issues" | Discover first: `issue-audit` for backlog cleanup, `address-issues` for implementation, `aiwg-issue` for AIWG product issues |
+| Jev decision offload | "help me set up jev", "use my jev token" | Follow the Jev setup routing below, then the `decision-offload` rule |
 
 ## AIWG Installation Routing
 
@@ -165,6 +169,41 @@ When a broken or stale route is confirmed, file an AIWG correction issue with
 the requested route, observed route, command output, AIWG version, provider, and
 reproduction command. Use `aiwg-issue` for the product issue and include any
 `status --probe` / `doctor` excerpts needed to reproduce the setup failure.
+
+## Jev Setup Routing
+
+When the user says "help me set up Jev", "use my jev token", or anything
+matching the Jev triggers, walk them through setup in order, then hand off to
+the `decision-offload` rule:
+
+1. Install or update the CLI:
+
+   ```bash
+   npm i -g aiwg@latest
+   ```
+
+2. Deploy the decision-engine addon (opt-in, excluded from bulk installs):
+
+   ```bash
+   aiwg use decision-engine
+   ```
+
+3. Store the token (never paste it into chat — read it from stdin) and verify:
+
+   ```bash
+   printf '%s' "$TOKEN" | aiwg decision setup jev --token-stdin --verify
+   ```
+
+   `setup` writes the credential file atomically with mode 0600 and counts as
+   the explicit opt-in that enables `aiwg decision ask`. Without it, `ask`
+   returns `fallback` with `reason: "not-configured"`.
+
+4. From here on, bounded decisions go through the `decision-offload` rule:
+   `aiwg decision ask ... --json`, use the answer when `status` is
+   `answered`, decide normally on `fallback`. Full user-facing steps are in
+   the Jev quickstart:
+
+   `@$AIWG_ROOT/docs/decision/jev-quickstart.md`
 
 ## Behavior
 

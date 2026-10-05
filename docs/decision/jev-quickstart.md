@@ -18,6 +18,8 @@ aiwg use decision-engine
 
 The `decision-engine` addon is opt-in and excluded from bulk installs
 (`aiwg use all`, framework deploys).
+New to AIWG? Start with [Install, connect and verify](../getting-started/install-connect-verify.md),
+then come back here to add the addon.
 
 ## 2. Store the token
 
