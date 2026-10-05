@@ -267,6 +267,8 @@ describe('decision-engine clean install from the packed tarball', () => {
     const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
     expect(existsSync(script)).toBe(true);
     expect(existsSync(path.join(consumer, SKILL, 'scripts', 'runtime-root.mjs'))).toBe(true);
+    // The stale-artifact prune must keep a named install's own rule (#2862).
+    expect(existsSync(path.join(consumer, '.claude', 'rules', 'decision-offload.md'))).toBe(true);
 
     const request = path.join(consumer, EXAMPLES, 'dispatcher-request-llm.json');
     const disabled = dispatch(script, request, consumer);
@@ -480,6 +482,7 @@ describe('decision-engine clean install from the packed tarball', () => {
     await mkdir(bulk, { recursive: true });
     ok(aiwg(['use', 'all', '--copy-all', '--provider', 'claude', '--target', bulk], consumer));
     expect(existsSync(path.join(bulk, SKILL))).toBe(false);
+    expect(existsSync(path.join(bulk, '.claude', 'rules', 'decision-offload.md'))).toBe(false);
     const manifest = JSON.parse(await readFile(path.join(installRoot, 'agentic/code/addons/decision-engine/manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({ autoInstall: false, explicitInstall: true });
     // Other autoInstall:false addons (testing-quality here) are still deployed.

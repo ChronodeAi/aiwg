@@ -424,7 +424,11 @@ function normalizeAnswer(request: DecisionAdapterRequest, body: Record<string, u
       if (canonicalJson(legend[String(index)]) !== canonicalJson(level)) throw new DecisionValidationError('Score legend does not match declared levels');
     });
     const mean = Object.entries(distribution).reduce((sum, [index, probability]) => sum + Number(index) * probability, 0);
-    if (Math.abs(mean - answer.score) > 0.02) throw new DecisionValidationError('Score is not the distribution weighted mean');
+    // Jev reports probabilities and the score to two decimals, so each probability carries up to
+    // 0.005 of rounding error, weighted by its index, plus 0.005 on the score itself.
+    const indexSum = Object.keys(distribution).reduce((sum, index) => sum + Number(index), 0);
+    const tolerance = Math.max(0.02, 0.005 * indexSum + 0.005) + 1e-9;
+    if (Math.abs(mean - answer.score) > tolerance) throw new DecisionValidationError('Score is not the distribution weighted mean');
     validateDecisionValue(request.definition, answer.score);
     return success(answer.score, model, usage, uncertainty(answer.confidence, distribution, 'typesafe-distribution-v1'));
   }

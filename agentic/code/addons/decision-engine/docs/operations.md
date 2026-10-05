@@ -71,6 +71,10 @@ a new binding pin and invocation. Existing receipts are never reinterpreted.
 Outcomes are data. Any downstream action goes through the ordinary AIWG policy
 and authorization gates independently.
 
+Single-question offload through `aiwg decision ask` is enabled by
+`aiwg decision setup jev` and governed for agents by the `decision-offload`
+rule. See the [Jev quickstart](../../../../../docs/decision/jev-quickstart.md).
+
 To explicitly upgrade a string-only definition, build the package and run
 `node agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/decision-convert-definition.mjs <old.json> <new.json>`.
 The command refuses to overwrite an existing output, prints the old/new digests,

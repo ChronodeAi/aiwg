@@ -155,11 +155,15 @@ Example: `aiwg discover "pipeline architect"`. Phrases below pass straight to `a
 | Agentic or bounded classification | `agentic classification` | decision-engine (opt-in) |
 | Jev decision engine | `Jev decision engine` | decision-engine (opt-in) |
 | Reduce frontier tokens with bounded decisions | `classify to reduce frontier tokens` | decision-engine (opt-in) |
+| Offload a yes/no, pick-one, or 1-N decision to Jev | `offload decisions to jev` | decision-engine (opt-in) |
+| Set up Jev with a token | `set up jev` | decision-engine (opt-in) |
 | Questions sharing authorized state | `shared-state batching` | decision-engine (opt-in) |
 | Offline decision fixtures and readiness plans | `decision playground` | decision-engine (opt-in) |
 
 `decision-engine` requires explicit installation: `aiwg use decision-engine`.
-It is excluded from bulk installs. Discover `decision-evaluate` for pinned
+It is excluded from bulk installs. Discover `decision-offload` for
+single-question offload via `aiwg decision ask` (enabled by
+`aiwg decision setup jev`); discover `decision-evaluate` for pinned
 classification requests; evaluation requires `AIWG_DECISION_ENABLED=1` plus
 an explicit backend binding and approved projection for live egress. Library
 batching also needs host policies; discovering the skill does not enable it.

@@ -19,6 +19,13 @@ remove it. Once installed, the dispatcher still refuses to run unless
 migrate existing workflows, or give any outcome the authority to perform an
 action.
 
+The single-question `aiwg decision ask` path is enabled separately by
+`aiwg decision setup jev`, which stores the credential and records the
+opt-in. Without setup, `ask` returns a fallback meaning "decide it yourself
+with the LLM". Offloading helps on workloads with many small bounded
+questions; savings vary by workload. See the
+[Jev quickstart](../../../../docs/decision/jev-quickstart.md).
+
 Runnable offline examples ship with the addon in [`examples/`](examples/README.md).
 They are included in the npm package at
 `node_modules/aiwg/agentic/code/addons/decision-engine/examples/`.

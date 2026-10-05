@@ -7,6 +7,27 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Turnkey Jev decision offload (#2862). `aiwg decision setup jev --token-stdin --verify`
+  stores a Jev token in a user-level 0600 credential file
+  (`~/.config/aiwg/credentials/jev.json`), records the opt-in, and checks it with one
+  live call. `aiwg decision ask --question "<q>" (--yes-no | --choices id=meaning,... |
+  --scale 1-5)` sends one bounded decision to Jev and returns
+  `aiwg-decision-ask/v1` JSON. Abstentions, errors, timeouts, a missing setup, and
+  confidence below `--threshold` (default 0.8) all return `fallback: "llm"`, which
+  means the agent decides as usual. The MCP `decision` toolset adds `decision-ask`.
+  The decision-engine addon ships the `decision-offload` rule and skill, which send
+  agents' bounded decisions to Jev first. The steward, aiwg-utils quickref, and
+  language map now route "set up jev". The quickstart is
+  `docs/decision/jev-quickstart.md`.
+
+### Fixed
+
+- The Jev adapter rejected valid Score responses whose two-decimal probability
+  rounding moved the weighted mean by 0.02 or more (live `jev-1.13.0`: mean 3.98,
+  score 3.96). The tolerance now covers that rounding.
+
 ## [2026.10.0] - 2026-10-02 - "Muse Code stable, gates and decision studies"
 
 ### Changed
