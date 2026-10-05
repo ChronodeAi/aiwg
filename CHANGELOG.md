@@ -7,6 +7,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
+
 ### Added
 
 - Turnkey Jev decision offload (#2862). `aiwg decision setup jev --token-stdin --verify`
