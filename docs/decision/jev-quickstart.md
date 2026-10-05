@@ -47,11 +47,7 @@ endpoint is the official `https://api.typesafe.ai/v1/systemone` unless
 
 ## 3. Verify
 
-```bash
-printf '%s' "$TOKEN" | aiwg decision setup jev --token-stdin --verify
-```
-
-`--verify` makes one tiny live yes/no call and reports status, model, and
+The `--verify` flag in step 2 makes one tiny live yes/no call and reports status, model, and
 usage. Without `--token-stdin`, `setup` uses the env token if one is present
 and otherwise exits 2 with instructions.
 
@@ -70,8 +66,8 @@ aiwg decision ask --question "Is this test failure flaky?" --yes-no \
 
 # Pick one of N known options
 aiwg decision ask --question "Which file owns retry policy?" \
-  --choices cli,config,runtime,policy \
-  --context "cli=src/cli.ts config=src/config.ts runtime=src/runtime.ts policy=src/policy.ts" --json
+  --choices "cli=src/cli.ts argument parsing,config=src/config.ts settings loading,runtime=src/runtime.ts execution loop,policy=src/policy.ts retry and backoff rules" \
+  --json
 
 # 1-5 severity score
 aiwg decision ask --question "Severity of: null deref in login handler" \
@@ -79,7 +75,10 @@ aiwg decision ask --question "Severity of: null deref in login handler" \
 ```
 
 `--choices` takes 2–255 ids matching `[A-Za-z0-9_.-]{1,64}` with no
-duplicates; `--scale lo-hi` allows at most 10 levels. Context is untrusted
+duplicates. Write each as `id=what it means` (no commas in the description):
+Jev sees only the description, so bare ids produce more low-confidence
+fallbacks. `--scale lo-hi` allows at most 10 levels and answers the most
+likely level. Context is untrusted
 data capped at 32 KiB — larger context exits 2 with
 `reason: "context-too-large"`. Nothing is written and nothing is executed.
 
@@ -126,7 +125,7 @@ force-disables it.
 | `reason: "context-too-large"` (exit 2) | Trim context to 32 KiB or less. |
 | Credential file refused | Fix permissions: parent dir 0700, file 0600; group/world-readable files are refused. |
 | Frequent timeouts | Raise `--timeout-ms` (default 15000); timeouts fall back to the LLM. |
-| Low-confidence fallbacks | Lower `--threshold`, or accept the LLM decision — fallback is the normal path, not an error. |
+| Low-confidence fallbacks | Give each choice a description (`id=meaning`) and add context. Lower `--threshold` only if wrong answers are cheap. Fallback is the normal path, not an error. |
 
 See also the [CLI/MCP driver guide](cli-mcp-driver.md), the
 [transport contract](jev-transport.md), and the

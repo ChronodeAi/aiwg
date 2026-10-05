@@ -78,8 +78,8 @@ aiwg decision ask --question "Is this test failure flaky?" --yes-no \
 
 # Which of these 4 files owns X (pick one)?
 aiwg decision ask --question "Which file owns retry policy?" \
-  --choices cli,config,runtime,policy \
-  --context "cli=src/cli.ts config=src/config.ts runtime=src/runtime.ts policy=src/policy.ts" --json
+  --choices "cli=src/cli.ts argument parsing,config=src/config.ts settings loading,runtime=src/runtime.ts execution loop,policy=src/policy.ts retry and backoff rules" \
+  --json
 
 # Severity 1-5 for a triage item
 aiwg decision ask --question "Severity of: <one-line summary>" --scale 1-5 \

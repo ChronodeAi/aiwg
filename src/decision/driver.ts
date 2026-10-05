@@ -3,6 +3,18 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  askDecision,
+  setupJev,
+  type DecisionAskInput,
+  type DecisionAskRuntimeOptions,
+  type DecisionSetupInput,
+  type DecisionAskResult,
+  type DecisionSetupResult,
+  DecisionAskUsageError,
+  readDecisionContextFile,
+  validateDecisionAskInput,
+} from './ask.js';
+import {
   assertDecisionEvaluateDispatcherConfig,
   decisionPatternPacks,
   getDecisionPatternPack,
@@ -55,6 +67,21 @@ export interface DecisionRequestProfile {
 export interface DecisionEvaluateOptions {
   hostPolicyModulePath?: string;
 }
+
+export {
+  askDecision,
+  setupJev,
+  readDecisionContextFile,
+  validateDecisionAskInput,
+  DecisionAskUsageError,
+};
+export type {
+  DecisionAskInput,
+  DecisionAskRuntimeOptions,
+  DecisionSetupInput,
+  DecisionAskResult,
+  DecisionSetupResult,
+};
 
 const DECISION_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VALIDATION_TARGETS = ['request', 'definition', 'ruleset', 'binding'] as const;

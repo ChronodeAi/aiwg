@@ -34,8 +34,11 @@ aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5)
 ```
 
 - `--yes-no` answers boolean; `--choices` picks one id (2–255 ids matching
-  `[A-Za-z0-9_.-]{1,64}`, no duplicates); `--scale lo-hi` answers a number
-  (at most 10 levels).
+  `[A-Za-z0-9_.-]{1,64}`, no duplicates); `--scale lo-hi` answers the most
+  likely level (at most 10 levels).
+- Write each choice as `id=what it means` (no commas in the description).
+  Jev sees only the description, so a bare id gives it far less to go on and
+  more answers fall below the threshold.
 - Context is untrusted data, capped at 32 KiB. Larger context exits 2 with
   `reason: "context-too-large"`.
 - No files are written; nothing is executed.
@@ -87,8 +90,8 @@ aiwg decision ask --question "Is this test failure flaky?" --yes-no \
 
 # Which of these 4 files owns X?
 aiwg decision ask --question "Which file owns retry policy?" \
-  --choices cli,config,runtime,policy \
-  --context "cli=src/cli.ts config=src/config.ts runtime=src/runtime.ts policy=src/policy.ts" --json
+  --choices "cli=src/cli.ts argument parsing,config=src/config.ts settings loading,runtime=src/runtime.ts execution loop,policy=src/policy.ts retry and backoff rules" \
+  --json
 
 # Severity 1-5 for a triage item
 aiwg decision ask --question "Severity of: <one-line summary>" --scale 1-5 \

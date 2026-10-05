@@ -82,6 +82,21 @@ const SYNTHETIC_SETUP = z.object({
   pattern: z.object({ id: z.string(), version: z.string() }).passthrough(),
   files: z.record(z.string(), z.unknown()),
 }).passthrough();
+const ASK = z.object({
+  schema: z.literal('aiwg-decision-ask/v1'),
+  status: z.enum(['answered', 'fallback']),
+  answer: z.union([z.string(), z.boolean(), z.number()]).nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  probability: z.number().min(0).max(1).optional(),
+  fallback: z.enum(['llm']).nullable(),
+  reason: z.string(),
+  model: z.string().nullable(),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+  }).nullable(),
+  latencyMs: z.number().nonnegative(),
+}).passthrough();
 
 let driverPromise;
 
@@ -175,6 +190,31 @@ export function registerDecisionToolset(server) {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   }, async ({ profile, opt_in }) => (await driver()).evaluateMcpProfile(profile, opt_in, options()), EVALUATE);
+
+  registerJsonTool(server, 'decision-ask', {
+    title: 'Ask bounded Jev decision',
+    description: 'Ask a bounded yes/no, choice, or small ordinal decision. Falls back to the caller on missing setup or low confidence.',
+    inputSchema: {
+      question: z.string().min(1),
+      yes_no: z.boolean().default(false),
+      choices: z.array(z.string()).min(2).max(255).optional().describe('Choice ids, each optionally written as id=description so Jev knows what the option means'),
+      scale: z.object({ low: z.number().int(), high: z.number().int() }).optional(),
+      context: z.string().optional(),
+      threshold: z.number().min(0).max(1).default(0.8),
+      timeout_ms: z.number().int().positive().default(15000),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  }, async ({ question, yes_no, choices, scale, context, threshold, timeout_ms }) => {
+    const modeCount = (yes_no ? 1 : 0) + (choices ? 1 : 0) + (scale ? 1 : 0);
+    if (modeCount !== 1) throw new Error('Select exactly one of yes_no, choices, or scale');
+    return (await driver()).askDecision({
+      question,
+      mode: yes_no ? { kind: 'yes-no' } : choices ? { kind: 'choices', choices } : { kind: 'scale', low: scale.low, high: scale.high },
+      ...(context === undefined ? {} : { context }),
+      threshold,
+      timeoutMs: timeout_ms,
+    }, options());
+  }, ASK);
 
   registerJsonTool(server, 'decision-setup-synthetic-classification', {
     title: 'Prepare synthetic classification artifacts',
