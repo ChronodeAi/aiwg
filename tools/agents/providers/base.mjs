@@ -1363,13 +1363,13 @@ export function computeAllArtifactBasenames(srcRoot, type) {
     // Soul companions live alongside agents and are deployed with them —
     // keep their stems in the desired set so the prune never removes them.
     add(frameworkArtifacts.souls || []);
-    add(getAddonAgentFiles(aiwgRoot));
+    add(getAddonAgentFiles(aiwgRoot, [], { includeExplicit: true }));
   } else if (type === 'commands') {
     add(frameworkArtifacts.commands);
-    add(getAddonCommandFiles(aiwgRoot));
+    add(getAddonCommandFiles(aiwgRoot, [], { includeExplicit: true }));
   } else if (type === 'rules') {
     add(frameworkArtifacts.rules);
-    add(getAddonRuleFiles(aiwgRoot));
+    add(getAddonRuleFiles(aiwgRoot, [], { includeExplicit: true }));
   }
 
   return stems;
@@ -2264,9 +2264,10 @@ export function collectFrameworkArtifacts(srcRoot, mode, options = {}) {
 /**
  * Discover all addons in the agentic/code/addons directory
  * @param {string} srcRoot - Source root directory
+ * @param {{includeExplicit?: boolean}} [options] - includeExplicit also returns explicitInstall addons
  * @returns {Array<{name: string, path: string, manifest: object}>} - Array of addon info
  */
-export function discoverAddons(srcRoot) {
+export function discoverAddons(srcRoot, { includeExplicit = false } = {}) {
   const addonsDir = path.join(srcRoot, 'agentic', 'code', 'addons');
   if (!fs.existsSync(addonsDir)) return [];
 
@@ -2290,7 +2291,9 @@ export function discoverAddons(srcRoot) {
     if (manifest.devOnly === true) continue;
     // explicitInstall addons deploy only when named (`aiwg use <addon>`), never
     // as part of a framework or `all` bulk deploy (#2641).
-    if (manifest.explicitInstall === true) continue;
+    // The stale-artifact prune passes includeExplicit so a named install's own
+    // files stay in its desired set and are not deleted right after deployment.
+    if (manifest.explicitInstall === true && !includeExplicit) continue;
 
     addons.push({
       name: entry.name,
@@ -2308,8 +2311,8 @@ export function discoverAddons(srcRoot) {
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
  * @returns {string[]} - Array of agent file paths
  */
-export function getAddonAgentFiles(srcRoot, excludeAddons = []) {
-  const addons = discoverAddons(srcRoot);
+export function getAddonAgentFiles(srcRoot, excludeAddons = [], options = {}) {
+  const addons = discoverAddons(srcRoot, options);
   const files = [];
 
   for (const addon of addons) {
@@ -2330,8 +2333,8 @@ export function getAddonAgentFiles(srcRoot, excludeAddons = []) {
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
  * @returns {string[]} - Array of command file paths
  */
-export function getAddonCommandFiles(srcRoot, excludeAddons = []) {
-  const addons = discoverAddons(srcRoot);
+export function getAddonCommandFiles(srcRoot, excludeAddons = [], options = {}) {
+  const addons = discoverAddons(srcRoot, options);
   const files = [];
 
   for (const addon of addons) {
@@ -2651,8 +2654,8 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
   return names.length + demotedNames.length;
 }
 
-export function getAddonRuleFiles(srcRoot, excludeAddons = []) {
-  const addons = discoverAddons(srcRoot);
+export function getAddonRuleFiles(srcRoot, excludeAddons = [], options = {}) {
+  const addons = discoverAddons(srcRoot, options);
   const files = [];
 
   for (const addon of addons) {
