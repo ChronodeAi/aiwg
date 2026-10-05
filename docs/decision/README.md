@@ -19,6 +19,9 @@ The standard test suite uses fixtures only. The live Jev smoke is separately
 gated by `AIWG_DECISION_JEV_LIVE_SMOKE=1` and
 `AIWG_DECISION_JEV_API_KEY`.
 
+Single-question offload through `aiwg decision ask` is enabled by
+`aiwg decision setup jev`; see the [Jev quickstart](jev-quickstart.md).
+
 The dispatcher request is deliberately narrower than the TypeScript library.
 Public request JSON can name artifact paths, adapter configuration, projection
 policy files, credentials by environment-variable name, and trusted
