@@ -9,7 +9,9 @@ import { ClaudeSessionAdapter } from './adapters/claude.js';
 import { CodexSessionAdapter } from './adapters/codex.js';
 import { CursorSessionAdapter } from './adapters/cursor.js';
 import { FactorySessionAdapter } from './adapters/factory.js';
-import { MuseSessionAdapter, museNativeSourceMatchesWorkspace } from './adapters/muse.js';
+import {
+  MuseSessionAdapter, inspectMuseNativeWorkspace, type MuseWorkspaceInspection,
+} from './adapters/muse.js';
 import { OmpSessionAdapter, readOmpSessionHeader } from './adapters/omp.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { PiSessionAdapter } from './adapters/pi.js';
@@ -54,6 +56,10 @@ export interface DiscoveryProviderReport {
   dateRangeBasis: 'source-mtime';
   reasonCode: string | null;
   remediation: string | null;
+  museSourceInspections?: Array<MuseWorkspaceInspection & {
+    sourceKey: string;
+    redactedLocator: string;
+  }>;
 }
 
 export interface SessionDiscoveryManifest {
@@ -179,16 +185,24 @@ export async function discoverWorkspaceHistories(
       allowedRoots: availableRoots,
     };
     const providerSources: DiscoveryManifestSource[] = [];
+    const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
     for await (const descriptor of entry.adapter.discover(scope)) {
-      const locator = await canonicalPath(descriptor.locator);
-      if (entry.provider === 'codex'
-        && !await codexSourceMatchesWorkspace(locator, workspacePath)) continue;
-      if (entry.provider === 'muse'
-        && !await museNativeSourceMatchesWorkspace({
+      if (entry.provider === 'muse') {
+        const inspection = await inspectMuseNativeWorkspace({
           ...descriptor,
           sourceId: 'discovery',
           authorizedScope: scope,
-        }, workspacePath)) continue;
+        }, workspacePath);
+        museSourceInspections.push({
+          sourceKey: sha256(['muse-workspace-inspection-v1', descriptor.locator].join('\0')),
+          redactedLocator: redactSourceLocator(descriptor.locator),
+          ...inspection,
+        });
+        if (inspection.outcome !== 'matched') continue;
+      }
+      const locator = await canonicalPath(descriptor.locator);
+      if (entry.provider === 'codex'
+        && !await codexSourceMatchesWorkspace(locator, workspacePath)) continue;
       const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
       if (ompHeader && resolve(ompHeader.cwd) !== workspacePath) continue;
       const details = await stat(locator);
@@ -214,16 +228,28 @@ export async function discoverWorkspaceHistories(
       providerSources.push(source);
       candidates.push(source);
     }
-    reports.set(entry.provider, providerReport(
+    const incompleteMuseInspection = museSourceInspections.some(
+      (inspection) => inspection.outcome === 'inconclusive',
+    );
+    const report = providerReport(
       entry.provider,
-      'checked',
+      incompleteMuseInspection ? 'not-checked' : 'checked',
       'discoverable',
       providerSources,
-      providerSources.length === 0 ? 'NO_WORKSPACE_SOURCES' : null,
-      providerSources.length === 0
+      incompleteMuseInspection ? 'MUSE_SOURCE_INSPECTION_INCOMPLETE'
+        : providerSources.length === 0 ? 'NO_WORKSPACE_SOURCES' : null,
+      incompleteMuseInspection
+        ? 'Review museSourceInspections; authorize a supported Muse export for unresolved sources before claiming workspace coverage.'
+        : providerSources.length === 0
         ? `The ${entry.provider} root was checked, but no source matched the authorized workspace.`
         : null,
-    ));
+    );
+    if (entry.provider === 'muse') {
+      report.museSourceInspections = museSourceInspections.sort(
+        (a, b) => a.sourceKey.localeCompare(b.sourceKey),
+      );
+    }
+    reports.set(entry.provider, report);
   }
 
   for (const provider of SESSION_PROVIDER_IDS) {
@@ -263,6 +289,7 @@ export async function discoverWorkspaceHistories(
       provider: provider.provider,
       status: provider.status,
       reasonCode: provider.reasonCode,
+      ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
   return {
@@ -385,6 +412,7 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
       provider: provider.provider,
       status: provider.status,
       reasonCode: provider.reasonCode,
+      ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
   return sha256(JSON.stringify(identity));

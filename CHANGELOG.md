@@ -7,6 +7,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- `aiwg sessions discover --muse-root` dropped every matching Muse session log
+  longer than 100 records, with no diagnostic (#2865). Discovery now streams each
+  log under bounded limits and stops at the first matching workspace evidence.
+  Each Muse source gets a content-free inspection receipt (`matched`, `mismatch`,
+  or `inconclusive` with a reason code), and an inconclusive inspection keeps Muse
+  coverage partial instead of counting as a mismatch. Import also accepts Muse
+  Code 1.4.3 `runtime.session` mode records, which carry an event without a kind;
+  before, one such record made the whole session fail with `MALFORMED_SOURCE`.
+
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 
 ### Added
