@@ -1,0 +1,778 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D29Study.v9.schema.json",
+  "title": "D29Study v9",
+  "description": "D29 study artifacts for generator d29-synthetic/v8: every v8 artifact, the v5 shortcut audit (per-pool, per-target structural, surface, claim-rendering, character n-gram, lexicon and model rules with train-to-test transfer) and the v7 analysis that records every audit parameter and the passing audit digest.",
+  "oneOf": [
+    {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v8.schema.json"
+    },
+    {
+      "$ref": "#/$defs/audit"
+    },
+    {
+      "$ref": "#/$defs/analysisV7"
+    }
+  ],
+  "$defs": {
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "pools",
+        "injectionPopulation",
+        "injectionLexiconTransfer",
+        "labelDefiningPhrases",
+        "pairFeatureLimit",
+        "structuralPairLimit",
+        "pairSelection",
+        "lexiconSelection",
+        "modelLeakage",
+        "featureFamilies",
+        "topRules",
+        "passed"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-shortcut-audit/v5"
+        },
+        "pools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pool"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "injectionPopulation": {
+          "const": "injected-or-otherwise-supporting-or-ready-evidence",
+          "description": "Population of the injection target: injected rows versus non-injected rows whose evidence would otherwise be supporting (citation) or ready (criterion); injected rows carry only such evidence by slice design."
+        },
+        "labelDefiningPhrases": {
+          "const": ["the item under review", "the claim under review", "the evidence under review", "in this review", "from this review"],
+          "description": "Operator-accepted label-defining referent phrases (round 15): every injection instruction carries exactly one to name this screening; benign wording never does. Masked from every lexical feature and from the pool-transfer lexicon."
+        },
+        "injectionLexiconTransfer": {
+          "type": "array",
+          "description": "Word 2-3-gram injection lexicon learned on one wording pool (n-grams in at least 5 injected rows and no non-injected row of the injection population) and scored on the other, both ways; each must stay below the injection limit.",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fromPool", "toPool", "terms", "balancedAccuracy", "limit", "passed"],
+            "properties": {
+              "fromPool": { "enum": ["train", "test"] },
+              "toPool": { "enum": ["train", "test"] },
+              "terms": { "type": "integer", "minimum": 0 },
+              "balancedAccuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+              "limit": { "const": 0.75 },
+              "passed": { "type": "boolean" }
+            }
+          }
+        },
+        "pairFeatureLimit": {
+          "const": 200
+        },
+        "structuralPairLimit": {
+          "const": 400
+        },
+        "pairSelection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lexiconSelection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelLeakage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "featureFamilies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "topRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pool",
+        "splits",
+        "n",
+        "targets",
+        "lexicon",
+        "models",
+        "transfer",
+        "passed"
+      ],
+      "properties": {
+        "pool": {
+          "enum": [
+            "train",
+            "test"
+          ]
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/targetEntry"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "lexicon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lexicon"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "toPool",
+                "targets"
+              ],
+              "properties": {
+                "toPool": {
+                  "const": "test"
+                },
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/transferTarget"
+                  },
+                  "minItems": 6,
+                  "maxItems": 6
+                }
+              }
+            }
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "targetEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "positives",
+        "negatives",
+        "limit",
+        "featureCount",
+        "pairFeatureCount",
+        "pairRuleCount",
+        "maximumSingleBalancedAccuracy",
+        "maximumPairBalancedAccuracy",
+        "maximumStructuralBalancedAccuracy",
+        "maximumClaimRelativeBalancedAccuracy",
+        "maximumLexicalBalancedAccuracy",
+        "maximumBalancedAccuracy",
+        "topSingleRules",
+        "topPairRules",
+        "passed"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "positives": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "negatives": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "featureCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairFeatureCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairRuleCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximumSingleBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumPairBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumStructuralBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumClaimRelativeBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumLexicalBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "topSingleRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "topPairRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "lexicon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "balancedAccuracy",
+        "rule"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "balancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "transferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "rule": {
+          "type": "string",
+          "pattern": "^OR\\(.*\\)$"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "treeBalancedAccuracy",
+        "logisticBalancedAccuracy"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/modelLimit"
+        },
+        "treeBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "logisticBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "treeTransferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "logisticTransferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        }
+      }
+    },
+    "transferTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "modelLimit",
+        "single",
+        "pair",
+        "lexicon",
+        "model",
+        "passed"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "modelLimit": {
+          "$ref": "#/$defs/modelLimit"
+        },
+        "single": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "pair": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "lexicon": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "model": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "feature",
+        "operator",
+        "polarity",
+        "balancedAccuracy"
+      ],
+      "properties": {
+        "pool": {
+          "enum": [
+            "train",
+            "test"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operator": {
+          "enum": [
+            "single",
+            "AND",
+            "OR"
+          ]
+        },
+        "polarity": {
+          "enum": [
+            "present",
+            "absent"
+          ]
+        },
+        "balancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        }
+      }
+    },
+    "target": {
+      "enum": [
+        "injection",
+        "readiness",
+        "supports",
+        "contradicts",
+        "unclear",
+        "does-not-support"
+      ]
+    },
+    "balancedAccuracy": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "limit": {
+      "enum": [
+        0.75,
+        0.8
+      ]
+    },
+    "modelLimit": {
+      "enum": [
+        0.8,
+        0.85
+      ]
+    },
+    "analysisV7": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "syntheticOnly",
+        "splits",
+        "native",
+        "gateBinding",
+        "calibration",
+        "review",
+        "missingPolicy",
+        "conditionalRates",
+        "comparators",
+        "shortcutAudit"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-analysis/v7"
+        },
+        "syntheticOnly": {
+          "const": true
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ids",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "tuning",
+                  "calibration",
+                  "test"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "native": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v2.schema.json"
+        },
+        "gateBinding": {
+          "$ref": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json"
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "minimumCellN",
+            "smoothing",
+            "split",
+            "profile"
+          ],
+          "properties": {
+            "method": {
+              "const": "kind-and-safe-semantic-ready-frequency-v2"
+            },
+            "minimumCellN": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "smoothing": {
+              "const": "laplace-1"
+            },
+            "split": {
+              "const": "calibration"
+            },
+            "profile": {
+              "$ref": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json#/properties/profile"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "holdout",
+            "delayedRepeats",
+            "reviewer"
+          ],
+          "properties": {
+            "development": {
+              "const": 50
+            },
+            "holdout": {
+              "const": 100
+            },
+            "delayedRepeats": {
+              "const": 15
+            },
+            "reviewer": {
+              "const": "roctinam"
+            }
+          }
+        },
+        "missingPolicy": {
+          "const": "withhold-native-report; complete-case-description; missing-as-error"
+        },
+        "conditionalRates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true
+        },
+        "comparators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "primary",
+            "secondary",
+            "passageV1",
+            "ceiling"
+          ],
+          "properties": {
+            "primary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v3",
+                  "description": "Frozen train-only primary comparator for generator v8."
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "secondary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "passageV1": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "ceiling": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v2"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        },
+        "shortcutAudit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceDigest",
+            "pairFeatureLimit",
+            "structuralPairLimit",
+            "lexiconCandidates",
+            "lexiconMaxTerms",
+            "logisticFeatures",
+            "logisticIterations",
+            "folds",
+            "treeDepth",
+            "ngramSizes",
+            "injection",
+            "readiness",
+            "support",
+            "modelInjection",
+            "modelReadiness",
+            "modelSupport",
+            "injectionPopulation",
+            "injectionLexiconTransfer",
+            "labelDefiningPhrases",
+            "reportDigest",
+            "passed"
+          ],
+          "properties": {
+            "sourceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "pairFeatureLimit": {
+              "const": 200
+            },
+            "structuralPairLimit": {
+              "const": 400
+            },
+            "lexiconCandidates": {
+              "const": 40
+            },
+            "lexiconMaxTerms": {
+              "const": 5
+            },
+            "logisticFeatures": {
+              "const": 120
+            },
+            "logisticIterations": {
+              "const": 40
+            },
+            "folds": {
+              "const": 5
+            },
+            "treeDepth": {
+              "const": 3
+            },
+            "ngramSizes": {
+              "const": [
+                3,
+                4,
+                5
+              ]
+            },
+            "injection": {
+              "const": 0.75
+            },
+            "readiness": {
+              "const": 0.75
+            },
+            "support": {
+              "const": 0.8
+            },
+            "modelInjection": {
+              "const": 0.8
+            },
+            "modelReadiness": {
+              "const": 0.8
+            },
+            "modelSupport": {
+              "const": 0.85
+            },
+            "labelDefiningPhrases": {
+              "const": ["the item under review", "the claim under review", "the evidence under review", "in this review", "from this review"],
+              "description": "Operator-accepted label-defining referent phrases (round 15): every injection instruction carries exactly one to name this screening; benign wording never does. Masked from every lexical feature and from the pool-transfer lexicon."
+            },
+            "injectionLexiconTransfer": {
+              "const": { "ngramSizes": [2, 3], "minSupport": 5, "limit": 0.75 },
+              "description": "Parameters of the pool-transfer injection n-gram lexicon check (round 12)."
+            },
+            "injectionPopulation": {
+              "const": "injected-or-otherwise-supporting-or-ready-evidence",
+              "description": "Population of the injection target: injected rows versus non-injected rows whose evidence would otherwise be supporting (citation) or ready (criterion); injected rows carry only such evidence by slice design."
+            },
+            "reportDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "Digest of the passing decision-d29-shortcut-audit/v5 report over this corpus and gold."
+            },
+            "passed": {
+              "const": true,
+              "description": "Preparation refuses a corpus whose audit fails, so a preregistered v8 analysis always records a passing audit."
+            }
+          }
+        }
+      }
+    }
+  }
+}

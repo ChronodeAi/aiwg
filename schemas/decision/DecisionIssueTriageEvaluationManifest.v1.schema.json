@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json",
+  "title": "DecisionIssueTriageEvaluationManifest.v1",
+  "description": "Preregistered offline/holdout manifest for the issue triage shadow pilot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "pilotPack",
+    "calibration",
+    "dataset",
+    "slices",
+    "thresholds",
+    "holdout",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "decision-issue-triage-evaluation-manifest/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "pilotPack": { "$ref": "#/$defs/pin" },
+    "calibration": {
+      "description": "Calibration registry, policy and per-sample request rule frozen before holdout access; all null pins no registry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registryDigest", "policyDigest", "requestRule"],
+      "properties": {
+        "registryDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
+        "policyDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
+        "requestRule": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["requestedAlias", "runIdPrefix", "calibrationArtifactId", "notBefore"],
+          "properties": {
+            "requestedAlias": { "type": "string", "minLength": 1 },
+            "runIdPrefix": { "type": "string", "minLength": 1 },
+            "calibrationArtifactId": { "type": ["string", "null"], "minLength": 1 },
+            "notBefore": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest", "splitMethod", "minimumTotal", "minimumPerSupportedSlice", "splitDigests"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "splitMethod": { "enum": ["time", "source"] },
+        "minimumTotal": { "type": "integer", "minimum": 1 },
+        "minimumPerSupportedSlice": { "type": "integer", "minimum": 1 },
+        "splitDigests": {
+          "description": "Digests of the frozen tuning, calibration and test memberships, pinned before holdout access.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tuning", "calibration", "test"],
+          "properties": {
+            "tuning": { "$ref": "#/$defs/digest" },
+            "calibration": { "$ref": "#/$defs/digest" },
+            "test": { "$ref": "#/$defs/digest" }
+          }
+        }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "dimension", "minimumSupport", "whenInsufficient", "aggregation"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "dimension": {
+            "enum": ["issue-type", "area", "state-completeness", "adversarial-authority", "new-or-unseen-category"]
+          },
+          "minimumSupport": { "type": "integer", "minimum": 1 },
+          "whenInsufficient": { "const": "label-insufficient" },
+          "aggregation": { "enum": ["report-supported", "suppress-small-n"] }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumFalseDuplicateRate",
+        "maximumFalseAutoRate",
+        "qualityNonInferiorityMargin",
+        "minimumAcceptedCoverage",
+        "confidenceInterval",
+        "minimumTotalSamples",
+        "minimumPerSliceSamples",
+        "minimumDuplicateSamples",
+        "minimumDuplicateRecall",
+        "benefit"
+      ],
+      "properties": {
+        "maximumFalseDuplicateRate": { "$ref": "#/$defs/unit" },
+        "maximumFalseAutoRate": { "$ref": "#/$defs/unit" },
+        "qualityNonInferiorityMargin": {
+          "description": "Cascade-minus-baseline accuracy margin; non-positive. -0.02 allows the cascade to be at most two points worse. Superiority (positive) margins are not supported.",
+          "type": "number",
+          "minimum": -1,
+          "maximum": 0
+        },
+        "minimumAcceptedCoverage": { "$ref": "#/$defs/unit" },
+        "confidenceInterval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "level"],
+          "properties": {
+            "method": { "enum": ["wilson", "bootstrap", "exact"] },
+            "level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 }
+          }
+        },
+        "minimumTotalSamples": { "type": "integer", "minimum": 1 },
+        "minimumPerSliceSamples": { "type": "integer", "minimum": 1 },
+        "minimumDuplicateSamples": {
+          "description": "Minimum labeled duplicate cases before duplicate metrics can support PROMOTE.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimumDuplicateRecall": {
+          "description": "Minimum Wilson lower bound of duplicate recall at the preregistered level.",
+          "$ref": "#/$defs/unit"
+        },
+        "benefit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mustBePositive", "metric"],
+          "properties": {
+            "mustBePositive": { "const": true },
+            "metric": { "enum": ["total-task-token-cost", "reviewer-time"] }
+          }
+        }
+      }
+    },
+    "holdout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["thresholdsRegisteredAt", "holdoutAccessedAt"],
+      "properties": {
+        "thresholdsRegisteredAt": { "type": "string", "format": "date-time" },
+        "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extendsEvalIntegrity", "preserveGateDecision"],
+      "properties": {
+        "extendsEvalIntegrity": { "const": true },
+        "preserveGateDecision": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

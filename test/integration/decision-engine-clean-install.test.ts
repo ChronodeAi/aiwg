@@ -55,8 +55,9 @@ function aiwg(args: string[], cwd = consumer): SpawnSyncReturns<string> {
   });
 }
 
-function dispatch(script: string, request: string, cwd: string, extra: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
-  return run(process.execPath, [script, '--request', request], { cwd, env: isolatedEnv(extra), timeout: 120_000 });
+function dispatch(script: string, request: string, cwd: string, extra: NodeJS.ProcessEnv = {},
+  args: string[] = []): SpawnSyncReturns<string> {
+  return run(process.execPath, [script, '--request', request, ...args], { cwd, env: isolatedEnv(extra), timeout: 120_000 });
 }
 
 describe('decision-engine clean install from the packed tarball', () => {
@@ -97,20 +98,177 @@ describe('decision-engine clean install from the packed tarball', () => {
   it('ships the addon examples, runtime locator and compiled runtime', () => {
     for (const relative of [
       'dist/src/decision/index.js',
+      'dist/src/storage/protected-files.d.ts',
       'agentic/code/addons/decision-engine/manifest.json',
       'agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/runtime-root.mjs',
       'agentic/code/addons/decision-engine/examples/dispatcher-request-llm.json',
       'agentic/code/addons/decision-engine/examples/fixture-llm-adapter.mjs',
+      'agentic/code/addons/decision-engine/examples/fixture-jev-adapter.mjs',
       'agentic/code/addons/decision-engine/examples/binding-jev.json',
+      'dist/src/decision/driver.js',
+      'dist/src/mcp/tools/decision.mjs',
+      'docs/decision/cli-mcp-driver.md',
       'tools/decision/jev-live-smoke.mjs',
     ]) expect(existsSync(path.join(installRoot, relative)), relative).toBe(true);
   });
+
+  it('discovers classification and efficiency phrases from a fresh installed index without inference', async () => {
+    const probe = path.join(consumer, 'decision-discovery-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import { buildIndex } from './node_modules/aiwg/dist/src/artifacts/index-builder.js';
+      import { discoverCapability } from './node_modules/aiwg/dist/src/artifacts/query-engine.js';
+      import { fileURLToPath } from 'node:url';
+      import net from 'node:net'; import tls from 'node:tls';
+      import http from 'node:http'; import https from 'node:https';
+      const deny = () => { throw new Error('discovery must stay network-free'); };
+      globalThis.fetch = deny; net.connect = deny; net.createConnection = deny;
+      tls.connect = deny; http.request = deny; https.request = deny; http.get = deny; https.get = deny;
+      const root = fileURLToPath(new URL('./node_modules/aiwg/', import.meta.url));
+      process.env.AIWG_ROOT = root;
+      const output = console.log;
+      console.log = () => {};
+      await buildIndex(root, { graph: 'framework', force: true, explicit: true });
+      const results = [];
+      for (const phrase of ['agentic classification', 'decision classification', 'bounded classification',
+        'Jev decision engine', 'classify to reduce frontier tokens', 'shared-state batching',
+        'decision playground', 'decision-evaluate']) {
+        const captured = [];
+        console.log = (...args) => captured.push(args.map(String).join(' '));
+        await discoverCapability(root, { phrase, graph: 'framework', backend: 'local', json: true, limit: 3 });
+        const names = JSON.parse(captured.join('')).results.map(item => item.name);
+        const expected = phrase === 'decision playground' ? 'decision-playground' : 'decision-evaluate';
+        assert(names.includes(expected), phrase + ': ' + names.join(', '));
+        results.push({ phrase, names });
+      }
+      console.log = output;
+      process.stdout.write(JSON.stringify(results));
+    `);
+    const result = ok(run(process.execPath, [probe], {
+      cwd: consumer, env: isolatedEnv({ XDG_DATA_HOME: path.join(tempRoot, 'discovery-index') }), timeout: 180_000,
+    }));
+    expect(JSON.parse(result.stdout)).toHaveLength(8);
+  }, 180_000);
+
+  it('imports experimental graph APIs and compiles their declarations from the tarball', async () => {
+    const names = [
+      'DecisionGraphError', 'planDecisionGraph', 'decisionGraphToFlow', 'decisionGraphApprovalGateId',
+      'admittedDecisionFlowAdapter', 'decisionRulesetFlowInvoker', 'decisionResultNodeStatus',
+      'decisionEvaluateSkillFlowInvoker', 'resolveDecisionEvaluateSkill', 'runDecisionEvaluateSkill',
+      'GraphBudgetLedger', 'auditGraphEvidence', 'effectiveGraphCeilings', 'finalizeDecisionGraphRun',
+      'FileGraphRunReceiptStore', 'decisionGraphParallelDispatch', 'selectDecisionBeam', 'graphBeamFlowInvoker',
+      'shortlistRerankTemplate', 'taxonomyBeamTemplate', 'extractorVerifierFallbackTemplate',
+    ];
+    const probe = path.join(consumer, 'graph-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import * as graph from 'aiwg/decision/graph';
+      for (const name of ${JSON.stringify(names)}) assert.equal(typeof graph[name], 'function', name);
+      for (const name of ['decisionFlowNode', 'assertDecisionFlowPins', 'decisionFlowResponse', 'assertUnknownCostBound']) {
+        assert.equal(name in graph, false, name);
+      }
+      assert.throws(() => graph.planDecisionGraph({}, new Set()), graph.DecisionGraphError);
+      process.stdout.write('graph-import-ok');
+    `);
+    expect(ok(run(process.execPath, [probe], { cwd: consumer, env: isolatedEnv() })).stdout).toBe('graph-import-ok');
+
+    const typeProbe = path.join(consumer, 'graph-probe.mts');
+    await writeFile(typeProbe, `
+      import { ${names.join(', ')} } from 'aiwg/decision/graph';
+      import type {
+        DecisionGraph, GraphPin, GraphPlan, GraphFlowRequest, GraphFlowResponse, GraphFlowEstimate,
+        DecisionResultProjection, DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun,
+        GraphObservation, GraphCeilings, GraphEvidenceReceipt, GraphFlowReport, GraphRunReceipt, DecisionGraphTemplate,
+      } from 'aiwg/decision/graph';
+      export const runtime = [${names.join(', ')}];
+      export type Contracts = [DecisionGraph, GraphPin, GraphPlan, GraphFlowRequest, GraphFlowResponse,
+        GraphFlowEstimate, DecisionResultProjection, DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun,
+        GraphObservation, GraphCeilings, GraphEvidenceReceipt, GraphFlowReport, GraphRunReceipt, DecisionGraphTemplate];
+      export const planner: (value: unknown, pins: ReadonlySet<string>) => GraphPlan = planDecisionGraph;
+    `);
+    ok(run(process.execPath, [path.join(ROOT, 'node_modules/typescript/bin/tsc'),
+      '--noEmit', '--strict', '--module', 'NodeNext', '--target', 'ES2022', typeProbe],
+    { cwd: consumer, env: isolatedEnv() }));
+  }, 180_000);
+
+  it('loads the installed decision driver without source-relative runtime paths', async () => {
+    const probe = path.join(consumer, 'decision-driver-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import path from 'node:path';
+      import { pathToFileURL } from 'node:url';
+      const installRoot = process.argv[2];
+      const driver = await import(pathToFileURL(path.join(installRoot, 'dist/src/decision/driver.js')).href);
+      const caps = driver.decisionCapabilities({ cwd: process.cwd(), frameworkRoot: installRoot, env: {} });
+      assert.equal(caps.backend.configured, false);
+      assert.equal(caps.backend.probed, false);
+      assert.equal(caps.backend.status, 'not-probed');
+      const setup = driver.syntheticClassificationSetup({}, { frameworkRoot: installRoot });
+      assert.equal(setup.files['input.json'].text.length > 0, true);
+      assert.equal(
+        setup.files['dispatcher-request.json'].adapterModules.jev,
+        path.join(installRoot, 'agentic/code/addons/decision-engine/examples/fixture-jev-adapter.mjs'),
+      );
+      assert.throws(() => driver.syntheticClassificationSetup({ allowedOptions: [] }, { frameworkRoot: installRoot }), /must not be empty/);
+      assert.throws(() => driver.syntheticClassificationSetup({ allowedOptions: ['support'] }, { frameworkRoot: installRoot }), /pinned definition options/);
+      const receipt = await driver.runOfflinePattern('bounded-classification', 'classification-known');
+      assert.equal(receipt.status, 'success');
+      process.stdout.write('decision-driver-ok');
+    `);
+    expect(ok(run(process.execPath, [probe, installRoot], { cwd: consumer, env: isolatedEnv(), timeout: 120_000 })).stdout)
+      .toBe('decision-driver-ok');
+  }, 180_000);
+
+  it('registers installed MCP decision tools with structured output schemas', async () => {
+    const probe = path.join(consumer, 'decision-mcp-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import path from 'node:path';
+      import { pathToFileURL } from 'node:url';
+      const installRoot = process.argv[2];
+      const { registerOptInToolsets } = await import(pathToFileURL(path.join(installRoot, 'dist/src/mcp/tools/subsystems.mjs')).href);
+      const tools = new Map();
+      const server = { registerTool(name, config, handler) { tools.set(name, { config, handler }); } };
+      process.env.AIWG_DECISION_MCP_REQUESTS = 'demo=/trusted/request.json';
+      registerOptInToolsets(server, new Set(['decision']));
+      assert.equal(tools.has('decision-capabilities'), true);
+      assert.equal(tools.has('decision-validate'), true);
+      assert.equal(tools.has('decision-evaluate-profile'), true);
+      assert.deepEqual(tools.get('decision-evaluate-profile').config.annotations, {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      });
+      assert.equal('path' in tools.get('decision-validate').config.inputSchema, false);
+      const patterns = await tools.get('decision-patterns-list').handler({});
+      assert.equal(tools.get('decision-patterns-list').config.outputSchema.result.safeParse(patterns.structuredContent.result).success, true);
+      const setup = await tools.get('decision-setup-synthetic-classification').handler({ allowed_options: ['bug'], text: 'Crash after save' });
+      assert.equal(tools.get('decision-setup-synthetic-classification').config.outputSchema.result.safeParse(setup.structuredContent.result).success, true);
+      const validation = await tools.get('decision-validate').handler({
+        target: 'request',
+        document: { rulesetPath: 'ruleset.json', bindingPath: 'binding.json', inputPath: 'input.json' },
+      });
+      assert.equal(validation.structuredContent.result.valid, true);
+      assert.equal(validation.structuredContent.result.source, 'mcp-inline');
+      assert.deepEqual(JSON.parse(validation.content[0].text), validation.structuredContent.result);
+      assert.equal(tools.get('decision-validate').config.outputSchema.result.safeParse(validation.structuredContent.result).success, true);
+      const denied = await tools.get('decision-evaluate-profile').handler({ profile: 'demo', opt_in: false });
+      assert.equal(denied.structuredContent.result.status, 'denied');
+      assert.equal(denied.structuredContent.result.reason, 'per-call-opt-in-required');
+      assert.equal(tools.get('decision-evaluate-profile').config.outputSchema.result.safeParse(denied.structuredContent.result).success, true);
+      process.stdout.write('decision-mcp-ok');
+    `);
+    expect(ok(run(process.execPath, [probe, installRoot], { cwd: consumer, env: isolatedEnv({ PATH: process.env.PATH }), timeout: 120_000 })).stdout)
+      .toBe('decision-mcp-ok');
+  }, 180_000);
 
   it('deploys the addon by name and runs the deployed dispatcher on the fixture request', async () => {
     ok(aiwg(['use', 'decision-engine', '--provider', 'claude']));
     const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
     expect(existsSync(script)).toBe(true);
     expect(existsSync(path.join(consumer, SKILL, 'scripts', 'runtime-root.mjs'))).toBe(true);
+    // The stale-artifact prune must keep a named install's own rule (#2862).
+    expect(existsSync(path.join(consumer, '.claude', 'rules', 'decision-offload.md'))).toBe(true);
 
     const request = path.join(consumer, EXAMPLES, 'dispatcher-request-llm.json');
     const disabled = dispatch(script, request, consumer);
@@ -122,6 +280,145 @@ describe('decision-engine clean install from the packed tarball', () => {
     expect(outcome.kind).toBe('RulesetResult');
     expect(outcome.spec.status).toBe('completed');
     expect(outcome.spec.ruleset.id).toBe('example-triage');
+  }, 600_000);
+
+  it('runs trusted host policies for native batching, replay and projection denial from the installed dispatcher', async () => {
+    const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
+    const state = path.join(tempRoot, 'host-policy-state');
+    await mkdir(state, { recursive: true });
+    const fakeAdapter = path.join(consumer, 'installed-fake-jev.mjs');
+    await writeFile(fakeAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "function answers(body) { return Object.fromEntries(Object.entries(body.questions).map(([id, question]) => [id, question.type === 'choice'",
+      "  ? { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, runtime: 0, other: 0 }, confidence: 1 }",
+      "  : question.type === 'score' ? { type: 'score', score: 0.25, probabilities: { 0: 0.75, 1: 0.25, 2: 0 },",
+      "    legend: { 0: 'Cosmetic or documentation issue; core functions work.', 1: 'A feature fails but has a workaround.', 2: 'Core functions unavailable.' }, confidence: 0.8 }",
+      "  : { type: 'noul', noul: 0.05 }])); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: answers(body), model: 'jev-fixture', usage: { input_tokens: 9, output_tokens: 3 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const networkAdapter = path.join(consumer, 'installed-network-jev.mjs');
+    await writeFile(networkAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'network-dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: {}, model: 'jev-fixture', usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const hostModule = path.join(consumer, 'decision-host-policies.mjs');
+    await writeFile(hostModule, [
+      "import { readFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { CanonicalJsonByteEstimator, DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION,",
+      "  FileBatchReceiptStore, FileBatchResultStore, compareContextUsage, decisionBatchQuestionId, planDecisionContext } from 'aiwg/decision';",
+      "const state = process.env.AIWG_TEST_HOST_POLICY_STATE;",
+      "const input = JSON.parse(readFileSync(process.env.AIWG_TEST_HOST_POLICY_INPUT, 'utf8'));",
+      "const lifecycle = { version: DECISION_LIFECYCLE_VERSION, surfaces: Object.fromEntries(DECISION_LIFECYCLE_SURFACES.map(surface => [surface,",
+      "  { classification: 'restricted', accessScopes: ['batch-owner'], retentionMs: 86400000, export: 'denied', deletion: 'tombstone', backup: 'expire-with-primary' }])) };",
+      "const integrityKey = new Uint8Array(32).fill(11);",
+      "const results = new FileBatchResultStore(join(state, 'results'), { integrityKey, lifecycle, encryptionKeyReference: 'test-key',",
+      "  resolveEncryptionKey: async () => Buffer.from(new Uint8Array(32).fill(12)) });",
+      "const estimator = new CanonicalJsonByteEstimator();",
+      "const questionIds = ['category', 'severity', 'core_unavailable'].map(decisionBatchQuestionId);",
+      "const contextInput = { subject: 'ticket:42', authorizedState: input, authorizationDigest: `sha256:${'a'.repeat(64)}`,",
+      "  incompleteContext: false, questions: questionIds.map(id => ({ id, subject: 'ticket:42', entry: { question: id } })) };",
+      "const contextProfile = { id: 'jev', version: '1', estimator: { id: estimator.id, version: estimator.version },",
+      "  limits: { aggregateTokens: 100000, stateAndLongestQuestionTokens: 100000 }, safetyMarginBps: 0, requestEnvelopeTokens: 0 };",
+      "const contextPlan = planDecisionContext(contextInput,",
+      "  { id: 'jev', version: '1', estimator: { id: estimator.id, version: estimator.version },",
+      "    limits: { aggregateTokens: 100000, stateAndLongestQuestionTokens: 100000 }, safetyMarginBps: 0, requestEnvelopeTokens: 0 }, estimator);",
+      "const qualification = compareContextUsage([{ caseId: 'installed-host-policy', input: contextInput,",
+      "  actualInputTokens: contextPlan.partitions[0].estimate.aggregateTokens, source: 'provider', usageRef: 'fixture:installed-host-policy' }], contextProfile, estimator);",
+      "export const decisionHostPolicies = {",
+      "  batching: { native: { enabled: true, evaluations: Object.fromEntries(['category', 'severity', 'core_unavailable'].map(alias => [alias,",
+      "    { decisionSubject: 'ticket:42', independent: true, egressPolicy: 'jev-public-v1', hostPolicy: 'installed-host-v1' }])) } },",
+      "  context: { qualified: { input: contextInput, profile: contextProfile, estimator, rollout: { mode: 'enforce', qualification } } },",
+      "  batchReceipts: { durable: { store: new FileBatchReceiptStore(join(state, 'receipts'), { integrityKey, lifecycle, results }), resultStore: results,",
+      "    tenantId: 'tenant', projectId: 'project', contextPlan, subjectHash: `sha256:${'b'.repeat(64)}` },",
+      "    budgetDenied: { store: new FileBatchReceiptStore(join(state, 'budget-denied-receipts'), { integrityKey, lifecycle, results }), resultStore: results,",
+      "    tenantId: 'tenant', projectId: 'project', contextPlan, subjectHash: `sha256:${'c'.repeat(64)}`,",
+      "    unknownCostBound: { upperBoundMicros: 1, policyId: 'zero-dispatch-budget', policyVersion: '1' }, maxCostMicros: 0 } }",
+      "};",
+    ].join('\n'), { mode: 0o600 });
+    const requestPath = path.join(consumer, 'trusted-host-request.json');
+    await writeFile(requestPath, JSON.stringify({
+      rulesetPath: path.join(consumer, EXAMPLES, 'ruleset.json'),
+      bindingPath: path.join(consumer, EXAMPLES, 'binding-jev.json'),
+      definitionPaths: ['decision-category.json', 'decision-severity.json', 'decision-core_unavailable.json']
+        .map(name => path.join(consumer, EXAMPLES, name)),
+      inputPath: path.join(consumer, EXAMPLES, 'input.json'),
+      projectionPolicyPath: path.join(consumer, EXAMPLES, 'projection-policy-jev.json'),
+      runId: 'installed-host-policy-run', invocationId: 'installed-host-policy-invocation',
+      credentials: { 'typesafe-api': 'AIWG_TEST_DISPATCH_TOKEN', 'receipt-key': 'AIWG_TEST_RECEIPT_KEY' },
+      adapterModules: { jev: fakeAdapter },
+      hostPolicies: { batching: 'native', context: 'qualified', batchReceipts: 'durable' },
+    }));
+    const env = { AIWG_DECISION_ENABLED: '1', AIWG_TEST_DISPATCH_TOKEN: 'synthetic-token',
+      AIWG_TEST_RECEIPT_KEY: '11'.repeat(32),
+      AIWG_TEST_HOST_POLICY_STATE: state, AIWG_TEST_HOST_POLICY_INPUT: path.join(consumer, EXAMPLES, 'input.json') };
+    const args = ['--host-policy-module', hostModule];
+    const first = ok(dispatch(script, requestPath, consumer, env, args));
+    const firstOutcome = JSON.parse(first.stdout);
+    expect(firstOutcome.spec.status).not.toBe('error');
+    expect(Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.attempts[0]?.batch?.mode))
+      .toEqual(['native', 'native', 'native']);
+    const firstBatchResults = Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.batchResult);
+    expect(firstBatchResults.every(Boolean)).toBe(true);
+    expect(new Set(firstBatchResults.map((value: any) => value.batchId))).toHaveLength(1);
+    expect(new Set(firstBatchResults.map((value: any) => value.questionId))).toHaveLength(3);
+    const firstDispatches = JSON.parse(await readFile(path.join(state, 'dispatch-log.json'), 'utf8'));
+    expect(firstDispatches).toHaveLength(1);
+    expect(Object.keys(firstDispatches[0].questions)).toHaveLength(3);
+    const replay = ok(dispatch(script, requestPath, consumer, env, args));
+    const replayOutcome = JSON.parse(replay.stdout);
+    expect(replayOutcome.spec.status).toBe(firstOutcome.spec.status);
+    expect(Object.values(replayOutcome.spec.evaluations).map((value: any) => value.spec.batchResult))
+      .toEqual(Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.batchResult));
+    expect(JSON.parse(await readFile(path.join(state, 'dispatch-log.json'), 'utf8'))).toHaveLength(1);
+    const budgetAdapter = path.join(consumer, 'installed-budget-jev.mjs');
+    await writeFile(budgetAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'budget-dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: {}, model: 'jev-fixture', usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const budgetRequest = path.join(consumer, 'trusted-host-budget-request.json');
+    await writeFile(budgetRequest, JSON.stringify({ ...JSON.parse(await readFile(requestPath, 'utf8')),
+      invocationId: 'installed-host-policy-budget-denied',
+      adapterModules: { jev: budgetAdapter },
+      hostPolicies: { batching: 'native', context: 'qualified', batchReceipts: 'budgetDenied' } }));
+    const budgetDenied = dispatch(script, budgetRequest, consumer, env, args);
+    expect(budgetDenied.status).toBe(1);
+    expect(JSON.parse(budgetDenied.stdout).spec).toMatchObject({ status: 'error', reason: 'budget-exhausted' });
+    await expect(readFile(path.join(state, 'budget-dispatch-log.json'), 'utf8')).rejects.toThrow(/ENOENT/);
+    const deniedPolicy = JSON.parse(await readFile(path.join(consumer, EXAMPLES, 'projection-policy-jev.json'), 'utf8'));
+    deniedPolicy.region = 'eu';
+    const deniedPolicyPath = path.join(consumer, 'projection-denied.json');
+    await writeFile(deniedPolicyPath, JSON.stringify(deniedPolicy));
+    const deniedRequest = path.join(consumer, 'trusted-host-denied-request.json');
+    await writeFile(deniedRequest, JSON.stringify({ ...JSON.parse(await readFile(requestPath, 'utf8')),
+      invocationId: 'installed-host-policy-denied', projectionPolicyPath: deniedPolicyPath,
+      receiptDirectory: path.join(state, 'denied-invocation-receipts'),
+      adapterModules: { jev: networkAdapter } }));
+    const denied = dispatch(script, deniedRequest, consumer, env, args);
+    expect(denied.status).toBe(1);
+    expect(denied.stderr).toContain('projection field is not authorized');
+    await expect(readFile(path.join(state, 'network-dispatch-log.json'), 'utf8')).rejects.toThrow(/ENOENT/);
   }, 600_000);
 
   it('runs the deployed decision-playground against the installed runtime', () => {
@@ -185,6 +482,7 @@ describe('decision-engine clean install from the packed tarball', () => {
     await mkdir(bulk, { recursive: true });
     ok(aiwg(['use', 'all', '--copy-all', '--provider', 'claude', '--target', bulk], consumer));
     expect(existsSync(path.join(bulk, SKILL))).toBe(false);
+    expect(existsSync(path.join(bulk, '.claude', 'rules', 'decision-offload.md'))).toBe(false);
     const manifest = JSON.parse(await readFile(path.join(installRoot, 'agentic/code/addons/decision-engine/manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({ autoInstall: false, explicitInstall: true });
     // Other autoInstall:false addons (testing-quality here) are still deployed.

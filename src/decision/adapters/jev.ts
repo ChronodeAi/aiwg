@@ -40,6 +40,9 @@ interface JevAdapterOptions {
    * the evaluator then denies every projection policy for this adapter.
    */
   region?: string;
+  /** Trusted collection-only observer of bounded response bytes, including terminal invalid answers.
+   * The caller must keep bodies private. Absent observers do not change adapter behavior. */
+  observeResponseBody?: (body: string, metadata: { actualModel: string | null; usage: DecisionUsage }) => void;
 }
 
 interface PinnedAddress { address: string; family: 4 }
@@ -69,6 +72,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
   private readonly pinnedFetch: NonNullable<JevAdapterOptions['pinnedFetch']>;
   private readonly now: () => number;
   private readonly region: string | null;
+  private readonly observeResponseBody?: JevAdapterOptions['observeResponseBody'];
 
   constructor(options: JevAdapterOptions = {}) {
     this.endpoint = options.endpoint ?? JEV_ENDPOINT;
@@ -78,6 +82,17 @@ export class JevDecisionAdapter implements DecisionAdapter {
     this.pinnedFetch = options.pinnedFetch ?? pinnedHttpsFetch;
     this.now = options.now ?? Date.now;
     this.region = options.region?.trim() ? options.region : null;
+    this.observeResponseBody = options.observeResponseBody;
+  }
+
+  private observeResponse(body: string): void {
+    if (!this.observeResponseBody) return;
+    let parsed: Record<string, unknown> = {};
+    try { parsed = asRecord(parseBoundedJson(body)); } catch { /* Invalid answers still have bounded body evidence. */ }
+    let usage = emptyUsage();
+    try { usage = normalizeUsage(parsed.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
+    this.observeResponseBody(body, { actualModel: typeof parsed.model === 'string' && parsed.model ? parsed.model : null,
+      usage });
   }
 
   async capabilities(): Promise<AdapterCapabilities> {
@@ -178,6 +193,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     if (!response.ok) {
       try {
         const errorBody = await readBoundedBody(response, signal);
+        this.observeResponse(errorBody);
         if (!metadata.requestId && response.headers.get('content-type')?.includes('json')) {
           let parsedError: unknown;
           try { parsedError = parseBoundedJson(errorBody); }
@@ -203,6 +219,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     let parsed: unknown;
     try {
       const encoded = await readBoundedBody(response, signal);
+      this.observeResponse(encoded);
       parsed = parseBoundedJson(encoded);
       if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
       if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
@@ -284,12 +301,14 @@ export class JevDecisionAdapter implements DecisionAdapter {
       return batchFailure(requests, failure('data-boundary-denied', metadata));
     }
     if (!response.ok) {
-      try { await readBoundedBody(response, signal); } catch { return batchFailure(requests, failure('invalid-output', metadata)); }
+      try { this.observeResponse(await readBoundedBody(response, signal)); } catch { return batchFailure(requests, failure('invalid-output', metadata)); }
       const retryAfterMs = parseRetryAfter(response.headers, this.now());
       return batchFailure(requests, failure(mapStatus(response.status), { ...metadata, ...(retryAfterMs === null ? {} : { retryAfterMs }) }));
     }
     try {
-      const parsed = parseBoundedJson(await readBoundedBody(response, signal));
+      const encoded = await readBoundedBody(response, signal);
+      this.observeResponse(encoded);
+      const parsed = parseBoundedJson(encoded);
       const normalized = normalizeBatchResponse(requests, parsed).map(answer => ({
         questionId: answer.questionId,
         observation: { ...answer.observation, ...metadata },
@@ -405,7 +424,11 @@ function normalizeAnswer(request: DecisionAdapterRequest, body: Record<string, u
       if (canonicalJson(legend[String(index)]) !== canonicalJson(level)) throw new DecisionValidationError('Score legend does not match declared levels');
     });
     const mean = Object.entries(distribution).reduce((sum, [index, probability]) => sum + Number(index) * probability, 0);
-    if (Math.abs(mean - answer.score) > 0.02) throw new DecisionValidationError('Score is not the distribution weighted mean');
+    // Jev reports probabilities and the score to two decimals, so each probability carries up to
+    // 0.005 of rounding error, weighted by its index, plus 0.005 on the score itself.
+    const indexSum = Object.keys(distribution).reduce((sum, index) => sum + Number(index), 0);
+    const tolerance = Math.max(0.02, 0.005 * indexSum + 0.005) + 1e-9;
+    if (Math.abs(mean - answer.score) > tolerance) throw new DecisionValidationError('Score is not the distribution weighted mean');
     validateDecisionValue(request.definition, answer.score);
     return success(answer.score, model, usage, uncertainty(answer.confidence, distribution, 'typesafe-distribution-v1'));
   }

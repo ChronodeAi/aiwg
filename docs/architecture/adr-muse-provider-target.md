@@ -8,6 +8,12 @@
 stable promotion)  
 **Related:** #222 (sessions export-first), #232–#238 (session catalog, schemas, allowlists, smoke harness)
 
+**Current provider status:** Stable as of 2026-10-02 under
+[#231](https://github.com/jmagly/aiwg/issues/231). Linux PUW and path security
+review satisfied the promotion gate; maintainers waived macOS/Windows PUW for
+this promotion. This note records the status flip without changing the original
+ADR decision history below.
+
 ## Context
 
 **Muse Code** is Meta's terminal/CI coding agent built on Muse Spark. It is a high-leverage AIWG peer: native `AGENTS.md`
@@ -104,7 +110,7 @@ PR3/#227; this ADR locks only the surface choice (`AGENTS.md`, discover-first).
 
 ### Sessions: export-first
 
-Session catalog support is **export-first** until an evidence-gated native discover path exists (#222):
+Session catalog support is **export-first**, with an evidence-gated native discover path (#222):
 
 - The adapter ingests only explicit `muse export` / `/export trajectory` JSON documents supplied by the operator,
   gated on the document's `export_schema_version` major (currently `1`); unknown majors fail closed, as with
@@ -113,8 +119,8 @@ Session catalog support is **export-first** until an evidence-gated native disco
 - A future evidence-gated `--muse-root` discover path (analogous to `--codex-root`) remains the route to native discovery.
   The documented candidate native root is `$XDG_DATA_HOME/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`
   (default `~/.local/share/muse/sessions`). It was verified on disk against Muse Code 1.4.0 on 2026-09-25 (see
-  `docs/providers/muse-sessions.md`), but its line format is internal, so import stays export-first until PR B of #222
-  adds an evidence-gated discover path over it.
+  `docs/providers/muse-sessions.md`). Native discovery over it shipped in PR B of #222 and runs only for a root the
+  operator authorizes with `--muse-root`; there is still no default root and no home-directory scraping.
 
 Session adapter implementation itself is out of scope here (Phase 4 / #222, catalog track #232).
 
@@ -129,8 +135,8 @@ Session adapter implementation itself is out of scope here (Phase 4 / #222, cata
 
 ### Headless Ralph
 
-A headless Ralph/loop adapter over `muse exec` is **optional and post-experimental** (PR7/#230). It does not block the
-experimental cut (#225–#229) or stable promotion (#231), and no `muse exec` contract may be assumed until evidenced
+A headless Ralph/loop adapter over `muse exec` is **optional** (PR7/#230). It does not block the
+provider cut (#225–#229) or stable promotion (#231), and no `muse exec` contract may be assumed until evidenced
 against the installed CLI surface.
 
 ### Explicit exclusions
@@ -144,8 +150,8 @@ Out of provider scope, now and for all child issues unless a new ADR re-opens th
 
 ## Consequences
 
-- Dual registries (provider definitions + deploy agents) plus the capability matrix gain a `muse` row at `experimental`
-  without inventing filesystem facts (#225).
+- Dual registries (provider definitions + deploy agents) plus the capability matrix initially gained a `muse` row
+  without inventing filesystem facts (#225); #231 promoted it to stable.
 - Doctor, setup choices, install-connect-verify, model catalog / provider-policy schema, and wizard/discovery allowlists
   gain Muse Code entries against the locked roots (#229, #233–#236, #238).
 - Operators stop overloading `--provider cursor` for Muse fleets; Cursor IDE fleets stay on `cursor`.

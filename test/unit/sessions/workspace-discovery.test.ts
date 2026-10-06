@@ -63,6 +63,51 @@ describe('workspace session discovery and batch import', () => {
       .toEqual(['claude', 'codex', 'cursor', 'factory']);
   });
 
+  it('discovers Muse native logs only when --muse-root evidence matches the workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-muse-discovery-'));
+    roots.push(root);
+    const workspace = join(root, 'workspace');
+    const museRoot = join(root, 'muse-sessions');
+    const matching = join(museRoot, '2026', '09', '25', '00000000-0000-4000-8000-000000000002');
+    const unrelated = join(museRoot, '2026', '09', '25', '00000000-0000-4000-8000-000000000003');
+    await Promise.all([workspace, matching, unrelated].map((path) => mkdir(path, { recursive: true })));
+    await writeFile(join(matching, 'session.jsonl'), JSON.stringify({
+      schema_version: 1,
+      id: 'matching',
+      stream: { kind: 'session', id: '00000000-0000-4000-8000-000000000002' },
+      sequence: 1,
+      recorded_at: 1790349213957005,
+      record_type: 'event',
+      durability: 'durable',
+      payload_type: 'runtime.session.metadata',
+      payload_schema_version: 1,
+      payload: { kind: 'metadata', record: { workspace_root: workspace } },
+    }) + '\n');
+    await writeFile(join(unrelated, 'session.jsonl'), JSON.stringify({
+      schema_version: 1,
+      id: 'unrelated',
+      stream: { kind: 'session', id: '00000000-0000-4000-8000-000000000003' },
+      sequence: 1,
+      recorded_at: 1790349213957005,
+      record_type: 'event',
+      durability: 'durable',
+      payload_type: 'runtime.session.metadata',
+      payload_schema_version: 1,
+      payload: { kind: 'metadata', record: { workspace_root: join(root, 'other-workspace') } },
+    }) + '\n');
+
+    const manifest = await discoverWorkspaceHistories({ workspace, museRoot });
+    const museSources = manifest.sources.filter((source) => source.provider === 'muse');
+    expect(museSources).toHaveLength(1);
+    expect(museSources[0]).toMatchObject({
+      locatorClass: 'muse-native-session-log',
+      locator: join(matching, 'session.jsonl'),
+    });
+    expect((await discoverWorkspaceHistories({ workspace })).sources.filter(
+      (source) => source.provider === 'muse',
+    )).toHaveLength(0);
+  });
+
   itWithSqlite('resumes only incomplete sources and reconciles partial coverage', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({

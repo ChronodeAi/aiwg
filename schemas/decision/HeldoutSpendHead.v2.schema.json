@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutSpendHead.v2.schema.json",
+  "title": "HeldoutSpendHead",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "digest",
+    "baselineDigests"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-spend-head/v2"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "baselineDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["portfolio"],
+      "minProperties": 2,
+      "properties": {
+        "portfolio": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "D17": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "D29": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

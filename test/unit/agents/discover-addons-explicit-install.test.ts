@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { discoverAddons, getAddonSkillDirs } from '../../../tools/agents/providers/base.mjs';
+import { computeAllArtifactBasenames, discoverAddons, getAddonRuleFiles, getAddonSkillDirs } from '../../../tools/agents/providers/base.mjs';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const temps: string[] = [];
@@ -35,5 +35,14 @@ describe('discoverAddons explicitInstall', () => {
     expect(names).not.toContain('decision-engine');
     expect(names).toEqual(expect.arrayContaining(['composition-engine', 'testing-quality', 'aiwg-utils']));
     expect(getAddonSkillDirs(root).some((dir: string) => path.basename(dir) === 'decision-evaluate')).toBe(false);
+  });
+
+  it('keeps explicitInstall rules in the prune desired set without adding them to bulk deploys (#2862)', () => {
+    const bulkRules = getAddonRuleFiles(root).map((file: string) => path.basename(file));
+    expect(bulkRules).not.toContain('decision-offload.md');
+    expect(getAddonRuleFiles(root, [], { includeExplicit: true }).map((file: string) => path.basename(file)))
+      .toContain('decision-offload.md');
+    expect(discoverAddons(root, { includeExplicit: true }).map((addon: { name: string }) => addon.name)).toContain('decision-engine');
+    expect(computeAllArtifactBasenames(root, 'rules').has('decision-offload')).toBe(true);
   });
 });

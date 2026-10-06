@@ -42,7 +42,7 @@ describe('decision qualification fixture provenance', () => {
     expect(new Set(manifest.fixtures.map(item => item.path)).size).toBe(manifest.fixtures.length);
     for (const item of manifest.fixtures) {
       expect(item.id).toMatch(/^DEC-[A-Z]+-[0-9]{2}$/);
-      expect(item.path).toMatch(/^(?:test\/fixtures\/decision|agentic\/code\/addons\/decision-engine\/examples|docs\/decision\/evidence)\/[A-Za-z0-9_/.-]+\.(?:json|ts|mjs)$/);
+      expect(item.path).toMatch(/^(?:test\/fixtures\/decision|agentic\/code\/addons\/decision-engine\/examples|docs\/decision\/evidence)\/[A-Za-z0-9_/.-]+\.(?:json|ts|mjs|dmn|xsd|md|py)$/);
       expect(item.origin).toBe('repository-authored');
       expect(item.author.length).toBeGreaterThan(0);
       expect(item.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);

@@ -24,6 +24,7 @@ import type { ProviderPrefixReport } from './compile-cache/prefix.js';
 import type { DecisionTelemetryContext, DecisionTelemetryHook } from './telemetry/types.js';
 import type { DecisionTelemetryIdSource } from './telemetry/context.js';
 import type { DecisionProjectionEvidence, DecisionProjectionPolicy } from './projection.js';
+import type { PreprocessedEvidenceReceiptEvidence, PreprocessingVerification } from './preprocessed-evidence.js';
 import type { DecisionResultCache, ResultCacheActor, ResultCacheCallerReceipt,
   ResultCachePolicy, ResultCacheSemanticIdentity } from './result-cache/index.js';
 
@@ -89,7 +90,7 @@ export interface DecisionRuleset {
     inputSchema: JsonSchema;
     evaluations: Array<{ alias: string; decision: ArtifactPin; inputPointer: string }>;
     rules: Array<{ id: string; priority: number; when: DecisionPredicate; outcome: JsonValue }>;
-    composition: 'first-match' | 'collect';
+    composition: 'first-match' | 'unique' | 'any' | 'collect' | 'collect-sum' | 'collect-min' | 'collect-max' | 'collect-count';
     conflict: 'error' | 'review';
     defaultOutcome: JsonValue;
     failureOutcome: JsonValue;
@@ -353,6 +354,16 @@ export interface DecisionResult {
   };
 }
 
+/** Request-owned accounting for native batches without durable batch receipts. */
+export interface DecisionBatchRequestUsage {
+  /** Matches attempts[].batch.groupId; ordinal matches the batch attempt. */
+  groupId: string;
+  ordinal: number;
+  questionIds: string[];
+  usage: DecisionUsage;
+  requestId: string | null;
+}
+
 export interface RulesetResult {
   apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'RulesetResult';
@@ -367,6 +378,8 @@ export interface RulesetResult {
     outcome?: JsonValue;
     matchedRules: string[];
     evaluations: Record<string, DecisionResult>;
+    /** One usage owner per non-durable native request; answer attempts carry null usage. */
+    batchRequests?: DecisionBatchRequestUsage[];
     /** Caller-level cache receipt. Historical evaluation attempts in a hit belong to the source. */
     cache?: ResultCacheCallerReceipt;
     /** Invocation-wide context plan plus immutable estimate-versus-actual evidence. */
@@ -375,6 +388,8 @@ export interface RulesetResult {
     projection?: DecisionProjectionOptOutRecord;
     /** Body-free D06 preflight diagnostic for a context-plan rejection. */
     contextFailure?: DecisionContextFailure;
+    /** Body-free D24 preprocessing lineage references for text derived from non-text sources. */
+    preprocessingLineage?: PreprocessedEvidenceReceiptEvidence;
   };
 }
 
@@ -721,6 +736,20 @@ export interface DecisionEvaluationRequest {
   };
   /** Optional policy for consuming provider-reported prompt-prefix metadata. */
   providerPrefix?: DecisionProviderPrefixPolicy;
+  /**
+   * Explicit, host-resolved preprocessing lineage for text-only decision input.
+   * The evaluator records these pins/digests in the result but never reads raw
+   * media or derived text bodies from this evidence. An empty lineage (no
+   * references and no traces) is treated exactly as absent. Any other lineage is
+   * gated before credential resolution and transport: a destination mismatch is
+   * refused, and review lineage returns `review` without dispatch.
+   */
+  preprocessingLineage?: PreprocessedEvidenceReceiptEvidence;
+  /**
+   * Current host-stored manifests (and optional D10 lifecycle state) that stored
+   * lineage references are checked against. Omitting it routes lineage to review.
+   */
+  preprocessingVerification?: PreprocessingVerification;
   /**
    * Trusted host-side state projection boundary. Required for any adapter that
    * does not declare `egress: { mode: 'none' }`; omitting it denies dispatch as

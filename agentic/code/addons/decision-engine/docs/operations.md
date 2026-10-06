@@ -71,6 +71,10 @@ a new binding pin and invocation. Existing receipts are never reinterpreted.
 Outcomes are data. Any downstream action goes through the ordinary AIWG policy
 and authorization gates independently.
 
+Single-question offload through `aiwg decision ask` is enabled by
+`aiwg decision setup jev` and governed for agents by the `decision-offload`
+rule. See the [Jev quickstart](../../../../../docs/decision/jev-quickstart.md).
+
 To explicitly upgrade a string-only definition, build the package and run
 `node agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/decision-convert-definition.mjs <old.json> <new.json>`.
 The command refuses to overwrite an existing output, prints the old/new digests,
@@ -115,3 +119,29 @@ Messages name the logical reference and the variable name only. The key value
 never appears in results, receipts, or diagnostics. The receipt key's logical
 reference is reserved: a binding that names it as a backend `credentialRef` is
 refused, so the key cannot be sent to a remote backend.
+
+## Held-out study collection
+
+Source-checkout operators can use the experimental, default-off
+[shared held-out collector](../../../../../docs/decision/heldout-collector.md)
+for synthetic D17/D29 study modules. Preparation and dry-run use source directly;
+collection needs a separate priced, digest-bound approval and explicit env gate.
+The collector does not promote models or establish study quality.
+
+The [D29 v6 study](../../../../../docs/decision/d29-heldout-study.md) adds balanced
+inventory facts, replacement-slot screening-control cases and explicit provider
+labeling conventions. Passage baseline v2 is primary; unchanged passage v1 and
+the original baseline remain secondary. Development and public-test audits cover
+structural and claim-relative single/pairwise rules and an informational tree.
+The public `d29-study-v6` demo is rejected for paid collection. Live observations,
+reviewed calibration and completed human assessments remain pending.
+
+Jev collection requires attested free output and reserves request bytes plus a
+preregistered provider overhead allowance (default 512 tokens). Preserve the
+separate spend counter, head and baseline files under the canonical artifact
+root; deleting run directories does not restore spend allowance. The first
+approval pins each study's budget in its baseline. Every mode and resume keeps
+that budget and subtracts cumulative USD, calls and reserved tokens; changed
+budgets are refused before credentials. Baselines missing this required budget
+and damaged counters require operator reconciliation before further collection. See the
+collector guide for the input-overrun assumption and repair requirements.

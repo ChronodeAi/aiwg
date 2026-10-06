@@ -3,6 +3,13 @@ namespace: aiwg
 name: decision-evaluate
 platforms: [all]
 description: Evaluate a pinned normalized decision ruleset through an explicitly configured Jev or LLM-subagent binding
+triggers:
+  - agentic classification
+  - decision classification
+  - bounded classification
+  - Jev decision engine
+  - classify to reduce frontier tokens
+  - shared-state batching
 requires:
   - feature-enabled: AIWG_DECISION_ENABLED=1
   - request: dispatcher request JSON with authored artifact paths and runtime adapter configuration
@@ -13,7 +20,7 @@ script:
   entrypoint: scripts/decision-evaluate.mjs
   runtime: node
   cwd: project-root
-  argsHint: "--request <dispatcher-request.json>"
+  argsHint: "--request <dispatcher-request.json> [--host-policy-module <trusted-module.mjs>]"
 ---
 
 # Decision Evaluate
@@ -30,6 +37,27 @@ artifact. It names `rulesetPath`, `bindingPath`, `definitionPaths`, `inputPath`,
 from logical reference to environment-variable name, and optional
 `adapterModules` for configured worker transports. Credential values are read
 only at adapter call time and never written to results.
+
+Advanced runtime policies are host-owned. The request may include
+`hostPolicies` with named references for `batching`, `batchReceipts`,
+`context`, `scheduler`, `compileCache`, `resultCache`, or `providerPrefix`:
+
+```json
+{
+  "hostPolicies": {
+    "batching": "native-ticket-batch",
+    "batchReceipts": "durable-ticket-batch"
+  }
+}
+```
+
+Those names resolve only through a trusted host registry supplied in-process by
+a driver, or through `--host-policy-module` when running the packaged script.
+The JSON request cannot serialize callbacks, stores, schedulers, cache
+services, authenticated scopes, or key services. Inline `batching`,
+`resultCache`, `providerPrefix`, and similar misspelled or unsupported fields
+fail before dispatch instead of being ignored. Jev compile caching remains off
+unless the host deliberately supplies a `compileCache` policy.
 
 Network-capable adapters (including the packaged Jev adapter) require
 `projectionPolicyPath`: a trusted projection policy file, or an array of

@@ -1,15 +1,63 @@
 # Jev transport contract
 
-The Jev adapter sends one POST per evaluator attempt. The evaluator owns retry and fallback. The adapter does not use SDK retries. It accepts the official `x-typesafe-request-id` response header first and falls back to `x-request-id` only when the official value is absent or unsafe. On an error response with neither header, it can read a safe `request_id` or `requestId` JSON body field. The receipt records `requestIdSource` as `typesafe`, `legacy`, or `body`; duplicate, control-character, non-ASCII, and over-128-character values are discarded. These IDs are internal correlation data, not authorization tokens, trace IDs, or metric labels. Use `decisionResultForExport` for external artifacts; it clears provider request IDs unless a caller supplies an explicit policy permitting them.
+The Jev adapter sends one POST per evaluator attempt. The evaluator owns retry and fallback. The adapter does
+not use SDK retries. It accepts the official `x-typesafe-request-id` response header first and falls back to
+`x-request-id` only when the official value is absent or unsafe. On an error response with neither header, it
+can read a safe `request_id` or `requestId` JSON body field. The receipt records `requestIdSource` as
+`typesafe`, `legacy`, or `body`; duplicate, control-character, non-ASCII, and over-128-character values are
+discarded. These IDs are internal correlation data, not authorization tokens, trace IDs, or metric labels. Use
+`decisionResultForExport` for external artifacts; it clears provider request IDs unless a caller supplies an
+explicit policy permitting them.
 
-The default endpoint is `https://api.typesafe.ai/v1/systemone`. A custom origin must be explicitly allowlisted and have only public IPv4 DNS answers before credential resolution. For custom origins the adapter uses Node HTTPS with a pinned `lookup` result and TLS hostname verification against the approved hostname. Native fetch is used only for the official origin; it cannot pin a preflight DNS result. HTTP, userinfo, alternate ports, IP literals, private/link-local/loopback answers, and unapproved origins are denied. The final response origin is checked when exposed by the transport. Redirects are disabled; same-origin redirects are not supported. No `Authorization` header is copied to another origin.
+The default endpoint is `https://api.typesafe.ai/v1/systemone`. A custom origin must be explicitly allowlisted
+and have only public IPv4 DNS answers before credential resolution. For custom origins the adapter uses Node
+HTTPS with a pinned `lookup` result and TLS hostname verification against the approved hostname. Native fetch
+is used only for the official origin; it cannot pin a preflight DNS result. HTTP, userinfo, alternate ports,
+IP literals, private/link-local/loopback answers, and unapproved origins are denied. The final response origin
+is checked when exposed by the transport. Redirects are disabled; same-origin redirects are not supported. No
+`Authorization` header is copied to another origin.
 
-`capabilities().egress` reports `{ mode: 'network', origin, region }`: the origin of the configured endpoint and the host-declared `region` constructor option (`null` when omitted). The evaluator binds a projection policy's origin and region to these values before credential resolution, and denies an undeclared region; see [state-projection.md](state-projection.md). The region is not enforced by the transport. When the request carries projection evidence, the body `state` is the trust partition `{ verified, untrusted }` rather than a flat object.
+`capabilities().egress` reports `{ mode: 'network', origin, region }`: the origin of the configured endpoint
+and the host-declared `region` constructor option (`null` when omitted). The evaluator binds a projection
+policy's origin and region to these values before credential resolution, and denies an undeclared region; see
+[state-projection.md](state-projection.md). The region is not enforced by the transport. When the request
+carries projection evidence, the body `state` is the trust partition `{ verified, untrusted }` rather than a
+flat object.
 
-Responses are bounded to 32 KiB of headers and 1 MiB of decoded body bytes. A declared oversized content length fails early. JSON is parsed in a fresh V8 context with a 50 ms execution timeout, so pathological synchronous parsing is interrupted. Invalid or oversized responses become sanitized `invalid-output` observations. Error bodies are discarded without retention.
+Responses are bounded to 32 KiB of headers and 1 MiB of decoded body bytes. A declared oversized content
+length fails early. JSON is parsed in a fresh V8 context with a 50 ms execution timeout, so pathological
+synchronous parsing is interrupted. Invalid or oversized responses become sanitized `invalid-output`
+observations. Error bodies are discarded without retention.
 
-Credential resolution happens after origin authorization and before network dispatch. A missing credential reference or denied/configuration resolver error is `unauthorized`; an explicit `missing` resolver category or empty token is `authentication`; a resolver failure is `executor-unavailable`. Resolver messages and logical references are not copied into observations or receipts. A `JevCredentialError` carries the safe category. The adapter zeroes its byte copy after decoding.
+Credential resolution happens after origin authorization and before network dispatch. A missing credential
+reference or denied/configuration resolver error is `unauthorized`; an explicit `missing` resolver category or
+empty token is `authentication`; a resolver failure is `executor-unavailable`. Resolver messages and logical
+references are not copied into observations or receipts. A `JevCredentialError` carries the safe category. The
+adapter zeroes its byte copy after decoding.
 
-HTTP 408, 429, 529, and 5xx are eligible for evaluator retries. HTTP 401/403, 404/422, policy and data-boundary denial, and invalid output are not. `retry-after-ms` takes precedence over numeric-seconds or HTTP-date `Retry-After`. Malformed or past hints are ignored. The evaluator caps hints by the target ceiling and remaining total deadline; only exponential fallback delay gets bounded jitter through the injectable `random` source. A terminal HTTP response is distinguishable from an ambiguous fetch failure in `dispatchCertainty`. A dispatched cancellation or timeout cannot prove remote billing did not occur and records remote execution as unknown. Receipt-backed calls do not blindly retry an ambiguous transport outcome.
+The adapter declares at most **255 Choice options** and **10 Score levels**
+(`src/decision/adapters/jev.ts`, `capabilities()`). Both definition schema versions
+also cap those arrays at 255 and 10. The retained TV06 vendor vector in
+`test/fixtures/decision/vendor-vectors-v1.json` records 255 as the documented-limit
+assumption; its provenance explicitly says the original vendor research document
+is absent. No lower vendor maximum is established by this repository. TV-12's
+`choice-255` is therefore admissible, subject to the independent context limits.
+The r3 HTTP 200 invalid-output response does not establish a smaller option limit.
+Current vendor documentation has not been reverified by this offline amendment.
 
-Offline verification uses synthetic credentials and fake responses: `npx vitest run --config config/vitest.config.js test/unit/decision/jev-transport.test.ts`. Live Jev calls are not part of the default suite.
+HTTP 408, 429, 529, and 5xx are eligible for evaluator retries. HTTP 401/403, 404/422, policy and
+data-boundary denial, and invalid output are not. `retry-after-ms` takes precedence over numeric-seconds or
+HTTP-date `Retry-After`. Malformed or past hints are ignored. The evaluator caps hints by the target ceiling
+and remaining total deadline; only exponential fallback delay gets bounded jitter through the injectable
+`random` source. A terminal HTTP response is distinguishable from an ambiguous fetch failure in
+`dispatchCertainty`. A dispatched cancellation or timeout cannot prove remote billing did not occur and
+records remote execution as unknown. Receipt-backed calls do not blindly retry an ambiguous transport outcome.
+
+Offline verification uses synthetic credentials and fake responses: `npx vitest run --config
+config/vitest.config.js test/unit/decision/jev-transport.test.ts`. Live Jev calls are not part of the default
+suite.
+
+The experimental, default-off [TV-12 collector](context-live-qualification.md) has
+its own preregistered measurement retry policy. It can retry terminal invalid
+output once, recording and charging both attempts. This exception applies only
+to collection; ordinary evaluator retries and decision behavior remain unchanged.

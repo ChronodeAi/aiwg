@@ -76,6 +76,7 @@
     "providers/grok-build-qualification",
     "migration/grok-build-from-claude-workaround",
     "integrations/grokbot-linux-puw",
+    "integrations/muse-linux-puw",
     "migration/grokbot-from-cursor-workaround",
     "integrations/muse-quickstart",
     "integrations/hermes-quickstart",
@@ -119,6 +120,7 @@
     "security/threat-assessment-policy",
     "security/context-memory-firewall",
     "security/grokbot-path-security-review",
+    "security/muse-path-security-review",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -544,7 +546,8 @@
     "addons/network-analysis/operator-guide",
     "addons/network-analysis/release-checklist",
     "addons/network-analysis/termshark-handoff",
-    "releases/grokbot-stable-promotion-notes"
+    "releases/grokbot-stable-promotion-notes",
+    "releases/muse-stable-promotion-notes"
   ],
   "sections": [
     {
@@ -4116,6 +4119,13 @@
       "parent": "reference"
     },
     {
+      "id": "security/muse-path-security-review",
+      "title": "Muse Code Path Security Review",
+      "summary": "Fail-closed XDG skill roots, hooks/MCP merge safety, and --muse-root discovery bounds (#231)",
+      "file": "security/muse-path-security-review.md",
+      "parent": "reference"
+    },
+    {
       "id": "migration/grokbot-from-cursor-workaround",
       "title": "Migrate Grok Bot from Cursor Workaround",
       "summary": "Move Grok fleets to --provider grokbot; keep Cursor IDE on cursor",
@@ -4130,10 +4140,24 @@
       "parent": "reference"
     },
     {
+      "id": "releases/muse-stable-promotion-notes",
+      "title": "Muse Code Stable Promotion Notes",
+      "summary": "Release notes for muse experimental → stable (#231)",
+      "file": "releases/muse-stable-promotion-notes.md",
+      "parent": "reference"
+    },
+    {
       "id": "integrations/grokbot-linux-puw",
       "title": "Grok Bot Linux PUW (#210)",
       "summary": "Linux PUW evidence for grokbot stable; macOS/Windows waived by maintainer",
       "file": "integrations/grokbot-linux-puw.md",
+      "parent": "reference"
+    },
+    {
+      "id": "integrations/muse-linux-puw",
+      "title": "Muse Code Linux PUW (#231)",
+      "summary": "Linux PUW evidence for muse stable; macOS/Windows waived by maintainer",
+      "file": "integrations/muse-linux-puw.md",
       "parent": "reference"
     }
   ],

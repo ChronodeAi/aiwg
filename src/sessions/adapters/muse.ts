@@ -1,5 +1,5 @@
 /**
- * Muse Code session adapter — manual export only, trajectory-first.
+ * Muse Code session adapter — explicit export plus evidence-gated native logs.
  *
  * Muse Code journals model calls, tool runs, and approvals to an append-only
  * session log and projects it into a self-contained JSON document via
@@ -9,12 +9,10 @@
  * fail closed with `UNKNOWN_SCHEMA_MAJOR`, as with peer native-export
  * adapters.
  *
- * Auto-discovery is unsupported and must never scrape home directories or
- * invent session roots. The documented candidate native root
- * (`$XDG_DATA_HOME/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`,
- * default `~/.local/share/muse/sessions`) is NOT authorized or implemented
- * here; a future evidence-gated `--muse-root` discover path remains the
- * route to native discovery (#222 PR B).
+ * Auto-discovery must never scrape home directories or invent session roots.
+ * Native discovery is available only when the operator explicitly authorizes
+ * a Muse sessions root with `--muse-root`; the adapter then enumerates only
+ * `$root/YYYY/MM/DD/<session-id>/session.jsonl`.
  *
  * Trajectory shape follows the documented export format at
  * https://dev.meta.ai/docs/cookbook/audit-agent-sessions: top-level
@@ -42,6 +40,8 @@
  * @issue #232
  */
 
+import { opendir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
   SessionContractError,
@@ -54,12 +54,19 @@ import {
   type SourceDescriptor,
   type SourceProbe,
 } from '../contracts.js';
-import { readBoundedJson, type ReaderLimits } from '../readers.js';
+import {
+  readBoundedJson,
+  readBoundedJsonLines,
+  type BoundedJsonRecord,
+  type ReaderLimits,
+} from '../readers.js';
 
 export const MUSE_ADAPTER_VERSION = '1.0.0';
 export const MUSE_EXPORT_SCHEMA_VERSION = '1.0.0';
 export const MUSE_EXPORT_SCHEMA_MAJOR = 1;
 export const MUSE_LOCATOR_CLASS = 'manual-export' as const;
+export const MUSE_NATIVE_LOCATOR_CLASS = 'muse-native-session-log' as const;
+export const MUSE_NATIVE_SCHEMA_VERSION = '1.0.0';
 
 const Rfc3339Schema = z.string().refine(
   (value) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
@@ -143,7 +150,10 @@ const MuseDiagnosticsSchema = z.object({
   unknown_payload_kinds: z.number().int().nonnegative().optional(),
   gaps: z.number().int().nonnegative().optional(),
   omitted_live_only: z.number().int().nonnegative().optional(),
+  omitted_records: z.number().int().nonnegative().optional(),
   duplicate_records: z.number().int().nonnegative().optional(),
+  retained_frames: z.number().int().nonnegative().optional(),
+  retained_frame_children: z.number().int().nonnegative().optional(),
 }).passthrough();
 
 const MuseTrajectorySchema = z.object({
@@ -160,33 +170,83 @@ const MuseTrajectorySchema = z.object({
 type MuseTrajectory = z.infer<typeof MuseTrajectorySchema>;
 type MuseExportEvent = z.infer<typeof MuseExportEventSchema>;
 type MuseRecordEvent = z.infer<typeof MuseRecordEventSchema>;
+type MuseDiagnostics = z.infer<typeof MuseDiagnosticsSchema>;
 
 function isRecordEvent(event: MuseExportEvent): event is MuseRecordEvent {
   return event.kind === 'record';
 }
 type MuseEnvelope = z.infer<typeof MuseEnvelopeSchema>;
 
+const MuseRetainedFrameSchema = z.object({
+  retained_frame: z.string().min(1),
+  frame_schema_version: z.number().int().nonnegative().optional(),
+  outer_log_ordinal: z.number().int().nonnegative().optional(),
+  transaction_id: z.string().optional(),
+  content_sha256: z.string().optional(),
+  children: z.array(z.object({
+    child_index: z.number().int().nonnegative().optional(),
+    record_json: z.string().min(1),
+  }).passthrough()),
+}).passthrough();
+
+interface MuseRecordContext {
+  locatorClass: typeof MUSE_LOCATOR_CLASS | typeof MUSE_NATIVE_LOCATOR_CLASS;
+  sourceLabel: string;
+  bytesRead: number;
+  fallbackSessionId: string;
+  spawns: Map<string, { agentPath?: string; role?: string }>;
+  exportSchemaVersion?: number;
+  redaction?: string;
+  exporterVersion?: string;
+  sessionBuild?: string;
+  terminatedAbnormally?: boolean;
+  diagnostics?: MuseDiagnostics;
+}
+
+interface MuseNativeRecord {
+  event: MuseRecordEvent;
+  line: BoundedJsonRecord;
+  retainedFrame?: string;
+  retainedChildIndex?: number;
+}
+
 export class MuseSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'muse' as const;
   readonly adapterVersion = MUSE_ADAPTER_VERSION;
-  readonly disposition = 'manual-only' as const;
-  readonly supportedOperations = ['inspect', 'stream'] as const;
-  readonly acquisitionModes = ['manual-export'] as const;
+  readonly disposition = 'implemented' as const;
+  readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;
+  readonly acquisitionModes = ['manual-export', 'jsonl'] as const;
 
-  constructor(private readonly limits?: Partial<ReaderLimits>) {}
+  constructor(private readonly limits?: Partial<ReaderLimits>, private readonly maxFiles = 10_000) {}
 
-  async *discover(_scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
-    throw new SessionContractError(
-      'UNSUPPORTED_OPERATION',
-      'Muse Code session auto-discover is unsupported: the native log under '
-        + '$XDG_DATA_HOME/muse/sessions uses an internal format. Run `muse export --session '
-        + '<id-or-session.jsonl>` and select that trajectory file. AIWG does not scrape home '
-        + 'directories for this provider.',
-    );
+  async *discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
+    if (scope.allowedRoots.length === 0) {
+      throw unsupportedNativeDiscovery();
+    }
+    let count = 0;
+    for (const root of [...scope.allowedRoots].sort()) {
+      for await (const locator of museNativeSessionLogs(resolve(root))) {
+        if (++count > this.maxFiles) {
+          throw new SessionContractError(
+            'RESOURCE_LIMIT_EXCEEDED',
+            'Muse native session discovery exceeded the authorized file limit',
+          );
+        }
+        yield { provider: 'muse', locator, locatorClass: MUSE_NATIVE_LOCATOR_CLASS };
+      }
+    }
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
-    this.assertManualExport(source);
+    if (source.locatorClass === MUSE_NATIVE_LOCATOR_CLASS) {
+      const native = await this.readNative(source);
+      return {
+        sourceSchemaVersion: MUSE_NATIVE_SCHEMA_VERSION,
+        consistency: native.complete ? 'complete' : 'provisional',
+        operationalState: 'available',
+      };
+    }
+    this.assertSupportedLocator(source);
     const { trajectory } = await this.readTrajectory(source);
     for (const event of trajectory.events) this.parseEvent(event);
     return {
@@ -200,10 +260,42 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
     source: SelectedSource,
     cursor?: ImportCursor,
   ): AsyncIterable<ProviderRecord> {
-    this.assertManualExport(source);
+    if (source.locatorClass === MUSE_NATIVE_LOCATOR_CLASS) {
+      const native = await this.readNative(source);
+      const start = parseEventCursor(cursor?.value);
+      let outputIndex = 0;
+      for (const record of native.records) {
+        const position = outputIndex;
+        outputIndex += 1;
+        if (position < start) continue;
+        const mapped = this.toProviderRecord(
+          native.context,
+          record.event.envelope,
+          record.event,
+          position,
+        );
+        mapped.rawReference = {
+          locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
+          offset: record.line.byteOffset,
+          sequence: record.line.sequence,
+        };
+        mapped.sourceCursor = String(outputIndex);
+        mapped.extensions = {
+          ...mapped.extensions,
+          'native.muse': compactObject({
+            ...((mapped.extensions?.['native.muse'] as Record<string, unknown> | undefined) ?? {}),
+            retainedFrame: record.retainedFrame,
+            retainedChildIndex: record.retainedChildIndex,
+          }),
+        };
+        yield mapped;
+      }
+      return;
+    }
+    this.assertSupportedLocator(source);
     const { trajectory, bytesRead } = await this.readTrajectory(source);
     const start = parseEventCursor(cursor?.value);
-    const spawns = acceptedSpawnsById(trajectory);
+    const context = contextFromTrajectory(trajectory, bytesRead);
     let index = 0;
     for (const event of trajectory.events) {
       // Cursor positions are raw event positions so resume stays aligned
@@ -214,7 +306,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       // Gap/retained-frame markers carry no record payload: skip them, never
       // fabricate a ProviderRecord for one.
       if (!isRecordEvent(event)) continue;
-      yield this.toProviderRecord(trajectory, bytesRead, event.envelope, spawns, event, position);
+      yield this.toProviderRecord(context, event.envelope, event, position);
     }
   }
 
@@ -248,10 +340,8 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
   }
 
   private toProviderRecord(
-    trajectory: MuseTrajectory,
-    bytesRead: number,
+    context: MuseRecordContext,
     envelope: MuseEnvelope,
-    spawns: Map<string, { agentPath?: string; role?: string }>,
     event: MuseExportEvent,
     index: number,
   ): ProviderRecord {
@@ -259,7 +349,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
     // first session summary only when the stream block is absent. Live
     // evidence (Muse Code 1.3.0) shows merged events always carry the parent
     // id here, so never assume sessions[0] without reading the envelope.
-    const nativeSessionId = streamSessionIdOf(envelope) ?? trajectory.sessions[0].session_id;
+    const nativeSessionId = streamSessionIdOf(envelope) ?? context.fallbackSessionId;
     const payload = envelope.payload ?? {};
     const payloadRecord = payload as Record<string, unknown>;
     const eventKind = eventKindOf(event);
@@ -270,7 +360,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
     const approvalOutcome = stringField(payloadRecord, 'outcome');
     const decisionSource = objectField(payloadRecord, 'decision_source');
     const linkage = subagentLinkageOf(payloadRecord);
-    const spawnContext = spawnContextOf(spawns, envelope.payload_type, linkage.subagentId);
+    const spawnContext = spawnContextOf(context.spawns, envelope.payload_type, linkage.subagentId);
     return {
       nativeSessionId,
       nativeEventId: `muse-seq-${envelope.sequence}`,
@@ -283,14 +373,15 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       model: undefined,
       entities: [],
       occurredAt: occurredAtOf(envelope.recorded_at) ?? undefined,
-      text: describeEvent(eventKind, envelope.sequence, {
+      text: describeEvent(context.sourceLabel, eventKind, envelope.sequence, {
         operation, policyDecision, decision, approvalOutcome, decisionSource,
       }),
-      rawReference: { locatorClass: MUSE_LOCATOR_CLASS, sequence: index },
+      rawReference: { locatorClass: context.locatorClass, sequence: index },
       sourceCursor: String(index + 1),
-      sourceBytes: bytesRead,
+      sourceBytes: context.bytesRead,
       extensions: {
         'native.muse': compactObject({
+          acquisition: context.locatorClass,
           eventKind,
           recordType: event.kind,
           payloadType: envelope.payload_type,
@@ -300,11 +391,11 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
           envelopeSequence: envelope.sequence,
           envelopeId: envelope.id,
           causationId: envelope.causation_id,
-          exportSchemaVersion: trajectory.export_schema_version,
-          redaction: trajectory.redaction,
-          exporterVersion: trajectory.exporter_version?.display,
-          sessionBuild: trajectory.session_build?.display,
-          terminatedAbnormally: trajectory.session_terminated_abnormally,
+          exportSchemaVersion: context.exportSchemaVersion,
+          redaction: context.redaction,
+          exporterVersion: context.exporterVersion,
+          sessionBuild: context.sessionBuild,
+          terminatedAbnormally: context.terminatedAbnormally,
           operation,
           policyDecision,
           decision,
@@ -312,21 +403,256 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
           approvalOutcome,
           ...linkage,
           ...spawnContext,
-          diagnostics: trajectory.diagnostics,
+          diagnostics: context.diagnostics,
         }),
       },
     };
   }
 
-  private assertManualExport(source: SelectedSource): void {
-    if (source.locatorClass !== MUSE_LOCATOR_CLASS) {
+  private async readNative(source: SelectedSource): Promise<{
+    records: MuseNativeRecord[];
+    complete: boolean;
+    context: MuseRecordContext;
+  }> {
+    this.assertSupportedLocator(source);
+    let input;
+    try {
+      input = await readBoundedJsonLines(
+        { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+        { consistency: 'complete', limits: this.limits },
+      );
+    } catch (error) {
+      if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
+        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL');
+      }
+      throw error;
+    }
+    const diagnostics: MuseDiagnostics = {};
+    const records: MuseNativeRecord[] = [];
+    let fallbackSessionId = nativeSessionIdFromLocator(source.locator) ?? source.sourceId;
+    let complete = false;
+    for (const line of input.records) {
+      const value = line.value;
+      if (isOmissionMarker(value)) {
+        diagnostics.omitted_records = (diagnostics.omitted_records ?? 0) + 1;
+        if (asObject(value).retained_marker === 'omitted_live_only') {
+          diagnostics.omitted_live_only = (diagnostics.omitted_live_only ?? 0) + 1;
+        }
+        continue;
+      }
+      const retained = MuseRetainedFrameSchema.safeParse(value);
+      if (retained.success) {
+        diagnostics.retained_frames = (diagnostics.retained_frames ?? 0) + 1;
+        for (const child of retained.data.children) {
+          let decoded: unknown;
+          try {
+            decoded = JSON.parse(child.record_json);
+          } catch {
+            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed JSON');
+          }
+          const event = recordEventFromEnvelope(decoded);
+          if (!event) {
+            throw new SessionContractError('MALFORMED_SOURCE', 'Muse retained frame child record is malformed');
+          }
+          fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+          complete ||= event.envelope.payload_type === 'session.end';
+          diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
+          records.push({
+            event,
+            line,
+            retainedFrame: retained.data.retained_frame,
+            retainedChildIndex: child.child_index,
+          });
+        }
+        continue;
+      }
+      const event = recordEventFromEnvelope(value);
+      if (!event) {
+        throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log line is not a supported record shape');
+      }
+      fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+      complete ||= event.envelope.payload_type === 'session.end';
+      records.push({ event, line });
+    }
+    if (records.length === 0) {
+      throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains no record envelopes');
+    }
+    return {
+      records,
+      complete,
+      context: {
+        locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
+        sourceLabel: 'muse native session log',
+        bytesRead: input.bytesRead,
+        fallbackSessionId,
+        spawns: new Map(),
+        diagnostics,
+      },
+    };
+  }
+
+  private assertSupportedLocator(source: SelectedSource): void {
+    if (source.locatorClass !== MUSE_LOCATOR_CLASS && source.locatorClass !== MUSE_NATIVE_LOCATOR_CLASS) {
       throw new SessionContractError(
         'UNSUPPORTED_OPERATION',
-        `Muse Code supports only locatorClass "${MUSE_LOCATOR_CLASS}" because its native log format is internal `
-          + `(got "${source.locatorClass}"). Select an explicit \`muse export\` trajectory file.`,
+        `Muse Code supports locatorClass "${MUSE_LOCATOR_CLASS}" and explicitly authorized `
+          + `"${MUSE_NATIVE_LOCATOR_CLASS}" sources (got "${source.locatorClass}").`,
       );
     }
   }
+}
+
+function unsupportedNativeDiscovery(): SessionContractError {
+  return new SessionContractError(
+    'UNSUPPORTED_OPERATION',
+    'Muse Code session auto-discover is unsupported: the native log under '
+      + '$XDG_DATA_HOME/muse/sessions uses an internal format. Run `muse export --session '
+      + '<id-or-session.jsonl>` and select that trajectory file. AIWG does not scrape home '
+      + 'directories for this provider.',
+  );
+}
+
+function contextFromTrajectory(trajectory: MuseTrajectory, bytesRead: number): MuseRecordContext {
+  return {
+    locatorClass: MUSE_LOCATOR_CLASS,
+    sourceLabel: 'muse export trajectory',
+    bytesRead,
+    fallbackSessionId: trajectory.sessions[0].session_id,
+    spawns: acceptedSpawnsById(trajectory),
+    exportSchemaVersion: trajectory.export_schema_version,
+    redaction: trajectory.redaction,
+    exporterVersion: trajectory.exporter_version?.display,
+    sessionBuild: trajectory.session_build?.display,
+    terminatedAbnormally: trajectory.session_terminated_abnormally,
+    diagnostics: trajectory.diagnostics,
+  };
+}
+
+async function* museNativeSessionLogs(root: string): AsyncGenerator<string> {
+  let years;
+  try {
+    years = await opendir(root);
+  } catch {
+    return;
+  }
+  for await (const year of years) {
+    if (!year.isDirectory() || !/^\d{4}$/.test(year.name)) continue;
+    const yearPath = resolve(root, year.name);
+    let months;
+    try {
+      months = await opendir(yearPath);
+    } catch {
+      continue;
+    }
+    for await (const month of months) {
+      if (!month.isDirectory() || !/^(0[1-9]|1[0-2])$/.test(month.name)) continue;
+      const monthPath = resolve(yearPath, month.name);
+      let days;
+      try {
+        days = await opendir(monthPath);
+      } catch {
+        continue;
+      }
+      for await (const day of days) {
+        if (!day.isDirectory() || !/^(0[1-9]|[12]\d|3[01])$/.test(day.name)) continue;
+        const dayPath = resolve(monthPath, day.name);
+        let sessions;
+        try {
+          sessions = await opendir(dayPath);
+        } catch {
+          continue;
+        }
+        for await (const session of sessions) {
+          if (!session.isDirectory() || !/^[A-Za-z0-9._-]+$/.test(session.name)) continue;
+          const sessionPath = resolve(dayPath, session.name);
+          let entries;
+          try {
+            entries = await opendir(sessionPath);
+          } catch {
+            continue;
+          }
+          for await (const entry of entries) {
+            if (entry.isFile() && entry.name === 'session.jsonl') {
+              yield resolve(sessionPath, entry.name);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export async function museNativeSourceMatchesWorkspace(
+  source: SelectedSource,
+  workspacePath: string,
+): Promise<boolean> {
+  let input;
+  try {
+    input = await readBoundedJsonLines(
+      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+      { consistency: 'complete', limits: { maxRecords: 100, maxRecordBytes: 8 * 1024 * 1024 } },
+    );
+  } catch {
+    return false;
+  }
+  for (const line of input.records) {
+    for (const envelope of nativeEnvelopesFromLine(line.value)) {
+      const candidate = workspaceEvidenceOf(envelope);
+      if (!candidate) continue;
+      if (workspacePathEquals(candidate, workspacePath)) return true;
+    }
+  }
+  return false;
+}
+
+function nativeEnvelopesFromLine(value: unknown): MuseEnvelope[] {
+  if (isOmissionMarker(value)) return [];
+  const event = recordEventFromEnvelope(value);
+  if (event) return [event.envelope];
+  const retained = MuseRetainedFrameSchema.safeParse(value);
+  if (!retained.success) return [];
+  const envelopes: MuseEnvelope[] = [];
+  for (const child of retained.data.children) {
+    try {
+      const childEvent = recordEventFromEnvelope(JSON.parse(child.record_json));
+      if (childEvent) envelopes.push(childEvent.envelope);
+    } catch {
+      return [];
+    }
+  }
+  return envelopes;
+}
+
+function recordEventFromEnvelope(value: unknown): MuseRecordEvent | null {
+  const envelope = MuseEnvelopeSchema.safeParse(value);
+  return envelope.success ? { kind: 'record', envelope: envelope.data } : null;
+}
+
+function isOmissionMarker(value: unknown): boolean {
+  const record = asObject(value);
+  return Object.prototype.hasOwnProperty.call(record, 'omitted_record')
+    || record.retained_marker === 'omitted_live_only';
+}
+
+function workspaceEvidenceOf(envelope: MuseEnvelope): string | null {
+  const payload = asObject(envelope.payload);
+  const record = asObject(payload.record);
+  for (const candidate of [record.workspace_root, record.cwd]) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return null;
+}
+
+function workspacePathEquals(candidate: string, workspacePath: string): boolean {
+  return resolve(candidate) === workspacePath;
+}
+
+function nativeSessionIdFromLocator(locator: string): string | null {
+  const parts = locator.replaceAll('\\', '/').split('/');
+  const leaf = parts.at(-1);
+  if (leaf !== 'session.jsonl') return null;
+  const sessionId = parts.at(-2);
+  return sessionId && /^[A-Za-z0-9._-]+$/.test(sessionId) ? sessionId : null;
 }
 
 /**
@@ -440,6 +766,12 @@ function objectField(payload: Record<string, unknown>, key: string): Record<stri
     : null;
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function occurredAtOf(recordedAt: string | number | undefined): string | null {
   if (typeof recordedAt === 'number') {
     // Epoch microseconds (Muse Code 1.4.0 export and native log).
@@ -451,6 +783,7 @@ function occurredAtOf(recordedAt: string | number | undefined): string | null {
 }
 
 function describeEvent(
+  sourceLabel: string,
   eventKind: string,
   sequence: number,
   provenance: {
@@ -461,7 +794,7 @@ function describeEvent(
     decisionSource: Record<string, unknown> | null;
   },
 ): string {
-  const parts = [`muse export trajectory event ${eventKind} (sequence ${sequence})`];
+  const parts = [`${sourceLabel} event ${eventKind} (sequence ${sequence})`];
   if (provenance.operation) parts.push(`operation=${provenance.operation}`);
   if (provenance.policyDecision) parts.push(`policy_decision=${provenance.policyDecision}`);
   if (provenance.decision) parts.push(`decision=${provenance.decision}`);

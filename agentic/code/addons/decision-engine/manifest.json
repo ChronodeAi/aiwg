@@ -13,12 +13,16 @@
   "keywords": ["decision", "ruleset", "jev", "llm-subagent", "flow"],
   "entry": {
     "skills": "skills/",
+    "rules": "rules/",
     "docs": "docs/",
-    "examples": "examples/"
+    "examples": "examples/",
+    "gatePacks": "gate-packs/"
   },
   "agents": [],
   "commands": [],
-  "skills": ["decision-evaluate", "decision-playground"],
+  "skills": ["decision-evaluate", "decision-playground", "decision-offload"],
+  "rules": ["decision-offload"],
+  "gatePacks": ["integrity-ceiling", "absolute-screening"],
   "dependencies": {
     "required": ["aiwg-utils", "composition-engine"],
     "optional": []

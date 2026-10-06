@@ -1,0 +1,334 @@
+{
+  "schemaVersion": "decision-comparative-replay-audit-sample/v1",
+  "generatorDigest": "sha256:70b3747cd8365d00a685a312b85aadb208a8acd450ce530d5696e281b76b6d34",
+  "splitDigest": "sha256:84e927e6727cafb1f15e18e53aa4a20d6f889e88c2f17b2a66d148e6d328fce5",
+  "goldDigest": "sha256:78f197dfd61e72fb235f860a808a8125df6066da64363102203e9a88c01c8680",
+  "status": "pending",
+  "reviewer": null,
+  "completedAt": null,
+  "itemAssessments": 44,
+  "uniqueDevelopmentRoots": 20,
+  "uniqueHoldoutRoots": 20,
+  "delayedRepeats": 4,
+  "artifactReviews": [
+    {
+      "artifact": "protocol-preregistration",
+      "status": "pending"
+    },
+    {
+      "artifact": "final-comparative-report",
+      "status": "pending"
+    }
+  ],
+  "blinding": "Operator-only deterministic blinded A/B key: hide rootId, repeatOf, pairOrder, source identities and prior answers in reviewer packets; expose only assessmentId and shuffled A/B diagnostic claims.",
+  "assessments": [
+    {
+      "assessmentId": "audit-01",
+      "phase": "development",
+      "rootId": "d23-tuning-threshold-boundary-001",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-02",
+      "phase": "development",
+      "rootId": "d23-tuning-threshold-boundary-002",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-03",
+      "phase": "development",
+      "rootId": "d23-tuning-threshold-boundary-003",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-04",
+      "phase": "development",
+      "rootId": "d23-tuning-threshold-boundary-004",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-05",
+      "phase": "development",
+      "rootId": "d23-tuning-threshold-boundary-005",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-06",
+      "phase": "development",
+      "rootId": "d23-tuning-priority-loss-001",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-07",
+      "phase": "development",
+      "rootId": "d23-tuning-priority-loss-002",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-08",
+      "phase": "development",
+      "rootId": "d23-tuning-priority-loss-003",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-09",
+      "phase": "development",
+      "rootId": "d23-tuning-priority-loss-004",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-10",
+      "phase": "development",
+      "rootId": "d23-tuning-priority-loss-005",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-11",
+      "phase": "development",
+      "rootId": "d23-tuning-unchanged-control-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-12",
+      "phase": "development",
+      "rootId": "d23-tuning-unchanged-control-002",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-13",
+      "phase": "development",
+      "rootId": "d23-tuning-unchanged-control-003",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-14",
+      "phase": "development",
+      "rootId": "d23-tuning-unchanged-control-004",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-15",
+      "phase": "development",
+      "rootId": "d23-tuning-unchanged-control-005",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-16",
+      "phase": "development",
+      "rootId": "d23-tuning-unreplayable-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-17",
+      "phase": "development",
+      "rootId": "d23-tuning-unreplayable-002",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-18",
+      "phase": "development",
+      "rootId": "d23-tuning-unreplayable-003",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-19",
+      "phase": "development",
+      "rootId": "d23-tuning-unreplayable-004",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-20",
+      "phase": "development",
+      "rootId": "d23-tuning-unreplayable-005",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-21",
+      "phase": "holdout",
+      "rootId": "d23-test-threshold-boundary-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-22",
+      "phase": "holdout",
+      "rootId": "d23-test-threshold-boundary-002",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-23",
+      "phase": "holdout",
+      "rootId": "d23-test-threshold-boundary-003",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-24",
+      "phase": "holdout",
+      "rootId": "d23-test-threshold-boundary-004",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-25",
+      "phase": "holdout",
+      "rootId": "d23-test-threshold-boundary-005",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-26",
+      "phase": "holdout",
+      "rootId": "d23-test-priority-loss-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-27",
+      "phase": "holdout",
+      "rootId": "d23-test-priority-loss-002",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-28",
+      "phase": "holdout",
+      "rootId": "d23-test-priority-loss-003",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-29",
+      "phase": "holdout",
+      "rootId": "d23-test-priority-loss-004",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-30",
+      "phase": "holdout",
+      "rootId": "d23-test-priority-loss-005",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-31",
+      "phase": "holdout",
+      "rootId": "d23-test-unchanged-control-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-32",
+      "phase": "holdout",
+      "rootId": "d23-test-unchanged-control-002",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-33",
+      "phase": "holdout",
+      "rootId": "d23-test-unchanged-control-003",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-34",
+      "phase": "holdout",
+      "rootId": "d23-test-unchanged-control-004",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-35",
+      "phase": "holdout",
+      "rootId": "d23-test-unchanged-control-005",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-36",
+      "phase": "holdout",
+      "rootId": "d23-test-unreplayable-001",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-37",
+      "phase": "holdout",
+      "rootId": "d23-test-unreplayable-002",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-38",
+      "phase": "holdout",
+      "rootId": "d23-test-unreplayable-003",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-39",
+      "phase": "holdout",
+      "rootId": "d23-test-unreplayable-004",
+      "repeatOf": null,
+      "pairOrder": "report-gold"
+    },
+    {
+      "assessmentId": "audit-40",
+      "phase": "holdout",
+      "rootId": "d23-test-unreplayable-005",
+      "repeatOf": null,
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-41",
+      "phase": "delayed-repeat",
+      "rootId": "d23-test-threshold-boundary-001",
+      "repeatOf": "audit-21",
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-42",
+      "phase": "delayed-repeat",
+      "rootId": "d23-test-priority-loss-001",
+      "repeatOf": "audit-26",
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-43",
+      "phase": "delayed-repeat",
+      "rootId": "d23-test-unchanged-control-001",
+      "repeatOf": "audit-31",
+      "pairOrder": "gold-report"
+    },
+    {
+      "assessmentId": "audit-44",
+      "phase": "delayed-repeat",
+      "rootId": "d23-test-unreplayable-001",
+      "repeatOf": "audit-36",
+      "pairOrder": "gold-report"
+    }
+  ]
+}

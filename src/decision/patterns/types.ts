@@ -184,7 +184,8 @@ export interface LivePatternReceipt {
   route: PatternRoute;
   reason: string;
   action: { status: 'unexecuted' };
-  result: RulesetResult;
+  /** Null when a deterministic precondition rejected the request before evaluation. */
+  result: RulesetResult | null;
 }
 
 export interface PatternDrillReceipt {

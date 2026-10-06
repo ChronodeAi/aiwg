@@ -10,6 +10,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // Mock script runner
 const mockRun = vi.fn().mockResolvedValue({ exitCode: 0 });
@@ -225,6 +228,35 @@ describe('Utility Command Handlers', () => {
         mockContext.args,
         { cwd: mockContext.cwd }
       );
+    });
+
+    it('shows Muse native extensions when Muse is requested', async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-muse-'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        mockContext.cwd = tmp;
+        mockContext.args = ['--provider', 'muse'];
+        await doctorHandler.execute(mockContext);
+        expect(log.mock.calls.map((call) => String(call[0])).join('\n'))
+          .toContain('── Muse Code native extensions ──');
+      } finally {
+        log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('hides Muse native extensions when Muse is neither requested nor deployed', async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-no-muse-'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        mockContext.cwd = tmp;
+        await doctorHandler.execute(mockContext);
+        expect(log.mock.calls.map((call) => String(call[0])).join('\n'))
+          .not.toContain('── Muse Code native extensions ──');
+      } finally {
+        log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
     });
   });
 

@@ -7,6 +7,7 @@ import {
   createAcceptancePromotionRecord,
   replayAcceptancePolicyShadow,
   applyPrimitiveAcceptance,
+  applyTargetAcceptance,
   artifactPin,
   evaluateDecisionRuleset,
   validateDecisionDocument,
@@ -273,5 +274,36 @@ describe('primitive-aware acceptance', () => {
     const binding = JSON.parse(readFileSync('agentic/code/addons/decision-engine/examples/binding-jev.json', 'utf8')) as DecisionBinding;
     binding.spec.evaluations.category!.targets[0]!.acceptance = policy();
     expect(() => validateDecisionDocument(binding)).toThrow(DecisionValidationError);
+  });
+});
+
+describe('confidence-threshold target acceptance', () => {
+  it('ACC-TARGET-01 abstains with provenance but without the rejected value or transport fields', () => {
+    const observation = {
+      status: 'success', reason: 'none', value: 'yes', uncertainty: { confidence: 0.1, profile: 'p' }, actualModel: 'm',
+      usage: { inputTokens: 1, outputTokens: 1, costUsd: null }, requestId: 'r', httpStatus: 200,
+      dispatchCertainty: 'terminal-response',
+    } as unknown as Parameters<typeof applyTargetAcceptance>[2];
+    const target = { acceptance: { mode: 'confidence-threshold', profile: 'p', minimumBps: 8000 } } as unknown as Parameters<typeof applyTargetAcceptance>[1];
+    expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target, observation)).toEqual({
+      status: 'abstained', reason: 'low-confidence', uncertainty: observation.uncertainty, actualModel: 'm',
+      usage: observation.usage, requestId: 'r',
+    });
+  });
+});
+
+describe('confidence-threshold boundary', () => {
+  it('ACC-TARGET-02 accepts a confidence exactly at the basis-point threshold', () => {
+    const target = (minimumBps: number) =>
+      ({ acceptance: { mode: 'confidence-threshold', profile: 'p', minimumBps } } as unknown as Parameters<typeof applyTargetAcceptance>[1]);
+    // 0.7 * 10_000 is 6999.999999999999 in binary floating point; equality must still accept.
+    for (const [confidence, minimumBps] of [[0.7, 7000], [0.29, 2900], [0.57, 5700], [0.1, 1000], [0.3, 3000]] as const) {
+      const observation = {
+        status: 'success', reason: 'none', value: 'yes', uncertainty: { confidence, profile: 'p' }, actualModel: 'm',
+        usage: { inputTokens: 1, outputTokens: 1, costUsd: null }, requestId: 'r',
+      } as unknown as Parameters<typeof applyTargetAcceptance>[2];
+      expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target(minimumBps), observation).status).toBe('success');
+      expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target(minimumBps + 1), observation).status).toBe('abstained');
+    }
   });
 });

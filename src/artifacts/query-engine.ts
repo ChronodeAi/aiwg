@@ -10,6 +10,7 @@
  */
 
 import { minimatch } from 'minimatch';
+import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { QueryParams, QueryResult, MetadataEntry, GraphType, ArtifactIndex } from './types.js';
@@ -905,6 +906,8 @@ export async function queryIndex(
  * @implements #1214
  */
 export interface DiscoverParams {
+  /** Trusted host-only, default-off D27 observer. Shadow evidence never changes ranking. */
+  shadowRoute?: DiscoveryShadowRoute;
   /** Search phrase (the user's capability description) */
   phrase: string;
   /** Restrict to specific types — defaults to the operational discovery surface */
@@ -1293,6 +1296,19 @@ export async function discoverCapability(
   ).slice(0, limit);
   const relaxed = scored.some(result => !strictPaths.has(result.entry.path));
 
+  if (params.shadowRoute) {
+    try {
+      await params.shadowRoute.observe(params.phrase, scored.map(result => ({
+        id: discoveryIdForEntry(result.entry), name: result.entry.name ?? result.entry.title,
+        type: result.entry.type, capability: result.entry.capability ?? result.entry.summary,
+        score: result.score,
+      })));
+    } catch {
+      // An optional observation failure must never replace deterministic discovery.
+      params.shadowRoute.disable();
+    }
+  }
+
   const queryTimeMs = Date.now() - startTime;
 
   /**
@@ -1671,7 +1687,14 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
         ((basename === 'SKILL.md' && e.type === 'skill') ||
           (basename === 'BEHAVIOR.md' && e.type === 'behavior')) &&
         dirStem === needle;
-      return slugLayoutMatch || fileStem === needle || e.name === needle;
+      if (slugLayoutMatch || fileStem === needle || e.name === needle) return true;
+      if (e.type === 'gate-pack' && typeof e.name === 'string') {
+        const gateStem = fileStem.replace(/\.gatepack$/i, '');
+        const rest = e.name.includes(':') ? e.name.slice(e.name.indexOf(':') + 1) : e.name;
+        const short = rest.includes('/') ? rest.slice(rest.indexOf('/') + 1) : rest;
+        return gateStem === needle || rest === needle || short === needle;
+      }
+      return false;
     });
   }
   if (matches.length === 0) {
@@ -1727,6 +1750,69 @@ async function fortemiRecordForEntry(
   if (!loaded.exported) return null;
   const id = discoveryIdForEntry(entry);
   return loaded.exported.items.find((record) => record.id === id || record.source.path === entry.path) ?? null;
+}
+
+/**
+ * Scan bundle `gate-packs/` directories for a pack matching `needle` (#2830).
+ *
+ * Accepts the full namespaced id, the rest-path or the short pack name and
+ * probes `<bundle>/gate-packs/<pack>.gatepack.{yaml,yml,json}`. Never looks
+ * under `gates/`, which agent-persistence HITL owns.
+ */
+async function findGatePackInCorpus(
+  groups: Array<{ kind: 'framework' | 'addon' | 'extension' | 'plugin'; dir: string }>,
+  needle: string,
+): Promise<{ path: string; bundleKind: 'framework' | 'addon' | 'extension' | 'plugin' | null; bundleId: string | null } | null> {
+  const path = await import('node:path');
+  const fsp = (await import('node:fs')).promises;
+  const trimmed = needle.trim();
+  const rest = trimmed.includes(':') ? trimmed.slice(trimmed.indexOf(':') + 1) : trimmed;
+  const slash = rest.indexOf('/');
+  const wantedBundle = slash >= 0 ? rest.slice(0, slash) : null;
+  const wantedPack = slash >= 0 ? rest.slice(slash + 1) : rest;
+  if (!wantedPack || /\s/.test(wantedPack) || wantedPack.includes(':') || wantedPack.includes('/')) return null;
+  const extensions = ['.gatepack.yaml', '.gatepack.yml', '.gatepack.json'];
+  const ordered = wantedBundle
+    ? groups.flatMap(group => [{ group, bundle: wantedBundle }])
+    : null;
+  const probe = async (
+    group: { kind: 'framework' | 'addon' | 'extension' | 'plugin'; dir: string },
+    bundle: string,
+  ): Promise<{ path: string; bundleKind: 'framework' | 'addon' | 'extension' | 'plugin' | null; bundleId: string | null } | null> => {
+    for (const extension of extensions) {
+      const candidate = path.join(group.dir, bundle, 'gate-packs', `${wantedPack}${extension}`);
+      try {
+        const stat = await fsp.stat(candidate);
+        if (stat.isFile()) return { path: candidate, bundleKind: group.kind, bundleId: bundle };
+      } catch {
+        // not present — continue
+      }
+    }
+    return null;
+  };
+  if (ordered) {
+    for (const { group, bundle } of ordered) {
+      const found = await probe(group, bundle);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const group of groups) {
+    let bundles: string[];
+    try {
+      bundles = (await fsp.readdir(group.dir, { withFileTypes: true }))
+        .filter(d => d.isDirectory())
+        .map(d => d.name)
+        .sort();
+    } catch {
+      continue;
+    }
+    for (const bundle of bundles) {
+      const found = await probe(group, bundle);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1803,6 +1889,16 @@ async function findCorpusArtifact(
         }
       }
     }
+  }
+
+  // Gate packs live in `<bundle>/gate-packs/*.gatepack.yaml|json` (never
+  // `gates/`, which agent-persistence HITL uses). The needle may be the full
+  // namespaced id (`aiwg:decision-engine/integrity-ceiling`), the rest-path
+  // (`decision-engine/integrity-ceiling`) or the short pack name
+  // (`integrity-ceiling`). (#2830)
+  if (typeFilter.length === 0 || typeFilter.includes('gate-pack')) {
+    const gateMatch = await findGatePackInCorpus(groups, name);
+    if (gateMatch) return { ...gateMatch, type: 'gate-pack' };
   }
 
   // Top-level agents live at `agentic/code/agents/<category>/<name>.md`

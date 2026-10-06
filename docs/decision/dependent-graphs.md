@@ -1,5 +1,34 @@
 # Dependent decision graphs (experimental)
 
+## Package entry point
+
+Import the experimental graph surface from `aiwg/decision/graph`:
+
+```ts
+import {
+  planDecisionGraph, decisionGraphToFlow, decisionEvaluateSkillFlowInvoker,
+  decisionRulesetFlowInvoker, admittedDecisionFlowAdapter, DecisionGraphError,
+  GraphBudgetLedger, finalizeDecisionGraphRun, FileGraphRunReceiptStore,
+} from 'aiwg/decision/graph';
+import type { DecisionGraph, GraphPlan, GraphRunReceipt } from 'aiwg/decision/graph';
+```
+
+The entry point includes planning and pin types, Flow compilation and approval
+IDs, both host invokers and their request/response types, skill resolution and
+execution, budget admission, evidence auditing and ceilings, receipt finalization
+and storage, parallel dispatch, beam selection, and the three graph templates.
+`aiwg/decision` remains the independent decision runtime entry point.
+
+Internal bridge utilities `decisionFlowNode`, `assertDecisionFlowPins`,
+`decisionFlowResponse`, and `assertUnknownCostBound` are intentionally private:
+hosts use the invokers that apply these checks together. Deep imports into
+`dist/src/decision/graph-*.js` are not public package contracts. Template-local
+helper types are inferred from the public template functions.
+
+Runtime JavaScript and matching TypeScript declarations ship together. This
+surface is experimental; making it importable does not satisfy G5/G6 live
+qualification or promote it to comprehensive-release claims (see #2686).
+
 `DecisionGraph.v1.schema.json` and `planDecisionGraph` provide an opt-in, versioned DAG contract. Existing independent rulesets are unchanged. Validation precedes Flow compilation, adapter resolution, and any transport. A trusted caller supplies resolved definition/binding digests; model evidence cannot alter the graph, pins, permissions, or output projections. The graph has one entry, stage-ordered edges, named inputs/outputs, and declared terminals. A node with only guarded outgoing edges may also be terminal. Missing pins, duplicate IDs, cycles, ambiguous inputs, unreachable nodes, illegal projections and unsafe budgets fail closed.
 
 ## Flow-hosted execution
@@ -33,7 +62,7 @@ Compatible same-subject nodes are only **candidates** for native batching if tar
 
 Seeded property tests (the repository's linear congruential generator, no extra dependency) generate 120 random valid DAGs and check that the plan is identical under shuffled node, edge, terminal, input and output order, that stage/batch invariants hold, that evidence receipts are identical for any observation order, and that Flow-hosted receipts do not depend on the order in which parallel calls complete. A failing case reports its seed.
 
-The paired benchmark runs 24 seeded tasks per pattern through the compiled graph (host admission, local beam selector, receipt finalization) and through an independently authored explicit FlowGraph with the same scripted provider. The provider answers are imperfect and task-dependent, and include empty shortlists and fallback branches. The benchmark compares accuracy against fixed labels, provider calls, tokens, priced cost and logical critical-path latency (each Flow activation waits for its slowest node's provider-reported duration); the DAG layer must change none of them. Host orchestration time is measured and reported (`AIWG_GRAPH_BENCHMARK_REPORT=1`) but not asserted. What this cannot show: real-provider accuracy, billable price, network or queueing latency, or whether a pattern beats a differently shaped workflow. Those need live providers and are tracked in #2686 with G5/G6 qualification. This capability is experimental and excluded from comprehensive-release claims until those gates pass.
+The paired benchmark runs 24 seeded tasks per pattern through the compiled graph (host admission, local beam selector, receipt finalization) and through an independently authored explicit FlowGraph with the same scripted provider. The provider answers are imperfect and task-dependent, and include empty shortlists and fallback branches. The benchmark compares accuracy against fixed labels, provider calls, tokens, priced cost and logical critical-path latency (each Flow activation waits for its slowest node's provider-reported duration); the DAG layer must change none of them. Host orchestration time is measured and reported (`AIWG_GRAPH_BENCHMARK_REPORT=1`) but not asserted. What this cannot show: real-provider accuracy, billable price, network or queueing latency, or whether a pattern beats a differently shaped workflow. Those need live providers and are tracked in #2686 with G5/G6 qualification. The live paired runner, preregistered synthetic workload and non-inferiority margin for that benchmark are described in [dag-live-qualification.md](dag-live-qualification.md); no live run has been recorded yet. This capability is experimental and excluded from comprehensive-release claims until those gates pass.
 
 The #2127 graph profile projects onto this same FlowGraph substrate. The skill-bridge suite reproduces its `success-path`, `hitl-blocked`, `hitl-denial`, `checkpoint-replay`, `runtime-failure` and `budget-limit` cases through the decision bridge, including the real skill script with the example fixture adapter (no provider or network). Decision stages keep Flow retry at zero and delegate retry/fallback to the dispatcher, so the profile's Flow-level `retry-exhaustion-fallback` case has no decision-stage equivalent.
 

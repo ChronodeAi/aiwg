@@ -1,0 +1,1516 @@
+{
+  "population": [
+    {
+      "split": "tuning",
+      "slice": "citation-supports",
+      "variant": "exact",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-supports",
+      "variant": "paraphrase",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-supports",
+      "variant": "multi-value",
+      "n": 9
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-contradicts",
+      "variant": "negated",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-contradicts",
+      "variant": "moved",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-single",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-restricted",
+      "n": 7
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-unclear",
+      "variant": "scoped",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-unclear",
+      "variant": "temporal",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-unclear",
+      "variant": "tentative",
+      "n": 7
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-unclear",
+      "variant": "different-nonexclusive",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-does-not-support",
+      "variant": "other-attribute",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-digit",
+      "n": 9
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-transposition",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-injection",
+      "variant": "context",
+      "n": 7
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-injection",
+      "variant": "prefix",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-injection",
+      "variant": "middle",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "citation-injection",
+      "variant": "suffix",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-ready",
+      "variant": "exact",
+      "n": 9
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-ready",
+      "variant": "verified",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-ready",
+      "variant": "checklist",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "explicit-none",
+      "n": 3
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "planned",
+      "n": 3
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-attribute",
+      "n": 3
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-subject",
+      "n": 4
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "stale",
+      "n": 4
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "self-attested",
+      "n": 4
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-incomplete",
+      "variant": "partial",
+      "n": 4
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-injection",
+      "variant": "context",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-injection",
+      "variant": "prefix",
+      "n": 7
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-injection",
+      "variant": "middle",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "criterion-injection",
+      "variant": "suffix",
+      "n": 6
+    },
+    {
+      "split": "tuning",
+      "slice": "missing-artifact",
+      "variant": "exact",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "missing-artifact",
+      "variant": "verified",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "missing-artifact",
+      "variant": "checklist",
+      "n": 9
+    },
+    {
+      "split": "tuning",
+      "slice": "failed-test",
+      "variant": "exact",
+      "n": 9
+    },
+    {
+      "split": "tuning",
+      "slice": "failed-test",
+      "variant": "verified",
+      "n": 8
+    },
+    {
+      "split": "tuning",
+      "slice": "failed-test",
+      "variant": "checklist",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-supports",
+      "variant": "exact",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-supports",
+      "variant": "paraphrase",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-supports",
+      "variant": "multi-value",
+      "n": 9
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-contradicts",
+      "variant": "negated",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-contradicts",
+      "variant": "moved",
+      "n": 7
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-single",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-restricted",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-unclear",
+      "variant": "scoped",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-unclear",
+      "variant": "temporal",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-unclear",
+      "variant": "tentative",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-unclear",
+      "variant": "different-nonexclusive",
+      "n": 7
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-does-not-support",
+      "variant": "other-attribute",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-digit",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-transposition",
+      "n": 9
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-injection",
+      "variant": "context",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-injection",
+      "variant": "prefix",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-injection",
+      "variant": "middle",
+      "n": 7
+    },
+    {
+      "split": "calibration",
+      "slice": "citation-injection",
+      "variant": "suffix",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-ready",
+      "variant": "exact",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-ready",
+      "variant": "verified",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-ready",
+      "variant": "checklist",
+      "n": 9
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "explicit-none",
+      "n": 4
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "planned",
+      "n": 4
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-attribute",
+      "n": 4
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-subject",
+      "n": 4
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "stale",
+      "n": 3
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "self-attested",
+      "n": 3
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-incomplete",
+      "variant": "partial",
+      "n": 3
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-injection",
+      "variant": "context",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-injection",
+      "variant": "prefix",
+      "n": 7
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-injection",
+      "variant": "middle",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "criterion-injection",
+      "variant": "suffix",
+      "n": 6
+    },
+    {
+      "split": "calibration",
+      "slice": "missing-artifact",
+      "variant": "exact",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "missing-artifact",
+      "variant": "verified",
+      "n": 9
+    },
+    {
+      "split": "calibration",
+      "slice": "missing-artifact",
+      "variant": "checklist",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "failed-test",
+      "variant": "exact",
+      "n": 9
+    },
+    {
+      "split": "calibration",
+      "slice": "failed-test",
+      "variant": "verified",
+      "n": 8
+    },
+    {
+      "split": "calibration",
+      "slice": "failed-test",
+      "variant": "checklist",
+      "n": 8
+    },
+    {
+      "split": "test",
+      "slice": "citation-supports",
+      "variant": "exact",
+      "n": 67
+    },
+    {
+      "split": "test",
+      "slice": "citation-supports",
+      "variant": "paraphrase",
+      "n": 66
+    },
+    {
+      "split": "test",
+      "slice": "citation-supports",
+      "variant": "multi-value",
+      "n": 67
+    },
+    {
+      "split": "test",
+      "slice": "citation-contradicts",
+      "variant": "negated",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-contradicts",
+      "variant": "moved",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-single",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-contradicts",
+      "variant": "exclusive-restricted",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-unclear",
+      "variant": "scoped",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-unclear",
+      "variant": "temporal",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-unclear",
+      "variant": "tentative",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-unclear",
+      "variant": "different-nonexclusive",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-does-not-support",
+      "variant": "other-attribute",
+      "n": 66
+    },
+    {
+      "split": "test",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-digit",
+      "n": 67
+    },
+    {
+      "split": "test",
+      "slice": "citation-does-not-support",
+      "variant": "near-miss-transposition",
+      "n": 67
+    },
+    {
+      "split": "test",
+      "slice": "citation-injection",
+      "variant": "context",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-injection",
+      "variant": "prefix",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-injection",
+      "variant": "middle",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "citation-injection",
+      "variant": "suffix",
+      "n": 50
+    },
+    {
+      "split": "test",
+      "slice": "criterion-ready",
+      "variant": "exact",
+      "n": 33
+    },
+    {
+      "split": "test",
+      "slice": "criterion-ready",
+      "variant": "verified",
+      "n": 34
+    },
+    {
+      "split": "test",
+      "slice": "criterion-ready",
+      "variant": "checklist",
+      "n": 33
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "explicit-none",
+      "n": 15
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "planned",
+      "n": 14
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-attribute",
+      "n": 14
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "wrong-subject",
+      "n": 14
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "stale",
+      "n": 14
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "self-attested",
+      "n": 14
+    },
+    {
+      "split": "test",
+      "slice": "criterion-incomplete",
+      "variant": "partial",
+      "n": 15
+    },
+    {
+      "split": "test",
+      "slice": "criterion-injection",
+      "variant": "context",
+      "n": 25
+    },
+    {
+      "split": "test",
+      "slice": "criterion-injection",
+      "variant": "prefix",
+      "n": 25
+    },
+    {
+      "split": "test",
+      "slice": "criterion-injection",
+      "variant": "middle",
+      "n": 25
+    },
+    {
+      "split": "test",
+      "slice": "criterion-injection",
+      "variant": "suffix",
+      "n": 25
+    },
+    {
+      "split": "test",
+      "slice": "missing-artifact",
+      "variant": "exact",
+      "n": 33
+    },
+    {
+      "split": "test",
+      "slice": "missing-artifact",
+      "variant": "verified",
+      "n": 33
+    },
+    {
+      "split": "test",
+      "slice": "missing-artifact",
+      "variant": "checklist",
+      "n": 34
+    },
+    {
+      "split": "test",
+      "slice": "failed-test",
+      "variant": "exact",
+      "n": 34
+    },
+    {
+      "split": "test",
+      "slice": "failed-test",
+      "variant": "verified",
+      "n": 33
+    },
+    {
+      "split": "test",
+      "slice": "failed-test",
+      "variant": "checklist",
+      "n": 33
+    }
+  ],
+  "developmentReviewMissingVariants": [
+    {
+      "slice": "criterion-incomplete",
+      "variant": "planned"
+    },
+    {
+      "slice": "criterion-incomplete",
+      "variant": "wrong-attribute"
+    }
+  ],
+  "baseline": {
+    "tuning": {
+      "n": 250,
+      "readinessAccuracy": {
+        "events": 200,
+        "n": 250,
+        "rateBps": 8000,
+        "lowerBps": 7460,
+        "upperBps": 8449
+      },
+      "jointAccuracy": {
+        "events": 125,
+        "n": 250,
+        "rateBps": 5000,
+        "lowerBps": 4384,
+        "upperBps": 5616
+      },
+      "falseReady": {
+        "events": 0,
+        "n": 200,
+        "rateBps": 0,
+        "lowerBps": 0,
+        "upperBps": 189
+      },
+      "supportConfusion": {
+        "supports": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 50,
+          "does-not-support": 0
+        },
+        "contradicts": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        },
+        "unclear": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        },
+        "does-not-support": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        }
+      }
+    },
+    "calibration": {
+      "n": 250,
+      "readinessAccuracy": {
+        "events": 200,
+        "n": 250,
+        "rateBps": 8000,
+        "lowerBps": 7460,
+        "upperBps": 8449
+      },
+      "jointAccuracy": {
+        "events": 125,
+        "n": 250,
+        "rateBps": 5000,
+        "lowerBps": 4384,
+        "upperBps": 5616
+      },
+      "falseReady": {
+        "events": 0,
+        "n": 200,
+        "rateBps": 0,
+        "lowerBps": 0,
+        "upperBps": 189
+      },
+      "supportConfusion": {
+        "supports": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 50,
+          "does-not-support": 0
+        },
+        "contradicts": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        },
+        "unclear": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        },
+        "does-not-support": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 25,
+          "does-not-support": 0
+        }
+      }
+    },
+    "test": {
+      "n": 1500,
+      "readinessAccuracy": {
+        "events": 1200,
+        "n": 1500,
+        "rateBps": 8000,
+        "lowerBps": 7790,
+        "upperBps": 8195
+      },
+      "jointAccuracy": {
+        "events": 604,
+        "n": 1500,
+        "rateBps": 4027,
+        "lowerBps": 3781,
+        "upperBps": 4278
+      },
+      "falseReady": {
+        "events": 4,
+        "n": 1200,
+        "rateBps": 33,
+        "lowerBps": 12,
+        "upperBps": 86
+      },
+      "supportConfusion": {
+        "supports": {
+          "supports": 8,
+          "contradicts": 0,
+          "unclear": 392,
+          "does-not-support": 0
+        },
+        "contradicts": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 200,
+          "does-not-support": 0
+        },
+        "unclear": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 200,
+          "does-not-support": 0
+        },
+        "does-not-support": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 200,
+          "does-not-support": 0
+        }
+      }
+    },
+    "developmentReview": {
+      "n": 50,
+      "readinessAccuracy": {
+        "events": 40,
+        "n": 50,
+        "rateBps": 8000,
+        "lowerBps": 6696,
+        "upperBps": 8876
+      },
+      "jointAccuracy": {
+        "events": 25,
+        "n": 50,
+        "rateBps": 5000,
+        "lowerBps": 3664,
+        "upperBps": 6336
+      },
+      "falseReady": {
+        "events": 0,
+        "n": 40,
+        "rateBps": 0,
+        "lowerBps": 0,
+        "upperBps": 877
+      },
+      "supportConfusion": {
+        "supports": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 10,
+          "does-not-support": 0
+        },
+        "contradicts": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 5,
+          "does-not-support": 0
+        },
+        "unclear": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 5,
+          "does-not-support": 0
+        },
+        "does-not-support": {
+          "supports": 0,
+          "contradicts": 0,
+          "unclear": 5,
+          "does-not-support": 0
+        }
+      }
+    }
+  },
+  "shortcutAudit": {
+    "schemaVersion": "decision-d29-shortcut-audit/v1",
+    "splits": [
+      "tuning",
+      "calibration"
+    ],
+    "n": 500,
+    "targets": [
+      {
+        "target": "injection",
+        "positives": 100,
+        "negatives": 400,
+        "limit": 0.75,
+        "featureCount": 890,
+        "maximumBalancedAccuracy": 0.7075,
+        "topRules": [
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:inventory",
+            "polarity": "absent",
+            "balancedAccuracy": 0.7075
+          },
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:operations",
+            "polarity": "absent",
+            "balancedAccuracy": 0.6837500000000001
+          },
+          {
+            "target": "injection",
+            "view": "passage-and-context",
+            "feature": "token:inventory",
+            "polarity": "absent",
+            "balancedAccuracy": 0.67625
+          },
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:independently",
+            "polarity": "present",
+            "balancedAccuracy": 0.6675
+          },
+          {
+            "target": "injection",
+            "view": "passage-and-context",
+            "feature": "token:independently",
+            "polarity": "present",
+            "balancedAccuracy": 0.6675
+          },
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:deployment",
+            "polarity": "absent",
+            "balancedAccuracy": 0.6599999999999999
+          },
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:independent",
+            "polarity": "absent",
+            "balancedAccuracy": 0.65875
+          },
+          {
+            "target": "injection",
+            "view": "passage-and-context",
+            "feature": "token:independent",
+            "polarity": "absent",
+            "balancedAccuracy": 0.65875
+          },
+          {
+            "target": "injection",
+            "view": "passage",
+            "feature": "token:in",
+            "polarity": "absent",
+            "balancedAccuracy": 0.65625
+          },
+          {
+            "target": "injection",
+            "view": "passage-and-context",
+            "feature": "token:operations",
+            "polarity": "absent",
+            "balancedAccuracy": 0.65625
+          }
+        ]
+      },
+      {
+        "target": "readiness",
+        "positives": 100,
+        "negatives": 400,
+        "limit": 0.75,
+        "featureCount": 890,
+        "maximumBalancedAccuracy": 0.58,
+        "topRules": [
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:inventory",
+            "polarity": "present",
+            "balancedAccuracy": 0.58
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:records",
+            "polarity": "present",
+            "balancedAccuracy": 0.5725
+          },
+          {
+            "target": "readiness",
+            "view": "passage",
+            "feature": "token:has",
+            "polarity": "absent",
+            "balancedAccuracy": 0.56875
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:has",
+            "polarity": "absent",
+            "balancedAccuracy": 0.56875
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:this",
+            "polarity": "absent",
+            "balancedAccuracy": 0.56375
+          },
+          {
+            "target": "readiness",
+            "view": "passage",
+            "feature": "token:records",
+            "polarity": "present",
+            "balancedAccuracy": 0.5625
+          },
+          {
+            "target": "readiness",
+            "view": "passage",
+            "feature": "token:and",
+            "polarity": "present",
+            "balancedAccuracy": 0.56125
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:contains",
+            "polarity": "present",
+            "balancedAccuracy": 0.56125
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:copies",
+            "polarity": "present",
+            "balancedAccuracy": 0.56125
+          },
+          {
+            "target": "readiness",
+            "view": "passage-and-context",
+            "feature": "token:deployment",
+            "polarity": "present",
+            "balancedAccuracy": 0.56125
+          }
+        ]
+      },
+      {
+        "target": "supports",
+        "positives": 100,
+        "negatives": 150,
+        "limit": 0.8,
+        "featureCount": 688,
+        "maximumBalancedAccuracy": 0.635,
+        "topRules": [
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:in",
+            "polarity": "absent",
+            "balancedAccuracy": 0.635
+          },
+          {
+            "target": "supports",
+            "view": "passage",
+            "feature": "token:inventory",
+            "polarity": "absent",
+            "balancedAccuracy": 0.615
+          },
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:calendar",
+            "polarity": "absent",
+            "balancedAccuracy": 0.605
+          },
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:listed",
+            "polarity": "absent",
+            "balancedAccuracy": 0.605
+          },
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:weekly",
+            "polarity": "absent",
+            "balancedAccuracy": 0.605
+          },
+          {
+            "target": "supports",
+            "view": "context",
+            "feature": "token:module",
+            "polarity": "absent",
+            "balancedAccuracy": 0.6033333333333333
+          },
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:operations",
+            "polarity": "absent",
+            "balancedAccuracy": 0.6016666666666667
+          },
+          {
+            "target": "supports",
+            "view": "passage-and-context",
+            "feature": "token:window",
+            "polarity": "absent",
+            "balancedAccuracy": 0.6
+          },
+          {
+            "target": "supports",
+            "view": "passage",
+            "feature": "token:in",
+            "polarity": "absent",
+            "balancedAccuracy": 0.595
+          },
+          {
+            "target": "supports",
+            "view": "passage",
+            "feature": "characters<=203",
+            "polarity": "present",
+            "balancedAccuracy": 0.5916666666666667
+          }
+        ]
+      },
+      {
+        "target": "contradicts",
+        "positives": 50,
+        "negatives": 200,
+        "limit": 0.8,
+        "featureCount": 688,
+        "maximumBalancedAccuracy": 0.75,
+        "topRules": [
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:no",
+            "polarity": "present",
+            "balancedAccuracy": 0.75
+          },
+          {
+            "target": "contradicts",
+            "view": "passage-and-context",
+            "feature": "token:no",
+            "polarity": "present",
+            "balancedAccuracy": 0.75
+          },
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:a",
+            "polarity": "present",
+            "balancedAccuracy": 0.6725000000000001
+          },
+          {
+            "target": "contradicts",
+            "view": "passage-and-context",
+            "feature": "token:a",
+            "polarity": "present",
+            "balancedAccuracy": 0.66
+          },
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:longer",
+            "polarity": "present",
+            "balancedAccuracy": 0.63
+          },
+          {
+            "target": "contradicts",
+            "view": "passage-and-context",
+            "feature": "token:longer",
+            "polarity": "present",
+            "balancedAccuracy": 0.63
+          },
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:now",
+            "polarity": "present",
+            "balancedAccuracy": 0.6225
+          },
+          {
+            "target": "contradicts",
+            "view": "passage-and-context",
+            "feature": "token:now",
+            "polarity": "present",
+            "balancedAccuracy": 0.6225
+          },
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:does",
+            "polarity": "present",
+            "balancedAccuracy": 0.62
+          },
+          {
+            "target": "contradicts",
+            "view": "passage",
+            "feature": "token:single",
+            "polarity": "present",
+            "balancedAccuracy": 0.62
+          }
+        ]
+      },
+      {
+        "target": "unclear",
+        "positives": 50,
+        "negatives": 200,
+        "limit": 0.8,
+        "featureCount": 688,
+        "maximumBalancedAccuracy": 0.635,
+        "topRules": [
+          {
+            "target": "unclear",
+            "view": "passage",
+            "feature": "token:in",
+            "polarity": "present",
+            "balancedAccuracy": 0.635
+          },
+          {
+            "target": "unclear",
+            "view": "passage-and-context",
+            "feature": "token:that",
+            "polarity": "present",
+            "balancedAccuracy": 0.6325000000000001
+          },
+          {
+            "target": "unclear",
+            "view": "passage",
+            "feature": "token:according",
+            "polarity": "present",
+            "balancedAccuracy": 0.62
+          },
+          {
+            "target": "unclear",
+            "view": "passage-and-context",
+            "feature": "token:according",
+            "polarity": "present",
+            "balancedAccuracy": 0.62
+          },
+          {
+            "target": "unclear",
+            "view": "passage",
+            "feature": "token:that",
+            "polarity": "present",
+            "balancedAccuracy": 0.615
+          },
+          {
+            "target": "unclear",
+            "view": "passage-and-context",
+            "feature": "token:in",
+            "polarity": "present",
+            "balancedAccuracy": 0.5925
+          },
+          {
+            "target": "unclear",
+            "view": "passage",
+            "feature": "token:staging",
+            "polarity": "present",
+            "balancedAccuracy": 0.5875
+          },
+          {
+            "target": "unclear",
+            "view": "passage-and-context",
+            "feature": "token:staging",
+            "polarity": "present",
+            "balancedAccuracy": 0.5875
+          },
+          {
+            "target": "unclear",
+            "view": "passage",
+            "feature": "token:window",
+            "polarity": "present",
+            "balancedAccuracy": 0.5825
+          },
+          {
+            "target": "unclear",
+            "view": "passage-and-context",
+            "feature": "token:operations",
+            "polarity": "present",
+            "balancedAccuracy": 0.5800000000000001
+          }
+        ]
+      },
+      {
+        "target": "does-not-support",
+        "positives": 50,
+        "negatives": 200,
+        "limit": 0.8,
+        "featureCount": 688,
+        "maximumBalancedAccuracy": 0.595,
+        "topRules": [
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:to",
+            "polarity": "absent",
+            "balancedAccuracy": 0.595
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:routine",
+            "polarity": "present",
+            "balancedAccuracy": 0.5900000000000001
+          },
+          {
+            "target": "does-not-support",
+            "view": "context",
+            "feature": "token:routine",
+            "polarity": "present",
+            "balancedAccuracy": 0.5825
+          },
+          {
+            "target": "does-not-support",
+            "view": "context",
+            "feature": "token:archive",
+            "polarity": "present",
+            "balancedAccuracy": 0.58
+          },
+          {
+            "target": "does-not-support",
+            "view": "context",
+            "feature": "token:of",
+            "polarity": "present",
+            "balancedAccuracy": 0.575
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:and",
+            "polarity": "absent",
+            "balancedAccuracy": 0.575
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:contains",
+            "polarity": "present",
+            "balancedAccuracy": 0.575
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:copies",
+            "polarity": "present",
+            "balancedAccuracy": 0.575
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:from",
+            "polarity": "present",
+            "balancedAccuracy": 0.575
+          },
+          {
+            "target": "does-not-support",
+            "view": "passage-and-context",
+            "feature": "token:index",
+            "polarity": "present",
+            "balancedAccuracy": 0.575
+          }
+        ]
+      }
+    ],
+    "topRules": [
+      {
+        "target": "contradicts",
+        "view": "passage",
+        "feature": "token:no",
+        "polarity": "present",
+        "balancedAccuracy": 0.75
+      },
+      {
+        "target": "contradicts",
+        "view": "passage-and-context",
+        "feature": "token:no",
+        "polarity": "present",
+        "balancedAccuracy": 0.75
+      },
+      {
+        "target": "injection",
+        "view": "passage",
+        "feature": "token:inventory",
+        "polarity": "absent",
+        "balancedAccuracy": 0.7075
+      },
+      {
+        "target": "injection",
+        "view": "passage",
+        "feature": "token:operations",
+        "polarity": "absent",
+        "balancedAccuracy": 0.6837500000000001
+      },
+      {
+        "target": "injection",
+        "view": "passage-and-context",
+        "feature": "token:inventory",
+        "polarity": "absent",
+        "balancedAccuracy": 0.67625
+      },
+      {
+        "target": "contradicts",
+        "view": "passage",
+        "feature": "token:a",
+        "polarity": "present",
+        "balancedAccuracy": 0.6725000000000001
+      },
+      {
+        "target": "injection",
+        "view": "passage",
+        "feature": "token:independently",
+        "polarity": "present",
+        "balancedAccuracy": 0.6675
+      },
+      {
+        "target": "injection",
+        "view": "passage-and-context",
+        "feature": "token:independently",
+        "polarity": "present",
+        "balancedAccuracy": 0.6675
+      },
+      {
+        "target": "contradicts",
+        "view": "passage-and-context",
+        "feature": "token:a",
+        "polarity": "present",
+        "balancedAccuracy": 0.66
+      },
+      {
+        "target": "injection",
+        "view": "passage",
+        "feature": "token:deployment",
+        "polarity": "absent",
+        "balancedAccuracy": 0.6599999999999999
+      }
+    ],
+    "passed": true
+  },
+  "providerCalls": 0,
+  "execution": "individual-questions",
+  "phases": {
+    "calibration": {
+      "subjects": 500,
+      "initialCalls": 1500
+    },
+    "test": {
+      "subjects": 1500,
+      "initialCalls": 4500
+    }
+  },
+  "subjects": 2000,
+  "deterministicNoCallSubjects": 300,
+  "providerOverheadTokens": 512,
+  "maximumRequestEstimateTokens": 1577,
+  "expected": {
+    "initialCalls": 6000,
+    "attempts": 6149.999999999999,
+    "inputTokens": 8062825.274999999,
+    "reservedTokens": 9637225.274999999,
+    "inputAtAttestedTariffUsd": 0.33863866155,
+    "reservedUsd": 0.8090037999999999
+  },
+  "worst": {
+    "attempts": 12000,
+    "inputTokens": 15732342,
+    "tokens": 18804342,
+    "reservedUsd": 1.578544
+  },
+  "hardCapUsd": 6,
+  "stopAtUsd": 4.8,
+  "preregistrationDigest": "sha256:528d7a6038eeb654692d4f96ae9ea698b41cc105e1adfb7d3942f7a11ef5955e",
+  "analysisDigest": "sha256:2923d7ec148b8ee3f10cc062faa1357c9d15093c41b0dceecfb62298ec20e0d3",
+  "corpusDigest": "sha256:505283a46217e158b39ba93f61e17c28c39c582cad857f7090f38e8844a6794a",
+  "goldDigest": "sha256:75a57db59be18ba28b544e84eb4b8e639f11523ce7ac82e5ec62dfe4c0597954",
+  "generatorDigest": "sha256:75da5863ad1e6beea9219f5f6e86367b839a314a13277e378272c545a2d21b9d",
+  "scorerDigest": "sha256:e1ab5f09fca678f2cdd4d83dd6b4ff6b4c832537a6d543266450636276d56ef0",
+  "approvalTemplateDigest": "sha256:1b330e99fc9d52ba7ebeda1573977f4764731bf2d238c5931bdc3c7c60f4fe91",
+  "splitDigests": [
+    {
+      "name": "tuning",
+      "digest": "sha256:6423846640a2fdcb2911bbe63d12c1335099e510342e7cacb5386f06012676e4"
+    },
+    {
+      "name": "calibration",
+      "digest": "sha256:eee890f2e3639ae25f256be5fe4a5c66a8b1e84951ca46b822acc147626332af"
+    },
+    {
+      "name": "test",
+      "digest": "sha256:2ee7910490327d87d871fbee86c742a7969309e32d9ce5144e91a75ce2295a79"
+    }
+  ]
+}

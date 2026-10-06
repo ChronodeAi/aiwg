@@ -28,6 +28,17 @@ A context rejection is an `error` ruleset result with no evaluations and a body-
 
 `assertContextQualified` now throws `rollout-unqualified` (previously `invalid-profile`).
 
+The evaluator also preflights the worst-case completion result envelope (#2797): every
+evaluation clones the full plan alongside the ruleset-level plan, and usage is recorded
+cumulatively (entries are upserted by key, so retries add none), so the probe assumes every
+evaluation carries every usage entry with the binding's full per-alias retry attempts
+(`min(maxAttempts, Σ(retry.maxRetries + 1))`, each with `requestIdSource` and single-dispatch
+batch evidence) and answer-domain-sized distributions. A many-alias invocation whose worst-case
+envelope cannot satisfy entry admission rejects with `invalid-input` / `invalid-input`
+before receipts, credentials, admission control or transport, instead of discarding completed
+provider work after dispatch. A fitting envelope still passes through writer-version admission
+when the completed result is written.
+
 ## Qualification and rollout (D06 / TV-12)
 
 `compareContextUsage` retains a body-free, sorted comparison for *one complete provider request per case*: profile digest/version, estimator identity/version, original plan digest, estimate, observed request-level input tokens, signed error and conservative rounded-up undercount in basis points. A split plan is not comparable to a single request. Store the returned JSON with the immutable provider usage receipt referenced by `usageRef`; do not claim provider token accuracy from a synthetic value. The `source: synthetic` fixtures in `test/unit/decision/context-qualification.test.ts` exercise the gate only; they are **not** provider observations or TV-12 live evidence. The gate rejects promotion when observed undercount exceeds the configured margin, and always rejects synthetic-only evidence. This is a necessary per-corpus check, not a guarantee across unseen requests, model revisions or new serialization.

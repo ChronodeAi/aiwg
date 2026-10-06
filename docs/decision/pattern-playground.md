@@ -74,6 +74,14 @@ with a durable batch receipt: the receipt reports request-level usage once
 (`scope: "request"`), and each answer's usage stays null. The multi-subject
 anti-example makes zero requests.
 
+Both offline and live runners require every evaluation alias to declare the
+same nonempty subject identity. Mixed or missing identities return `deny` with
+`multi-subject-batch-rejected` before evaluation or budget reservation. Live
+receipts for this preflight denial have `result: null`, zero calls and attempts,
+an empty admission list, and zero reserved tokens and cost. Consumers must check
+for a null result before inspecting evaluations. Valid live probes still use
+individual calls and retain each primitive's acceptance and abstention rules.
+
 The catalog includes routing, RAG screening, citation support, guardrails,
 advisory tool-risk preflight, bounded classification, ordinal scoring, function
 selection, same-subject batching, durable review, and candidate selection.
@@ -104,6 +112,56 @@ non-permissive pinned authorization with zero unauthorized effects. See
 [Durable decision review](review.md#offline-acceptance-and-load-fixture).
 
 ## Live variant
+
+### Semantic input contracts
+
+Live subjects are required, not inferred from locator or policy metadata.
+The same closed schemas validate offline and live inputs before inference;
+unknown configuration fields are rejected. Existing sparse callers must add
+the following content (the catalog fixtures show complete synthetic examples):
+
+| Pack | Required semantic content |
+| --- | --- |
+| `intent-routing` | `request` |
+| `rag-screen` | `question`, `passage`, nonempty `comparisonSources` with `locator` and `text` |
+| `citation-support` | `claim`, `sourceText` for the cited source |
+| `guardrails` | `content` |
+| `tool-risk-preflight` | `proposedTool`: `name`, `arguments` object, `purpose` |
+| `bounded-classification` | `text` |
+| `ordinal-scoring` | `report` |
+| `function-selection` | `request` and `proposedArguments` |
+| `same-subject-batch` | `record.summary`, plus matching subject identities |
+| `durable-review` | `item` |
+| `candidate-selection` | `task`, `criteria`, nonempty `evidence` with `candidate` and `text` |
+
+RAG contradiction needs comparison text; a locator alone is insufficient.
+Citation hosts must resolve `sourceText` from the cited, independently verified
+source. Supplying text does not verify its provenance or grant authority.
+Candidate evidence describes options but does not expand `extractedCandidates`.
+Tool arguments are data to screen; this pack never executes a tool.
+
+Configure the host projection with these semantic fields as untrusted content
+for the approved provider, model, origin, region and purpose. For example,
+classification projects `/text` to `text`; its `allowedOptions` remains a local
+candidate gate. The resulting Jev state contains `untrusted.text`, not the
+authority list. For the same-subject pack, pointers are relative to `/record`,
+so project `/summary`. Keep deterministic policy, authorization lists, argument
+schemas and provenance verification local. The definition's bounded answer
+options describe possible evidence, not permission to select or execute them.
+
+Fixtures include realistic positive, contradiction and injection content.
+Recorded answers still test runtime mechanics, not model quality. Synthetic
+live probes verify the input/projection path; they do not qualify accuracy,
+calibration or production workload suitability.
+
+After building, run `node tools/decision/patterns-live-smoke.mjs` with explicit
+`AIWG_DECISION_JEV_LIVE_SMOKE=1`, a secret-injected `AIWG_DECISION_JEV_API_KEY`,
+and an operator-declared `AIWG_DECISION_JEV_REGION`. It checks all 11 available
+packs with synthetic fixtures, at most 15 calls total, and the catalog's
+per-pack token, cost, attempt and deadline bounds. It accepts valid abstention,
+prints only compact receipts, executes no actions, and never logs credentials.
+
+### Execution bounds
 
 Live execution is available only through `runLiveDecisionPattern()`, and only
 for explicitly synthetic probes. Call `planLiveDecisionPattern()` first to get a

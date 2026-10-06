@@ -150,6 +150,8 @@ import { installationHandler } from './installation.js';
 import { uhpHandler } from './uhp.js';
 import { schemaHandler } from './schema.js';
 import { datasetHandler } from './dataset.js';
+import { decisionHandler } from './decision.js';
+import { gatesHandler } from './gates.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -193,6 +195,8 @@ export {
   writingHandler,
   schemaHandler,
   datasetHandler,
+  decisionHandler,
+  gatesHandler,
   installationHandler,
 
   // Project
@@ -389,6 +393,8 @@ export const allHandlers: CommandHandler[] = [
   writingHandler,
   schemaHandler,
   datasetHandler,
+  decisionHandler,
+  gatesHandler,
 
   // Workspace management
   ...workspaceHandlers,

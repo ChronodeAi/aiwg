@@ -300,7 +300,7 @@ OPTIONS:
   --timeout <min>         Timeout per iteration in minutes (default: 60)
   --mcp-config <json>     MCP server configuration JSON
   --gitea-issue           Create/link Gitea issue for tracking
-  --provider <name>       CLI provider: claude (default), codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (experimental, #230)
+  --provider <name>       CLI provider: claude (default), codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (optional adapter, #230)
   --thinking <level>      Provider thinking level (Pi: off..max)
   --tools <names>         Comma-separated provider tool allow-list
 
@@ -560,7 +560,7 @@ async function main() {
   await ensureProvidersRegistered();
   const providerName = options.provider || 'claude';
   if (!hasProvider(providerName)) {
-    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (experimental, disable: AIWG_MUSE_RALPH_ENABLED=0)`);
+    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (optional adapter; disable: AIWG_MUSE_RALPH_ENABLED=0)`);
     process.exit(1);
   }
 

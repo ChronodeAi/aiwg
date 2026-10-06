@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { canonicalSha256, matchEvidenceDigest, type EvidenceDigestMode } from '../../gates/stats/index.js';
 import type { LabelStabilityReport } from './drift.js';
 import type { BinarySliceMetrics } from './quality.js';
 import type { ExecutedQualification } from './runner.js';
@@ -17,6 +17,52 @@ export interface QualificationIntegrityMetadata {
   compromise_labels: readonly string[];
   weak_signal_reason: string | null;
   release_gate: { decision: 'PROMOTE' | 'HOLD' | 'ROLLBACK'; reasons: readonly string[] };
+}
+
+/**
+ * #2037/#2048 integrity modes whose verified state has a trusted score source.
+ * Mirrors tools/eval buildIntegrityMetadata: each strict mode maps to exactly one source.
+ */
+export const VERIFIED_QUALIFICATION_INTEGRITY_SOURCES: Readonly<Record<string, string>> = Object.freeze({
+  fresh: 'fresh-workspace',
+  locked: 'locked-artifact-snapshot',
+  'full-locked': 'full-locked-workspace',
+});
+
+/**
+ * Allowlist check for promotable integrity metadata. Any malformed, unknown or
+ * unverified mode/state/score-source is a problem; an empty result is the only
+ * state that may PROMOTE. Callers still honour upstream HOLD/ROLLBACK separately.
+ */
+export function qualificationIntegrityAllowlistProblems(integrity: unknown): string[] {
+  const value = integrity as QualificationIntegrityMetadata | null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !Number.isSafeInteger(value.sample_n) || value.sample_n < 0
+    || typeof value.integrity_mode !== 'string' || typeof value.integrity_state !== 'string'
+    || typeof value.trusted_score_source !== 'string'
+    || typeof value.fresh_workspace_required !== 'boolean' || typeof value.fresh_workspace_verified !== 'boolean'
+    || !Array.isArray(value.compromise_labels) || value.compromise_labels.some(label => typeof label !== 'string')
+    || !(value.weak_signal_reason === null || typeof value.weak_signal_reason === 'string')
+    || !('uncertainty' in value) || !('paired_baseline' in value)
+    || !value.release_gate || typeof value.release_gate !== 'object'
+    || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(value.release_gate.decision)
+    || !Array.isArray(value.release_gate.reasons)) {
+    return ['integrity-invalid'];
+  }
+  const problems: string[] = [];
+  const expectedSource = Object.hasOwn(VERIFIED_QUALIFICATION_INTEGRITY_SOURCES, value.integrity_mode)
+    ? VERIFIED_QUALIFICATION_INTEGRITY_SOURCES[value.integrity_mode] : undefined;
+  if (value.integrity_state !== 'verified') problems.push('integrity-not-verified');
+  if (expectedSource === undefined) problems.push('integrity-mode-not-allowlisted');
+  else if (value.trusted_score_source !== expectedSource) problems.push('untrusted-score-source');
+  if (value.fresh_workspace_required && !value.fresh_workspace_verified) problems.push('fresh-workspace-unverified');
+  if (value.uncertainty === null || value.uncertainty === undefined) problems.push('uncertainty-missing');
+  if (value.paired_baseline === null || value.paired_baseline === undefined) problems.push('paired-baseline-missing');
+  if (value.weak_signal_reason !== null) problems.push('weak-signal');
+  if (value.compromise_labels.length > 0) problems.push('compromised');
+  if (value.sample_n <= 0) problems.push('insufficient-samples');
+  if (value.release_gate.decision !== 'PROMOTE') problems.push(`upstream-integrity-${value.release_gate.decision.toLowerCase()}`);
+  return problems;
 }
 
 /** AC8 metrics serialized into the release record from the preregistered held-out evaluation. */
@@ -67,8 +113,12 @@ export interface QualificationReleaseInputs {
   cacheLayers?: Readonly<Record<QualificationCacheLayer, QualificationCacheLayerEvidence>>;
 }
 
+export type QualificationReleaseVersion =
+  | 'decision-qualification-release/v1'
+  | 'decision-qualification-release/v2';
+
 export interface QualificationReleaseRecord {
-  schemaVersion: 'decision-qualification-release/v1';
+  schemaVersion: QualificationReleaseVersion;
   runId: string;
   sourceCommit: string;
   dirty: boolean;
@@ -174,7 +224,7 @@ export function buildQualificationReleaseRecord(
     || report.decision === 'ROLLBACK' || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK'
     : complete && releaseDecision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
   const fields = {
-    schemaVersion: 'decision-qualification-release/v1' as const,
+    schemaVersion: 'decision-qualification-release/v2' as const,
     runId: manifest.runId, sourceCommit: manifest.sourceCommit, dirty: manifest.dirty,
     environment: input.environment, commands: [...input.commands],
     pins: Object.fromEntries(Object.entries(pinned).sort(([a], [b]) => a.localeCompare(b))),
@@ -188,7 +238,27 @@ export function buildQualificationReleaseRecord(
       caseIds: input.cacheLayers![layer].manifest.evidence.map(item => item.caseId).sort() }])) as QualificationReleaseRecord['cacheLayers'] : null,
     decision,
   };
-  return { ...fields, digest: `sha256:${createHash('sha256').update(JSON.stringify(fields)).digest('hex')}` };
+  return { ...fields, digest: canonicalSha256(fields) };
+}
+
+/**
+ * Verifies a release record digest without rebuilding it. Canonical-only by default;
+ * pass `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
+ * (`JSON.stringify`) digest for pre-migration v1 evidence. Fresh v2 records are
+ * canonical-only: a legacy digest on v2 fields never verifies, even under an
+ * explicit allowlist. Returns the matching mode, or null when neither matches.
+ */
+export function verifyQualificationReleaseDigest(
+  record: QualificationReleaseRecord, options?: { digestModes?: readonly EvidenceDigestMode[] },
+): EvidenceDigestMode | null {
+  if (!record || typeof record !== 'object') return null;
+  if (record.schemaVersion !== 'decision-qualification-release/v1'
+    && record.schemaVersion !== 'decision-qualification-release/v2') return null;
+  const { digest, ...fields } = record;
+  const modes = record.schemaVersion === 'decision-qualification-release/v1'
+    ? options?.digestModes
+    : (options?.digestModes ?? (['canonical'] as const)).filter(mode => mode === 'canonical');
+  return matchEvidenceDigest(fields, digest, modes);
 }
 
 /** Deliberately excludes private callback details, stdout/stderr and raw captures. */

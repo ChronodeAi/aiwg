@@ -776,7 +776,7 @@ reload are shown with `--verbose`.
 | Google Antigravity CLI (experimental) | `antigravity` (`agy`) | `.agents/agents/`, `.agents/skills/`, project `AGENTS.md`; global skills unsupported | — |
 | Oh My Pi (experimental) | `omp` (`oh-my-pi`) | `.omp/agents/`, `.omp/prompts/`, `.omp/rules/`, `.agents/skills/`, `.omp/AGENTS.md` | Explicit extension bridge |
 | Pi Coding Agent (experimental) | `pi` | `.agents/skills/`, `.pi/prompts/`, `.pi/.aiwg/skills/`, `.pi/extensions/aiwg-bridge.ts`, project `AGENTS.md` | Trust-gated extension bridge (tool policy only) |
-| Muse Code (experimental) | `muse` | project `.agents/skills/`, `AGENTS.md` (discover-first; workspace trust required); `$XDG_CONFIG_HOME/muse/skills/` with `--scope user` | — |
+| Muse Code | `muse` | project `.agents/skills/`, `AGENTS.md` (discover-first; workspace trust required); `$XDG_CONFIG_HOME/muse/skills/` with `--scope user` | — |
 | Claude Code    | `claude`        | `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, `.claude/rules/`                                           | —         |
 | GitHub Copilot | `copilot`       | `.github/agents/`, `.github/copilot-rules/`, `.github/skills/`                                                        | —         |
 | Factory AI     | `factory`       | `.factory/droids/`, `.factory/commands/`, `.factory/skills/`, `.factory/rules/`                                       | —         |
@@ -805,7 +805,7 @@ On first run after the commands-to-skills migration, `aiwg use` detects an exist
 - **Warp**: Agents and commands also aggregated into `WARP.md` for single-file context loading
 - **OpenHuman**: Kernel skills and rule bodies are user-global; the default deploy emits no markdown persona copies. Project context is rendered into `AGENTS.md`, and curated native TOML agents are opt-in with `--harness-agents`.
 - **Hermes**: Not a spawnable CLI — access via `ollama run hermes3` or MCP sidecar; deploy sets up skills and a lean AGENTS.md
-- **Muse Code**: Experimental; user-scope skills resolve from
+- **Muse Code**: Stable; user-scope skills resolve from
   `$XDG_CONFIG_HOME/muse/skills/` (default `~/.config/muse/skills`) at deploy
   time, failing closed on bad XDG metadata. Project skills deploy to
   `.agents/skills/`. Context loads discover-first from `AGENTS.md` only after
@@ -5934,7 +5934,7 @@ aiwg use sdlc --provider hermes
 # OpenClaw (includes behaviors in ~/.openclaw/behaviors/)
 aiwg use sdlc --provider openclaw
 
-# Muse Code (experimental — discover-first AGENTS.md; user skills via $XDG_CONFIG_HOME/muse/skills)
+# Muse Code (stable — discover-first AGENTS.md; user skills via $XDG_CONFIG_HOME/muse/skills)
 aiwg use sdlc --provider muse
 
 # Local / Ollama  (Claude Code paths, route coding tasks to local model)

@@ -1,0 +1,564 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionFeatureObservation.v1.schema.json",
+  "title": "AIWG Decision Feature Observation v1",
+  "description": "One governed probabilistic feature row with source pins, export authorization, lifecycle reference, lineage, train/serve evidence, batch accounting and per-feature missingness/provenance.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "featureSet",
+    "observationId",
+    "subjectId",
+    "eventTime",
+    "exportTime",
+    "sourceReceipt",
+    "authorization",
+    "lifecycle",
+    "lineage",
+    "trainServe",
+    "batchAccounting",
+    "features"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-feature-export/v1"
+    },
+    "kind": {
+      "const": "DecisionFeatureObservation"
+    },
+    "featureSet": {
+      "$ref": "#/$defs/featureSetRef"
+    },
+    "observationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventTime": {
+      "type": "string"
+    },
+    "exportTime": {
+      "type": "string"
+    },
+    "sourceReceipt": {
+      "type": "object",
+      "required": [
+        "kind",
+        "runId",
+        "invocationId",
+        "alias"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "DecisionResult",
+            "RulesetResult"
+          ]
+        },
+        "runId": {
+          "type": "string"
+        },
+        "invocationId": {
+          "type": "string"
+        },
+        "alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "authorization": {
+      "$ref": "#/$defs/auth"
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "surface",
+        "reference",
+        "tombstone",
+        "legalHold",
+        "expiresAtEpochMs",
+        "revokedAtEpochMs",
+        "deletedAtEpochMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "const": "export"
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tombstone": {
+          "type": "boolean"
+        },
+        "legalHold": {
+          "type": "boolean"
+        },
+        "expiresAtEpochMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revokedAtEpochMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "deletedAtEpochMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "required": [
+        "ruleset",
+        "binding",
+        "decision",
+        "definition"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ruleset": {
+          "$ref": "#/$defs/pin"
+        },
+        "binding": {
+          "$ref": "#/$defs/pin"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "trainServe": {
+      "type": "object",
+      "required": [
+        "featureSetDigest",
+        "servedModels",
+        "calibrationRefs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "featureSetDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "servedModels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "calibrationRefs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "batchAccounting": {
+      "type": "object",
+      "required": [
+        "scope",
+        "reference",
+        "authoritativeUsage",
+        "owners",
+        "allocation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "enum": [
+            "none",
+            "ruleset-batch-request",
+            "durable-batch-receipt"
+          ]
+        },
+        "reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authoritativeUsage": {
+          "type": "null"
+        },
+        "allocation": {
+          "type": "object",
+          "required": [
+            "kind",
+            "algorithm",
+            "algorithmVersion",
+            "usage"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "none",
+                "estimated"
+              ]
+            },
+            "algorithm": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "algorithmVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/usage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "owners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/batchOwner"
+          }
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/cell"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "pin": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "featureSetRef": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": [
+        "tenantId",
+        "projectId",
+        "actorId",
+        "recipient",
+        "purpose",
+        "datasetPolicyId",
+        "accessScope"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recipient": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "datasetPolicyId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accessScope": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "costUsd"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "required": [
+        "value",
+        "state",
+        "source",
+        "missingReason",
+        "calibrationRef",
+        "derivation",
+        "evidencePath"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "present",
+            "missing"
+          ]
+        },
+        "source": {
+          "enum": [
+            "provider-native",
+            "model-self-report",
+            "adapter-one-hot",
+            "derived",
+            "calibrated",
+            "missing"
+          ]
+        },
+        "missingReason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "not-applicable",
+            "unsupported-old-field",
+            "missing-evidence",
+            "incompatible-primitive",
+            "calibration-unavailable",
+            null
+          ]
+        },
+        "calibrationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derivation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "algorithm",
+                "version"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "algorithm": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "evidencePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "batchOwner": {
+      "type": "object",
+      "required": [
+        "ownerId",
+        "runId",
+        "invocationId",
+        "groupId",
+        "ordinal",
+        "requestId",
+        "questionIds",
+        "usageDigest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "groupId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ordinal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "questionIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "usageDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

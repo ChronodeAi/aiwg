@@ -6,9 +6,11 @@ stable_id: aiwg.agent-reference.provider.muse
 
 # Muse Code Operational Reference
 
-> **AIWG provider status:** Experimental (`muse`). No aliases are registered:
-> `muse-spark`, `muse-code`, `spark`, and `meta` are all deliberately rejected
-> as provider ids. Decision record:
+> **AIWG provider status:** Stable (`muse`). Promoted under
+> [#231](https://github.com/jmagly/aiwg/issues/231) with Linux PUW and path
+> security review; maintainer guidance on 2026-10-02 waived macOS/Windows PUW.
+> No aliases are registered: `muse-spark`, `muse-code`, `spark`, and `meta`
+> are all deliberately rejected as provider ids. Decision record:
 > [`docs/architecture/adr-muse-provider-target.md`](../../architecture/adr-muse-provider-target.md).
 >
 > **First time using AIWG?** Begin with
@@ -24,11 +26,11 @@ Muse deploys into paths Muse does not load and prints foreign reload guidance.
 
 | Artifact | Where it lands | Notes |
 | -------- | -------------- | ----- |
-| Context bridge | `<project>/AGENTS.md` + `WORKSPACE.md` + `.aiwg/AIWG.md` | Discover-first; loads only after the workspace is trusted |
+| Context bridge | `<project>/AGENTS.md` + `WORKSPACE.md` + `.aiwg/AIWG.md` | Trust-gated discover-first bridge |
 | Agents / commands / rules | AIWG index | `aiwg discover` / `aiwg show` — no native file surface in this wave |
 | Skills (kernel, project) | `<project>/.agents/skills/` | Canonical project deployment root |
 | Skills (standard, project) | `<project>/.agents/.aiwg/skills/` | Only with `--copy-all`; indexed, not startup-listed |
-| Skills (user) | `$XDG_CONFIG_HOME/muse/skills` (default `~/.config/muse/skills`) | Resolved at deploy time; absolute `XDG_CONFIG_HOME` honored |
+| Skills (user) | `$XDG_CONFIG_HOME/muse/skills` | Resolved at deploy time; default `~/.config/muse/skills` |
 
 AIWG never writes `.cursor/**` for this provider, never invents `~/.muse` or
 siblings of `muse/skills` under the XDG config home, and never silently mirrors
@@ -79,7 +81,10 @@ aiwg status --probe --json   # Muse restart copy — never Cursor wording
 aiwg doctor --provider muse
 ```
 
-`aiwg doctor --provider muse` checks the labeled Muse surfaces, the deployed
+`aiwg doctor --provider muse` checks the labeled Muse surfaces, reports a
+"Muse Code native extensions" section (the `muse` CLI version, whether
+`.muse/hooks.json` holds the AIWG-managed group, and whether the user
+settings register the `aiwg` MCP server), the deployed
 `.agents/skills/` listing, and the context/memory firewall scan over the
 muse layout (`AGENTS.md` bridge + project skill root). Muse has no native
 agent surface; the Agents line reports that agents are indexed and reached
@@ -90,10 +95,13 @@ via `aiwg discover` / `aiwg show`.
 Muse keeps one directory per session under
 `$XDG_DATA_HOME/muse/sessions/YYYY/MM/DD/<session-id>/` (default
 `~/.local/share/muse/sessions`), with the event log in `session.jsonl` and
-CLI diagnostics in `cli-*.log`. That log format is internal, so session
-import is **export-first**: run `muse export --session <id-or-session.jsonl>`
-and pass the exported JSON to `aiwg sessions import`. No `~/.muse` root
-exists or is assumed. Details: [Muse sessions](../../providers/muse-sessions.md).
+CLI diagnostics in `cli-*.log`. Import a session either from an explicit
+`muse export --session <id-or-session.jsonl>` document, or discover native
+logs for a workspace with
+`aiwg sessions discover --workspace <path> --muse-root ~/.local/share/muse/sessions`.
+Native discovery needs that explicit root, matches workspaces only from
+workspace facts recorded in the log, and never assumes a `~/.muse` root.
+Details: [Muse sessions](../../providers/muse-sessions.md).
 
 ## Models
 

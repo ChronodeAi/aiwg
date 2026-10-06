@@ -1,0 +1,1344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json",
+  "title": "D29Study v2",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/analysis"
+    },
+    {
+      "$ref": "#/$defs/gold"
+    },
+    {
+      "$ref": "#/$defs/review"
+    },
+    {
+      "$ref": "#/$defs/readiness"
+    },
+    {
+      "$ref": "#/$defs/access"
+    },
+    {
+      "$ref": "#/$defs/score"
+    },
+    {
+      "$ref": "#/$defs/calibrationReview"
+    }
+  ],
+  "$defs": {
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "syntheticOnly",
+        "splits",
+        "native",
+        "external",
+        "calibration",
+        "review",
+        "missingPolicy",
+        "conditionalRates"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-analysis/v2"
+        },
+        "syntheticOnly": {
+          "const": true
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ids",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "tuning",
+                  "calibration",
+                  "test"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "native": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v1.schema.json"
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimumAcceptedCoverageLowerBps",
+            "maximumBlockingSliceFalseReadyEvents",
+            "maximumBlockingSliceFalseReadyUpperBps"
+          ],
+          "properties": {
+            "minimumAcceptedCoverageLowerBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "maximumBlockingSliceFalseReadyEvents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maximumBlockingSliceFalseReadyUpperBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "minimumCellN",
+            "smoothing",
+            "split",
+            "profile"
+          ],
+          "properties": {
+            "method": {
+              "const": "kind-and-safe-semantic-ready-frequency-v2"
+            },
+            "minimumCellN": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "smoothing": {
+              "const": "laplace-1"
+            },
+            "split": {
+              "const": "calibration"
+            },
+            "profile": {
+              "$ref": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json#/properties/profile"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "holdout",
+            "delayedRepeats",
+            "reviewer"
+          ],
+          "properties": {
+            "development": {
+              "const": 50
+            },
+            "holdout": {
+              "const": 100
+            },
+            "delayedRepeats": {
+              "const": 15
+            },
+            "reviewer": {
+              "const": "roctinam"
+            }
+          }
+        },
+        "missingPolicy": {
+          "const": "withhold-native-report; complete-case-description; missing-as-error"
+        },
+        "conditionalRates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true
+        }
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "syntheticOnly",
+        "rows"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-gold/v2"
+        },
+        "syntheticOnly": {
+          "const": true
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "world",
+              "gold",
+              "variant"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "world": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "sourceAttribute",
+                  "claimAttribute",
+                  "sourceValue",
+                  "claimValue",
+                  "uncertain",
+                  "injected",
+                  "artifactPresent",
+                  "testPassed",
+                  "required",
+                  "covered",
+                  "variant",
+                  "sourceModule",
+                  "claimModule",
+                  "exclusive"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "citation",
+                      "phase-criterion"
+                    ]
+                  },
+                  "sourceAttribute": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "claimAttribute": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sourceValue": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "claimValue": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "uncertain": {
+                    "type": "boolean"
+                  },
+                  "injected": {
+                    "type": "boolean"
+                  },
+                  "artifactPresent": {
+                    "type": "boolean"
+                  },
+                  "testPassed": {
+                    "type": "boolean"
+                  },
+                  "required": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "covered": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "variant": {
+                    "enum": [
+                      "exact",
+                      "listens",
+                      "inverted",
+                      "configured",
+                      "exactly-one",
+                      "only-listens",
+                      "no-other-port",
+                      "might",
+                      "reportedly",
+                      "planned",
+                      "different-nonexclusive",
+                      "color",
+                      "owner",
+                      "near-miss-module",
+                      "exact-context",
+                      "listens-prefix",
+                      "inverted-suffix",
+                      "configured-mid",
+                      "verified",
+                      "checklist",
+                      "no-coverage",
+                      "wrong-attribute",
+                      "wrong-subject",
+                      "exact-prefix",
+                      "verified-suffix",
+                      "checklist-mid"
+                    ]
+                  },
+                  "sourceModule": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "claimModule": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "exclusive": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "gold": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ready",
+                  "support"
+                ],
+                "properties": {
+                  "ready": {
+                    "type": "boolean"
+                  },
+                  "support": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "unclear",
+                      "does-not-support",
+                      null
+                    ]
+                  }
+                }
+              },
+              "variant": {
+                "enum": [
+                  "exact",
+                  "listens",
+                  "inverted",
+                  "configured",
+                  "exactly-one",
+                  "only-listens",
+                  "no-other-port",
+                  "might",
+                  "reportedly",
+                  "planned",
+                  "different-nonexclusive",
+                  "color",
+                  "owner",
+                  "near-miss-module",
+                  "exact-context",
+                  "listens-prefix",
+                  "inverted-suffix",
+                  "configured-mid",
+                  "verified",
+                  "checklist",
+                  "no-coverage",
+                  "wrong-attribute",
+                  "wrong-subject",
+                  "exact-prefix",
+                  "verified-suffix",
+                  "checklist-mid"
+                ]
+              }
+            }
+          },
+          "minItems": 2000,
+          "maxItems": 2000
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "reviewer",
+        "corpusDigest",
+        "assessments",
+        "preregistrationReview",
+        "finalDispositionReview"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-review/v2"
+        },
+        "reviewer": {
+          "const": "roctinam"
+        },
+        "corpusDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "assessments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "phase",
+              "id",
+              "goldCorrect",
+              "goldRationale",
+              "blindReviewedAt",
+              "agreed",
+              "overridden",
+              "rationale",
+              "unblindedAt"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "phase": {
+                "enum": [
+                  "development",
+                  "holdout",
+                  "delayed-repeat"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "goldCorrect": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "goldRationale": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "blindReviewedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "agreed": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "overridden": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unblindedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "minItems": 165,
+          "maxItems": 165
+        },
+        "preregistrationReview": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finalDispositionReview": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "model",
+        "method",
+        "splitDigest",
+        "definitionDigest",
+        "evidenceDigest",
+        "cells"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-readiness/v2"
+        },
+        "model": {
+          "const": "jev-1.13.0"
+        },
+        "method": {
+          "const": "kind-and-safe-semantic-ready-frequency-v2"
+        },
+        "splitDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "definitionDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "evidenceDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "cells": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "citation:true",
+            "citation:false",
+            "phase-criterion:true",
+            "phase-criterion:false"
+          ],
+          "properties": {
+            "citation:true": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "n",
+                "ready",
+                "probability"
+              ],
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "probability": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "citation:false": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "n",
+                "ready",
+                "probability"
+              ],
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "probability": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "phase-criterion:true": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "n",
+                "ready",
+                "probability"
+              ],
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "probability": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "phase-criterion:false": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "n",
+                "ready",
+                "probability"
+              ],
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ready": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "probability": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "access": {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/access"
+    },
+    "external": {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/external"
+    },
+    "score": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "decision",
+            "native",
+            "external",
+            "heldout",
+            "provenance",
+            "reviewerN",
+            "missingInputs",
+            "completeCase",
+            "failureAsError",
+            "proposedStatisticalDisposition",
+            "limitations",
+            "groups"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "decision-d29-score/v2"
+            },
+            "decision": {
+              "enum": [
+                "HOLD",
+                "ROLLBACK"
+              ]
+            },
+            "native": {
+              "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json"
+            },
+            "external": {
+              "$ref": "#/$defs/external"
+            },
+            "heldout": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "schemaVersion",
+                    "evaluatedAt",
+                    "splits",
+                    "samples"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "decision-sdlc-screening-heldout-records/v1"
+                    },
+                    "evaluatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "splits": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "ids",
+                          "digest"
+                        ],
+                        "properties": {
+                          "name": {
+                            "enum": [
+                              "tuning",
+                              "calibration",
+                              "test"
+                            ]
+                          },
+                          "ids": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                          },
+                          "digest": {
+                            "type": "string",
+                            "pattern": "^sha256:[a-f0-9]{64}$"
+                          }
+                        }
+                      },
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    "samples": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "kind",
+                          "slice",
+                          "gold",
+                          "candidate",
+                          "baseline",
+                          "reviewer"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "kind": {
+                            "enum": [
+                              "citation",
+                              "phase-criterion"
+                            ]
+                          },
+                          "slice": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "gold": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "ready",
+                              "support"
+                            ],
+                            "properties": {
+                              "ready": {
+                                "type": "boolean"
+                              },
+                              "support": {
+                                "enum": [
+                                  "supports",
+                                  "contradicts",
+                                  "unclear",
+                                  "does-not-support",
+                                  null
+                                ]
+                              }
+                            }
+                          },
+                          "candidate": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "route",
+                              "support",
+                              "readyProbability",
+                              "latencyMs",
+                              "inputTokens",
+                              "outputTokens",
+                              "costUsd",
+                              "calls",
+                              "retries",
+                              "fallbacks"
+                            ],
+                            "properties": {
+                              "route": {
+                                "enum": [
+                                  "ADVISORY_READY",
+                                  "REVIEW",
+                                  "FAIL",
+                                  "INSUFFICIENT_EVIDENCE"
+                                ]
+                              },
+                              "support": {
+                                "enum": [
+                                  "supports",
+                                  "contradicts",
+                                  "unclear",
+                                  "does-not-support",
+                                  null
+                                ]
+                              },
+                              "readyProbability": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                              },
+                              "latencyMs": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "inputTokens": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "outputTokens": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "costUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "retries": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "fallbacks": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          "baseline": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "correct",
+                              "costUsd"
+                            ],
+                            "properties": {
+                              "correct": {
+                                "type": "boolean"
+                              },
+                              "costUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          "reviewer": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "agreed",
+                                  "overridden"
+                                ],
+                                "properties": {
+                                  "agreed": {
+                                    "type": "boolean"
+                                  },
+                                  "overridden": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provenance": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "receiptDigest",
+                  "attempts",
+                  "mappingDigest",
+                  "baseline",
+                  "baselineDigest",
+                  "reservationUsdMicros"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "receiptDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "attempts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    }
+                  },
+                  "mappingDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "baseline": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "route",
+                      "support"
+                    ],
+                    "properties": {
+                      "route": {
+                        "enum": [
+                          "ADVISORY_READY",
+                          "REVIEW"
+                        ]
+                      },
+                      "support": {
+                        "enum": [
+                          "supports",
+                          "contradicts",
+                          "unclear",
+                          "does-not-support",
+                          null
+                        ]
+                      }
+                    }
+                  },
+                  "baselineDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "reservationUsdMicros": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "reviewerN": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingInputs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "completeCase": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "n",
+                "correct",
+                "external"
+              ],
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "correct": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "external": {
+                  "$ref": "#/$defs/external"
+                }
+              }
+            },
+            "failureAsError": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "counts",
+                "interval",
+                "missingCandidateErrors",
+                "denominator",
+                "promotable"
+              ],
+              "properties": {
+                "counts": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "both",
+                    "candidateOnly",
+                    "baselineOnly",
+                    "neither"
+                  ],
+                  "properties": {
+                    "both": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "candidateOnly": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "baselineOnly": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "neither": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "interval": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "lowerBps",
+                    "upperBps",
+                    "estimateBps",
+                    "n",
+                    "method"
+                  ],
+                  "properties": {
+                    "lowerBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "upperBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "estimateBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "method": {
+                      "const": "newcombe-hybrid-score"
+                    }
+                  }
+                },
+                "missingCandidateErrors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "denominator": {
+                  "const": 1500
+                },
+                "promotable": {
+                  "const": false
+                }
+              }
+            },
+            "proposedStatisticalDisposition": {
+              "enum": [
+                "pass",
+                "HOLD"
+              ]
+            },
+            "limitations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "groups": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "slices",
+                "variants"
+              ],
+              "properties": {
+                "slices": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/group"
+                  },
+                  "minItems": 1
+                },
+                "variants": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/group"
+                  },
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "decision",
+            "native",
+            "missingInputs"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "decision-d29-score/v2"
+            },
+            "decision": {
+              "enum": [
+                "HOLD",
+                "ROLLBACK"
+              ]
+            },
+            "native": {
+              "type": "null"
+            },
+            "missingInputs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "calibrationReview": {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/calibrationReview"
+    },
+    "groupMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "n",
+        "readinessAccuracy",
+        "jointAccuracy",
+        "falseReady",
+        "supportConfusion"
+      ],
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readinessAccuracy": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/external/oneOf/0/properties/coverage"
+        },
+        "jointAccuracy": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/external/oneOf/0/properties/coverage"
+        },
+        "falseReady": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/external/oneOf/0/properties/coverage"
+        },
+        "supportConfusion": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v1.schema.json#/$defs/external/oneOf/0/properties/confusion"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice",
+        "variant",
+        "n",
+        "missingCandidate",
+        "candidate",
+        "baseline"
+      ],
+      "properties": {
+        "slice": {
+          "enum": [
+            "citation-supports",
+            "citation-contradicts",
+            "citation-unclear",
+            "citation-does-not-support",
+            "citation-injection",
+            "criterion-ready",
+            "criterion-incomplete",
+            "criterion-injection",
+            "missing-artifact",
+            "failed-test"
+          ]
+        },
+        "variant": {
+          "enum": [
+            "exact",
+            "listens",
+            "inverted",
+            "configured",
+            "exactly-one",
+            "only-listens",
+            "no-other-port",
+            "might",
+            "reportedly",
+            "planned",
+            "different-nonexclusive",
+            "color",
+            "owner",
+            "near-miss-module",
+            "exact-context",
+            "listens-prefix",
+            "inverted-suffix",
+            "configured-mid",
+            "verified",
+            "checklist",
+            "no-coverage",
+            "wrong-attribute",
+            "wrong-subject",
+            "exact-prefix",
+            "verified-suffix",
+            "checklist-mid",
+            null
+          ]
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingCandidate": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidate": {
+          "$ref": "#/$defs/groupMetrics"
+        },
+        "baseline": {
+          "$ref": "#/$defs/groupMetrics"
+        }
+      }
+    }
+  }
+}

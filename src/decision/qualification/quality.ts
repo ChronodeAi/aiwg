@@ -1,14 +1,27 @@
-import { createHash } from 'node:crypto';
+import { wilson95 } from '../../gates/stats/binomial.js';
+import {
+  canonicalSha256, matchEvidenceDigest, verifyQualificationSplits, type EvidenceDigestMode,
+} from '../../gates/stats/index.js';
+import type { QualificationSplit } from '../../gates/stats/index.js';
 
-/** Frozen dataset memberships. Threshold selection may read tuning/calibration, never test. */
-export interface QualificationSplit {
-  name: 'tuning' | 'calibration' | 'test';
-  ids: readonly string[];
-  digest: `sha256:${string}`;
-}
+export {
+  PairedDifferenceError, clopperPearsonInterval, freezeQualificationSplit, normalQuantile,
+  pairedBinaryDifferenceInterval, pairedMeanDifferenceBootstrap, pairedNonInferiority,
+  verifyQualificationSplits, wilsonScoreInterval,
+} from '../../gates/stats/index.js';
+export type {
+  PairedBinaryCounts, PairedDifferenceInterval, QualificationSplit,
+} from '../../gates/stats/index.js';
+
+/** Digest modes accepted when verifying a frozen benchmark plan. Canonical-only by default; pass an explicit legacy allowlist to verify pre-migration evidence. */
+export type BenchmarkDigestModes = readonly EvidenceDigestMode[];
+
+export type BinaryBenchmarkPlanVersion =
+  | 'decision-binary-benchmark-plan/v1'
+  | 'decision-binary-benchmark-plan/v2';
 
 export interface FrozenBinaryBenchmarkPlan {
-  schemaVersion: 'decision-binary-benchmark-plan/v1';
+  schemaVersion: BinaryBenchmarkPlanVersion;
   splits: readonly QualificationSplit[];
   /** Hash of sorted (id, label, slice) triples across all splits, before any held-out predictions. */
   datasetDigest: `sha256:${string}`;
@@ -22,14 +35,19 @@ export interface FrozenBinaryBenchmarkPlan {
 
 export interface BinaryBenchmarkLabel { id: string; label: 0 | 1; slice: string }
 
-const sha256 = (value: unknown): `sha256:${string}` =>
-  `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
-
 /** Freeze thresholds and all three label sets before acquiring test predictions. */
 export function freezeBinaryBenchmarkPlan(
   splits: readonly QualificationSplit[], labels: readonly BinaryBenchmarkLabel[],
   limits: Pick<FrozenBinaryBenchmarkPlan, 'minimumOverallN' | 'minimumSliceN' | 'maximumSelectiveRisk' | 'maximumReviewRate' | 'maximumBrier'>,
 ): FrozenBinaryBenchmarkPlan {
+  const fields = buildBinaryBenchmarkPlanFields(splits, labels, limits);
+  return { ...fields, digest: canonicalSha256(fields) };
+}
+
+function buildBinaryBenchmarkPlanFields(
+  splits: readonly QualificationSplit[], labels: readonly BinaryBenchmarkLabel[],
+  limits: Pick<FrozenBinaryBenchmarkPlan, 'minimumOverallN' | 'minimumSliceN' | 'maximumSelectiveRisk' | 'maximumReviewRate' | 'maximumBrier'>,
+): Omit<FrozenBinaryBenchmarkPlan, 'digest'> {
   verifyQualificationSplits(splits);
   const ids = splits.flatMap(split => split.ids).sort();
   if (labels.length !== ids.length || new Set(labels.map(label => label.id)).size !== ids.length
@@ -40,27 +58,63 @@ export function freezeBinaryBenchmarkPlan(
       .some(value => !Number.isFinite(value) || value < 0 || value > 1)) {
     throw new Error('invalid preregistered benchmark plan');
   }
-  const fields = {
-    schemaVersion: 'decision-binary-benchmark-plan/v1' as const,
+  return {
+    schemaVersion: 'decision-binary-benchmark-plan/v2' as const,
     splits: ['tuning', 'calibration', 'test'].map(name => splits.find(split => split.name === name)!),
-    datasetDigest: sha256([...labels].sort((a, b) => a.id.localeCompare(b.id))),
+    datasetDigest: canonicalSha256([...labels].sort((a, b) => a.id.localeCompare(b.id))),
     ...limits,
   };
-  return { ...fields, digest: sha256(fields) };
+}
+
+/**
+ * Verifies a frozen plan digest without scoring. Canonical-only by default; pass
+ * `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
+ * (`JSON.stringify`) digest for pre-migration v1 evidence. Fresh v2 records are
+ * canonical-only: a legacy digest on v2 fields never verifies, even under an
+ * explicit allowlist.
+ */
+export function verifyBinaryBenchmarkPlanDigest(
+  plan: FrozenBinaryBenchmarkPlan, labels: readonly BinaryBenchmarkLabel[],
+  options?: { digestModes?: BenchmarkDigestModes },
+): EvidenceDigestMode | null {
+  const { digest, ...fields } = plan;
+  if (fields.schemaVersion !== 'decision-binary-benchmark-plan/v1'
+    && fields.schemaVersion !== 'decision-binary-benchmark-plan/v2') return null;
+  let expected: Omit<FrozenBinaryBenchmarkPlan, 'digest'>;
+  try {
+    expected = buildBinaryBenchmarkPlanFields(plan.splits, labels, {
+      minimumOverallN: plan.minimumOverallN, minimumSliceN: plan.minimumSliceN,
+      maximumSelectiveRisk: plan.maximumSelectiveRisk, maximumReviewRate: plan.maximumReviewRate,
+      maximumBrier: plan.maximumBrier,
+    });
+  } catch {
+    return null;
+  }
+  // Substantive fields must match; the version selects the digest lineage.
+  const { schemaVersion: _expectedVersion, ...expectedRest } = expected;
+  void _expectedVersion;
+  const { schemaVersion: _fieldsVersion, ...fieldsRest } = fields;
+  void _fieldsVersion;
+  if (canonicalSha256(expectedRest) !== canonicalSha256(fieldsRest)) return null;
+  // v1 respects the caller's allowlist (default canonical-only); v2 intersects
+  // it with canonical-only, so a legacy digest on v2 never verifies.
+  const modes = fields.schemaVersion === 'decision-binary-benchmark-plan/v1'
+    ? options?.digestModes
+    : (options?.digestModes ?? (['canonical'] as const)).filter(mode => mode === 'canonical');
+  return matchEvidenceDigest(fields, digest, modes);
 }
 
 /** A separately anchored digest is required: a caller-created plan cannot attest its own preregistration. */
 export function evaluatePreregisteredBinaryBenchmark(
   plan: FrozenBinaryBenchmarkPlan, trustedPlanDigest: `sha256:${string}`,
   labels: readonly BinaryBenchmarkLabel[], samples: readonly BinaryQualificationSample[],
+  options?: { digestModes?: BenchmarkDigestModes },
 ): { decision: 'pass' | 'fail' | 'insufficient-evidence'; reasons: string[]; metrics: ReturnType<typeof evaluateBinaryHeldout> } {
-  const { digest, ...fields } = plan;
-  if (digest !== trustedPlanDigest || digest !== sha256(fields)
-    || freezeBinaryBenchmarkPlan(plan.splits, labels, {
-      minimumOverallN: plan.minimumOverallN, minimumSliceN: plan.minimumSliceN,
-      maximumSelectiveRisk: plan.maximumSelectiveRisk, maximumReviewRate: plan.maximumReviewRate,
-      maximumBrier: plan.maximumBrier,
-    }).digest !== digest) throw new Error('benchmark preregistration or dataset mismatch');
+  const { digest } = plan;
+  if (digest !== trustedPlanDigest
+    || verifyBinaryBenchmarkPlanDigest(plan, labels, options) === null) {
+    throw new Error('benchmark preregistration or dataset mismatch');
+  }
   const testLabels = new Map(labels.filter(label => plan.splits.find(split => split.name === 'test')!.ids.includes(label.id))
     .map(label => [label.id, label]));
   if (samples.some(sample => sample.label !== testLabels.get(sample.id)?.label || sample.slice !== testLabels.get(sample.id)?.slice)) {
@@ -114,43 +168,22 @@ export interface BinarySliceMetrics {
   fallbacks: number;
 }
 
-function digestIds(ids: readonly string[]): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(JSON.stringify([...ids].sort())).digest('hex')}`;
-}
-
-/** Hash the exact membership set; duplicate, empty and overlapping IDs fail closed. */
-export function freezeQualificationSplit(name: QualificationSplit['name'], ids: readonly string[]): QualificationSplit {
-  if (!ids.length || ids.some(id => !id.trim()) || new Set(ids).size !== ids.length) {
-    throw new Error('qualification split requires unique nonempty IDs');
-  }
-  return { name, ids: [...ids].sort(), digest: digestIds(ids) };
-}
-
-export function verifyQualificationSplits(splits: readonly QualificationSplit[]): void {
-  if (splits.length !== 3 || new Set(splits.map(split => split.name)).size !== 3
-    || splits.some(split => !['tuning', 'calibration', 'test'].includes(split.name))) {
-    throw new Error('qualification requires tuning, calibration and test splits');
-  }
-  const all = new Set<string>();
-  for (const split of splits) {
-    if (!split.ids.length || split.ids.some(id => typeof id !== 'string' || !id.trim())
-      || new Set(split.ids).size !== split.ids.length || split.digest !== digestIds(split.ids)) {
-      throw new Error('qualification split digest or membership mismatch');
-    }
-    for (const id of split.ids) {
-      if (all.has(id)) throw new Error('qualification splits overlap');
-      all.add(id);
-    }
-  }
-}
-
 /** Refuses to score unregistered or non-held-out samples. */
 export function evaluateBinaryHeldout(
   splits: readonly QualificationSplit[],
   samples: readonly BinaryQualificationSample[],
 ): { overall: BinarySliceMetrics; slices: Record<string, BinarySliceMetrics> } {
+  return evaluateBinarySplit(splits, samples, 'test');
+}
+
+/** Descriptive fit diagnostics; calibration observations are never held-out test evidence. */
+export function evaluateBinaryCalibration(splits: readonly QualificationSplit[], samples: readonly BinaryQualificationSample[]) {
+  return evaluateBinarySplit(splits, samples, 'calibration');
+}
+
+function evaluateBinarySplit(splits: readonly QualificationSplit[], samples: readonly BinaryQualificationSample[], name: 'test' | 'calibration') {
   verifyQualificationSplits(splits);
-  const test = splits.find(split => split.name === 'test')!;
+  const test = splits.find(split => split.name === name)!;
   if (samples.length !== test.ids.length || new Set(samples.map(sample => sample.id)).size !== samples.length
     || samples.some(sample => !test.ids.includes(sample.id))) {
     throw new Error('held-out sample membership mismatch');
@@ -259,16 +292,6 @@ export function measurePairedMovement(pairs: readonly PairedQualificationSample[
   const changedN = pairs.filter(pair => pair.control !== pair.observed).length;
   const [low, high] = wilson95(changedN, pairs.length);
   return { sampleN: pairs.length, changedN, changedRate: changedN / pairs.length, changedWilson95: [low, high] };
-}
-
-function wilson95(errors: number, n: number): readonly [number, number] {
-  // 95% normal quantile; finite-sample Wilson interval for binomial events.
-  const z = 1.959963984540054;
-  const rate = errors / n;
-  const denominator = 1 + z * z / n;
-  const center = (rate + z * z / (2 * n)) / denominator;
-  const margin = z * Math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / denominator;
-  return [Math.max(0, center - margin), Math.min(1, center + margin)];
 }
 
 function scoreBinary(samples: readonly BinaryQualificationSample[]): BinarySliceMetrics {

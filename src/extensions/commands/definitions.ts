@@ -194,6 +194,44 @@ export const installationCommand: Extension = {
   } satisfies CommandMetadata,
 };
 
+export const decisionCommand: Extension = {
+  id: 'decision',
+  type: 'command',
+  name: 'Decision Driver',
+  description: 'Inspect, validate and run governed decision classification workflows',
+  version: '1.0.0',
+  capabilities: ['cli', 'decision', 'classification', 'mcp', 'validation'],
+  keywords: ['decision', 'classification', 'patterns', 'mcp', 'evaluate', 'validate'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<capabilities|patterns|validate|evaluate|setup> [options]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
+export const gatesCommand: Extension = {
+  id: 'gates',
+  type: 'command',
+  name: 'Gates',
+  description: 'Validate, evaluate and inspect declarative gate packs offline',
+  version: '1.0.0',
+  capabilities: ['cli', 'gates', 'validation', 'evaluation'],
+  keywords: ['gates', 'gate pack', 'validate', 'evaluate', 'promotion', 'hold', 'rollback'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<validate|evaluate|show|list> [options]',
+    allowedTools: ['Read'],
+  } satisfies CommandMetadata,
+};
+
 // Renamed from `refreshCommand` as part of #694 (avoid collision with git sync
 // semantics) and re-linked to `refreshHandler` in #919. Users who type
 // `aiwg sync` still reach this handler via its 'sync' alias and see a
@@ -3924,6 +3962,8 @@ export const commandDefinitions: Extension[] = [
   contextFirewallCommand,
   updateCommand,
   installationCommand,
+  decisionCommand,
+  gatesCommand,
   refreshCommand,
   regenerateCommand,
   workspaceContextCommand,

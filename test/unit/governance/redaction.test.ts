@@ -169,3 +169,98 @@ items:
     }).allowed).toBe(false);
   });
 });
+
+describe('unterminated private-key blocks and additional provider tokens (#2793)', () => {
+  const keyBody = 'MIIEvwIBADANBgkqhkiG9w0BAQUAA4IBDwAwggEKAoIBAQC7';
+
+  it('redacts an unterminated private-key block while retaining surrounding text', () => {
+    const input = `prefix safe text\n-----BEGIN PRIVATE KEY-----\n${keyBody}\n${keyBody}\nsuffix safe text`;
+    const result = redactText(input);
+    expect(result.sensitivity).toBe('sensitive');
+    expect(result.findings.map((finding) => finding.class)).toContain('private-key');
+    expect(result.text).not.toContain(keyBody);
+    expect(result.text).not.toContain('BEGIN PRIVATE KEY');
+    expect(result.text).toContain('prefix safe text');
+    expect(result.text).toContain('suffix safe text');
+  });
+
+  it('redacts unterminated header variants and preserves a terminated block beside them', () => {
+    const terminated = `-----BEGIN PRIVATE KEY-----\n${canaries.privateKeyBody}\n-----END PRIVATE KEY-----`;
+    const unterminated = `-----BEGIN RSA PRIVATE KEY-----\n${keyBody}\nclosing prose stays`;
+    const result = redactText(`${terminated}\nbetween text\n${unterminated}`);
+    expect(result.findings.filter((finding) => finding.class === 'private-key')).toHaveLength(2);
+    expectNoCanaries(result.text);
+    expect(result.text).not.toContain(keyBody);
+    expect(result.text).toContain('between text');
+    expect(result.text).toContain('closing prose stays');
+  });
+
+  it('redacts an unterminated legacy encrypted PEM body after RFC 1421 header lines', () => {
+    const input = `log start\n-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF\n\n${keyBody}\n${keyBody}\nafter the truncated key`;
+    const result = redactText(input);
+    expect(result.findings.map((finding) => finding.class)).toContain('private-key');
+    expect(result.text).not.toContain(keyBody);
+    expect(result.text).not.toContain('DEK-Info');
+    expect(result.text).toContain('log start');
+    expect(result.text).toContain('after the truncated key');
+  });
+
+  it('redacts a lone BEGIN marker without consuming following prose', () => {
+    const result = redactText('before -----BEGIN PRIVATE KEY----- after prose remains');
+    expect(result.findings.map((finding) => finding.class)).toContain('private-key');
+    expect(result.text).not.toContain('BEGIN PRIVATE KEY');
+    expect(result.text).toContain('before ');
+    expect(result.text).toContain(' after prose remains');
+  });
+
+  it('redacts standalone whsec_ and glpat- values while retaining surrounding text', () => {
+    const webhookSecret = 'whsec_5f4dcc3b5aa765d61d8327deb882cf99a1b2c3d4e5';
+    const deployToken = 'glpat-abcdefghij1234567890';
+    const result = redactText(`hook ${webhookSecret} configured\ndeploy ${deployToken} done`);
+    expect(result.sensitivity).toBe('sensitive');
+    expect(result.findings.map((finding) => finding.class)).toContain('provider-token');
+    expect(result.text).not.toContain(webhookSecret);
+    expect(result.text).not.toContain(deployToken);
+    expect(result.text).toContain('hook ');
+    expect(result.text).toContain(' configured');
+    expect(result.text).toContain('deploy ');
+    expect(result.text).toContain(' done');
+  });
+
+  it('flags base64 blobs that decode to the new provider-token prefixes', () => {
+    const encoded = Buffer.from('webhook=whsec_5f4dcc3b5aa765d61d8327deb882cf99a1b2c3d4e5').toString('base64');
+    const result = redactText(`payload ${encoded} end`);
+    expect(result.findings.map((finding) => finding.class)).toContain('encoded-secret');
+    expect(result.text).not.toContain(encoded);
+    expect(result.text).toContain('payload ');
+    expect(result.text).toContain(' end');
+  });
+
+  it('leaves short or bare prefixes untouched to avoid over-redaction', () => {
+    for (const input of ['contact whsec_help for details', 'use glpat-abc for now', 'the glpat listing', 'a whsec value']) {
+      const result = redactText(input);
+      expect(result.sensitivity, input).toBe('none');
+      expect(result.text, input).toBe(input);
+    }
+  });
+});
+
+describe('private key and payment key coverage (#2618)', () => {
+  it('redacts every PEM private key header variant and Stripe secret keys', () => {
+    const body = 'cmVkYWN0aW9uLWNhbmFyeS1wZW0tdmFyaWFudA';
+    const variants = ['', 'RSA ', 'EC ', 'DSA ', 'OPENSSH ', 'PGP ', 'ENCRYPTED '];
+    for (const variant of variants) {
+      const pem = `-----BEGIN ${variant}PRIVATE KEY-----\n${body}\n-----END ${variant}PRIVATE KEY-----`;
+      const result = redactText(`key:\n${pem}\ndone`);
+      expect(result.text, variant || 'plain').not.toContain(body);
+      expect(result.findings.map(finding => finding.class), variant || 'plain').toContain('private-key');
+    }
+    // Stripe-shaped canaries are assembled at runtime so no live-key literal sits in
+    // source; GitHub push protection blocks those (#2856).
+    for (const key of [['sk', 'live', '51Hcanary0123456789abcdef'].join('_'), ['sk', 'test', '51Hcanary0123456789abcdef'].join('_'), ['rk', 'live', '51Hcanary0123456789abcdef'].join('_')]) {
+      const result = redactText(`stripe ${key} configured`);
+      expect(result.text).not.toContain(key);
+      expect(result.findings.map(finding => finding.class)).toContain('provider-token');
+    }
+  });
+});

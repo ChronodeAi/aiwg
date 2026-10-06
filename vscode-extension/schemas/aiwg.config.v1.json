@@ -541,9 +541,69 @@
           }
         }
       }
+    },
+    "gates": {
+      "$ref": "#/definitions/GatesConfig"
     }
   },
   "definitions": {
+    "GatesConfig": {
+      "type": "object",
+      "description": "Project gate floors for decision studies (#2832). Floors are project policy: every binding must include and tighten each floor gate. Absent means unconfigured; callers that load floors get the operator default integrity-ceiling floor.",
+      "additionalProperties": false,
+      "properties": {
+        "floors": {
+          "type": "array",
+          "description": "Floor sources. Each entry sets exactly one of 'pack' (an inline project: GatePack) or 'packRef' (a pin over a registered pack whose composed gates all become floors).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pack": {
+                "type": "object",
+                "description": "Inline floor pack (gates.aiwg.io/v1alpha1 GatePack with a project: id). Validated against the closed GatePack schema at load; every threshold parameter needs a default (the enforced minimum)."
+              },
+              "packRef": {
+                "$ref": "#/definitions/GateFloorPackRef"
+              }
+            },
+            "anyOf": [
+              { "required": ["pack"] },
+              { "required": ["packRef"] }
+            ]
+          }
+        },
+        "ceilings": {
+          "type": "object",
+          "description": "Outcome ceilings keyed by binding metadata.id, plus '*' as the project-wide default applied to every binding. A per-study key may only tighten the '*' default; a binding declaring a looser ceiling is refused at resolution.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["PROMOTE", "HOLD", "ROLLBACK"]
+          }
+        }
+      }
+    },
+    "GateFloorPackRef": {
+      "type": "object",
+      "description": "Pin over a registered gate pack whose composed gates all become project floors. Version and authored digest are verified at resolution.",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Full namespaced pack id, e.g. aiwg:decision-engine/integrity-ceiling or project:my-floors."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Pack version (X.Y.Z), must match the registered pack."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Authored-pack digest, must match the registered pack."
+        }
+      }
+    },
     "Authorization": {
       "type": "object",
       "additionalProperties": false,

@@ -17,9 +17,32 @@ export const artifactIndexFiles = [
 export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corpus.test.ts'];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
+  'tools/experiments/conformal/prototype.test.mjs',
   'test/unit/providers/grok-build-qualification.test.mjs',
   'test/contract/agentic-publication-source.test.mjs',
   'test/contract/setup-manifest-site-dispatch.test.mjs',
   'test/contract/site-manifest-release-dispatch.test.mjs',
   'test/contract/socket-post-publish-workflow.test.mjs',
+];
+// Heavy D29 suites: multi-seed structure scans, positive controls, repeated
+// audits and full-corpus reproductions. They run in their own CI job
+// (test:d29-slow) so they never push the shared test:ci step past its cap;
+// test/unit/decision/d29-synthetic-v8-smoke.test.mjs keeps fast single-seed
+// coverage in the default lane.
+// Heavy D17 staged-calibration suite: full 1,800-row preparation, 1,200-row calibrated
+// scoring, seal re-derivation and promotion-route replays (about 30 s of one worker).
+// It runs in the same slow job; the D17 diagnostic, corpus, artifact and statistics
+// files keep fast coverage in the default lane.
+export const d17SlowFiles = [
+  'test/unit/decision/ensemble-study-staged.test.ts',
+  // D17-MF probe (#2850): full 5,772-row preparation, shortcut audit, bundle planning and calibrated scoring (about 22 s).
+  'test/unit/decision/d17-multifact.test.ts',
+];
+export const d29SlowFiles = [
+  'test/unit/decision/d29-synthetic-v8.test.mjs',
+  'test/unit/decision/d29-study.test.mjs',
+  'test/unit/decision/d29-synthetic-v6.test.mjs',
+  'test/unit/decision/d29-synthetic-v7.test.mjs',
+  'test/unit/decision/d29-gates-regression.test.mjs',
+  'test/unit/decision/d29-v8-review.test.mjs',
 ];

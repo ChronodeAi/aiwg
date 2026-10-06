@@ -1,0 +1,758 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ContextPruningEvaluationReport.v1.schema.json",
+  "title": "Context Pruning Evaluation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "preregistration",
+    "holdoutAccessedAt",
+    "integrity",
+    "metrics",
+    "derived",
+    "missingInputs",
+    "findings",
+    "upstreamDecision",
+    "decision",
+    "advisory",
+    "digest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-context-pruning-evaluation-report/v1"
+    },
+    "preregistration": {
+      "$ref": "#/$defs/preregistration"
+    },
+    "holdoutAccessedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "integrity": {
+      "$ref": "#/$defs/integrity"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pairs",
+        "quality",
+        "protectedRetentionBps",
+        "providerUsage",
+        "estimatorUsage",
+        "totalCalls",
+        "latencyMs",
+        "promptCache",
+        "sharedStateAccounting"
+      ],
+      "properties": {
+        "pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pairId",
+              "slice"
+            ],
+            "properties": {
+              "pairId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "slice": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "quality": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric",
+              "pairs"
+            ],
+            "properties": {
+              "metric": {
+                "enum": [
+                  "downstream-task-success",
+                  "requirement-coverage",
+                  "factual-coverage",
+                  "citation-accuracy",
+                  "human-preference"
+                ]
+              },
+              "pairs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "pairId",
+                    "baseline",
+                    "candidate"
+                  ],
+                  "properties": {
+                    "pairId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "baseline": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "candidate": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "protectedRetentionBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "providerUsage": {
+          "$ref": "#/$defs/usageAccounting"
+        },
+        "estimatorUsage": {
+          "$ref": "#/$defs/usageAccounting"
+        },
+        "totalCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latencyMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "p50",
+            "p95",
+            "p99"
+          ],
+          "properties": {
+            "p50": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "p95": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "p99": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "promptCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseline",
+            "prunedDownstream"
+          ],
+          "properties": {
+            "baseline": {
+              "$ref": "#/$defs/promptCacheArm"
+            },
+            "prunedDownstream": {
+              "$ref": "#/$defs/promptCacheArm"
+            }
+          }
+        },
+        "sharedStateAccounting": {
+          "const": "not-applicable"
+        }
+      }
+    },
+    "derived": {
+      "$ref": "#/$defs/derived"
+    },
+    "missingInputs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "findings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "upstreamDecision": {
+      "$ref": "#/$defs/gateDecision"
+    },
+    "decision": {
+      "$ref": "#/$defs/gateDecision"
+    },
+    "advisory": {
+      "enum": [
+        "INSUFFICIENT EVIDENCE",
+        null
+      ]
+    },
+    "digest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gateDecision": {
+      "enum": [
+        "PROMOTE",
+        "HOLD",
+        "ROLLBACK"
+      ]
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sample_n",
+        "uncertainty",
+        "paired_baseline",
+        "integrity_mode",
+        "fresh_workspace_required",
+        "fresh_workspace_verified",
+        "integrity_state",
+        "trusted_score_source",
+        "compromise_labels",
+        "weak_signal_reason",
+        "release_gate"
+      ],
+      "properties": {
+        "sample_n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertainty": {},
+        "paired_baseline": {},
+        "integrity_mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fresh_workspace_required": {
+          "type": "boolean"
+        },
+        "fresh_workspace_verified": {
+          "type": "boolean"
+        },
+        "integrity_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trusted_score_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "compromise_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "weak_signal_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "reasons"
+          ],
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/gateDecision"
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputTokens",
+        "cachedInputTokens",
+        "outputTokens",
+        "costUsd"
+      ],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cachedInputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "usageAccounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "prunedDownstream",
+        "decisionCalls",
+        "fallbackCalls",
+        "transformationCalls"
+      ],
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/usage"
+        },
+        "prunedDownstream": {
+          "$ref": "#/$defs/usage"
+        },
+        "decisionCalls": {
+          "$ref": "#/$defs/usage"
+        },
+        "fallbackCalls": {
+          "$ref": "#/$defs/usage"
+        },
+        "transformationCalls": {
+          "$ref": "#/$defs/usage"
+        }
+      }
+    },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "id",
+        "registeredAt",
+        "pairSetDigest",
+        "thresholds",
+        "digest"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-context-pruning-preregistration/v1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "pairSetDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protectedRetentionBps",
+            "confidenceInterval",
+            "qualityMetrics",
+            "slices",
+            "minimumOverallN",
+            "minimumSliceN",
+            "minimumZeroVarianceN",
+            "minimumProtectedN",
+            "powerRule",
+            "qualityNonInferiorityMarginBps",
+            "positiveTotalTokenTarget",
+            "positiveTotalCostTargetUsd"
+          ],
+          "properties": {
+            "protectedRetentionBps": {
+              "const": 10000
+            },
+            "confidenceInterval": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "levelBps",
+                "binaryMethod",
+                "boundedMethod",
+                "bootstrapSeed",
+                "bootstrapResamples"
+              ],
+              "properties": {
+                "levelBps": {
+                  "type": "integer",
+                  "exclusiveMinimum": 5000,
+                  "exclusiveMaximum": 9999
+                },
+                "binaryMethod": {
+                  "enum": [
+                    "newcombe-10",
+                    "tango"
+                  ]
+                },
+                "boundedMethod": {
+                  "const": "percentile-bootstrap"
+                },
+                "bootstrapSeed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "bootstrapResamples": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                }
+              }
+            },
+            "qualityMetrics": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "metric",
+                  "scale"
+                ],
+                "properties": {
+                  "metric": {
+                    "enum": [
+                      "downstream-task-success",
+                      "requirement-coverage",
+                      "factual-coverage",
+                      "citation-accuracy",
+                      "human-preference"
+                    ]
+                  },
+                  "scale": {
+                    "enum": [
+                      "binary",
+                      "bounded"
+                    ]
+                  }
+                }
+              }
+            },
+            "slices": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "minimumOverallN": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "minimumSliceN": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minimumZeroVarianceN": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "minimumProtectedN": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "powerRule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "qualityNonInferiorityMarginBps": {
+              "type": "integer",
+              "minimum": -10000,
+              "maximum": 0
+            },
+            "positiveTotalTokenTarget": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "positiveTotalCostTargetUsd": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "promptCacheArm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hits",
+        "misses",
+        "cachedInputTokens"
+      ],
+      "properties": {
+        "hits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "misses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cachedInputTokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "derived": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampleN",
+        "sliceSupport",
+        "quality",
+        "providerSavings",
+        "estimatorSavings",
+        "protectedRetention"
+      ],
+      "properties": {
+        "sampleN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sliceSupport": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "quality": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric",
+              "scale",
+              "n",
+              "missingPairs",
+              "harm",
+              "sliceSupport",
+              "interval",
+              "decision"
+            ],
+            "properties": {
+              "metric": {
+                "enum": [
+                  "downstream-task-success",
+                  "requirement-coverage",
+                  "factual-coverage",
+                  "citation-accuracy",
+                  "human-preference"
+                ]
+              },
+              "scale": {
+                "enum": [
+                  "binary",
+                  "bounded"
+                ]
+              },
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missingPairs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "harm": {
+                "type": "boolean"
+              },
+              "sliceSupport": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "interval": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "lowerBps",
+                      "upperBps",
+                      "estimateBps",
+                      "n",
+                      "method"
+                    ],
+                    "properties": {
+                      "lowerBps": {
+                        "type": "integer",
+                        "minimum": -10000,
+                        "maximum": 10000
+                      },
+                      "upperBps": {
+                        "type": "integer",
+                        "minimum": -10000,
+                        "maximum": 10000
+                      },
+                      "estimateBps": {
+                        "type": "integer",
+                        "minimum": -10000,
+                        "maximum": 10000
+                      },
+                      "n": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "method": {
+                        "enum": [
+                          "newcombe-hybrid-score",
+                          "tango-score",
+                          "percentile-bootstrap"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "decision": {
+                "enum": [
+                  "non-inferior",
+                  "not-non-inferior",
+                  "insufficient"
+                ]
+              }
+            }
+          }
+        },
+        "providerSavings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "totalTokens",
+            "uncachedTokens",
+            "costUsd",
+            "cachedInputTokensDelta"
+          ],
+          "properties": {
+            "totalTokens": {
+              "type": "integer"
+            },
+            "uncachedTokens": {
+              "type": "integer"
+            },
+            "costUsd": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "cachedInputTokensDelta": {
+              "type": "integer"
+            }
+          }
+        },
+        "estimatorSavings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "totalTokens"
+          ],
+          "properties": {
+            "totalTokens": {
+              "type": "integer"
+            }
+          }
+        },
+        "protectedRetention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protectedItems",
+            "retained",
+            "bps"
+          ],
+          "properties": {
+            "protectedItems": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "retained": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bps": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        }
+      }
+    }
+  }
+}
