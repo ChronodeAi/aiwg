@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /** D17-MF calibrated multi-fact probe (#2850). Offline by default; collection uses tools/decision/heldout-study.mjs. */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, realpath } from 'node:fs/promises';
 import { resolve, join, relative, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { register } from 'tsx/esm/api';
 register();
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -11,7 +12,9 @@ const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const json = async path => JSON.parse(await readFile(resolve(path), 'utf8'));
 const D17_CONTEXT_KEYS = ['d17CalibrationDir', 'd17CalibrationReviewFile', 'd17CalibrationRun', 'd17DevelopmentReviewFile',
-  'trustedD17CalibrationReviewDigest', 'trustedD17DevelopmentReviewDigest'];
+  'd17SourceRoot', 'trustedD17CalibrationReviewDigest', 'trustedD17DevelopmentReviewDigest'];
+// Everything D17's source digests cover (tools/decision/d17-study.mjs sourceDigests).
+const D17_PINNED_PATHS = ['src', 'schemas', 'tools/decision', 'package.json', 'package-lock.json', 'tsconfig.json'];
 const USAGE = 'D17-MF (#2850) experimental/default-off. --dry-run SEED; --prepare SEED NEW_DIR; '
   + '--bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST OUTPUT.json D17_CALIBRATION_CONTEXT.json; '
   + '--dev-review-material PREPARED_DIR NEW_OUTPUT.json (private seed; output under the artifact root, contains gold, mode 600); '
@@ -63,6 +66,26 @@ async function preparedFrom(directory) {
 }
 
 /**
+ * The D17 source checkout that sealed the calibration phase: a git work tree whose HEAD is exactly the sealed approval's
+ * source commit, with no tracked, untracked or ignored changes under any path D17's source digests cover.
+ */
+export async function assertD17SealedSource(sourceRoot, sealedCommit) {
+  if (typeof sourceRoot !== 'string' || !sourceRoot || typeof sealedCommit !== 'string' || !/^[a-f0-9]{40}$/.test(sealedCommit)) {
+    throw new Error('D17 sealed source');
+  }
+  const directory = await realpath(resolve(sourceRoot));
+  const git = args => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  let head, status;
+  try {
+    head = git(['rev-parse', '--verify', 'HEAD^{commit}']).trim();
+    status = git(['status', '--porcelain', '--ignored', '--untracked-files=all', '--', ...D17_PINNED_PATHS]);
+  } catch { throw new Error('D17 sealed source is not a git work tree'); }
+  if (head !== sealedCommit) throw new Error('D17 sealed source commit mismatch');
+  if (status.trim()) throw new Error('D17 sealed source has local changes under pinned paths');
+  return directory;
+}
+
+/**
  * Re-derives the registered D17 calibration set bound by the approval from its sealed calibration phase (re-fit,
  * out-of-fold metrics, both reviews) and qualifies the member artifact at `nowEpochMs`; returns the scorer context.
  */
@@ -71,10 +94,13 @@ export async function deriveD17Calibration(contextConfig, bindingDigest, nowEpoc
   const { readHeldoutCalibrationPhase } = await import('../../src/decision/heldout/calibration.ts');
   const { verifyD17CalibrationSet } = await import('../../src/decision/ensemble-study/calibration.ts');
   const { heldoutDigest } = await import('../../src/decision/heldout/contract.ts');
-  const { prepare: prepareD17 } = await import('./d17-study.mjs');
   const dir = resolve(contextConfig.d17CalibrationDir), set = await json(join(dir, 'calibration-set.json'));
   if (heldoutDigest(set) !== bindingDigest) throw new Error('D17-MF calibration binding');
   const sealed = await readHeldoutCalibrationPhase(resolve(contextConfig.d17CalibrationRun), set.priorApprovalDigest, set.calibrationPhaseRecordDigest);
+  // D17's preregistration pins the digests of its whole source tree, so the sealed study only reproduces at the sealed
+  // commit. Re-derive it there rather than at this (newer) source; the exact-reproduction check below is unchanged.
+  const sourceRoot = await assertD17SealedSource(contextConfig.d17SourceRoot, sealed.bundle.approval.sourceCommit);
+  const { prepare: prepareD17 } = await import(pathToFileURL(join(sourceRoot, 'tools/decision/d17-study.mjs')).href);
   const d17Prepared = await prepareD17(sealed.bundle.corpus.provenance.seed, 'staged');
   const verified = verifyD17CalibrationSet(d17Prepared, { mode: 'staged', phase: 'test', calibrationArtifactDigest: bindingDigest,
     calibrationPhaseRecordDigest: set.calibrationPhaseRecordDigest, priorApprovalDigest: set.priorApprovalDigest }, {
