@@ -228,8 +228,18 @@ registered D17 calibration set digest, and the scorer applies the D17 member
 would absorb exactly the miscalibration this probe measures.
 
 The registered calibrator is re-derived from the D17 seal (re-fit, out-of-fold
-metrics, both reviews; the registered files must match), and the member artifact
-is qualified at three points:
+metrics, both reviews; the registered files must match).
+
+The D17 preregistration pins the digests of D17's whole source tree (`src/`,
+`schemas/`, `tools/decision/` and the package files). The sealed study therefore
+reproduces only at the sealed commit, never at a later commit that contains
+D17-MF. The re-derivation runs D17's preparation from `d17SourceRoot`, a separate
+checkout of that commit. The CLI refuses the checkout unless its HEAD is exactly
+the sealed approval's `sourceCommit`, and unless the pinned paths have no
+tracked, untracked or ignored changes. The exact-reproduction check itself is
+unchanged.
+
+The member artifact is qualified at three points:
 
 1. at bundle time;
 2. at collection end;
@@ -284,7 +294,8 @@ Collection and scoring run at the exact approved source commit:
     `d17mf-smoke`, `d17mf-7f3a9c2e1b` and the review seeds) and the prefixes
     `review-` and `d17mf-offline|public|smoke|sweep|demo`.
   - A private seed must also contain at least 24 lowercase hex characters of
-    fresh randomness, for example `d17mf-$(openssl rand -hex 16)`. Memorable
+    fresh randomness, and a seed is at most 32 characters, for example
+    `d17mf-$(openssl rand -hex 13)` (26 hex characters, 32 in total). Memorable
     and near-variant seeds are therefore refused.
 - The bundle must use artifact-mode calibration.
 - Seed reuse is refused at the collector:
@@ -323,7 +334,8 @@ nice -n 19 node tools/decision/d17-multifact.mjs --dev-review-material PREPARED_
 #   - an approvalReference that cites DEV_REVIEW_DIGEST
 # Anchor its digest.
 # D17_CONTEXT.json: d17CalibrationRun (the sealed D17 c03 run), d17CalibrationDir (registered set),
-#   d17CalibrationReviewFile, trustedD17CalibrationReviewDigest, d17DevelopmentReviewFile, trustedD17DevelopmentReviewDigest.
+#   d17CalibrationReviewFile, trustedD17CalibrationReviewDigest, d17DevelopmentReviewFile, trustedD17DevelopmentReviewDigest,
+#   d17SourceRoot (a clean checkout of the sealed commit, f7056a79fa3c1f857ab91aad0eaa91c37e593bda).
 nice -n 19 node tools/decision/d17-multifact.mjs --bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST BUNDLE.json D17_CONTEXT.json
 nice -n 19 node tools/decision/d17-multifact.mjs --dry-run-ledger BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT D17_CONTEXT.json
 nice -n 19 node tools/decision/heldout-study.mjs --dry-run BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT
