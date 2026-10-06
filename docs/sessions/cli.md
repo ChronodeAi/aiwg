@@ -30,9 +30,10 @@ installer command when the package is absent or unusable.
 ## Commands
 
 ```text
-aiwg sessions sources [--json]
+aiwg sessions sources [--expected-providers <comma-separated-ids>] [--json]
 aiwg sessions discover --workspace <path>
-                       [--codex-root <authorized-path>]
+                       [--expected-providers <comma-separated-ids>]
+                       [--codex-root <authorized-path>] [--muse-root <authorized-path>]
                        [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
@@ -140,7 +141,30 @@ checked, unavailable, export-required, and not-checked providers and reconciles
 discovered, accepted, rejected, skipped, duplicate, previously committed, and
 pending sources. It also reports event/session totals, source/import date
 ranges, manifest age, stable rejection counts, and remediation commands.
-Status is `complete`, `partial`, `stale`, or `unknown`.
+Status is `complete`, `partial`, `stale`, or `unknown`. The independent
+`acquisitionStatus` is `complete`, `partial`, or `unknown`; database/index health
+is reported separately by `doctor`, and semantic review is `not-assessed`.
+
+Use `--expected-providers claude,codex,muse` on `sources` and `discover` to declare
+the authorized investigation scope independently of the running adapter registry.
+Unknown provider IDs are retained as `missing-adapter` entries, not discarded.
+Without this flag the declared canonical provider set is inventoried, but complete
+acquisition requires an explicit set. Supplying the flag on `import-discovered`
+must match the saved scope; changing it requires new discovery.
+
+`preflight` records expected/supported sets, runtime version, loaded package root,
+executable and installation identity, plus one coverage disposition per expected
+provider. The manifest identity binds this preflight; batch runs retain discovery
+runtime identity and recheck the current import runtime. Missing adapters or
+installation drift require deliberate runtime selection or a supported authorized
+export, never an automatic upgrade or source switch. Old manifests remain readable
+but cannot prove complete coverage without a new explicit preflight.
+
+Unavailable/unauthorized roots, missing exports, zero sources, empty/rejected
+imports and omitted scope keep acquisition partial. Muse's explicit `--muse-root`
+discovery covers matching parent logs only: nested subagent logs and full
+approval-review scope remain unresolved even when parent import succeeds. A source
+coverage ratio of 1 does not establish complete provider or session-tree coverage.
 
 Use `--min-coverage 0.95` in an audit or CI job. A lower or unknown ratio emits
 `COVERAGE_BELOW_THRESHOLD` and exit code 8 while retaining the coverage report

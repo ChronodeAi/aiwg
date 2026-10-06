@@ -1,3 +1,5 @@
+import type { SessionCoveragePreflight, SessionRuntimeIdentity } from './contracts.js';
+import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
 
 export const BATCH_IMPORT_VERSION = '1.0.0' as const;
@@ -34,6 +36,8 @@ export interface BatchImportRun {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  preflight?: SessionCoveragePreflight;
+  discoveryRuntime?: SessionRuntimeIdentity;
   providers: DiscoveryProviderReport[];
   sources: BatchSourceDisposition[];
 }
@@ -41,6 +45,9 @@ export interface BatchImportRun {
 export interface SessionCoverageReport {
   schemaVersion: typeof COVERAGE_VERSION;
   status: 'complete' | 'partial' | 'stale' | 'unknown';
+  acquisitionStatus: 'complete' | 'partial' | 'unknown';
+  preflight?: SessionCoveragePreflight;
+  semanticReview: 'not-assessed';
   workspaceId: string;
   manifestId: string | null;
   batchRunId: string | null;
@@ -97,7 +104,10 @@ export function coverageFromBatchRun(
   const notChecked = providerNames(run, 'not-checked');
   const manifestAgeMs = Math.max(0, now.getTime() - Date.parse(run.manifestCreatedAt));
   const isStale = manifestAgeMs > staleAfterMs;
-  const incomplete = rejected > 0 || pending > 0 || skipped > 0
+  const preflight = run.preflight ? reconcileCoveragePreflight(run.preflight, run.sources) : undefined;
+  const incomplete = !preflight || preflight.status !== 'complete'
+    || unavailable.length > 0 || accepted + duplicated + previouslyCommitted === 0
+    || rejected > 0 || pending > 0 || skipped > 0
     || exportRequired.length > 0 || notChecked.length > 0;
   const rejectionCounts: Record<string, number> = {};
   for (const source of run.sources) {
@@ -114,6 +124,9 @@ export function coverageFromBatchRun(
     .map((source) => source.updatedAt)
     .sort();
   const remediation = [
+    ...(preflight?.ledger.flatMap((entry) => entry.remediation ? [entry.remediation] : []) ?? ['Legacy receipt lacks provider/runtime preflight; rediscover with --expected-providers.']),
+    ...(preflight && ['mismatch', 'stale', 'unknown'].includes(preflight.runtime.installationState)
+      ? ['Inspect the recorded runtime identity and deliberately select a compatible installation; then rediscover. No automatic switch is performed.'] : []),
     ...(rejected > 0
       ? ['Run `aiwg sessions import-discovered --resume --confirm` after correcting rejected sources.']
       : []),
@@ -125,6 +138,9 @@ export function coverageFromBatchRun(
   return {
     schemaVersion: COVERAGE_VERSION,
     status: isStale ? 'stale' : incomplete ? 'partial' : 'complete',
+    acquisitionStatus: incomplete ? 'partial' : 'complete',
+    preflight,
+    semanticReview: 'not-assessed',
     workspaceId: run.workspaceId,
     manifestId: run.manifestId,
     batchRunId: run.runId,
@@ -172,6 +188,8 @@ function unknownCoverage(): SessionCoverageReport {
   return {
     schemaVersion: COVERAGE_VERSION,
     status: 'unknown',
+    acquisitionStatus: 'unknown',
+    semanticReview: 'not-assessed',
     workspaceId: '',
     manifestId: null,
     batchRunId: null,

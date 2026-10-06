@@ -11,6 +11,43 @@ export const SESSION_PROVIDER_IDS = [
 
 export const SessionProviderIdSchema = z.enum(SESSION_PROVIDER_IDS);
 export type SessionProviderId = z.infer<typeof SessionProviderIdSchema>;
+// Expected scope must also represent providers unknown to this runtime.
+export const ExpectedSessionProviderSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
+export const SessionRuntimeIdentitySchema = z.object({
+  packageName: z.string(),
+  version: z.string(),
+  packageRoot: z.string(),
+  executable: z.string(),
+  nodeVersion: z.string(),
+  installationMethod: z.string(),
+  installationState: z.enum(['aligned', 'mismatch', 'stale', 'unrecorded', 'unknown']),
+  canonicalRoot: z.string().nullable(),
+  diagnostics: z.array(z.string()),
+});
+export type SessionRuntimeIdentity = z.infer<typeof SessionRuntimeIdentitySchema>;
+export const SessionCoveragePreflightSchema = z.object({
+  expectedProviders: z.array(ExpectedSessionProviderSchema).min(1),
+  expectedProviderBasis: z.enum(['explicit', 'declared-default', 'legacy']),
+  supportedProviders: z.array(ExpectedSessionProviderSchema),
+  runtime: SessionRuntimeIdentitySchema,
+  status: z.enum(['partial', 'complete']),
+  unresolvedProviders: z.array(ExpectedSessionProviderSchema),
+  ledger: z.array(z.object({
+    provider: ExpectedSessionProviderSchema,
+    disposition: z.enum([
+      'missing-adapter', 'unsupported', 'authorization-required', 'export-required',
+      'unavailable', 'no-sources', 'not-checked', 'pending-import', 'import-incomplete',
+      'scope-incomplete', 'acquired',
+    ]),
+    adapterVersion: z.string().nullable(),
+    supportedOperations: z.array(z.string()),
+    acquisitionModes: z.array(z.string()),
+    sourceCount: z.number().int().nonnegative(),
+    boundaries: z.array(z.string()),
+    remediation: z.string().nullable(),
+  })),
+});
+export type SessionCoveragePreflight = z.infer<typeof SessionCoveragePreflightSchema>;
 export const SESSION_PROVIDER_ALIASES = Object.freeze({
   windsurf: 'devin-desktop',
   dsh: 'deepseek-harness',

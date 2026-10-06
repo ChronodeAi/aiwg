@@ -1,26 +1,6 @@
-import { OmpSessionAdapter, OMP_ADAPTER_VERSION } from './adapters/omp.js';
-import { DeepSeekHarnessSessionAdapter, DEEPSEEK_HARNESS_ADAPTER_VERSION } from './adapters/deepseek-harness.js';
 import { stat } from 'node:fs/promises';
-import {
-  CLAUDE_ADAPTER_VERSION,
-  ClaudeSessionAdapter,
-} from './adapters/claude.js';
-import {
-  CODEX_ADAPTER_VERSION,
-  CodexSessionAdapter,
-} from './adapters/codex.js';
-import {
-  CURSOR_ADAPTER_VERSION,
-  CursorSessionAdapter,
-} from './adapters/cursor.js';
-import {
-  FACTORY_ADAPTER_VERSION,
-  FactorySessionAdapter,
-} from './adapters/factory.js';
-import {
-  MUSE_ADAPTER_VERSION,
-  MuseSessionAdapter,
-} from './adapters/muse.js';
+import { createSessionAdapterRegistry } from './adapter-registry.js';
+import { coveragePreflight, sessionRuntimeIdentity } from './coverage-preflight.js';
 import {
   SESSION_CONTRACT_VERSION,
   SessionContractError,
@@ -29,6 +9,7 @@ import {
   type SelectedSource,
   type SessionSource,
   type SessionSourceAdapter,
+  type SessionRuntimeIdentity,
 } from './contracts.js';
 import {
   BATCH_IMPORT_VERSION,
@@ -47,6 +28,7 @@ import type {
 
 export interface BatchImportOptions {
   manifest: SessionDiscoveryManifest;
+  runtime?: SessionRuntimeIdentity;
   repository: SessionRepository;
   signal?: AbortSignal;
   inactivityThresholdMs?: number;
@@ -94,6 +76,12 @@ export async function importDiscoveryManifest(
       'discovery manifest is already associated with a different batch run',
     );
   }
+  run.preflight = coveragePreflight({
+    expectedProviders: options.manifest.preflight?.expectedProviders,
+    expectedProviderBasis: options.manifest.preflight?.expectedProviderBasis ?? 'legacy',
+    runtime: options.runtime ?? sessionRuntimeIdentity(),
+    reports: options.manifest.providers,
+  });
   run.status = 'running';
   run.updatedAt = now().toISOString();
   run.completedAt = null;
@@ -187,9 +175,7 @@ export async function importDiscoveryManifest(
   const pending = run.sources.some(
     (source) => source.status === 'pending' || source.status === 'running',
   );
-  const providerGap = run.providers.some(
-    (provider) => provider.status === 'export-required' || provider.status === 'not-checked',
-  );
+  const providerGap = coverageFromBatchRun(run, now()).acquisitionStatus !== 'complete';
   const publishable = run.sources
     .filter((source) => isAccepted(source.status))
     .map((source) => source.sourceId);
@@ -231,7 +217,14 @@ export function previewDiscoveryImport(
     sha256(['workspace-import-v1', manifest.manifestId, manifest.workspaceId].join('\0')),
     now,
   );
-  return receiptFor(run, now);
+  return receiptFor({
+    ...run,
+    preflight: coveragePreflight({
+      expectedProviders: manifest.preflight?.expectedProviders,
+      expectedProviderBasis: manifest.preflight?.expectedProviderBasis ?? 'legacy',
+      reports: manifest.providers,
+    }),
+  }, now);
 }
 
 function newBatchRun(
@@ -250,6 +243,8 @@ function newBatchRun(
     startedAt: timestamp,
     updatedAt: timestamp,
     completedAt: null,
+    preflight: manifest.preflight,
+    discoveryRuntime: manifest.preflight?.runtime,
     providers: manifest.providers,
     sources: manifest.sources.map((source): BatchSourceDisposition => ({
       sourceId: source.sourceId,
@@ -323,17 +318,7 @@ async function assertManifestSourceUnchanged(source: DiscoveryManifestSource): P
 }
 
 function adapterFor(provider: DiscoveryManifestSource['provider']): SessionSourceAdapter {
-  if (provider === 'deepseek-harness') return new DeepSeekHarnessSessionAdapter();
-  if (provider === 'omp') return new OmpSessionAdapter();
-  if (provider === 'claude') return new ClaudeSessionAdapter();
-  if (provider === 'codex') return new CodexSessionAdapter();
-  if (provider === 'cursor') return new CursorSessionAdapter();
-  if (provider === 'factory') return new FactorySessionAdapter();
-  if (provider === 'muse') return new MuseSessionAdapter();
-  throw new SessionContractError(
-    'UNSUPPORTED_OPERATION',
-    `batch discovery import is not implemented for ${provider}`,
-  );
+  return createSessionAdapterRegistry().get(provider);
 }
 
 async function sessionSource(
@@ -348,7 +333,7 @@ async function sessionSource(
     providerProfile: providerProfile(selected.provider, selected.locatorClass),
     locatorClass: selected.locatorClass,
     redactedLocator: '<discovered-session-source>',
-    adapterVersion: adapterVersion(selected.provider),
+    adapterVersion: adapter.adapterVersion,
     sourceSchemaVersion: probe.sourceSchemaVersion,
     disposition: 'implemented',
     operationalState: probe.operationalState,
@@ -356,17 +341,6 @@ async function sessionSource(
     authorizedAt: new Date().toISOString(),
     extensions: { [`native.${selected.provider}`]: {} },
   });
-}
-
-function adapterVersion(provider: DiscoveryManifestSource['provider']): string {
-  if (provider === 'deepseek-harness') return DEEPSEEK_HARNESS_ADAPTER_VERSION;
-  if (provider === 'omp') return OMP_ADAPTER_VERSION;
-  if (provider === 'claude') return CLAUDE_ADAPTER_VERSION;
-  if (provider === 'codex') return CODEX_ADAPTER_VERSION;
-  if (provider === 'cursor') return CURSOR_ADAPTER_VERSION;
-  if (provider === 'factory') return FACTORY_ADAPTER_VERSION;
-  if (provider === 'muse') return MUSE_ADAPTER_VERSION;
-  return '1.0.0';
 }
 
 function providerProfile(

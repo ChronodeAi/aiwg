@@ -84,22 +84,52 @@ Pass evidence IDs and limitations to a forensic workflow when needed. Never add
 
 ## Acquire missing history
 
-Only when importing or refreshing history is within the user's requested scope:
+Only when importing or refreshing history is within the user's requested scope,
+establish the expected providers from the authorized request and deployed/provider
+inventory first. The investigator's harness and the running CLI's own `sources`
+list are not the expected-provider inventory. Pass the chosen set explicitly:
 
 ```sh
-aiwg sessions discover --workspace <workspace-path> --dry-run --json
-aiwg sessions discover --workspace <workspace-path> --json
+aiwg sessions sources --expected-providers claude,codex,muse --json
+aiwg sessions discover --workspace <workspace-path> --expected-providers claude,codex,muse --codex-root <authorized-codex-root> --muse-root <authorized-muse-root> --dry-run --json
+aiwg sessions discover --workspace <workspace-path> --expected-providers claude,codex,muse --codex-root <authorized-codex-root> --muse-root <authorized-muse-root> --json
 aiwg sessions import-discovered --workspace <workspace-path> --dry-run --json
 aiwg sessions import-discovered --workspace <workspace-path> --confirm --json
 ```
 
+Inspect `data.preflight` from sources and `manifest.preflight` from discovery:
+expected/supported sets, every ledger disposition, unresolved providers, and the
+actual package version/root, executable, and canonical installation identity.
+If the runtime does not expose this preflight contract, stop the completion claim
+and record its `aiwg version`, executable location and `sessions sources` inventory
+as a runtime capability gap. Never silently drop Muse or another expected provider.
+For missing adapters or installation drift, deliberately select a compatible
+runtime with the operator, or use a supported explicitly authorized export path.
+Do not upgrade, switch installations, or invoke a source checkout implicitly.
+
 Discovery writes a manifest unless dry-run. Shared roots require separately
-established authorization: `--codex-root`, `--omp-root`, or `--dsh-root` as
-applicable. Do not guess those roots or scan the user's whole home. Use
-`sources` and the manifest dispositions for provider-specific supported/export
-paths. Import the saved manifest exactly; changed content requires a fresh
-preview. A missing SQLite runtime has an explicit `features install sqlite`
-remediation; follow it when installation is authorized.
+established authorization: `--codex-root`, `--omp-root`, `--dsh-root`, or
+`--muse-root` as applicable. Do not guess roots or scan the user's whole home.
+Use ledger remediation for provider-specific supported/export paths. Import the
+saved manifest exactly; changed content or provider scope requires fresh discovery.
+A missing SQLite runtime has an explicit `features install sqlite` remediation;
+follow it only when installation is authorized.
+
+Muse native discovery selects matching parent `session.jsonl` files and preserves
+native provenance, retained-frame children and omission diagnostics. It excludes
+nested subagent logs; parent-only acquisition does not establish full session-tree
+or approval-review coverage. Declare this boundary and separately request any
+needed supported exports. Missing authorization, exports, adapters, rejected/empty
+imports, and omitted scope keep acquisition partial. Zero accepted sources is
+not proof of no activity.
+
+Retain the batch receipt and its coverage ledger. Report inventory source counts,
+accepted source/event counts, and semantic review counts separately; the receipt
+marks semantic review `not-assessed`. `coverage.acquisitionStatus` is independent
+of manifest freshness, import success and `doctor` database/index health. An `ok`
+command envelope, a source coverage ratio of 1, or a healthy catalog cannot close
+unresolved provider or session-tree gaps. Legacy receipts without preflight cannot
+establish complete coverage; rediscover with an explicit expected set.
 
 For one authorized export:
 

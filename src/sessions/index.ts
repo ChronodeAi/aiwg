@@ -43,3 +43,6 @@ export * from './adapters/windsurf.js';
 
 export * from './adapters/muse.js';
 export * from './adapters/omp.js';
+
+export * from './adapter-registry.js';
+export * from './coverage-preflight.js';
