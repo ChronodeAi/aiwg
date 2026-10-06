@@ -451,7 +451,7 @@ describe('D17-MF CLI', () => {
 describe('D17-MF sealed D17 source', () => {
   const git = (cwd: string, ...args: string[]) => {
     const result = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', ...args],
-      { cwd, encoding: 'utf8' });
+      { cwd, encoding: 'utf8', timeout: 20_000 });
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   };
