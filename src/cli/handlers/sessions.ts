@@ -55,7 +55,6 @@ import {
   FilesystemPromotionDispositionCoordinator,
   MemoryPromotionGateway,
   SESSION_CONTRACT_VERSION,
-  SESSION_PROVIDER_IDS,
   SessionContractError,
   SessionRepository,
   SessionSourceSchema,
@@ -65,6 +64,9 @@ import {
   acquireImportLease,
   defaultDiscoveryManifestPath,
   discoverWorkspaceHistories,
+  createSessionAdapterRegistry,
+  coveragePreflight,
+  expectedSessionProviders,
   deriveSessionTimeline,
   importDiscoveryManifest,
   previewDiscoveryImport,
@@ -176,6 +178,7 @@ Options:
   --json          Emit the versioned JSON contract
   --dry-run       Preview a mutation without changing state
   --db <path>     Override .aiwg/sessions/catalog.sqlite
+  --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
@@ -272,8 +275,10 @@ async function executeCommand(
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const command = args.command!;
   if (command === 'sources') {
-    const reports = [...SESSION_PROVIDER_IDS].sort().map(providerDisposition);
-    return ok(command, { providers: reports, count: reports.length });
+    const registry = createSessionAdapterRegistry();
+    const reports = registry.list().map((adapter) => providerDisposition(adapter.provider));
+    const preflight = coveragePreflight({ expectedProviders: requestedProviders(args), registry });
+    return ok(command, { providers: reports, count: reports.length, preflight });
   }
   if (command === 'import') return importSource(ctx, args);
   if (command === 'discover') return discoverWorkspace(ctx, args);
@@ -1385,6 +1390,7 @@ async function discoverWorkspace(
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
   const manifest = await discoverWorkspaceHistories({
     workspace,
+    expectedProviders: requestedProviders(args),
     providerHome: args.values.has('--provider-home')
       ? resolve(ctx.cwd, args.values.get('--provider-home')!)
       : undefined,
@@ -1431,6 +1437,11 @@ async function importDiscovered(
       'discovery manifest does not belong to the explicitly authorized workspace',
       EXIT.contract,
     );
+  }
+  const expected = requestedProviders(args);
+  if (expected && JSON.stringify(expected) !== JSON.stringify(manifest.preflight?.expectedProviders)) {
+    throw new SessionContractError('INVALID_ARGUMENT',
+      'expected provider scope differs from the saved manifest; rediscover with --expected-providers');
   }
   const confirmed = args.flags.has('--confirm') || args.flags.has('--yes');
   if (isDryRun(ctx, args) || !confirmed) {
@@ -1811,7 +1822,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
     '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
-    '--inactivity-threshold',
+    '--inactivity-threshold', '--expected-providers',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
     '--out', '--plan', '--input', '--shard-name', '--max-attachment-bytes', '--format', '--grok-bin',
@@ -1835,6 +1846,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { command, positionals, flags, values };
+}
+
+function requestedProviders(args: ParsedArgs): string[] | undefined {
+  const value = args.values.get('--expected-providers');
+  return value === undefined ? undefined : expectedSessionProviders(value.split(','));
 }
 
 function requiredPositional(args: ParsedArgs, index: number, name: string): string {

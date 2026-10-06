@@ -8,6 +8,7 @@ export const packagingFiles = [
   'test/integration/tarball-allowlist-packaging.test.ts',
   'test/integration/dataset-contract-packaging.test.ts',
   'test/integration/sessions-muse-package.test.ts',
+  'test/integration/sessions-coverage-package.test.ts',
   'test/integration/decision-engine-clean-install.test.ts',
 ];
 export const artifactIndexFiles = [

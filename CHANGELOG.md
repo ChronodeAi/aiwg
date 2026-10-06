@@ -18,6 +18,19 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Code 1.4.3 `runtime.session` mode records, which carry an event without a kind;
   before, one such record made the whole session fail with `MALFORMED_SOURCE`.
 
+- Session collection could report complete coverage while silently omitting a
+  provider that the running runtime has no adapter for (#2864). `aiwg sessions
+  sources` and `discover` now return a coverage preflight: the expected provider
+  set (`--expected-providers`, independent of the runtime's own inventory), the
+  supported set, the runtime's package version, root, and installation state, and
+  a per-provider ledger disposition (`missing-adapter`, `export-required`,
+  `authorization-required`, `no-sources`, `scope-incomplete`, `acquired`, and
+  others). Coverage is `complete` only with an explicit expected scope, an aligned
+  runtime, and every expected provider acquired. Muse parent-only discovery stays
+  `scope-incomplete`. A stale runtime gets a remediation and never triggers an
+  automatic upgrade or installation switch. The session-explore acquisition
+  recipe now requires this preflight before a completion claim.
+
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 
 ### Added

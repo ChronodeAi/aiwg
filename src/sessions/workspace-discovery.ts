@@ -5,26 +5,23 @@ import {
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { ClaudeSessionAdapter } from './adapters/claude.js';
-import { CodexSessionAdapter } from './adapters/codex.js';
-import { CursorSessionAdapter } from './adapters/cursor.js';
-import { FactorySessionAdapter } from './adapters/factory.js';
-import {
-  MuseSessionAdapter, inspectMuseNativeWorkspace, type MuseWorkspaceInspection,
-} from './adapters/muse.js';
-import { OmpSessionAdapter, readOmpSessionHeader } from './adapters/omp.js';
+import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adapters/muse.js';
+import { readOmpSessionHeader } from './adapters/omp.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
-import { PiSessionAdapter } from './adapters/pi.js';
-import { DeepSeekHarnessSessionAdapter } from './adapters/deepseek-harness.js';
 import {
   SESSION_PROVIDER_IDS,
+  SessionCoveragePreflightSchema,
+  SessionContractError,
+  type SessionCoveragePreflight,
+  type SessionRuntimeIdentity,
   sha256,
   type AuthorizedScope,
   type SessionProviderId,
-  type SessionSourceAdapter,
   type SourceDescriptor,
 } from './contracts.js';
-import { redactSourceLocator } from './discovery.js';
+import { redactSourceLocator, type SessionSourceAdapterRegistry } from './discovery.js';
+import { createSessionAdapterRegistry } from './adapter-registry.js';
+import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
 import { fingerprintSourceFile } from './readers.js';
 
 export const DISCOVERY_MANIFEST_VERSION = '1.0.0' as const;
@@ -48,7 +45,7 @@ export interface DiscoveryManifestSource {
 }
 
 export interface DiscoveryProviderReport {
-  provider: SessionProviderId;
+  provider: string;
   status: DiscoveryProviderStatus;
   disposition: 'discoverable' | 'manual-export' | 'unsupported';
   sourceCount: number;
@@ -68,12 +65,16 @@ export interface SessionDiscoveryManifest {
   createdAt: string;
   workspaceId: string;
   workspacePath: string;
+  preflight?: SessionCoveragePreflight;
   providers: DiscoveryProviderReport[];
   sources: DiscoveryManifestSource[];
 }
 
 export interface DiscoverWorkspaceOptions {
   workspace: string;
+  expectedProviders?: readonly string[];
+  registry?: SessionSourceAdapterRegistry;
+  runtime?: SessionRuntimeIdentity;
   providerHome?: string;
   operatorHome?: string;
   codexRoot?: string;
@@ -85,7 +86,6 @@ export interface DiscoverWorkspaceOptions {
 
 interface DiscoverableProvider {
   provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse';
-  adapter: SessionSourceAdapter;
   roots: string[];
 }
 
@@ -97,30 +97,31 @@ const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
 export async function discoverWorkspaceHistories(
   options: DiscoverWorkspaceOptions,
 ): Promise<SessionDiscoveryManifest> {
+  const registry = options.registry ?? createSessionAdapterRegistry();
+  const expectedProviders = expectedSessionProviders(options.expectedProviders ?? SESSION_PROVIDER_IDS);
+  const supportedProviders = new Set(registry.list().map((adapter) => adapter.provider));
   const workspacePath = await canonicalPath(options.workspace);
   const workspaceId = workspacePath;
   const providerHomes = providerHomeCandidates(options.providerHome, options.operatorHome);
   const keyWithLeadingDash = workspaceKey(workspacePath, true);
   const keyWithoutLeadingDash = workspaceKey(workspacePath, false);
   const discoverable: DiscoverableProvider[] = [
-    { provider: 'deepseek-harness', adapter: new DeepSeekHarnessSessionAdapter(), roots: options.dshRoot
+    { provider: 'deepseek-harness', roots: options.dshRoot
       ? [resolve(options.dshRoot)] : options.providerHome
         ? [join(resolve(options.providerHome), '.dsh', 'sessions')] : [] },
-    { provider: 'omp', adapter: new OmpSessionAdapter(), roots: options.ompRoot
+    { provider: 'omp', roots: options.ompRoot
       ? [resolve(options.ompRoot)] : options.providerHome
         ? [resolveOmpPaths({ home: resolve(options.providerHome), cwd: workspacePath }).sessionsDir] : [] },
-    { provider: 'muse', adapter: new MuseSessionAdapter(), roots: options.museRoot
+    { provider: 'muse', roots: options.museRoot
       ? [resolve(options.museRoot)] : [] },
     {
       provider: 'claude',
-      adapter: new ClaudeSessionAdapter(),
       roots: providerHomes.map(
         (providerHome) => join(providerHome, '.claude', 'projects', keyWithLeadingDash),
       ),
     },
     {
       provider: 'codex',
-      adapter: new CodexSessionAdapter(),
       roots: options.codexRoot
         ? [resolve(options.codexRoot)]
         : options.providerHome
@@ -129,7 +130,6 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'cursor',
-      adapter: new CursorSessionAdapter(),
       roots: providerHomes.map(
         (providerHome) =>
           join(providerHome, '.cursor', 'projects', keyWithoutLeadingDash, 'agent-transcripts'),
@@ -137,7 +137,6 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'factory',
-      adapter: new FactorySessionAdapter(),
       roots: providerHomes.flatMap((providerHome) => [
         join(providerHome, '.factory', 'projects', keyWithLeadingDash),
         join(providerHome, '.factory', 'sessions', keyWithLeadingDash),
@@ -145,7 +144,6 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'pi',
-      adapter: new PiSessionAdapter(),
       roots: options.providerHome
         ? [process.env.PI_CODING_AGENT_SESSION_DIR
           ? resolve(process.env.PI_CODING_AGENT_SESSION_DIR)
@@ -154,10 +152,13 @@ export async function discoverWorkspaceHistories(
     },
   ];
 
-  const reports = new Map<SessionProviderId, DiscoveryProviderReport>();
+  const reports = new Map<string, DiscoveryProviderReport>();
   const candidates: DiscoveryManifestSource[] = [];
   const seen = new Set<string>();
   for (const entry of discoverable) {
+    if (!expectedProviders.includes(entry.provider) || !supportedProviders.has(entry.provider)) continue;
+    const adapter = registry.get(entry.provider);
+    if (adapter.disposition === 'unsupported' || !adapter.supportedOperations.includes('discover')) continue;
     const availableRoots = [];
     for (const root of entry.roots) {
       if (await pathExists(root)) availableRoots.push(await canonicalPath(root));
@@ -175,7 +176,7 @@ export async function discoverWorkspaceHistories(
           ? 'SHARED_ROOT_AUTHORIZATION_REQUIRED'
           : 'PROVIDER_ROOT_UNAVAILABLE',
         codexNeedsAuthorization
-          ? `Pass --${entry.provider}-root with an explicitly authorized sessions root.`
+          ? `Pass --${entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider}-root with an explicitly authorized sessions root.`
           : `No authorized ${entry.provider} workspace history root was found.`,
       ));
       continue;
@@ -186,7 +187,7 @@ export async function discoverWorkspaceHistories(
     };
     const providerSources: DiscoveryManifestSource[] = [];
     const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
-    for await (const descriptor of entry.adapter.discover(scope)) {
+    for await (const descriptor of adapter.discover(scope)) {
       if (entry.provider === 'muse') {
         const inspection = await inspectMuseNativeWorkspace({
           ...descriptor,
@@ -252,9 +253,14 @@ export async function discoverWorkspaceHistories(
     reports.set(entry.provider, report);
   }
 
-  for (const provider of SESSION_PROVIDER_IDS) {
+  for (const provider of expectedProviders) {
     if (reports.has(provider)) continue;
-    const manual = MANUAL_EXPORT_PROVIDERS.has(provider);
+    const manual = MANUAL_EXPORT_PROVIDERS.has(provider as SessionProviderId);
+    if (!supportedProviders.has(provider as SessionProviderId)) {
+      reports.set(provider, providerReport(provider, 'not-checked', 'unsupported', [],
+        'MISSING_ADAPTER', 'Deliberately select a compatible runtime or an authorized supported export.'));
+      continue;
+    }
     const grokBuild = provider === 'grok-build';
     reports.set(provider, providerReport(
       provider,
@@ -273,9 +279,14 @@ export async function discoverWorkspaceHistories(
 
   const sources = candidates.sort(compareSources);
   const providers = [...reports.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+  const preflight = coveragePreflight({
+    expectedProviders, expectedProviderBasis: options.expectedProviders ? 'explicit' : 'declared-default',
+    registry, runtime: options.runtime, reports: providers,
+  });
   const identity = {
     schemaVersion: DISCOVERY_MANIFEST_VERSION,
     workspaceId,
+    preflight,
     sources: sources.map((source) => ({
       sourceId: source.sourceId,
       provider: source.provider,
@@ -298,6 +309,7 @@ export async function discoverWorkspaceHistories(
     createdAt: options.createdAt ?? new Date().toISOString(),
     workspaceId,
     workspacePath,
+    preflight,
     providers,
     sources,
   };
@@ -326,6 +338,10 @@ export async function readDiscoveryManifest(path: string): Promise<SessionDiscov
     || !Array.isArray(value.sources)) {
     throw new Error('session discovery manifest is malformed or unsupported');
   }
+  if (value.preflight) {
+    const parsed = SessionCoveragePreflightSchema.safeParse(value.preflight);
+    if (!parsed.success) throw new SessionContractError('INVALID_ARGUMENT', 'invalid discovery coverage preflight');
+  }
   const expected = await rediscoverManifestIdentity(value);
   if (expected !== value.manifestId) {
     throw new Error('session discovery manifest identity does not match its contents');
@@ -340,6 +356,7 @@ export function publicDiscoveryManifest(manifest: SessionDiscoveryManifest): Rec
     createdAt: manifest.createdAt,
     workspaceId: manifest.workspaceId,
     workspacePath: manifest.workspacePath,
+    preflight: manifest.preflight,
     providers: manifest.providers,
     sources: manifest.sources.map(({ locator: _locator, authorizedRoot: _root, ...source }) => source),
     totals: {
@@ -372,7 +389,7 @@ function sourceFromDescriptor(
 }
 
 function providerReport(
-  provider: SessionProviderId,
+  provider: string,
   status: DiscoveryProviderStatus,
   disposition: DiscoveryProviderReport['disposition'],
   sources: DiscoveryManifestSource[],
@@ -399,6 +416,7 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
   const identity = {
     schemaVersion: manifest.schemaVersion,
     workspaceId: manifest.workspaceId,
+    ...(manifest.preflight ? { preflight: manifest.preflight } : {}),
     sources: manifest.sources.map((source) => ({
       sourceId: source.sourceId,
       provider: source.provider,
