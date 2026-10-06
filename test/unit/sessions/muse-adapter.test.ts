@@ -159,6 +159,28 @@ describe('Muse Code session adapter', () => {
     expect(events.map((event) => event.kind)).not.toContain('omitted_record');
   });
 
+  it('streams Muse Code 1.4.3 runtime.session mode events that carry no event kind', async () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'aiwg-muse-modeless-'));
+    temporaryRoots.push(root);
+    const sessionRoot = resolve(root, '2026/09/25/00000000-0000-4000-8000-000000000003');
+    mkdirSync(sessionRoot, { recursive: true });
+    const locator = resolve(sessionRoot, 'session.jsonl');
+    const base = {
+      schema_version: 1,
+      stream: { kind: 'session', id: '00000000-0000-4000-8000-000000000003' },
+      recorded_at: 1790222400000000,
+      durability: 'durable',
+      payload_schema_version: 1,
+    };
+    writeFileSync(locator, [
+      { ...base, id: 'meta', sequence: 0, record_type: 'runtime.session.metadata', payload_type: 'runtime.session', payload: { kind: 'metadata', record: { workspace_root: root } } },
+      { ...base, id: 'mode', sequence: 1, record_type: 'event', payload_type: 'runtime.session', payload: { event: { approval: 'never', effective_mode: 'auto', sandbox: 'workspace-write', source: 'startup' } } },
+    ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+    const events = await collect(adapter.stream(selectedPath(locator, 'muse-native-modeless', root)));
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ kind: 'runtime.session', rawReference: { sequence: 1 } });
+  });
+
   it('fails closed for malformed native JSONL lines', async () => {
     const root = mkdtempSync(resolve(tmpdir(), 'aiwg-muse-malformed-'));
     temporaryRoots.push(root);

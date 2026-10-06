@@ -45,6 +45,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
   SessionContractError,
+  SessionErrorCodeSchema,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
   type ImportCursor,
@@ -60,6 +61,11 @@ import {
   type BoundedJsonRecord,
   type ReaderLimits,
 } from '../readers.js';
+import {
+  MUSE_WORKSPACE_SCAN_LIMITS,
+  museWorkspaceScanLines,
+  parseMuseScanJson,
+} from './muse-workspace-scan.js';
 
 export const MUSE_ADAPTER_VERSION = '1.0.0';
 export const MUSE_EXPORT_SCHEMA_VERSION = '1.0.0';
@@ -102,7 +108,9 @@ const MuseEnvelopeSchema = z.object({
   durability: z.string().optional(),
   payload_type: z.string().optional(),
   payload: z.object({
-    event: z.object({ kind: z.string().min(1) }).passthrough().optional(),
+    // Muse Code 1.4.3 runtime.session mode records carry an event without a
+    // kind; eventKindOf() falls back to payload_type for those.
+    event: z.object({ kind: z.string().min(1).optional() }).passthrough().optional(),
   }).passthrough().optional(),
 }).passthrough();
 
@@ -582,43 +590,100 @@ async function* museNativeSessionLogs(root: string): AsyncGenerator<string> {
   }
 }
 
+export const MuseWorkspaceInspectionSchema = z.object({
+  outcome: z.enum(['matched', 'mismatch', 'inconclusive']),
+  reasonCode: z.string().nullable(),
+  recordsInspected: z.number().int().nonnegative(),
+  bytesInspected: z.number().int().nonnegative(),
+  completeInspection: z.boolean(),
+});
+
+export type MuseWorkspaceInspection = z.infer<typeof MuseWorkspaceInspectionSchema>;
+
+/** Positive metadata evidence selects a source; import validates its full history. */
+export async function inspectMuseNativeWorkspace(
+  source: SelectedSource,
+  workspacePath: string,
+  limitsInput?: Partial<ReaderLimits>,
+): Promise<MuseWorkspaceInspection> {
+  const limits = { ...MUSE_WORKSPACE_SCAN_LIMITS, ...limitsInput };
+  const progress = { recordsInspected: 0, bytesInspected: 0 };
+  let sawWorkspaceEvidence = false;
+  let retainedChildren = 0;
+  const receipt = (
+    outcome: MuseWorkspaceInspection['outcome'],
+    reasonCode: string | null,
+    completeInspection = false,
+  ): MuseWorkspaceInspection => ({ outcome, reasonCode, ...progress, completeInspection });
+  try {
+    if (Object.values(limits).some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
+      throw new SessionContractError('INVALID_ARGUMENT', 'Muse inspection limits must be positive safe integers');
+    }
+    for await (const value of museWorkspaceScanLines(
+      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+      limits,
+      progress,
+    )) {
+      const envelopes = nativeEnvelopesFromLine(value, limits, (count) => {
+        retainedChildren += count;
+        if (retainedChildren > limits.maxRecords) {
+          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection limit exceeded');
+        }
+      });
+      for (const envelope of envelopes) {
+        const candidate = workspaceEvidenceOf(envelope);
+        if (!candidate) continue;
+        sawWorkspaceEvidence = true;
+        if (workspacePathEquals(candidate, workspacePath)) return receipt('matched', null);
+      }
+    }
+    return sawWorkspaceEvidence
+      ? receipt('mismatch', 'MUSE_WORKSPACE_MISMATCH', true)
+      : receipt('inconclusive', 'MUSE_WORKSPACE_EVIDENCE_ABSENT', true);
+  } catch (error) {
+    return receipt('inconclusive', error instanceof SessionContractError
+      ? error.code : 'MUSE_SOURCE_UNREADABLE');
+  }
+}
+
 export async function museNativeSourceMatchesWorkspace(
   source: SelectedSource,
   workspacePath: string,
 ): Promise<boolean> {
-  let input;
-  try {
-    input = await readBoundedJsonLines(
-      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
-      { consistency: 'complete', limits: { maxRecords: 100, maxRecordBytes: 8 * 1024 * 1024 } },
-    );
-  } catch {
-    return false;
+  const result = await inspectMuseNativeWorkspace(source, workspacePath);
+  if (result.outcome === 'inconclusive') {
+    const code = SessionErrorCodeSchema.safeParse(result.reasonCode);
+    throw new SessionContractError(code.success ? code.data : 'SCHEMA_DRIFT',
+      `Muse workspace inspection inconclusive: ${result.reasonCode}`);
   }
-  for (const line of input.records) {
-    for (const envelope of nativeEnvelopesFromLine(line.value)) {
-      const candidate = workspaceEvidenceOf(envelope);
-      if (!candidate) continue;
-      if (workspacePathEquals(candidate, workspacePath)) return true;
-    }
-  }
-  return false;
+  return result.outcome === 'matched';
 }
 
-function nativeEnvelopesFromLine(value: unknown): MuseEnvelope[] {
+function nativeEnvelopesFromLine(
+  value: unknown,
+  limits: ReaderLimits,
+  countChildren: (count: number) => void,
+): MuseEnvelope[] {
   if (isOmissionMarker(value)) return [];
-  const event = recordEventFromEnvelope(value);
-  if (event) return [event.envelope];
   const retained = MuseRetainedFrameSchema.safeParse(value);
-  if (!retained.success) return [];
+  if (!retained.success) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new SessionContractError('MALFORMED_SOURCE', 'Muse inspection encountered a non-object native record');
+    }
+    // Native logs carry record kinds the envelope schema does not model (for
+    // example runtime.session mode changes without payload.event.kind). They
+    // hold no workspace evidence, so skip them rather than fail the source.
+    const event = recordEventFromEnvelope(value);
+    return event ? [event.envelope] : [];
+  }
+  countChildren(retained.data.children.length);
   const envelopes: MuseEnvelope[] = [];
   for (const child of retained.data.children) {
-    try {
-      const childEvent = recordEventFromEnvelope(JSON.parse(child.record_json));
-      if (childEvent) envelopes.push(childEvent.envelope);
-    } catch {
-      return [];
+    if (Buffer.byteLength(child.record_json) > limits.maxRecordBytes) {
+      throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Muse retained child inspection byte limit exceeded');
     }
+    const childEvent = recordEventFromEnvelope(parseMuseScanJson(child.record_json, limits.maxNestingDepth));
+    if (childEvent) envelopes.push(childEvent.envelope);
   }
   return envelopes;
 }
