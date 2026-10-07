@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "roleGuidance": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/workerRole"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      }
+    },
+    "guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deniedEfforts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": [
+            "ultra"
+          ]
+        },
+        "deniedModels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "denySelfDelegation": {
+          "type": "boolean",
+          "default": true
+        },
+        "requireExactModel": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowedVisibility": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "listed",
+              "hidden"
+            ]
+          },
+          "default": [
+            "listed"
+          ]
+        },
+        "allowedLifecycle": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "active",
+              "deprecated"
+            ]
+          },
+          "default": [
+            "active"
+          ]
+        },
+        "minimumIdentityEvidence": {
+          "enum": [
+            "runtime-configured",
+            "backend-attested"
+          ],
+          "default": "runtime-configured"
+        }
+      }
+    },
+    "dataPolicy": {
+      "$ref": "#/$defs/workerDataPolicy"
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "warnHours": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 24
+        },
+        "blockHours": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 168
+        },
+        "policyDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30
+        }
+      }
+    },
+    "taskClasses": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "dataClasses": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/workerDataPolicy"
+      }
+    }
+  },
+  "$defs": {
+    "workerRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "tier": {
+          "enum": [
+            "economy",
+            "standard",
+            "premium",
+            "max-quality"
+          ]
+        },
+        "initialEffort": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "effortLadder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "escalateAfter": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "maxEscalations": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "deescalateAfter": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "allowNotApplicableEffort": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "groups",
+        "tier",
+        "initialEffort",
+        "effortLadder"
+      ]
+    },
+    "workerDataPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedProcessing": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "local",
+              "remote"
+            ]
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": [
+            "local",
+            "remote"
+          ]
+        },
+        "allowProductImprovement": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowUnknown": {
+          "type": "boolean",
+          "default": false
+        },
+        "maxRetentionDays": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

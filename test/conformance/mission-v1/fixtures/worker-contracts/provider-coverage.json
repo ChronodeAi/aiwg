@@ -1,0 +1,214 @@
+{
+  "revision": 1,
+  "source": "03-software-architecture.md §10 (2026-10-07); evidence is contract-only",
+  "rows": [
+    {
+      "provider": "claude",
+      "owner": "B-OG-28",
+      "scope": "IN",
+      "nativeMcp": "coding-tools-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "codex",
+      "owner": "B-OG-07",
+      "scope": "IN",
+      "nativeMcp": "version-blocked",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "copilot",
+      "owner": "B-OG-36",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "factory",
+      "owner": "B-OG-37",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "cursor",
+      "owner": "B-OG-38",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "opencode",
+      "owner": "B-OG-39",
+      "scope": "IN",
+      "nativeMcp": "http-not-mcp",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "warp",
+      "owner": "B-OG-40",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "grok-build",
+      "owner": "B-OG-41",
+      "scope": "IN",
+      "nativeMcp": "acp-not-mcp",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "hermes",
+      "owner": "B-OG-48",
+      "scope": "IN",
+      "nativeMcp": "conversation-tools-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "muse",
+      "owner": "B-OG-08",
+      "scope": "IN",
+      "nativeMcp": "msp-not-mcp",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "openclaw",
+      "owner": "B-OG-42",
+      "scope": "IN",
+      "nativeMcp": "no-verified-worker-tool",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "antigravity",
+      "owner": "B-OG-43",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "deepseek-harness",
+      "owner": "B-OG-44",
+      "scope": "IN",
+      "nativeMcp": "client-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "pi",
+      "owner": "B-OG-45",
+      "scope": "IN",
+      "nativeMcp": "rpc-not-mcp",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "omp",
+      "owner": "B-OG-45",
+      "scope": "IN",
+      "nativeMcp": "rpc-not-mcp",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "windsurf",
+      "owner": "B-OG-47",
+      "scope": "OUT",
+      "nativeMcp": "no-headless-evidence",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "grokbot",
+      "owner": "B-OG-47",
+      "scope": "OUT",
+      "nativeMcp": "desktop-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "openhuman",
+      "owner": "B-OG-47",
+      "scope": "OUT",
+      "nativeMcp": "prompt-inspection-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "generic",
+      "owner": "B-OG-47",
+      "scope": "OUT",
+      "nativeMcp": "deployment-fallback-only",
+      "qualification": "unqualified",
+      "kind": "deployment-provider",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    },
+    {
+      "provider": "local-text",
+      "owner": "B-OG-09",
+      "scope": "IN",
+      "nativeMcp": "bounded-http-bridge",
+      "qualification": "unqualified",
+      "kind": "worker-adapter",
+      "consumer": "models resolve / worker-resolve / worker-invoke"
+    }
+  ],
+  "inferenceProviders": [
+    "openai",
+    "local"
+  ],
+  "readiness": {
+    "directRequires": [
+      "model-policy",
+      "qualified-profile",
+      "applicable-controls",
+      "conductor-verification"
+    ],
+    "directDoesNotRequire": [
+      "mission",
+      "mc-session",
+      "daemon",
+      "executor-registry",
+      "admission",
+      "activation-marker",
+      "receipt-file"
+    ],
+    "managedAdditionallyRequires": [
+      "activation-marker",
+      "admission",
+      "runner",
+      "lease",
+      "evidence"
+    ]
+  }
+}

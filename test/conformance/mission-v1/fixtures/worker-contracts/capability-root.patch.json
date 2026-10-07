@@ -1,0 +1,20 @@
+{
+  "properties": {
+    "workerAdapters": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/workerAdapter"
+      }
+    },
+    "$schema": {
+      "enum": [
+        "../../../schemas/models/provider-model-capabilities.v1.schema.json",
+        "https://aiwg.io/schemas/models/provider-model-capabilities.v1.schema.json"
+      ]
+    }
+  }
+}

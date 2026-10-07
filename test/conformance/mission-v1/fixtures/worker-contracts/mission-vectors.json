@@ -1,0 +1,1327 @@
+[
+  {
+    "id": "intent-unresolved",
+    "definition": "workerSelectionIntent",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "taskId": "t1",
+      "requestId": "r1",
+      "parent": {
+        "kind": "mission",
+        "id": "m1"
+      },
+      "objective": "Summarize the supplied synthetic text",
+      "taskClass": "synthesis",
+      "role": "efficiency",
+      "inputs": [
+        {
+          "ref": "artifact:fixture",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "ownership": [],
+      "requiredTools": [],
+      "dataClass": "local-only",
+      "group": "synthesis",
+      "pins": {},
+      "allowFallback": false,
+      "limits": {
+        "tokens": 1000,
+        "costUsd": null,
+        "wallSeconds": 60,
+        "maxAttempts": 1
+      },
+      "acceptance": [
+        {
+          "id": "AC1",
+          "criterion": "Summary cites supplied facts",
+          "checkRef": "protected:summary"
+        }
+      ],
+      "verification": {
+        "runnerRef": "local-verifier",
+        "independentReview": "advisory",
+        "differentFamily": "prefer"
+      }
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "brief-admitted",
+    "definition": "workerBrief",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "invocationId": "i1",
+      "intent": {
+        "version": 1,
+        "taskId": "t1",
+        "requestId": "r1",
+        "parent": {
+          "kind": "mission",
+          "id": "m1"
+        },
+        "objective": "Summarize the supplied synthetic text",
+        "taskClass": "synthesis",
+        "role": "efficiency",
+        "inputs": [
+          {
+            "ref": "artifact:fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "ownership": [],
+        "requiredTools": [],
+        "dataClass": "local-only",
+        "group": "synthesis",
+        "pins": {},
+        "allowFallback": false,
+        "limits": {
+          "tokens": 1000,
+          "costUsd": null,
+          "wallSeconds": 60,
+          "maxAttempts": 1
+        },
+        "acceptance": [
+          {
+            "id": "AC1",
+            "criterion": "Summary cites supplied facts",
+            "checkRef": "protected:summary"
+          }
+        ],
+        "verification": {
+          "runnerRef": "local-verifier",
+          "independentReview": "advisory",
+          "differentFamily": "prefer"
+        }
+      },
+      "intentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "policyDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selected": {
+        "group": "synthesis",
+        "member": "local",
+        "cli": "local-text",
+        "model": "fixture-text:q4",
+        "inferenceProvider": "local",
+        "family": "fixture",
+        "effort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "profileRef": "local-text-runner",
+        "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "lease": {
+        "authorityRef": "project",
+        "generation": 1,
+        "reservationId": "lease1"
+      },
+      "workspace": {
+        "path": "/fixture/snapshot",
+        "baseRevision": null
+      },
+      "authorizationRefs": [],
+      "delegationAllowance": 0,
+      "output": {
+        "schemaRef": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerClaims",
+        "resultPath": "result.json"
+      }
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "claims-only",
+    "definition": "workerClaims",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "status": "completed",
+      "summary": "Synthetic fixture summary",
+      "claims": [],
+      "artifacts": [],
+      "checks": [],
+      "limitations": []
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "assembled-pending",
+    "definition": "workerResult",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "taskId": "t1",
+      "invocationId": "i1",
+      "briefDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "execution": {
+        "status": "completed",
+        "exitCode": 0,
+        "requested": {
+          "group": "synthesis",
+          "member": "local",
+          "cli": "local-text",
+          "model": "fixture-text:q4",
+          "inferenceProvider": "local",
+          "family": "fixture",
+          "effort": {
+            "support": "not-applicable",
+            "value": null
+          },
+          "profileRef": "local-text-runner",
+          "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "observedModel": "fixture-text:q4",
+        "observedFamily": "fixture",
+        "observedEffort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "identityEvidence": [
+          {
+            "ref": "artifact:fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "identityQuality": "backend-attested",
+        "startedAt": "2026-10-06T00:00:00Z",
+        "endedAt": "2026-10-06T00:00:01Z",
+        "termination": "confirmed",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 10,
+          "cacheTokens": null,
+          "reasoningTokens": null,
+          "costUsd": null,
+          "quality": "reported",
+          "reservedTokens": 1000,
+          "reservedUsd": null
+        },
+        "failure": null
+      },
+      "worker": {
+        "version": 1,
+        "status": "completed",
+        "summary": "Synthetic fixture summary",
+        "claims": [],
+        "artifacts": [],
+        "checks": [],
+        "limitations": []
+      },
+      "verification": {
+        "status": "pending",
+        "verifierId": null,
+        "runnerRef": null,
+        "artifactDigest": null,
+        "evidence": [],
+        "findings": []
+      }
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "dispatch-roundtrip",
+    "definition": "workerDispatch",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "requiredFeatures": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "taskId": "t1",
+      "requestId": "r1",
+      "invocationId": "i1",
+      "state": "completed",
+      "intent": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "brief": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "result": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "previousRecord": null
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "forged-worker-verification",
+    "definition": "workerClaims",
+    "valid": false,
+    "value": {
+      "version": 1,
+      "status": "completed",
+      "summary": "Synthetic fixture summary",
+      "claims": [],
+      "artifacts": [],
+      "checks": [],
+      "limitations": [],
+      "verification": {
+        "status": "accepted"
+      }
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "absent-effort-not-literal-none",
+    "definition": "workerEffort",
+    "valid": false,
+    "value": {
+      "support": "not-applicable",
+      "value": "none"
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "unknown-required-feature",
+    "definition": "workerDispatch",
+    "valid": false,
+    "value": {
+      "version": 1,
+      "requiredFeatures": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1",
+        "worker.future.v2"
+      ],
+      "taskId": "t1",
+      "requestId": "r1",
+      "invocationId": "i1",
+      "state": "completed",
+      "intent": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "brief": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "result": {
+        "ref": "artifact:fixture",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "previousRecord": null
+    },
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "direct-intent-no-parent",
+    "definition": "workerDirectIntent",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "taskId": "t1",
+      "requestId": "r1",
+      "objective": "Summarize the supplied synthetic text",
+      "taskClass": "synthesis",
+      "role": "efficiency",
+      "inputs": [
+        {
+          "ref": "artifact:fixture",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "ownership": [],
+      "requiredTools": [],
+      "dataClass": "local-only",
+      "group": "synthesis",
+      "pins": {},
+      "allowFallback": false,
+      "limits": {
+        "tokens": 1000,
+        "costUsd": null,
+        "wallSeconds": 60,
+        "maxAttempts": 1
+      },
+      "acceptance": [
+        {
+          "id": "AC1",
+          "criterion": "Summary cites supplied facts",
+          "checkRef": "protected:summary"
+        }
+      ],
+      "verification": {
+        "runnerRef": null,
+        "independentReview": "advisory",
+        "differentFamily": "prefer",
+        "controlledContext": "conductor-owned isolated verification context"
+      }
+    },
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "direct-brief-no-lease",
+    "definition": "workerDirectBrief",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "invocationId": "i1",
+      "intent": {
+        "version": 1,
+        "taskId": "t1",
+        "requestId": "r1",
+        "objective": "Summarize the supplied synthetic text",
+        "taskClass": "synthesis",
+        "role": "efficiency",
+        "inputs": [
+          {
+            "ref": "artifact:fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "ownership": [],
+        "requiredTools": [],
+        "dataClass": "local-only",
+        "group": "synthesis",
+        "pins": {},
+        "allowFallback": false,
+        "limits": {
+          "tokens": 1000,
+          "costUsd": null,
+          "wallSeconds": 60,
+          "maxAttempts": 1
+        },
+        "acceptance": [
+          {
+            "id": "AC1",
+            "criterion": "Summary cites supplied facts",
+            "checkRef": "protected:summary"
+          }
+        ],
+        "verification": {
+          "runnerRef": null,
+          "independentReview": "advisory",
+          "differentFamily": "prefer",
+          "controlledContext": "conductor-owned isolated verification context"
+        }
+      },
+      "intentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "policyDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selected": {
+        "group": "synthesis",
+        "member": "local",
+        "cli": "local-text",
+        "model": "fixture-text:q4",
+        "inferenceProvider": "local",
+        "family": "fixture",
+        "effort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "profileRef": "local-text-runner",
+        "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "workspace": {
+        "path": "/fixture/snapshot",
+        "baseRevision": null
+      },
+      "authorizationRefs": [],
+      "delegationAllowance": 0,
+      "output": {
+        "schemaRef": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerClaims",
+        "resultPath": "result.json"
+      },
+      "mode": "direct"
+    },
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "direct-pending",
+    "definition": "workerDirectResult",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "taskId": "t1",
+      "invocationId": "i1",
+      "briefDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "execution": {
+        "status": "completed",
+        "exitCode": 0,
+        "requested": {
+          "group": "synthesis",
+          "member": "local",
+          "cli": "local-text",
+          "model": "fixture-text:q4",
+          "inferenceProvider": "local",
+          "family": "fixture",
+          "effort": {
+            "support": "not-applicable",
+            "value": null
+          },
+          "profileRef": "local-text-runner",
+          "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "observedModel": "fixture-text:q4",
+        "observedFamily": "fixture",
+        "observedEffort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "identityEvidence": [
+          {
+            "ref": "artifact:fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "identityQuality": "backend-attested",
+        "startedAt": "2026-10-06T00:00:00Z",
+        "endedAt": "2026-10-06T00:00:01Z",
+        "termination": "confirmed",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 10,
+          "cacheTokens": null,
+          "reasoningTokens": null,
+          "costUsd": null,
+          "quality": "reported",
+          "reservedTokens": 1000,
+          "reservedUsd": null
+        },
+        "failure": null
+      },
+      "worker": {
+        "version": 1,
+        "status": "completed",
+        "summary": "Synthetic fixture summary",
+        "claims": [],
+        "artifacts": [],
+        "checks": [],
+        "limitations": []
+      },
+      "verification": {
+        "status": "pending",
+        "verifierId": null,
+        "runnerRef": null,
+        "artifactDigest": null,
+        "evidence": [],
+        "findings": [],
+        "controlledContext": null
+      },
+      "mode": "direct"
+    },
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "direct-accepted-no-receipt",
+    "definition": "workerDirectResult",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "taskId": "t1",
+      "invocationId": "i1",
+      "briefDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "execution": {
+        "status": "completed",
+        "exitCode": 0,
+        "requested": {
+          "group": "synthesis",
+          "member": "local",
+          "cli": "local-text",
+          "model": "fixture-text:q4",
+          "inferenceProvider": "local",
+          "family": "fixture",
+          "effort": {
+            "support": "not-applicable",
+            "value": null
+          },
+          "profileRef": "local-text-runner",
+          "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "observedModel": "fixture-text:q4",
+        "observedFamily": "fixture",
+        "observedEffort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "identityEvidence": [
+          {
+            "ref": "artifact:fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "identityQuality": "backend-attested",
+        "startedAt": "2026-10-06T00:00:00Z",
+        "endedAt": "2026-10-06T00:00:01Z",
+        "termination": "confirmed",
+        "usage": {
+          "inputTokens": 10,
+          "outputTokens": 10,
+          "cacheTokens": null,
+          "reasoningTokens": null,
+          "costUsd": null,
+          "quality": "reported",
+          "reservedTokens": 1000,
+          "reservedUsd": null
+        },
+        "failure": null
+      },
+      "worker": {
+        "version": 1,
+        "status": "completed",
+        "summary": "Synthetic fixture summary",
+        "claims": [],
+        "artifacts": [],
+        "checks": [],
+        "limitations": []
+      },
+      "verification": {
+        "status": "accepted",
+        "verifierId": "fixture-conductor",
+        "runnerRef": null,
+        "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "findings": [
+          "Protected synthetic summary check passed"
+        ],
+        "controlledContext": "conductor-owned isolated verification context"
+      },
+      "mode": "direct"
+    },
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "resolved-shell",
+    "definition": "workerResolvedInvocation",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "mode": "direct",
+      "transport": "shell",
+      "selected": {
+        "group": "synthesis",
+        "member": "local",
+        "cli": "local-text",
+        "model": "fixture-text:q4",
+        "inferenceProvider": "local",
+        "family": "fixture",
+        "effort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "profileRef": "local-text-runner",
+        "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "policyDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profileDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expiresAt": "2026-10-07T00:10:00Z",
+      "readiness": "launchable",
+      "briefDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "limits": {
+        "tokens": 1000,
+        "costUsd": null,
+        "wallSeconds": 60,
+        "maxAttempts": 1
+      },
+      "maxOutputBytes": 65536,
+      "effectiveCaps": {
+        "project": 2,
+        "group": 1
+      },
+      "controlEvidence": [
+        "fixture:synthetic-profile-v1"
+      ],
+      "argv": [
+        "/fixture/bin/worker",
+        "--model",
+        "fixture-text:q4",
+        "--final-output",
+        "/fixture/final.json",
+        "--",
+        "quotes ' \" spaces 雪\n--leading-dash $(touch /fixture/never)"
+      ],
+      "cwd": "/fixture/tree with spaces",
+      "stdin": "brief-text",
+      "briefPath": "/fixture/brief 雪.md",
+      "stdoutPath": "/fixture/events.jsonl",
+      "stderrPath": "/fixture/errors.log",
+      "finalPath": "/fixture/final.json",
+      "envNames": [
+        "PATH"
+      ],
+      "shellCommand": "cd '/fixture/tree with spaces' && '/fixture/bin/worker' '--model' 'fixture-text:q4' '--final-output' '/fixture/final.json' '--' 'quotes '\"'\"' \" spaces 雪\n--leading-dash $(touch /fixture/never)' < '/fixture/brief 雪.md' > '/fixture/events.jsonl' 2> '/fixture/errors.log'"
+    },
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "resolved-mcp",
+    "definition": "workerResolvedInvocation",
+    "valid": true,
+    "value": {
+      "version": 1,
+      "mode": "direct",
+      "transport": "mcp",
+      "selected": {
+        "group": "synthesis",
+        "member": "local",
+        "cli": "local-text",
+        "model": "fixture-text:q4",
+        "inferenceProvider": "local",
+        "family": "fixture",
+        "effort": {
+          "support": "not-applicable",
+          "value": null
+        },
+        "profileRef": "local-text-runner",
+        "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "policyDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profileDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expiresAt": "2026-10-07T00:10:00Z",
+      "readiness": "launchable",
+      "briefDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "limits": {
+        "tokens": 1000,
+        "costUsd": null,
+        "wallSeconds": 60,
+        "maxAttempts": 1
+      },
+      "maxOutputBytes": 65536,
+      "effectiveCaps": {
+        "project": 2,
+        "group": 1
+      },
+      "controlEvidence": [
+        "fixture:synthetic-profile-v1"
+      ],
+      "cwd": "/fixture/tree with spaces",
+      "briefPath": "/fixture/brief 雪.md",
+      "stdoutPath": "/fixture/events.jsonl",
+      "stderrPath": "/fixture/errors.log",
+      "finalPath": "/fixture/final.json",
+      "mcp": {
+        "serverRef": "fixture-worker",
+        "tool": "synthetic-worker",
+        "arguments": {
+          "model": "fixture-text:q4",
+          "effort": null,
+          "workdir": "/fixture/tree with spaces",
+          "brief": "/fixture/brief 雪.md",
+          "final_output": "/fixture/final.json"
+        },
+        "inputSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outputSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sessionIsolation": "per-call",
+        "timeoutSeconds": 60
+      }
+    },
+    "pack": "T-OG-17"
+  },
+  {
+    "id": "direct-intent-null-parent",
+    "definition": "workerDirectIntent",
+    "base": "direct-intent-no-parent",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/parent",
+        "value": null
+      }
+    ],
+    "valid": true,
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "direct-intent-session-parent",
+    "definition": "workerDirectIntent",
+    "base": "direct-intent-no-parent",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/parent",
+        "value": {
+          "kind": "conductor-session",
+          "id": "fixture-session"
+        }
+      }
+    ],
+    "valid": true,
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "direct-intent-managed-parent",
+    "definition": "workerDirectIntent",
+    "base": "direct-intent-no-parent",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/parent",
+        "value": {
+          "kind": "mission",
+          "id": "m1"
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "const"
+  },
+  {
+    "id": "direct-intent-no-controlled-context",
+    "definition": "workerDirectIntent",
+    "base": "direct-intent-no-parent",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/verification/controlledContext"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "direct-intent-fabricated-selection",
+    "definition": "workerDirectIntent",
+    "base": "direct-intent-no-parent",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/selected",
+        "value": {
+          "group": "synthesis",
+          "member": "local",
+          "cli": "local-text",
+          "model": "fixture-text:q4",
+          "inferenceProvider": "local",
+          "family": "fixture",
+          "effort": {
+            "support": "not-applicable",
+            "value": null
+          },
+          "profileRef": "local-text-runner",
+          "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "additionalProperties"
+  },
+  {
+    "id": "managed-intent-no-parent",
+    "definition": "workerSelectionIntent",
+    "base": "intent-unresolved",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/parent"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "managed-intent-no-runner",
+    "definition": "workerSelectionIntent",
+    "base": "intent-unresolved",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/verification/runnerRef"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "direct-brief-with-lease",
+    "definition": "workerDirectBrief",
+    "base": "direct-brief-no-lease",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/lease",
+        "value": {
+          "authorityRef": "project",
+          "generation": 1,
+          "reservationId": "lease1"
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "additionalProperties"
+  },
+  {
+    "id": "managed-brief-no-lease",
+    "definition": "workerBrief",
+    "base": "brief-admitted",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/lease"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "managed-brief-no-decision",
+    "definition": "workerBrief",
+    "base": "brief-admitted",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/decision"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "direct-brief-cannot-be-managed",
+    "definition": "workerBrief",
+    "base": "direct-brief-no-lease",
+    "patch": [],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "direct-accepted-null-verifierId",
+    "definition": "workerDirectResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/verifierId",
+        "value": null
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "type"
+  },
+  {
+    "id": "direct-accepted-null-artifactDigest",
+    "definition": "workerDirectResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/artifactDigest",
+        "value": null
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "type"
+  },
+  {
+    "id": "direct-accepted-null-controlledContext",
+    "definition": "workerDirectResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/controlledContext",
+        "value": null
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "type"
+  },
+  {
+    "id": "direct-accepted-empty-findings",
+    "definition": "workerDirectResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/findings",
+        "value": []
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "minItems"
+  },
+  {
+    "id": "managed-accepted",
+    "definition": "workerResult",
+    "base": "assembled-pending",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification",
+        "value": {
+          "status": "accepted",
+          "verifierId": "fixture-verifier",
+          "runnerRef": "fixture-runner",
+          "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence": [
+            {
+              "ref": "artifact:fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "findings": []
+        }
+      }
+    ],
+    "valid": true,
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "managed-accepted-no-runner",
+    "definition": "workerResult",
+    "base": "managed-accepted",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/runnerRef",
+        "value": null
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "type"
+  },
+  {
+    "id": "managed-accepted-no-evidence",
+    "definition": "workerResult",
+    "base": "managed-accepted",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/verification/evidence",
+        "value": []
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "minItems"
+  },
+  {
+    "id": "worker-forged-execution",
+    "definition": "workerClaims",
+    "base": "claims-only",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/execution",
+        "value": {
+          "status": "completed",
+          "exitCode": 0,
+          "requested": {
+            "group": "synthesis",
+            "member": "local",
+            "cli": "local-text",
+            "model": "fixture-text:q4",
+            "inferenceProvider": "local",
+            "family": "fixture",
+            "effort": {
+              "support": "not-applicable",
+              "value": null
+            },
+            "profileRef": "local-text-runner",
+            "qualificationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "observedModel": "fixture-text:q4",
+          "observedFamily": "fixture",
+          "observedEffort": {
+            "support": "not-applicable",
+            "value": null
+          },
+          "identityEvidence": [
+            {
+              "ref": "artifact:fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "identityQuality": "backend-attested",
+          "startedAt": "2026-10-06T00:00:00Z",
+          "endedAt": "2026-10-06T00:00:01Z",
+          "termination": "confirmed",
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 10,
+            "cacheTokens": null,
+            "reasoningTokens": null,
+            "costUsd": null,
+            "quality": "reported",
+            "reservedTokens": 1000,
+            "reservedUsd": null
+          },
+          "failure": null
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "additionalProperties"
+  },
+  {
+    "id": "worker-unknown-field",
+    "definition": "workerClaims",
+    "base": "claims-only",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/command",
+        "value": "touch forbidden"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "additionalProperties"
+  },
+  {
+    "id": "worker-oversized-summary",
+    "definition": "workerClaims",
+    "base": "claims-only",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/summary",
+        "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "maxLength"
+  },
+  {
+    "id": "worker-unsupported-version",
+    "definition": "workerClaims",
+    "base": "claims-only",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "const"
+  },
+  {
+    "id": "launchable-without-brief-digest",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-shell",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/briefDigest",
+        "value": null
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "type"
+  },
+  {
+    "id": "preparatory-without-brief-digest",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-shell",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/briefDigest",
+        "value": null
+      },
+      {
+        "op": "replace",
+        "path": "/readiness",
+        "value": "preparatory"
+      }
+    ],
+    "valid": true,
+    "pack": "T-OG-15"
+  },
+  {
+    "id": "unknown-transport",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-shell",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/transport",
+        "value": "acp"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "enum"
+  },
+  {
+    "id": "shell-with-mcp",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-shell",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/mcp",
+        "value": {
+          "serverRef": "fixture-worker",
+          "tool": "synthetic-worker",
+          "arguments": {
+            "model": "fixture-text:q4",
+            "effort": null,
+            "workdir": "/fixture/tree with spaces",
+            "brief": "/fixture/brief 雪.md",
+            "final_output": "/fixture/final.json"
+          },
+          "inputSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outputSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sessionIsolation": "per-call",
+          "timeoutSeconds": 60
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "not"
+  },
+  {
+    "id": "mcp-with-command-string",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-mcp",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/shellCommand",
+        "value": "touch forbidden"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-17",
+    "errorKeyword": "not"
+  },
+  {
+    "id": "mcp-no-schema-digest",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-mcp",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/mcp/inputSchemaDigest"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-17",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "mcp-no-isolation",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-mcp",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/mcp/sessionIsolation"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-17",
+    "errorKeyword": "required"
+  },
+  {
+    "id": "invocation-secret-environment-values",
+    "definition": "workerResolvedInvocation",
+    "base": "resolved-shell",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/env",
+        "value": {
+          "FIXTURE_SECRET": "forbidden"
+        }
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "additionalProperties"
+  },
+  {
+    "id": "dispatch-missing-required-feature",
+    "definition": "workerDispatch",
+    "base": "dispatch-roundtrip",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/requiredFeatures",
+        "value": [
+          "worker-dispatch.v1",
+          "worker-policy-origins.v1",
+          "worker-admission-fencing.v1",
+          "worker-claims.v1"
+        ]
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "contains"
+  },
+  {
+    "id": "dispatch-duplicate-required-feature",
+    "definition": "workerDispatch",
+    "base": "dispatch-roundtrip",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/requiredFeatures/-",
+        "value": "worker-claims.v1"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "uniqueItems"
+  },
+  {
+    "id": "dispatch-health-feature",
+    "definition": "workerDispatch",
+    "base": "dispatch-roundtrip",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/requiredFeatures/-",
+        "value": "worker-health.v1"
+      }
+    ],
+    "valid": true,
+    "pack": "T-OG-08/14"
+  },
+  {
+    "id": "direct-accepted-cannot-be-managed",
+    "definition": "workerResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/mode"
+      },
+      {
+        "op": "remove",
+        "path": "/verification/controlledContext"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/15",
+    "errorKeyword": "type"
+  }
+]

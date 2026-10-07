@@ -1413,6 +1413,69 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/legacy-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "pending",
+        "unknown"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/mission-definitions.patch.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "cancelled",
+        "completed",
+        "failed",
+        "pending",
+        "running",
+        "unknown"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/mission-vectors.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "completed",
+        "pending"
+      ],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/parallelism.fragment.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/fixtures/worker-contracts/public-vocabulary.json",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "json",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/conformance/mission-v1/mission-protocol.test.ts",
       "owner": "test/conformance",
       "role": "fixture-or-test",
@@ -1429,6 +1492,16 @@
         "running",
         "unknown"
       ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/conformance/mission-v1/worker-contracts.test.ts",
+      "owner": "test/conformance",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
