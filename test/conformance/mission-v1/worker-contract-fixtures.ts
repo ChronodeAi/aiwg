@@ -27,10 +27,7 @@ export function contractSchemas(): Record<string, any> {
   models.$defs = { ...models.$defs, ...modelDefs };
 
   const capability = readJson('schemas/models/provider-model-capabilities.v1.schema.json');
-  const { $defs: adapterDefs, $schema: _adapterDialect, ...adapter } = fixtureJson('worker-adapter.fragment.json');
-  Object.assign(capability.properties, fixtureJson('capability-root.patch.json').properties);
-  capability.properties.providers.additionalProperties.properties.workerAdapter = { $ref: '#/$defs/workerAdapter' };
-  capability.$defs = { ...capability.$defs, ...adapterDefs, workerAdapter: adapter };
+  // #2880: capability vectors exercise the shipped schema without fixture patching.
 
   // B-OG-30 (#2879): the 05 §5.1 definitions now live in the production owner.
   // Read them directly so shape vectors exercise shipped code; drift from the

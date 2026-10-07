@@ -232,3 +232,148 @@ Related package metadata/workflow checks also passed (6/6):
 npx vitest run --config config/vitest.config.js \
   test/smoke/cli-package-publish-workflow.test.ts test/unit/package-metadata.test.ts
 ```
+## #2880 S0 / S1 capability and installed-loader checkpoint (2026-10-07)
+
+The capability owner now contains the frozen root patch, workerAdapter and its
+profile/helper definitions verbatim. `contractSchemas()` reads this production
+owner directly; it no longer patches capability fixtures over missing production
+fields. Existing adapter vectors also exercise the production Zod loader. No
+frozen fragment, manifest digest, or existing vector was changed.
+
+New vectors in this same fixture home:
+
+- `adapter-vectors.json`: T-OG-03/17 HTTP and MCP positives, schema pins,
+  isolation, missing controls, closed profile fields, unsupported revision and
+  qualification evidence negatives. Deltas retain positive sibling values.
+- `adapter-loading-vectors.json`: T-OG-10/14 traversal, symlink, digest,
+  package/adapter/interface versions, wrong/reassigned exports, URL/unknown
+  modules, worker/group/world writable paths, duplicate IDs/references, builtin
+  collision, unsupported platforms and catalog-module tampering. Every negative
+  checks absence of the import side-effect marker.
+- `third-worker-adapter.mjs`: synthetic interface-v1 installed adapter/catalog.
+  No bootstrap switch, resolver or workflow knows its ID. Concurrent loads use
+  `ensureProvidersRegistered(trustedBindings)` and the existing string factory;
+  import and registration occur once. Cached calls recheck installed bytes.
+
+The host registration API takes the existing registry and an in-memory trusted
+installed-module allowlist: reference, canonical package root, relative module
+path, package name/version, interface version, SHA-256, adapter IDs and qualified
+platforms, plus worker-writable roots. Project configuration cannot supply this
+allowlist through any CLI/config loader. All selected runtime/catalog modules
+pass validation before any selected module import. Exports must be statically
+bound (`interfaceVersion=1`, callable `register(factory)`); reexports, computed
+interface values and visible binding writes are rejected. The syntax scan also
+rejects direct `eval(...)` calls; it does not detect indirect eval, `Function()`
+or computed dynamic imports. Trust rests on the approved digest and installation
+authority, since importing executes the entire module body.
+
+Threat note (08 Revision 2, TB5/TM-OG-07/17; 05 §4.3a): the host must keep
+installation roots, their path bindings and dependency closure read-only during
+loading and execution, including against concurrent installers and worker writes
+through aliases. Schedule installation updates outside that interval. Symlinked
+package roots resolve to a canonical identity before containment, package and
+digest checks; module/package.json symlinks inside that root remain rejected.
+Hardlinked module/package.json files are accepted only with no write permission
+bits for anyone (`mode & 0222 === 0`); writable hardlinks fail before import.
+This permits read-only content-addressed stores. Permission bits do not prevent
+an owner from changing modes or establish ACL/mount isolation: the host must
+enforce the read-only requirement, including shared inodes and symlink ancestors.
+
+The loader bounds module and package.json reads to 5 MiB (the catalog `maxBytes`
+default), then rechecks canonical identity, permissions and digest immediately
+before import. A residual check-to-import TOCTOU race remains: ESM reopens the
+path after validation, so the recheck narrows but does not close that window.
+These checks are defense in depth, not filesystem isolation or a race-free load.
+
+Direct/shared results: closed annotation enum and lossless metadata preservation,
+exact reference namespaces, process-default/HTTP binding semantics, versioned
+shell/MCP control guards, installed factory loading and pre-import negatives are
+implemented. Pure resolution needs no Mission, MC, admission, activation or
+executor service. All deployment providers pass the models consumer guard and
+bundled policy compiler, including Muse; Codex/Muse native resolve is exercised
+without managed state. Deployment support is not live worker qualification.
+T-OG-03 here covers metadata/required-control boundaries; provider terminal,
+cancellation and full invocation qualification remain their existing S1 owners.
+T-OG-17 here covers profile/schema pins; transport chaos belongs to B-OG-35.
+Managed admission, leases, activation, Mission/Flow/Ralph runtime and health
+settlement are **deferred to S2+**; no managed readiness is advertised.
+
+Minimal shared edits: `src/models/provider-policy.ts` adds capability fields and
+helpers only, leaving the config/catalog areas owned by #2878 unchanged;
+`src/cli/handlers/models.ts` derives its provider guard from the registry;
+`worker-contract-fixtures.ts` and `worker-contracts.test.ts` switch capability
+checks to production. Package manifests/lock promote already-locked Acorn to a
+runtime dependency for pre-import syntax checks. Both package manifests include
+models schemas, the CLI builder/manifest include Ralph adapters, and
+`config/test-lanes.mjs` registers the test in the existing packaging lane.
+
+Validation commands and results:
+
+```sh
+npm run typecheck
+npx tsc && npm run build:copy-mjs
+npx vitest run --config config/vitest.config.js \
+  test/conformance/mission-v1/worker-contracts.test.ts \
+  test/unit/models/worker-capabilities.test.ts \
+  test/unit/ralph-external/installed-worker-adapter.test.ts \
+  test/unit/ralph-external/provider-adapter.test.ts \
+  test/unit/models/provider-policy.test.ts \
+  test/unit/models/provider-conformance.test.ts \
+  test/unit/cli/handlers/models-worker-contracts.test.ts \
+  test/unit/cli/handlers/models.test.ts \
+  test/unit/mcp/worker-contracts.test.ts \
+  test/unit/ralph-external/session-launcher.test.ts \
+  test/unit/providers/capability-preflight.test.ts
+npx vitest run --config config/vitest.packaging.config.js \
+  test/integration/worker-adapter-package.test.ts
+```
+
+Typecheck and compilation/resource copy passed. Combined default suites:
+**318 passed, 1 environmental failure**, ten passing files and one failing file.
+The existing Grok discovery test in `models.test.ts` fails with `EROFS` writing
+`~/.cache/aiwg/model-catalog.v1.json`; no production workaround was added.
+The packaging lane fails in its existing global prepack setup with `EPERM`
+creating the tsx IPC socket, before either package test runs: **0 executed,
+2 blocked**. T-OG-14 package-path verification is therefore **partial**, not a
+passing packaged-runtime claim. The tests pack/extract both published targets
+outside the checkout, use compiled production code and preinstalled dependencies,
+and exercise the same trusted factory. The conductor must rerun this lane where
+its existing prepack setup is permitted.
+
+All owned test temporary roots were removed and ENOENT checked. New tests use
+synthetic modules/catalogs and no credentials or paid calls. Open conductor item:
+rerun the two package cases in a permitted environment before claiming T-OG-14
+complete; no contract redesign or frozen-vector correction is requested.
+
+### #2880 security fix pass (2026-10-07)
+
+The installed-loader unit suite adds writable hardlink negatives for both module
+and package.json, read-only store positives, symlinked package/ancestor positives
+with canonical-cache identity, worker-writable root and escaping symlink
+negatives, and 5 MiB read-limit boundaries. All frozen vectors are preserved.
+
+```sh
+npm run typecheck
+npx vitest run --config config/vitest.config.js \
+  test/conformance/mission-v1/worker-contracts.test.ts \
+  test/unit/cli/handlers/models-worker-contracts.test.ts \
+  test/unit/models/worker-capabilities.test.ts \
+  test/unit/ralph-external/installed-worker-adapter.test.ts \
+  test/unit/ralph-external/ test/unit/models/
+npx vitest run --config config/vitest.packaging.config.js \
+  test/integration/worker-adapter-package.test.ts
+```
+
+Typecheck passed. The requested four files passed **164/164** tests. The full
+default invocation produced **1029 passed, 9 failed**, 36 passing files and two
+failing files. One existing `models/live-smoke.test.ts` check fails with subprocess
+`EPERM`. Eight existing `ralph-external/snapshot-manager.test.ts` cases fail in
+temporary-repository `git commit` setup; stderr is suppressed by those tests, so
+their precise cause is unconfirmed (this environment enables GPG commit signing).
+No test or signing configuration was changed to bypass these failures.
+
+The packaging lane remains **0 executed, 2 blocked**: its global prepack setup
+fails with `EPERM` creating the tsx IPC socket. The focused loader suite passes
+**32/32**. All four requested security corrections are implemented; full green
+regression/packaging evidence remains partial until the conductor can rerun the
+blocked/failing existing lanes in a permitted test environment.

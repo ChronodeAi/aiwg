@@ -10,6 +10,12 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
+import { open, realpath, lstat } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+import { parse } from 'acorn';
+import { importImpl } from '../../_resolve-impl.mjs';
 
 /**
  * Whether the optional muse exec Ralph adapter is registered.
@@ -231,6 +237,202 @@ export class ProviderAdapter {
 
 /** @type {Map<string, () => ProviderAdapter>} */
 const providerRegistry = new Map();
+const installedModules = new Map();
+let installedLoad = Promise.resolve();
+// Same default byte ceiling as workerAdapter.catalogAdapter.maxBytes.
+const installedModuleMaxBytes = 5 * 1024 * 1024;
+
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+// Inspect syntax without executing module bodies (including top-level effects).
+// Only statically declared interfaceVersion and callable register exports qualify.
+function checkInstalledExports(source) {
+  const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
+  const declarations = new Map();
+  const exports = new Map();
+  for (const node of ast.body) {
+    const declaration = node.type === 'ExportNamedDeclaration' ? node.declaration : node;
+    if (declaration?.type === 'FunctionDeclaration' && declaration.id) declarations.set(declaration.id.name, declaration);
+    if (declaration?.type === 'VariableDeclaration' && declaration.kind === 'const') {
+      for (const item of declaration.declarations) if (item.id.type === 'Identifier') declarations.set(item.id.name, item.init);
+    }
+    if (node.type === 'ExportNamedDeclaration' && !node.source) {
+      if (declaration?.type === 'FunctionDeclaration') exports.set(declaration.id.name, declaration.id.name);
+      if (declaration?.type === 'VariableDeclaration') {
+        for (const item of declaration.declarations) if (item.id.type === 'Identifier') exports.set(item.id.name, item.id.name);
+      }
+      for (const item of node.specifiers) exports.set(item.exported.name, item.local.name);
+    }
+  }
+  const version = declarations.get(exports.get('interfaceVersion'));
+  const register = declarations.get(exports.get('register'));
+  if (version?.type !== 'Literal' || version.value !== 1
+    || !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(register?.type)
+    || register.generator) throw new Error('Installed worker module requires interfaceVersion=1 and register(factory) exports');
+  const interfaceBindings = new Set([exports.get('interfaceVersion'), exports.get('register')]);
+  function writesInterface(node) {
+    if (!node || typeof node !== 'object') return false;
+    if (node.type === 'Identifier' && interfaceBindings.has(node.name)) return true;
+    // Member mutation does not replace the exported binding.
+    if (node.type === 'MemberExpression') return false;
+    return Object.values(node).some(value => Array.isArray(value) ? value.some(writesInterface) : writesInterface(value));
+  }
+  function inspect(node) {
+    if (!node || typeof node !== 'object') return;
+    // Reject visible binding writes and direct eval calls only. This is not a
+    // general dynamic-code detector; execution still trusts installation authority.
+    if ((node.type === 'AssignmentExpression' && writesInterface(node.left))
+      || (node.type === 'UpdateExpression' && writesInterface(node.argument))
+      || (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'eval')) {
+      throw new Error('Installed worker module exports must remain statically bound');
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(inspect);
+      else if (value && typeof value === 'object') inspect(value);
+    }
+  }
+  inspect(ast);
+}
+
+async function readInstalledFile(filename) {
+  const file = await open(filename, 'r');
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) throw new Error('Installed module inputs must be regular files');
+    if (stat.size > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
+    // Bound the actual read too: an fstat size check alone allows concurrent growth.
+    const bytes = Buffer.alloc(installedModuleMaxBytes + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
+    return bytes.subarray(0, length);
+  } finally {
+    await file.close();
+  }
+}
+
+async function inspectInstalledModule(entry, workerWritableRoots, platform) {
+  if (!entry || !/^installed:[a-z][a-z0-9-]{0,62}$/.test(entry.reference)
+    || typeof entry.packageName !== 'string' || !entry.packageName
+    || typeof entry.packageVersion !== 'string' || !entry.packageVersion
+    || entry.interfaceVersion !== 1 || !/^sha256:[a-f0-9]{64}$/.test(entry.sha256)
+    || !Array.isArray(entry.adapterIds) || new Set(entry.adapterIds).size !== entry.adapterIds.length
+    || !entry.adapterIds.every(id => /^[a-z][a-z0-9-]{0,62}$/.test(id))) {
+    throw new Error('Invalid trusted installed module binding');
+  }
+  if (!Array.isArray(entry.platforms) || !entry.platforms.includes(platform)) throw new Error(`Unsupported worker module platform: ${platform}`);
+  if (!path.isAbsolute(entry.packageRoot) || !entry.modulePath || path.isAbsolute(entry.modulePath)
+    || entry.modulePath.includes('\\') || entry.modulePath.split('/').some(part => !part || part === '..' || part === '.')
+    || !/\.(mjs|js)$/.test(entry.modulePath)) throw new Error('Invalid installed module path');
+  const root = await realpath(entry.packageRoot);
+  const filename = await realpath(path.join(root, entry.modulePath));
+  if (!inside(root, filename)) throw new Error('Installed module path escapes package');
+  for (const writable of workerWritableRoots) {
+    const canonical = await realpath(writable);
+    if (inside(canonical, filename) || inside(canonical, root)) throw new Error('Installed module is in a worker-writable path');
+  }
+  for (const target of [root, path.join(root, 'package.json'), ...entry.modulePath.split('/').map((_, i, parts) => path.join(root, ...parts.slice(0, i + 1)))]) {
+    const stat = await lstat(target);
+    if (stat.isSymbolicLink() || (stat.mode & 0o022) !== 0) throw new Error('Symlink or untrusted writable installed module path');
+    // Directory link counts reflect children, not file aliases. Hardlinked store
+    // files qualify only when no permission class can write the shared inode.
+    if (stat.isFile() && stat.nlink > 1 && (stat.mode & 0o222) !== 0) {
+      throw new Error('Writable hardlink in installed module path');
+    }
+  }
+  const pkg = JSON.parse((await readInstalledFile(path.join(root, 'package.json'))).toString('utf8'));
+  if (pkg.name !== entry.packageName || pkg.version !== entry.packageVersion) throw new Error('Installed module package identity/version mismatch');
+  if (entry.modulePath.endsWith('.js') && pkg.type !== 'module') throw new Error('Installed worker module must be ESM');
+  const source = await readInstalledFile(filename);
+  if (`sha256:${createHash('sha256').update(source).digest('hex')}` !== entry.sha256) throw new Error('Installed module digest mismatch');
+  checkInstalledExports(source.toString('utf8'));
+  return { entry, filename, key: `${filename}:${entry.packageVersion}:${entry.sha256}` };
+}
+
+/**
+ * Trusted host/executor registration boundary, never project configuration.
+ * `modules` is the installation authority's allowlist, with realpath-resolved packageRoot,
+ * packageName/packageVersion, relative modulePath, sha256, interfaceVersion:1,
+ * adapterIds and qualified platforms. workerWritableRoots describes the worker's
+ * writable mounts. The host must keep install roots and their dependency closure
+ * read-only throughout loading/execution, including against concurrent installers
+ * and writable aliases. Path checks and rechecks do not close the import race;
+ * this loader is not a sandbox.
+ * No module locations are resolved from metadata, URLs, or runtime downloads.
+ */
+export function loadInstalledWorkerAdapters({ registry, modules, workerWritableRoots, platform = process.platform }) {
+  // Snapshot caller-owned bindings before asynchronous work; serialize registration.
+  const request = structuredClone({ registry, modules, workerWritableRoots, platform });
+  const pending = installedLoad.then(() => loadQualifiedModules(request));
+  installedLoad = pending.catch(() => {});
+  return pending;
+}
+
+async function loadQualifiedModules({ registry, modules, workerWritableRoots, platform }) {
+  await ensureProvidersRegistered();
+  const { parseProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const parsed = parseProviderModelCapabilities(registry);
+  if (!Array.isArray(modules) || !Array.isArray(workerWritableRoots)) throw new Error('Trusted module bindings and worker writable roots are required');
+  const allowlist = new Map();
+  for (const entry of modules) {
+    if (allowlist.has(entry.reference)) throw new Error(`Duplicate installed module reference: ${entry.reference}`);
+    allowlist.set(entry.reference, entry);
+  }
+  const required = new Map();
+  const adapters = [...Object.values(parsed.providers).flatMap(p => p.workerAdapter ? [p.workerAdapter] : []), ...Object.values(parsed.workerAdapters ?? {})];
+  for (const adapter of adapters) {
+    for (const reference of [adapter.runtimeDriver, ...(adapter.catalogAdapter.kind === 'module' ? [adapter.catalogAdapter.locator] : [])]) {
+      const entry = allowlist.get(reference);
+      if (!entry) throw new Error(`Worker module is not installed/approved: ${reference}`);
+      if (reference === adapter.runtimeDriver && (entry.packageVersion !== adapter.adapterVersion || !entry.adapterIds?.includes(adapter.id))) {
+        throw new Error('Worker adapter identity/version does not match trusted module');
+      }
+      required.set(reference, entry);
+    }
+  }
+  // Validate every module, digest, package, export and duplicate before ANY import.
+  const inspected = [];
+  const ids = new Set();
+  for (const entry of required.values()) {
+    const inspectedModule = await inspectInstalledModule(entry, workerWritableRoots, platform);
+    for (const id of entry.adapterIds) {
+      if (ids.has(id) || ((providerRegistry.has(id) || installedModules.has(inspectedModule.key))
+        && installedModules.get(id) !== inspectedModule.key)) throw new Error(`Duplicate worker adapter ID: ${id}`);
+      ids.add(id);
+    }
+    inspected.push(inspectedModule);
+  }
+  const staged = new Map();
+  for (const { entry, filename, key } of inspected) {
+    if (installedModules.has(key)) continue;
+    // Recheck immediately before import. ESM opens by path afterward, so a
+    // residual race remains; the host must enforce read-only install roots.
+    const rechecked = await inspectInstalledModule(entry, workerWritableRoots, platform);
+    if (rechecked.key !== key) throw new Error('Installed module canonical identity changed');
+    const module = await import(`${pathToFileURL(filename).href}?sha256=${entry.sha256.slice(7)}`);
+    if (module.interfaceVersion !== 1 || typeof module.register !== 'function') throw new Error('Installed worker module export mismatch');
+    const registered = new Set();
+    await module.register((id, factory) => {
+      if (!entry.adapterIds.includes(id) || registered.has(id) || staged.has(id) || typeof factory !== 'function') throw new Error(`Invalid or duplicate installed factory: ${id}`);
+      registered.add(id);
+      staged.set(id, { factory, key });
+    });
+    if (entry.adapterIds.some(id => !registered.has(id))) throw new Error('Installed module omitted an approved factory');
+  }
+  for (const [id, { factory, key }] of staged) {
+    registerProvider(id, factory);
+    installedModules.set(id, key);
+  }
+  for (const { key } of inspected) installedModules.set(key, true);
+  return adapters.map(adapter => adapter.id);
+}
 
 /**
  * Register a provider adapter factory.
@@ -318,9 +520,11 @@ const _registrationPromise = registerBuiltinProviders();
 /**
  * Ensure all built-in providers are registered before use.
  * Must be awaited before calling createProvider().
+ * Optional installed bindings come only from the trusted host registration path.
  */
-export async function ensureProvidersRegistered() {
+export async function ensureProvidersRegistered(installed) {
   await _registrationPromise;
+  if (installed !== undefined) return loadInstalledWorkerAdapters(installed);
 }
 
 export default ProviderAdapter;

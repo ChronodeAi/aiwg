@@ -4,6 +4,7 @@ export const packagingFiles = [
   'test/smoke/cockpit-base-footprint.test.js',
   'test/integration/network-analysis-addon.test.ts',
   'test/integration/cli-package-webmode.test.ts',
+  'test/integration/worker-adapter-package.test.ts',
   'test/integration/global-install-native-policy.test.ts',
   'test/integration/tarball-allowlist-packaging.test.ts',
   'test/integration/dataset-contract-packaging.test.ts',

@@ -89,6 +89,26 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   );
   await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
   await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
+  await cp(path.join(repoRoot, 'schemas', 'models'), path.join(outputDir, 'schemas', 'models'), { recursive: true });
+  // Include the installed loader's imports, not the Ralph runners and fixtures.
+  const workerAdapterFiles = [
+    'tools/ralph-external/lib/provider-adapter.mjs',
+    'tools/ralph-external/lib/claude-adapter.mjs',
+    'tools/ralph-external/lib/codex-adapter.mjs',
+    'tools/ralph-external/lib/opencode-adapter.mjs',
+    'tools/ralph-external/lib/factory-adapter.mjs',
+    'tools/ralph-external/lib/pi-adapter.mjs',
+    'tools/ralph-external/lib/omp-adapter.mjs',
+    'tools/ralph-external/lib/deepseek-harness-adapter.mjs',
+    'tools/ralph-external/lib/muse-adapter.mjs',
+    'tools/providers/omp-transport.mjs',
+    'tools/providers/deepseek-harness-transport.mjs',
+  ];
+  for (const filename of workerAdapterFiles) {
+    const destination = path.join(outputDir, filename);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(path.join(repoRoot, filename), destination);
+  }
   await cp(
     path.join(repoRoot, 'schemas', 'security'),
     path.join(outputDir, 'schemas', 'security'),

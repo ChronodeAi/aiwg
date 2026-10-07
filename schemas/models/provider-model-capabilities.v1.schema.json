@@ -4,37 +4,734 @@
   "title": "AIWG provider model capability registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "verifiedAt", "providers"],
+  "required": [
+    "version",
+    "verifiedAt",
+    "providers"
+  ],
   "properties": {
-    "version": { "const": "1.0.0" },
-    "verifiedAt": { "type": "string", "format": "date" },
+    "version": {
+      "const": "1.0.0"
+    },
+    "verifiedAt": {
+      "type": "string",
+      "format": "date"
+    },
     "providers": {
       "type": "object",
       "minProperties": 11,
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["agent", "skill", "globalChild", "identifierSyntax", "inheritance", "invalidPinFallback", "configTarget", "artifactFormat", "verification", "sourceUrl", "verifiedAt"],
+        "required": [
+          "agent",
+          "skill",
+          "globalChild",
+          "identifierSyntax",
+          "inheritance",
+          "invalidPinFallback",
+          "configTarget",
+          "artifactFormat",
+          "verification",
+          "sourceUrl",
+          "verifiedAt"
+        ],
         "properties": {
-          "agent": { "$ref": "#/$defs/control" },
-          "skill": { "$ref": "#/$defs/control" },
-          "globalChild": { "$ref": "#/$defs/control" },
-          "identifierSyntax": { "type": "string", "minLength": 1 },
-          "effortValues": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-          "inheritance": { "type": "string", "minLength": 1 },
-          "invalidPinFallback": { "type": "string", "minLength": 1 },
-          "configTarget": { "type": "string", "minLength": 1 },
-          "artifactFormat": { "type": "string", "minLength": 1 },
-          "verification": { "type": "string", "minLength": 1 },
-          "sourceUrl": { "type": "string", "format": "uri" },
-          "verifiedAt": { "type": "string", "format": "date" }
+          "agent": {
+            "$ref": "#/$defs/control"
+          },
+          "skill": {
+            "$ref": "#/$defs/control"
+          },
+          "globalChild": {
+            "$ref": "#/$defs/control"
+          },
+          "identifierSyntax": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effortValues": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
+          "inheritance": {
+            "type": "string",
+            "minLength": 1
+          },
+          "invalidPinFallback": {
+            "type": "string",
+            "minLength": 1
+          },
+          "configTarget": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifactFormat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "verifiedAt": {
+            "type": "string",
+            "format": "date"
+          },
+          "workerAdapter": {
+            "$ref": "#/$defs/workerAdapter"
+          }
         }
       }
+    },
+    "workerAdapters": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/workerAdapter"
+      }
+    },
+    "$schema": {
+      "enum": [
+        "../../../schemas/models/provider-model-capabilities.v1.schema.json",
+        "https://aiwg.io/schemas/models/provider-model-capabilities.v1.schema.json"
+      ]
     }
   },
   "$defs": {
     "control": {
-      "enum": ["native", "compiled", "inherited", "global-only", "informational", "unsupported"]
+      "enum": [
+        "native",
+        "compiled",
+        "inherited",
+        "global-only",
+        "informational",
+        "unsupported"
+      ]
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "process"
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "stdin": {
+          "enum": [
+            "closed",
+            "brief-json",
+            "brief-text"
+          ]
+        },
+        "cwd": {
+          "const": "${workspace}"
+        },
+        "envAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "versionArgv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10485760
+        }
+      },
+      "required": [
+        "kind",
+        "executable",
+        "argv",
+        "stdin",
+        "cwd",
+        "envAllowlist",
+        "versionArgv"
+      ]
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "http"
+        },
+        "protocol": {
+          "enum": [
+            "ollama",
+            "llama-cpp",
+            "openai-compatible"
+          ]
+        },
+        "healthPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/"
+        },
+        "modelsPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/"
+        },
+        "generatePath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 900
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10485760
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "healthPath",
+        "modelsPath",
+        "generatePath"
+      ]
+    },
+    "catalogAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "command",
+            "file",
+            "http",
+            "module"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "parser": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5242880
+        }
+      },
+      "required": [
+        "kind",
+        "locator",
+        "parser"
+      ]
+    },
+    "invocationProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transport": {
+          "enum": [
+            "shell",
+            "mcp"
+          ]
+        },
+        "supportedVersions": {
+          "type": "string",
+          "minLength": 1
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "support": {
+                "enum": [
+                  "native",
+                  "external",
+                  "not-applicable",
+                  "unqualified"
+                ]
+              },
+              "mapping": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "evidence": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "support",
+              "mapping",
+              "evidence"
+            ]
+          },
+          "required": [
+            "model",
+            "effort",
+            "sandbox",
+            "approval",
+            "workdir",
+            "finalOutput",
+            "stdin",
+            "structuredOutput",
+            "stepCap",
+            "trust",
+            "children",
+            "fallback"
+          ],
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "effort": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "sandbox": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "approval": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "workdir": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "finalOutput": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "stdin": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "structuredOutput": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "stepCap": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "trust": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "children": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            },
+            "fallback": {
+              "$ref": "#/$defs/invocationProfile/properties/controls/additionalProperties"
+            }
+          }
+        },
+        "envAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "pitfalls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serverRef": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "inputSchemaDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "outputSchemaDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "sessionIsolation": {
+              "enum": [
+                "per-call",
+                "per-instance",
+                "serialized"
+              ]
+            },
+            "cancel": {
+              "enum": [
+                "confirmed",
+                "uncertain"
+              ]
+            }
+          },
+          "required": [
+            "serverRef",
+            "tool",
+            "inputSchemaDigest",
+            "outputSchemaDigest",
+            "sessionIsolation",
+            "cancel"
+          ]
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "handshake": {
+              "enum": [
+                "semantic",
+                "process-only",
+                "unobserved"
+              ]
+            },
+            "outputFraming": {
+              "enum": [
+                "jsonl",
+                "plain",
+                "final-json",
+                "http-stream",
+                "mcp-progress",
+                "opaque"
+              ]
+            },
+            "signalParser": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sessionLogLocator": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "progressEvidence": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "stopEvidence": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "fixtureRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "qualifiedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "statusOperation": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            },
+            "cancelOperation": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "version",
+            "handshake",
+            "outputFraming",
+            "signalParser",
+            "sessionLogLocator",
+            "progressEvidence",
+            "stopEvidence",
+            "fixtureRef",
+            "qualifiedAt",
+            "statusOperation",
+            "cancelOperation"
+          ]
+        }
+      },
+      "required": [
+        "transport",
+        "supportedVersions",
+        "controls",
+        "envAllowlist",
+        "pitfalls"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "mcp"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "mcp": {}
+            },
+            "required": [
+              "mcp"
+            ]
+          }
+        }
+      ]
+    },
+    "workerAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapterVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supportedVersions": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeDriver": {
+          "type": "string",
+          "minLength": 1
+        },
+        "catalogAdapter": {
+          "$ref": "#/$defs/catalogAdapter"
+        },
+        "invocation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/process"
+            },
+            {
+              "$ref": "#/$defs/http"
+            }
+          ]
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "output": {
+              "enum": [
+                "native-schema",
+                "validated-file",
+                "text"
+              ]
+            },
+            "modelPin": {
+              "enum": [
+                "observed",
+                "requested",
+                "unsupported"
+              ]
+            },
+            "effort": {
+              "enum": [
+                "explicit",
+                "not-applicable",
+                "unsupported"
+              ]
+            },
+            "cancel": {
+              "enum": [
+                "process-group",
+                "session",
+                "none"
+              ]
+            },
+            "resume": {
+              "type": "boolean"
+            },
+            "sandboxModes": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "read-only",
+                  "workspace-write",
+                  "external"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "nestedAgentsControllable": {
+              "type": "boolean"
+            },
+            "nativeFallbackControllable": {
+              "type": "boolean"
+            },
+            "hardBudget": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "tokens",
+                  "cost",
+                  "wall-time"
+                ]
+              },
+              "minItems": 0,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "output",
+            "modelPin",
+            "effort",
+            "cancel",
+            "resume",
+            "sandboxModes",
+            "nestedAgentsControllable",
+            "nativeFallbackControllable",
+            "hardBudget"
+          ]
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "unqualified",
+                "qualified"
+              ]
+            },
+            "fixtureDigest": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "verifiedAt": {
+              "type": "string",
+              "minLength": 1,
+              "format": "date-time"
+            },
+            "evidenceRef": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "qualified"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "fixtureDigest": {},
+                  "verifiedAt": {},
+                  "evidenceRef": {}
+                },
+                "required": [
+                  "fixtureDigest",
+                  "verifiedAt",
+                  "evidenceRef"
+                ]
+              }
+            }
+          ]
+        },
+        "invocationProfiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/invocationProfile"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "provider",
+        "adapterVersion",
+        "supportedVersions",
+        "runtimeDriver",
+        "catalogAdapter",
+        "invocation",
+        "capabilities",
+        "qualification"
+      ]
     }
   }
 }

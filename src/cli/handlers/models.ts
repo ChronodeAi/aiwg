@@ -9,6 +9,7 @@ import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
 import {
   compileModelPolicy, validateCanonicalModelPolicy, validateUserProjectModelConfig,
+  loadProviderModelCapabilities,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import type { CanonicalModelPolicy, ModelTier } from '../../models/types.js';
@@ -34,10 +35,7 @@ interface ParsedArgs {
   flags: Map<string, string | boolean>;
 }
 const TIERS = new Set(['economy', 'standard', 'premium', 'max-quality']);
-const PROVIDERS = new Set([
-  'antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'grok-build', 'grokbot', 'hermes',
-  'opencode', 'openclaw', 'openhuman', 'omp', 'pi', 'warp', 'windsurf',
-]);
+const PROVIDERS = new Set(Object.keys(loadProviderModelCapabilities().providers));
 
 function parseArgs(args: string[]): ParsedArgs {
   const [subcommand = 'help', ...rest] = args;
