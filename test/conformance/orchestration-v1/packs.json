@@ -51,7 +51,9 @@
       "status": "partial",
       "testFiles": [
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
-        "test/unit/providers/grok-build-headless.test.ts"
+        "test/unit/providers/grok-build-headless.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts"
       ],
       "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
     },
@@ -171,7 +173,9 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/mission-v1/worker-contracts.test.ts"
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts"
       ],
       "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
     },
@@ -189,7 +193,9 @@
         "test/conformance/mission-v1/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/cli/handlers/models-worker-contracts.test.ts",
-        "test/conformance/orchestration-v1/worker-fixtures.test.ts"
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts"
       ],
       "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
     },
@@ -205,7 +211,9 @@
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/mcp/worker-contracts.test.ts",
-        "test/conformance/orchestration-v1/worker-fixtures.test.ts"
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts"
       ],
       "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
     },
