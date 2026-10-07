@@ -441,6 +441,74 @@ export function resolveWorkerInstallation(registry: ProviderModelCapabilityRegis
   return { adapter, endpoint: installation.endpoint };
 }
 
+/**
+ * Dispatch-time safety checks belong here, alongside transport qualification.
+ * Like route validation, rendering requires observation evidence; a default
+ * observation may supply it when no model observation is available.
+ */
+export function assertWorkerSelectionAllowed(selected: {
+  inferenceProvider: string; model: string; effort: { support: string; value: string | null };
+}, context: {
+  now: number;
+  policy?: WorkerSelectionPolicy;
+  dataClass?: string;
+  role?: string;
+  modelObservation?: WorkerSelectionObservation;
+  defaultObservation?: WorkerSelectionObservation;
+}): void {
+  const policy = context.policy ?? DEFAULT_WORKER_SELECTION;
+  if (isWorkerEffortDenied(selected.effort.value, policy)) {
+    throw new Error(`Worker invocation denied effort: ${selected.effort.value}`);
+  }
+  if (/(?:^|[-_:/.])contributor(?:$|[-_:/.])/i.test(selected.model)
+    || isWorkerModelDenied(workerModelKey(selected.inferenceProvider, selected.model), policy)) {
+    throw new Error(`Worker invocation denied model: ${selected.model}`);
+  }
+  const { data, unknownDataClass } = workerRouteDataPolicy(policy, context.dataClass);
+  if (unknownDataClass) throw new Error('Worker invocation has denied data-use: unknown data class');
+  const observation = context.modelObservation ?? context.defaultObservation;
+  if (!observation) throw new Error('Worker invocation requires model or default observation evidence');
+  const guidance = context.role ? policy.roleGuidance?.[context.role] : undefined;
+  if (isWorkerNullEffortDenied(selected.effort.value, observation, guidance)) {
+    throw new Error('Worker invocation denied effort: null effort requires qualified absence of an effort control');
+  }
+  for (const [kind, observation] of [
+    ['model', context.modelObservation], ['default', context.defaultObservation],
+  ] as const) {
+    if (!observation) continue;
+    if (observation.lifecycle === 'retired'
+      || (observation.retiredAt != null && Date.parse(observation.retiredAt) <= context.now)
+      || (observation.sunsetAt != null && Date.parse(observation.sunsetAt) <= context.now)) {
+      throw new Error(`Worker invocation ${kind} observation is retired`);
+    }
+    const blockMs = (policy.freshness?.blockHours ?? DEFAULT_WORKER_SELECTION.freshness!.blockHours!) * 3_600_000;
+    const observedAt = Date.parse(observation.observedAt);
+    if (!Number.isFinite(context.now) || !Number.isFinite(observedAt)
+      || !Number.isFinite(blockMs) || blockMs <= 0
+      || (observation.verifiedAt !== undefined && !Number.isFinite(Date.parse(observation.verifiedAt)))
+      || isWorkerEvidenceStale(observation, policy, context.now)) {
+      throw new Error(`Worker invocation ${kind} observation is stale or invalid`);
+    }
+    if (observation.dataUse && isWorkerDataUseDenied({
+      processing: observation.dataUse.processing ?? 'unknown',
+      productImprovement: observation.dataUse.productImprovement ?? null,
+      retentionDays: observation.dataUse.retentionDays ?? null,
+    }, data)) {
+      throw new Error(`Worker invocation ${kind} observation has denied data-use`);
+    }
+  }
+}
+
+interface WorkerSelectionObservation {
+  effortSupport?: string;
+  observedAt: string;
+  verifiedAt?: string;
+  lifecycle: string;
+  retiredAt?: string | null;
+  sunsetAt?: string | null;
+  dataUse?: Partial<WorkerModelObservation['dataUse']>;
+}
+
 /** Qualification is transport/version scoped; deployment support is insufficient. */
 export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: {
   profile: string; transport: 'shell' | 'mcp'; cliVersion: string; requiredControls?: string[];
@@ -638,6 +706,47 @@ export function resetModelPolicyCachesForTests(): void {
   catalogCache = null;
 }
 
+// Dispatch rechecks consume the effective policy from resolution. Keep these
+// predicates shared with route validation so defaults and restrictions agree.
+function isWorkerModelDenied(modelKey: string, policy: WorkerSelectionPolicy): boolean {
+  return (policy.guards?.deniedModels ?? DEFAULT_WORKER_SELECTION.guards!.deniedModels!).includes(modelKey);
+}
+function isWorkerEffortDenied(effort: string | null, policy: WorkerSelectionPolicy): boolean {
+  return effort !== null && (policy.guards?.deniedEfforts ?? DEFAULT_WORKER_SELECTION.guards!.deniedEfforts!).includes(effort);
+}
+function isWorkerNullEffortDenied(effort: string | null, observation: { effortSupport?: string },
+  guidance?: { allowNotApplicableEffort?: boolean }): boolean {
+  return effort === null && (observation.effortSupport !== 'not-applicable' || guidance?.allowNotApplicableEffort !== true);
+}
+function workerRouteDataPolicy(policy: WorkerSelectionPolicy, dataClass?: string): {
+  data: WorkerDataPolicy; unknownDataClass: boolean;
+} {
+  const data = { ...DEFAULT_WORKER_SELECTION.dataPolicy, ...policy.dataPolicy };
+  const narrowed = dataClass ? policy.dataClasses?.[dataClass] : undefined;
+  if (narrowed) {
+    if (narrowed.allowedProcessing) data.allowedProcessing = data.allowedProcessing?.filter(p => narrowed.allowedProcessing!.includes(p));
+    if (narrowed.allowUnknown === false) data.allowUnknown = false;
+    if (narrowed.allowProductImprovement === false) data.allowProductImprovement = false;
+    if (narrowed.maxRetentionDays !== undefined) data.maxRetentionDays = Math.min(data.maxRetentionDays ?? Infinity, narrowed.maxRetentionDays);
+  }
+  return { data, unknownDataClass: Boolean(dataClass && !narrowed) };
+}
+function isWorkerDataUseDenied(facts: WorkerModelObservation['dataUse'], data: WorkerDataPolicy): boolean {
+  return (facts.processing === 'unknown' && data.allowUnknown !== true)
+    || (facts.processing !== 'unknown' && !data.allowedProcessing?.includes(facts.processing))
+    || (facts.productImprovement === null && data.allowUnknown !== true)
+    || (facts.productImprovement === true && data.allowProductImprovement !== true)
+    || (data.maxRetentionDays !== undefined && (facts.retentionDays === null ? data.allowUnknown !== true : facts.retentionDays > data.maxRetentionDays));
+}
+function isWorkerEvidenceStale(observation: { observedAt: string; verifiedAt?: string }, policy: WorkerSelectionPolicy, now: number): boolean {
+  const observed = Date.parse(observation.observedAt);
+  const verified = observation.verifiedAt === undefined ? undefined : Date.parse(observation.verifiedAt);
+  const blockHours = policy.freshness?.blockHours ?? DEFAULT_WORKER_SELECTION.freshness!.blockHours!;
+  const policyDays = policy.freshness?.policyDays ?? DEFAULT_WORKER_SELECTION.freshness!.policyDays!;
+  return observed > now || now - observed > blockHours * 3600000
+    || (verified !== undefined && (verified > now || now - verified > policyDays * 86400000));
+}
+
 /** Validate a resolved route without launching or creating managed state. */
 export function validateWorkerPolicyRoute(input: {
   policy: WorkerSelectionPolicy;
@@ -665,31 +774,19 @@ export function validateWorkerPolicyRoute(input: {
   if (guards.requireExactModel !== false && input.selectedModel !== input.apiModelId) deny('OG_PIN_MISMATCH', '/worker/id', 'Selected model is not the exact observed API model');
   let modelKey: string | undefined;
   try { modelKey = workerModelKey(input.inferenceProvider, input.apiModelId); } catch { deny('OG_CONFIG_REFERENCE', '/worker/id', 'Invalid inference model identity'); }
-  if (modelKey && guards.deniedModels?.includes(modelKey)) deny('OG_MODEL_UNAPPROVED', '/defaults/workerSelection/guards/deniedModels', 'Inference model is denied');
+  if (modelKey && isWorkerModelDenied(modelKey, input.policy)) deny('OG_MODEL_UNAPPROVED', '/defaults/workerSelection/guards/deniedModels', 'Inference model is denied');
   if (input.identityEvidence === 'unknown' || input.identityEvidence === 'mismatched' || (guards.minimumIdentityEvidence === 'backend-attested' && input.identityEvidence !== 'backend-attested')) deny('OG_ADAPTER_UNQUALIFIED', '/defaults/workerSelection/guards/minimumIdentityEvidence', 'Identity evidence does not meet the required order');
   if (!(guards.allowedVisibility ?? ['listed']).includes(observation.visibility as 'listed' | 'hidden') || !(guards.allowedLifecycle ?? ['active']).includes(observation.lifecycle as 'active' | 'deprecated') || observation.availability !== 'accessible') deny('OG_MODEL_UNAPPROVED', '/worker', 'Visibility, lifecycle or availability is ineligible');
   if (input.effort === null) {
-    if (observation.effortSupport !== 'not-applicable' || guidance?.allowNotApplicableEffort !== true) deny('OG_EFFORT_DENIED', '/worker/effortSupport', 'Null effort requires qualified absence of an effort control');
+    if (isWorkerNullEffortDenied(input.effort, observation, guidance)) deny('OG_EFFORT_DENIED', '/worker/effortSupport', 'Null effort requires qualified absence of an effort control');
   } else {
     const effort = observation.efforts.find(e => e.id === input.effort);
-    if (observation.effortSupport !== 'explicit' || !effort || !(input.effort === 'none' ? guidance?.initialEffort === 'none' && guidance.effortLadder.length === 0 : guidance?.effortLadder.includes(input.effort)) || (guards.deniedEfforts ?? ['ultra']).includes(input.effort) || (guards.denySelfDelegation !== false && effort.selfDelegates !== false)) deny('OG_EFFORT_DENIED', '/worker/efforts', 'Unsupported, denied or self-delegating effort');
+    if (observation.effortSupport !== 'explicit' || !effort || !(input.effort === 'none' ? guidance?.initialEffort === 'none' && guidance.effortLadder.length === 0 : guidance?.effortLadder.includes(input.effort)) || isWorkerEffortDenied(input.effort, input.policy) || (guards.denySelfDelegation !== false && effort.selfDelegates !== false)) deny('OG_EFFORT_DENIED', '/worker/efforts', 'Unsupported, denied or self-delegating effort');
   }
-  const data = { ...DEFAULT_WORKER_SELECTION.dataPolicy, ...input.policy.dataPolicy };
-  if (input.dataClass) {
-    const narrowed = input.policy.dataClasses?.[input.dataClass];
-    if (!narrowed) deny('OG_DATA_POLICY', '/defaults/workerSelection/dataClasses', 'Unknown data class');
-    else {
-      if (narrowed.allowedProcessing) data.allowedProcessing = data.allowedProcessing?.filter(p => narrowed.allowedProcessing!.includes(p));
-      if (narrowed.allowUnknown === false) data.allowUnknown = false;
-      if (narrowed.allowProductImprovement === false) data.allowProductImprovement = false;
-      if (narrowed.maxRetentionDays !== undefined) data.maxRetentionDays = Math.min(data.maxRetentionDays ?? Infinity, narrowed.maxRetentionDays);
-    }
-  }
-  const facts = observation.dataUse;
-  if ((facts.processing === 'unknown' && data.allowUnknown !== true) || (facts.processing !== 'unknown' && !data.allowedProcessing?.includes(facts.processing)) || (facts.productImprovement === null && data.allowUnknown !== true) || (facts.productImprovement === true && data.allowProductImprovement !== true) || (data.maxRetentionDays !== undefined && (facts.retentionDays === null ? data.allowUnknown !== true : facts.retentionDays > data.maxRetentionDays))) deny('OG_DATA_POLICY', '/worker/dataUse', 'Execution path data facts do not satisfy policy');
+  const { data, unknownDataClass } = workerRouteDataPolicy(input.policy, input.dataClass);
+  if (unknownDataClass) deny('OG_DATA_POLICY', '/defaults/workerSelection/dataClasses', 'Unknown data class');
+  if (isWorkerDataUseDenied(observation.dataUse, data)) deny('OG_DATA_POLICY', '/worker/dataUse', 'Execution path data facts do not satisfy policy');
   const now = (input.now ?? new Date()).getTime();
-  const observed = Date.parse(observation.observedAt);
-  const verified = Date.parse(observation.verifiedAt);
-  if (observed > now || verified > now || now - observed > (input.policy.freshness?.blockHours ?? 168) * 3600000 || now - verified > (input.policy.freshness?.policyDays ?? 30) * 86400000) deny('OG_ADAPTER_UNQUALIFIED', '/worker/observedAt', 'Model evidence is stale or from the future');
+  if (isWorkerEvidenceStale(observation, input.policy, now)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/observedAt', 'Model evidence is stale or from the future');
   return diagnostics;
 }

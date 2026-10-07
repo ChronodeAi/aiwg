@@ -110,6 +110,92 @@ export class ProviderAdapter {
   }
 
   /**
+   * Prepare one policy-resolved invocation through the supported installed path.
+   * This only validates/renders data: the conductor still owns path/digest
+   * rechecks, launch, observation and verification. No Ralph loop is started.
+   * Qualified drivers supply explicit argv; legacy buildSessionArgs defaults
+   * must never be used as a fallback for a worker profile.
+   *
+   * @param {Object} invocation - Existing workerResolvedInvocation payload
+   * @param {Object} qualification - Trusted adapter, cliVersion, requiredControls,
+   *   now (epoch milliseconds), platform, current mcp/schema bindings, and optional
+   *   merged policy and dataClass from trusted resolution. Observation evidence
+   *   (modelObservation or defaultObservation) is required; null effort also
+   *   requires the selected role and policy role guidance allowing its absence.
+   * @returns {Promise<Object>} A detached typed descriptor; never executes it
+   */
+  async prepareWorkerInvocation(invocation, qualification) {
+    const { assertValidWorkerPayload } = await importImpl(import.meta.url, 'mission-protocol/codecs.js');
+    const { qualifyWorkerInvocationProfile, assertWorkerSelectionAllowed } = await importImpl(import.meta.url, 'models/provider-policy.js');
+    const result = structuredClone(invocation);
+    // shellCommand is derived syntax, never authority supplied by a brief.
+    if (result.transport === 'shell') result.shellCommand = '';
+    assertValidWorkerPayload('workerResolvedInvocation', result);
+    if ((qualification.platform ?? process.platform) !== 'linux') {
+      throw new Error('Unsupported worker invocation platform; Linux is required');
+    }
+    if (!Number.isFinite(qualification.now) || Date.parse(result.expiresAt) <= qualification.now) {
+      throw new Error('Worker invocation is expired or has no validation clock');
+    }
+    if (qualification.adapter.id !== this.getName()) {
+      throw new Error('Worker invocation adapter identity mismatch');
+    }
+    if (!Array.isArray(qualification.requiredControls)) {
+      throw new Error('Worker invocation must declare required controls');
+    }
+    assertWorkerSelectionAllowed(result.selected, qualification);
+    const profile = qualifyWorkerInvocationProfile(qualification.adapter, {
+      profile: result.selected.profileRef, transport: result.transport,
+      cliVersion: qualification.cliVersion,
+      requiredControls: [...new Set(['model', ...(result.selected.effort.support === 'explicit' ? ['effort'] : []), ...qualification.requiredControls])],
+      mcp: qualification.mcp,
+    });
+    const absolute = value => typeof value === 'string' && path.posix.isAbsolute(value) && !value.includes('\0');
+    for (const key of ['cwd', 'briefPath', 'stdoutPath', 'stderrPath', 'finalPath']) {
+      if (!absolute(result[key])) throw new Error(`Worker invocation requires absolute ${key}`);
+    }
+    const briefPath = path.posix.normalize(result.briefPath);
+    if ([result.stdoutPath, result.stderrPath, result.finalPath].some(value => path.posix.normalize(value) === briefPath)
+      || path.posix.normalize(result.stdoutPath) === path.posix.normalize(result.stderrPath)) {
+      throw new Error('Worker invocation input/output paths must be distinct');
+    }
+    if (result.transport === 'shell') {
+      if (!absolute(result.argv[0]) || result.argv.some(value => value.includes('\0'))) {
+        throw new Error('Worker invocation requires an absolute binary and NUL-free argv');
+      }
+      if (result.envNames.some(name => !profile.envAllowlist.includes(name))) {
+        throw new Error('Worker invocation environment is outside the qualified allowlist');
+      }
+      const quote = value => `'${value.replaceAll("'", "'\"'\"'")}'`;
+      // Only validated environment names appear as shell syntax; their values
+      // remain in the conductor environment and are never printed in the plan.
+      const environment = result.envNames.map(name => `${name}="\${${name}-}"`).join(' ');
+      const stdin = result.stdin === 'closed' ? '/dev/null' : quote(result.briefPath);
+      result.shellCommand = `cd ${quote(result.cwd)} && env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')} < ${stdin} > ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
+    } else {
+      const binding = result.mcp;
+      for (const key of ['serverRef', 'tool', 'inputSchemaDigest', 'outputSchemaDigest', 'sessionIsolation']) {
+        if (binding[key] !== profile.mcp[key]) throw new Error(`MCP worker binding changed: ${key}`);
+      }
+      if (binding.timeoutSeconds > result.limits.wallSeconds) {
+        throw new Error('MCP worker timeout exceeds the invocation deadline');
+      }
+      for (const key of ['input', 'output']) {
+        const schema = qualification.mcpSchemas?.[key];
+        if (!schema || `sha256:${createHash('sha256').update(JSON.stringify(schema)).digest('hex')}` !== binding[`${key}SchemaDigest`]) {
+          throw new Error(`MCP worker ${key} schema digest changed`);
+        }
+      }
+      const { default: Ajv2020 } = await import('ajv/dist/2020.js');
+      const { default: addFormats } = await import('ajv-formats');
+      const validate = addFormats(new Ajv2020({ strict: true, allErrors: true })).compile(qualification.mcpSchemas.input);
+      if (!validate(binding.arguments)) throw new Error('MCP worker arguments violate the pinned input schema');
+    }
+    assertValidWorkerPayload('workerResolvedInvocation', result);
+    return result;
+  }
+
+  /**
    * Build CLI arguments for a short analysis call (spawnSync).
    * Used by OutputAnalyzer, StateAssessor, and ClaudePromptGenerator
    * for quick Claude-powered analysis between iterations.
