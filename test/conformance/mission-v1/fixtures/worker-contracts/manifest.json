@@ -43,7 +43,7 @@
       "source": "05-configuration-spec.md ### 4.4 Existing",
       "owner": "schemas/models/model-catalog.v1.schema.json",
       "target": "$defs.workerObservation",
-      "sha256": "b038c4a919cece2fdae3bdeb9387ad70992f5fa57422f0fc4e3cb076acd90e43"
+      "sha256": "ca01c0888722709e29a836247578c9bad4d277e3905bb6c36c3c86621469e283"
     },
     {
       "file": "mission-definitions.patch.json",

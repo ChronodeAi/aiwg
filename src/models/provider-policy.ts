@@ -489,6 +489,9 @@ export function assertWorkerSelectionAllowed(selected: {
       || isWorkerEvidenceStale(observation, policy, context.now)) {
       throw new Error(`Worker invocation ${kind} observation is stale or invalid`);
     }
+    if (hasSelectionRelevantConflicts(observation as WorkerModelObservation)) {
+      throw new Error(`Worker invocation ${kind} observation has conflicting selection-relevant evidence`);
+    }
     if (observation.dataUse && isWorkerDataUseDenied({
       processing: observation.dataUse.processing ?? 'unknown',
       productImprovement: observation.dataUse.productImprovement ?? null,
@@ -507,6 +510,7 @@ interface WorkerSelectionObservation {
   retiredAt?: string | null;
   sunsetAt?: string | null;
   dataUse?: Partial<WorkerModelObservation['dataUse']>;
+  conflicts?: WorkerModelObservation['conflicts'];
 }
 
 /** Qualification is transport/version scoped; deployment support is insufficient. */
@@ -747,6 +751,12 @@ function isWorkerEvidenceStale(observation: { observedAt: string; verifiedAt?: s
     || (verified !== undefined && (verified > now || now - verified > policyDays * 86400000));
 }
 
+/** Optional catalog facts do not veto otherwise qualified selection. */
+export function hasSelectionRelevantConflicts(observation: WorkerModelObservation): boolean {
+  const relevant = /^\/(?:lifecycle|availability|visibility|hidden|efforts|effortSupport|reasoningEfforts|sunsetAt|retiredAt|replacementModelId|supersededBy|dataUse|id|apiModelId|cliId|family|runtimeVersion|accountScope|endpointFingerprint|identityEvidence)(?:\/|$)/;
+  return observation.conflicts?.some(conflict => relevant.test(conflict.field)) ?? false;
+}
+
 /** Validate a resolved route without launching or creating managed state. */
 export function validateWorkerPolicyRoute(input: {
   policy: WorkerSelectionPolicy;
@@ -766,6 +776,11 @@ export function validateWorkerPolicyRoute(input: {
   const shapeErrors = validateWorkerModelObservation(input.observation);
   if (shapeErrors.length) return [{ code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/worker', message: shapeErrors.join('; ') }];
   const observation = input.observation;
+  if (hasSelectionRelevantConflicts(observation)) deny('OG_MODEL_UNAPPROVED', '/worker/conflicts', 'Conflicting selection-relevant model evidence blocks the route');
+  else if (observation.conflicts?.length) diagnostics.push({
+    code: 'OG_MODEL_UNAPPROVED', pointer: '/worker/conflicts', blocking: false,
+    message: `Conflicting optional model evidence remains unknown: ${observation.conflicts.map(conflict => conflict.field).join(', ')}`,
+  });
   const guards = input.policy.guards ?? DEFAULT_WORKER_SELECTION.guards!;
   const guidance = input.policy.roleGuidance?.[input.role];
   if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence');

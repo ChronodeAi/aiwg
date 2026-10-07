@@ -125,6 +125,9 @@ describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () 
       ['retired model', f => { f.qualification.modelObservation.lifecycle = 'retired'; }, /retired/i],
       ['stale default', f => { f.qualification.defaultObservation = { observedAt: '2026-09-01T00:00:00Z', lifecycle: 'active' }; }, /stale/i],
       ['retired default', f => { f.qualification.defaultObservation = { observedAt: '2026-10-07T00:00:00Z', lifecycle: 'retired' }; }, /retired/i],
+      ['conflicting lifecycle evidence', f => {
+        f.qualification.modelObservation.conflicts = [{ field: '/lifecycle', values: [] }];
+      }, /conflicting selection-relevant evidence/i],
     ])('refuses %s before rendering', async (_id, mutate, error) => {
       const f = setup(transport);
       f.profile.controls.effort = { support: 'native', mapping: '--effort', evidence: 'fixture:synthetic-only' };
@@ -171,6 +174,9 @@ describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () 
     ['product improvement allowed', (f: any) => {
       f.qualification.policy = { dataPolicy: { allowProductImprovement: true } };
       f.qualification.modelObservation.dataUse.productImprovement = true;
+    }],
+    ['release-date-only conflict stays advisory', (f: any) => {
+      f.qualification.modelObservation.conflicts = [{ field: '/releaseDate', values: [] }];
     }],
   ] as const)('T-OG-15 renders a permitted selection: %s', async (_id, mutate) => {
     const f = setup();
