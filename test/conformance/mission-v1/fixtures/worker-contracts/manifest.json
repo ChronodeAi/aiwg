@@ -1,0 +1,56 @@
+{
+  "revision": 1,
+  "checkpoint": "B-OG-01 / #2876 S1 direct/shared",
+  "provenance": {
+    "kind": "synthetic-contract-fixtures",
+    "sourcePackage": "multi-cli-orchestration",
+    "baseline": "2026-10-07",
+    "paidCalls": 0,
+    "credentials": "none",
+    "runtimeQualification": false
+  },
+  "fragments": [
+    {
+      "file": "parallelism.fragment.json",
+      "source": "05-configuration-spec.md ### 4.1 Existing",
+      "owner": "vscode-extension/schemas/aiwg.config.v1.json",
+      "target": "properties.parallelism",
+      "sha256": "e51c1376248a54695a2ee74fd4419d6c0057433f757e080ff99af63347e7f9d3"
+    },
+    {
+      "file": "worker-selection.fragment.json",
+      "source": "05-configuration-spec.md ### 4.2 Existing",
+      "owner": "schemas/models/model-config-compatibility.v1.schema.json",
+      "target": "properties.defaults.properties.workerSelection",
+      "sha256": "6051d9dd591619e4a7721fb688676b03ab5a20faafd791a0cd581e4c75ab6343"
+    },
+    {
+      "file": "worker-adapter.fragment.json",
+      "source": "05-configuration-spec.md ### 4.3 Existing",
+      "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
+      "target": "$defs.workerAdapter",
+      "sha256": "ee8e9be50d2cb50052ca189639e779c35c48c117829befe5b69dd7331b1f320f"
+    },
+    {
+      "file": "capability-root.patch.json",
+      "source": "05-configuration-spec.md ### 4.3a Closed-root",
+      "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
+      "target": "properties",
+      "sha256": "ef9ccfc012621fab42f5aca16d555fef5a3093bf506dce31cae8b2385947157b"
+    },
+    {
+      "file": "worker-observation.fragment.json",
+      "source": "05-configuration-spec.md ### 4.4 Existing",
+      "owner": "schemas/models/model-catalog.v1.schema.json",
+      "target": "$defs.workerObservation",
+      "sha256": "b038c4a919cece2fdae3bdeb9387ad70992f5fa57422f0fc4e3cb076acd90e43"
+    },
+    {
+      "file": "mission-definitions.patch.json",
+      "source": "05-configuration-spec.md ### 5.1 Executable",
+      "owner": "schemas/mission-v1.schema.json",
+      "target": "$defs",
+      "sha256": "3a41382c7df7825793321b1a83430060552dc08f29beb4e3a70a6af33486fff2"
+    }
+  ]
+}
