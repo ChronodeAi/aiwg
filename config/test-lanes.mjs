@@ -17,6 +17,12 @@ export const artifactIndexFiles = [
   'test/integration/artifacts/multi-graph.test.ts',
 ];
 export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corpus.test.ts'];
+// Shared S0 infrastructure and frozen contracts run in the existing offline
+// conformance lane. Mechanism suites retain their source owner's unit lane.
+export const orchestrationConformanceFiles = [
+  'test/conformance/orchestration-v1/**/*.test.ts',
+  'test/conformance/mission-v1/worker-contracts.test.ts',
+];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
   'tools/experiments/conformal/prototype.test.mjs',
