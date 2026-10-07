@@ -13,7 +13,8 @@ import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { isCanonicalWorkerModelKey } from '../models/provider-policy.js';
+import { isCanonicalWorkerModelKey, loadProviderModelCapabilities, resolveWorkerInstallation } from '../models/provider-policy.js';
+import type { ProviderModelCapabilityRegistry } from '../models/provider-policy.js';
 import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
 import { createHash, randomBytes } from 'crypto';
 import { resolve, join, dirname, isAbsolute } from 'path';
@@ -946,14 +947,14 @@ export function validateParallelismConfig(value: unknown): string[] {
     const file = candidates.find(existsSync);
     if (!file) throw new Error('Parallelism schema is unavailable');
     const schema = JSON.parse(readFileSync(file, 'utf8'));
-    const ajv = addFormats(new Ajv({ strict: false, allErrors: true }));
+    const ajv = addFormats(new Ajv({ strict: true, allErrors: true }));
     parallelismValidator = ajv.compile({ ...schema.properties.parallelism, definitions: schema.definitions });
   }
   if (!parallelismValidator(value)) return (parallelismValidator.errors ?? []).map(error => `OG_CONFIG_REFERENCE /parallelism${error.instancePath}: ${error.message}`);
   const policy = value as ParallelismConfig;
   const errors: string[] = [];
   const error = (pointer: string, message: string): void => { errors.push(`OG_CONFIG_REFERENCE /parallelism/${pointer}: ${message}`); };
-  const builtinIds = new Set(Object.keys(PROVIDER_PARALLELISM_DEFAULTS));
+  const builtinIds = new Set<string>(PROVIDER_IDS.filter(id => id !== 'generic'));
   for (const [id, installation] of Object.entries(policy.clis ?? {})) {
     if (installation.adapter.startsWith('providers:') && !builtinIds.has(installation.adapter.slice(10))) error(`clis/${id}/adapter`, 'Unknown provider binding');
   }
@@ -978,6 +979,45 @@ export function validateParallelismConfig(value: unknown): string[] {
   }
   for (const key of Object.keys(admission?.modelCaps ?? {})) if (!isCanonicalWorkerModelKey(key)) error('admission/modelCaps', 'Noncanonical inference model key');
   return errors;
+}
+
+/** Resolve one enabled installation through trusted metadata, without probes.
+ * Implicit canonical IDs inherit current-account auth; no account/quota identity
+ * is invented. Profile qualification remains the invocation owner's obligation.
+ */
+export function resolveWorkerGroupInstallation(
+  parallelism: ParallelismConfig,
+  installationId: string,
+  registry: ProviderModelCapabilityRegistry = loadProviderModelCapabilities(),
+) {
+  const errors = validateParallelismConfig(parallelism);
+  if (errors.length) throw new Error(errors.join('; '));
+  if (!parallelism.worker_dispatch) throw new Error('OG_CONFIG_REFERENCE /parallelism/worker_dispatch: Worker dispatch is disabled');
+  const explicit = parallelism.clis?.[installationId];
+  const installation = explicit
+    ? structuredClone(explicit)
+    : { adapter: `providers:${installationId}`, enabled: true };
+  if (!explicit && (!PROVIDER_IDS.includes(installationId as typeof PROVIDER_IDS[number]) || installationId === 'generic')) {
+    throw new Error(`OG_CONFIG_REFERENCE /parallelism/clis/${installationId}: Unknown canonical installation`);
+  }
+  if (installation.enabled === false) throw new Error(`OG_CONFIG_REFERENCE /parallelism/clis/${installationId}: Installation is disabled`);
+  try {
+    return { installation: { ...installation, enabled: true }, ...resolveWorkerInstallation(registry, installation) };
+  } catch (error) {
+    throw new Error(`OG_ADAPTER_UNQUALIFIED /parallelism/clis/${installationId}: ${error}`);
+  }
+}
+
+/** Validate current model restrictions and group references before any write.
+ * Disabled/unbound projects retain their existing config-only edit behavior.
+ * This is shared validation, not Tier 1 coherent activation.
+ */
+export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig): Promise<void> {
+  const errors = validateParallelismConfig(config.parallelism);
+  if (errors.length) throw new Error(errors.join('; '));
+  if (!config.parallelism?.worker_dispatch) return;
+  const { ConfigLoader } = await import('../models/config-loader.js');
+  await new ConfigLoader(projectDir).load(config.parallelism);
 }
 
 /** Hash canonical JSON, treating absent optional model files as null. */
@@ -1816,12 +1856,14 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   let filePath = localPath;
   try {
     await access(localPath);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     if (artifactPath === localPath) return null;
     try {
       await access(artifactPath);
       filePath = artifactPath;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return null;
     }
   }
@@ -1876,6 +1918,8 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     console.warn(`Invalid gates section in .aiwg/aiwg.config (ignored):\n${gatesErrors.join('\n')}`);
   }
 
+  await validateWorkerConfigCandidate(projectDir, parsed);
+
   return parsed;
 }
 
@@ -1899,6 +1943,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
   const gatesErrors = validateGatesConfig(config.gates);
   if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
+  await validateWorkerConfigCandidate(projectDir, config);
   const localPath = getConfigPath(projectDir);
   const artifactDir = resolveProjectAiwgDir(projectDir);
   const artifactPath = join(artifactDir, CONFIG_FILENAME);
@@ -2178,6 +2223,7 @@ export function validateWorkerInstallationBindings(parallelism: ParallelismConfi
 }
 export function validateWorkerGroupReferences(parallelism: ParallelismConfig, selection: import('../models/types.js').WorkerSelectionPolicy, qualifiedRoles?: Record<string, string[]>): string[] {
   const errors = validateParallelismConfig(parallelism);
+  if (errors.length) return errors;
   for (const [role, guidance] of Object.entries(selection.roleGuidance ?? {})) {
     for (const group of guidance.groups) if (!parallelism.groups?.[group]) errors.push(`OG_CONFIG_REFERENCE /defaults/workerSelection/roleGuidance/${role}/groups: Unknown group ${group}`);
   }

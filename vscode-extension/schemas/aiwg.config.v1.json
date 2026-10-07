@@ -520,6 +520,9 @@
                 }
               },
               "then": {
+                "properties": {
+                  "reservationUsd": {}
+                },
                 "required": [
                   "reservationUsd"
                 ]
@@ -980,6 +983,10 @@
         "quotaScope"
       ],
       "not": {
+        "properties": {
+          "executable": {},
+          "endpoint": {}
+        },
         "required": [
           "executable",
           "endpoint"
