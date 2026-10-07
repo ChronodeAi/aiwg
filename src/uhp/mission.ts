@@ -1,6 +1,7 @@
 import type { UhpEvent, UhpMissionEvidence, UhpResponse, UhpResponseRequest } from './types.js';
 import { UHP_VERSION } from './types.js';
 import { decodeMission, type MissionDecodeResult } from '../mission-protocol/index.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 function collectArtifacts(response: UhpResponse): UhpMissionEvidence['artifacts'] {
   const artifacts = new Map<string, UhpMissionEvidence['artifacts'][number]>();
@@ -45,6 +46,9 @@ export function projectUhpResponseToMission(
   request: UhpResponseRequest = { input: '' },
   event?: UhpEvent,
 ): UhpMissionEvidence {
+  assertMissionWorkerHandoff(response, 'uhp');
+  assertMissionWorkerHandoff(request, 'uhp');
+  if (event) assertMissionWorkerHandoff(event, 'uhp');
   const known = ['in_progress', 'completed', 'failed', 'incomplete', 'cancelled'].includes(response.status);
   const state = response.status === 'in_progress' ? 'running' : known ? response.status : 'unknown';
   const metadata = response.metadata ?? {};

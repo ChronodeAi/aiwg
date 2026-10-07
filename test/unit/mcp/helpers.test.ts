@@ -34,6 +34,37 @@ const {
   DESTRUCTIVE_COMMANDS,
 } = helpers as any;
 
+describe('MCP worker contract ownership', () => {
+  const owner = 'https://aiwg.io/schemas/mission.aiwg.io/v1';
+  it.each([
+    { $ref: '#/$defs/workerName', $defs: { workerName: { type: 'string' } } },
+    { $id: 'https://synthetic.invalid/input', $ref: '#/$defs/workerBrief', $defs: { workerBrief: { type: 'string' } } },
+    { $ref: 'https://synthetic.invalid/input#/$defs/workerBrief' },
+    { $ref: `${owner}#/$defs/workerName` },
+    { $id: owner, properties: { local: { $id: 'https://synthetic.invalid/input', $ref: '#/$defs/workerBrief' } } },
+    { type: 'object', properties: { 'aiwg.worker-dispatch': { type: 'string' } }, default: { $ref: `${owner}#/$defs/workerBrief` } },
+  ])('accepts unrelated schemas and literals %j', schema => {
+    expect(() => helpers.assertNoWorkerBinding({ schema }, 'mcp')).not.toThrow();
+  });
+
+  it.each([
+    { $ref: `${owner}#/$defs/workerBrief` },
+    { $id: owner, $ref: '#/$defs/workerBrief' },
+    { $id: owner, properties: { child: { $ref: '#/$defs/workerResult' } } },
+    { $id: owner, allOf: [{ $ref: '#/$defs/workerBrief' }] },
+    { $id: `${owner}/local`, $ref: '../v1#/$defs/workerClaims' },
+    { schemaRef: `${owner}#/$defs/workerClaims` },
+  ])('blocks references owned by the mission-v1 worker definitions %j', schema => {
+    expect(() => helpers.assertNoWorkerBinding({ schema }, 'mcp')).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+    expect(() => helpers.assertNoWorkerBinding(schema, 'mcp')).toThrow(/OG_CONTRACT_UNSUPPORTED/);
+  });
+
+  it('accepts legacy output data and opaque vendor extensions', () => {
+    const data = { properties: { 'aiwg.worker-dispatch': { type: 'string' } }, extensions: { 'aiwg.worker-dispatch': { type: 'string' } } };
+    expect(() => helpers.assertNoWorkerBinding({ partialOutput: data, extensions: { 'vendor.synthetic': data } }, 'mcp')).not.toThrow();
+  });
+});
+
 describe("MCP helpers — scope split", () => {
   it("isGlobalAllowed returns true for discovery tools", () => {
     expect(isGlobalAllowed("discover")).toBe(true);

@@ -2,7 +2,23 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decodeMission, encodeMission } from '../../../src/mission-protocol/index.js';
+import {
+  WORKER_BASELINE_FEATURES,
+  WORKER_CONTRACT_REVISION,
+  WORKER_DEFINITION_PRODUCERS,
+  WORKER_DEFINITIONS,
+  WORKER_KNOWN_FEATURES,
+  WorkerContractError,
+  assertWorkerConsumerSupported,
+  decodeMission,
+  decodeWorkerPayload,
+  encodeMission,
+  encodeWorkerPayload,
+  negotiateWorkerSupport,
+  validateWorkerPayload,
+  workerDefinitionBundleDigest,
+  type WorkerConsumerSupport,
+} from '../../../src/mission-protocol/index.js';
 import { resolveParallelism } from '../../../src/config/aiwg-config.js';
 import { validateUserProjectModelConfig } from '../../../src/models/provider-policy.js';
 import { fixtureJson, fixtureRoot, materialize, readJson, validators, type ContractVector } from './worker-contract-fixtures.js';
@@ -41,7 +57,10 @@ describe('B-OG-01 frozen Mission definitions (T-OG-08/14/15/17)', () => {
       expect(consumer.owner, consumer.id).toMatch(/B-OG-\d+/);
       expect(consumer.checkpoint.length).toBeGreaterThan(0);
       for (const definition of consumer.definitions) expect(schemas.mission.$defs[definition], consumer.id).toBeDefined();
-      expect(consumer.advertisedWorkerSupport).toBe(false);
+      // B-OG-30 (#2879): worker-boundaries.test.ts exercises negotiation through
+      // encodeMission/decodeMission before canonical support is advertised.
+      // Every runtime consumer remains unadvertised until its own gate passes.
+      expect(consumer.advertisedWorkerSupport, consumer.id).toBe(consumer.id === 'canonical-codec');
     }
   });
 
@@ -122,12 +141,74 @@ describe('legacy and shared schema compatibility (T-OG-01/14)', () => {
   });
 });
 
-describe('frozen consumer negotiation oracle (T-OG-14; runtime owned by #2879)', () => {
+describe('production consumer negotiation guard (T-OG-14; B-OG-30 #2879)', () => {
   it.each(fixtureJson('negotiation-vectors.json'))('$id => $expected before any task transmission', vector => {
-    const { consumer } = vector;
-    const knownFeatures = [...schemas.mission.$defs.workerDispatch.properties.requiredFeatures.items.enum, 'worker-flow-values.v1'];
-    const supported = consumer.revision === 1 && consumer.bundleDigest === vector.bundleDigest && consumer.lossless === true && Array.isArray(consumer.features)
-      && vector.requiredFeatures.every((feature: string) => knownFeatures.includes(feature) && consumer.features.includes(feature));
-    expect(supported ? 'supported' : 'OG_CONTRACT_UNSUPPORTED').toBe(vector.expected);
+    expect(negotiateWorkerSupport(vector.consumer, { requiredFeatures: vector.requiredFeatures, bundleDigest: vector.bundleDigest })).toBe(vector.expected);
+  });
+
+  it('blocks old consumers before payload handling with OG_CONTRACT_UNSUPPORTED diagnostics', () => {
+    const digest = workerDefinitionBundleDigest();
+    const oldConsumer: WorkerConsumerSupport = { revision: 1, bundleDigest: digest, features: [], lossless: true };
+    expect(() => assertWorkerConsumerSupported(oldConsumer, { requiredFeatures: [...WORKER_BASELINE_FEATURES], bundleDigest: digest }))
+      .toThrowError(WorkerContractError);
+    try {
+      assertWorkerConsumerSupported(oldConsumer, { requiredFeatures: [...WORKER_BASELINE_FEATURES], bundleDigest: digest });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as WorkerContractError).code).toBe('OG_CONTRACT_UNSUPPORTED');
+    }
+    const matching: WorkerConsumerSupport = { revision: 1, bundleDigest: digest, features: [...WORKER_BASELINE_FEATURES], lossless: true };
+    expect(() => assertWorkerConsumerSupported(matching, { requiredFeatures: [...WORKER_BASELINE_FEATURES], bundleDigest: digest })).not.toThrow();
+  });
+});
+
+describe('production worker codecs (B-OG-30 #2879; T-OG-08/14)', () => {
+  it('ships the frozen 05 §5.1 definitions under an unchanged schema identity', () => {
+    const production = readJson('schemas/mission-v1.schema.json');
+    expect(production.$id).toBe('https://aiwg.io/schemas/mission.aiwg.io/v1');
+    expect(production.$id).toBe(schemas.mission.$id);
+    const frozen = fixtureJson('mission-definitions.patch.json').$defs;
+    for (const definition of WORKER_DEFINITIONS) {
+      expect(production.$defs[definition], definition).toEqual(frozen[definition]);
+    }
+    expect(production.$defs.extensions.properties).toEqual({ 'aiwg.worker-dispatch': { $ref: '#/$defs/workerDispatch' } });
+  });
+
+  it('keeps feature constants wired to the shipped dispatch enum', () => {
+    const dispatchEnum = schemas.mission.$defs.workerDispatch.properties.requiredFeatures.items.enum;
+    expect([...WORKER_BASELINE_FEATURES, 'worker-health.v1']).toEqual(dispatchEnum);
+    expect([...WORKER_KNOWN_FEATURES]).toEqual([...dispatchEnum, 'worker-flow-values.v1']);
+    expect(WORKER_CONTRACT_REVISION).toBe(1);
+  });
+
+  it('names a producer for every shipped worker definition', () => {
+    expect(new Set(WORKER_DEFINITIONS).size).toBe(WORKER_DEFINITIONS.length);
+    for (const definition of WORKER_DEFINITIONS) expect(WORKER_DEFINITION_PRODUCERS[definition]).toBeDefined();
+  });
+
+  it.each(vectors.filter(v => v.valid))('losslessly round-trips valid $id through production codecs', vector => {
+    const value = materialize(vector, vectors);
+    expect(validateWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value).valid).toBe(true);
+    const roundtrip = decodeWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], encodeWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value));
+    expect(roundtrip).toEqual(value);
+    if (typeof (value as { version?: unknown }).version === 'number') {
+      expect((roundtrip as { version: unknown }).version).toBe((value as { version: unknown }).version);
+    }
+  });
+
+  it.each(vectors.filter(v => !v.valid))('rejects invalid $id in production codecs', vector => {
+    const value = materialize(vector, vectors);
+    expect(validateWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value).valid).toBe(false);
+    expect(() => encodeWorkerPayload(vector.definition as (typeof WORKER_DEFINITIONS)[number], value)).toThrowError(WorkerContractError);
+  });
+
+  it('blocks gated payloads before validation when the consumer is old', () => {
+    const claims = materialize(vectors.find(v => v.id === 'claims-only')!, vectors);
+    const digest = workerDefinitionBundleDigest();
+    const oldConsumer: WorkerConsumerSupport = { revision: 1, bundleDigest: digest, features: [], lossless: true };
+    expect(() => encodeWorkerPayload('workerClaims', claims, { consumer: oldConsumer })).toThrowError(/OG_CONTRACT_UNSUPPORTED/);
+    expect(() => decodeWorkerPayload('workerClaims', claims, { consumer: oldConsumer })).toThrowError(/OG_CONTRACT_UNSUPPORTED/);
+    const matching: WorkerConsumerSupport = { revision: 1, bundleDigest: digest, features: [...WORKER_BASELINE_FEATURES], lossless: true };
+    expect(decodeWorkerPayload('workerClaims', encodeWorkerPayload('workerClaims', claims, { consumer: matching }), { consumer: matching })).toEqual(claims);
   });
 });

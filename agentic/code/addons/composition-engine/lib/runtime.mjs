@@ -3,6 +3,140 @@ import { validateFlowGraph } from './validator.mjs';
 
 const RESOURCE_KEYS = ['activations', 'tokens', 'costUsd', 'timeMs'];
 
+// This runtime has no worker-value validation/accounting handshake yet (05 §5.1).
+// Reject these bindings before validation can clone them or an adapter can launch.
+const MISSION_WORKER_SCHEMA_ID = 'https://aiwg.io/schemas/mission.aiwg.io/v1';
+const MISSION_WORKER_DEFINITIONS = new Set([
+  'workerArtifact',
+  'workerEffort',
+  'workerTuple',
+  'workerLimits',
+  'workerSelectionIntent',
+  'workerBrief',
+  'workerClaims',
+  'workerUsage',
+  'workerExecution',
+  'workerVerification',
+  'workerResult',
+  'workerDispatch',
+  'workerDirectIntent',
+  'workerDirectBrief',
+  'workerResolvedInvocation',
+  'workerDirectVerification',
+  'workerDirectResult',
+  'workerHealthSummary',
+  'workerEffectiveHealth',
+]);
+
+// Resolve against the owning schema, never infer ownership from a $defs name.
+function workerContractReference(reference, base = 'https://aiwg.invalid/local-schema') {
+  if (typeof reference !== 'string') return false;
+  try {
+    const resolved = new URL(reference, base);
+    const fragment = decodeURIComponent(resolved.hash).split('/');
+    resolved.hash = '';
+    return resolved.href === MISSION_WORKER_SCHEMA_ID
+      && fragment[0] === '#' && fragment[1] === '$defs'
+      && MISSION_WORKER_DEFINITIONS.has(fragment[2]);
+  } catch {
+    return false;
+  }
+}
+
+function assertNoWorkerBinding(value) {
+  const seenExtensions = new Set();
+  const seenRecords = new Set();
+  const seenSchemas = new Map();
+  function unsupported() {
+    throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Flow runtime does not advertise worker-flow-values.v1 validation/accounting support.');
+  }
+  function extensions(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenExtensions.has(item)) return;
+    seenExtensions.add(item);
+    if (Object.hasOwn(item, 'aiwg.worker-dispatch')) unsupported();
+    for (const [key, child] of Object.entries(item)) if (key.startsWith('aiwg.source.')) {
+      extensions(child);
+      record(child);
+    }
+  }
+  function schema(item, inheritedBase = 'https://aiwg.invalid/local-schema') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    let base = inheritedBase;
+    if (typeof item.$id === 'string') {
+      try { base = new URL(item.$id, inheritedBase).href; } catch { /* invalid schemas belong to validation */ }
+    }
+    const bases = seenSchemas.get(item) ?? new Set();
+    if (bases.has(base)) return;
+    bases.add(base);
+    seenSchemas.set(item, bases);
+    if (workerContractReference(item.$ref, base) || workerContractReference(item.schemaRef, base)) unsupported();
+    // Only JSON Schema subschemas inherit an owner. const/default/examples
+    // and properties' names are data, not active references or extensions.
+    for (const key of ['$defs', 'definitions', 'properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
+      for (const child of Object.values(item[key] ?? {})) schema(child, base);
+    }
+    for (const key of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+    }
+    for (const key of ['items', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties', 'contains', 'propertyNames', 'not', 'if', 'then', 'else']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+      else schema(item[key], base);
+    }
+  }
+  function record(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenRecords.has(item)) return;
+    seenRecords.add(item);
+    // All mission-v1 carriers: /extensions and /status/artifacts/*/extensions.
+    extensions(item.extensions);
+    if (Array.isArray(item.status?.artifacts)) item.status.artifacts.forEach(record);
+    // Native protocols also use metadata and top-level artifacts.
+    extensions(item.metadata);
+    if (Array.isArray(item.artifacts)) item.artifacts.forEach(record);
+    if (typeof item.$ref === 'string' || typeof item.schemaRef === 'string'
+      || typeof item.$id === 'string' || typeof item.$schema === 'string') schema(item);
+    schema(item.schema);
+    if (workerContractReference(item.output?.schemaRef)) unsupported();
+  }
+  record(value);
+}
+
+// Named input/output maps and their values are user data, not contract
+// records. Only a value that declares itself a Mission record can carry a
+// worker binding, so an input named `extensions` or `metadata` stays data.
+function assertNoWorkerValues(values) {
+  for (const value of Object.values(values ?? {})) {
+    if (value && typeof value === 'object' && !Array.isArray(value)
+      && value.apiVersion === 'mission.aiwg.io/v1' && value.kind === 'Mission') assertNoWorkerBinding(value);
+  }
+}
+
+function assertNoWorkerResult(result) {
+  assertNoWorkerBinding(result);
+  assertNoWorkerValues(result?.outputs);
+}
+
+function assertNoWorkerFlow(manifest, resume) {
+  assertNoWorkerBinding(manifest);
+  // Visit declared schemas and typed values, never arbitrary manifest data.
+  for (const candidate of manifest?.spec?.candidates ?? []) assertNoWorkerBinding(candidate);
+  for (const field of manifest?.spec?.state?.fields ?? []) {
+    assertNoWorkerBinding(field);
+    assertNoWorkerBinding(field.initial);
+  }
+  for (const node of manifest?.spec?.nodes ?? []) {
+    assertNoWorkerBinding(node);
+    for (const binding of [...(node.inputs ?? []), ...(node.outputs ?? [])]) {
+      assertNoWorkerBinding(binding);
+      assertNoWorkerBinding(binding.value);
+    }
+  }
+  assertNoWorkerBinding(manifest?.spec?.output);
+  assertNoWorkerBinding(resume);
+  assertNoWorkerValues(resume?.state);
+  assertNoWorkerBinding(resume?.results);
+  for (const result of Object.values(resume?.results ?? {})) assertNoWorkerResult(result);
+}
+
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -173,6 +307,7 @@ export class FlowGraphRuntimeError extends Error {
  * module deliberately does not create a competing mission ledger.
  */
 export async function executeFlowGraph(manifest, options = {}) {
+  assertNoWorkerFlow(manifest, options.resumeFrom);
   const validation = validateFlowGraph(manifest, options.validation);
   if (!validation.valid) {
     throw new FlowGraphRuntimeError('FLOW_GRAPH_INVALID', 'FlowGraph validation failed.', {
@@ -313,6 +448,7 @@ export async function executeFlowGraph(manifest, options = {}) {
   async function invoke(node, activationTick, iteration = 1) {
     enforceAuthority(node);
     const inputs = inputsFor(node);
+    assertNoWorkerValues(inputs);
     const inputSnapshot = clone(inputs);
     const nodeRunId = `${runId}:${node.id}:${activationTick}:${iteration}`;
     const invocationKey = node.idempotencyKey
@@ -365,6 +501,7 @@ export async function executeFlowGraph(manifest, options = {}) {
           state: clone(state),
           requestedResources: clone(node.ceilings ?? manifest.spec.ceilings),
         });
+        assertNoWorkerResult(raw);
         const outputs = clone(raw?.outputs ?? {});
         const usage = usageOf(raw);
         assertUsage(usage);
@@ -589,6 +726,7 @@ export async function executeFlowGraph(manifest, options = {}) {
       const requests = nodesToRun.map((node) => {
         enforceAuthority(node);
         const inputs = inputsFor(node);
+        assertNoWorkerValues(inputs);
         const nodeRunId = `${runId}:${node.id}:${tick}:${iteration}`;
         return {
           graphId,
@@ -619,6 +757,7 @@ export async function executeFlowGraph(manifest, options = {}) {
       }
       try {
         const rawResults = await options.parallelDispatch(clone(requests), options.invokeNode);
+        if (Array.isArray(rawResults)) rawResults.forEach(assertNoWorkerResult);
         if (!Array.isArray(rawResults) || rawResults.length !== requests.length) {
           throw new FlowGraphRuntimeError('PARALLEL_RESULT_MISMATCH', 'parallelDispatch must return one ordered result per request.');
         }

@@ -1,4 +1,5 @@
 import type { JsonValue } from '../a2a/jcs.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 /** A2A/telemetry metadata key reserved for the optional Flow graph profile. */
 export const AIWG_GRAPH_METADATA_KEY = 'aiwg.flow.graph';
@@ -59,10 +60,12 @@ export function isGraphExecutionMetadata(value: unknown): value is GraphExecutio
 }
 
 export function graphMetadataRecord(value: GraphExecutionMetadata): Record<string, JsonValue> {
+  assertMissionWorkerHandoff(value, 'graph');
   return { [AIWG_GRAPH_METADATA_KEY]: value as unknown as JsonValue };
 }
 
 export function extractGraphMetadata(metadata: Record<string, JsonValue> | undefined): GraphExecutionMetadata | undefined {
+  if (metadata) assertMissionWorkerHandoff({ metadata }, 'graph');
   const value = metadata?.[AIWG_GRAPH_METADATA_KEY];
   return isGraphExecutionMetadata(value) ? value : undefined;
 }
@@ -77,6 +80,7 @@ export function projectGraphMetadata(
   value: GraphExecutionMetadata,
   audience: GraphMetadataAudience,
 ): Partial<GraphExecutionMetadata> {
+  assertMissionWorkerHandoff(value, 'graph');
   if (!isGraphExecutionMetadata(value)) throw new Error('Invalid graph execution metadata.');
   if (audience === 'internal') return structuredClone(value);
   const common: Partial<GraphExecutionMetadata> = {

@@ -54,6 +54,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(repoRoot, 'schemas', 'dataset', 'dataset-contracts.v1.schema.json'),
     path.join(repoRoot, 'schemas', 'dataset', 'dataset-schema-governance.v1.schema.json'),
     path.join(repoRoot, 'schemas', 'dataset', 'run-ledger.v1.schema.json'),
+    path.join(repoRoot, 'schemas', 'mission-v1.schema.json'),
     path.join(repoRoot, 'agentic', 'code', 'providers', 'capability-matrix.yaml'),
     path.join(repoRoot, 'agentic', 'code', 'providers', 'model-capabilities.v1.json'),
     path.join(repoRoot, 'agentic', 'code', 'providers', 'model-catalog.v1.json'),
@@ -87,6 +88,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     { recursive: true },
   );
   await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
+  await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
   await cp(
     path.join(repoRoot, 'schemas', 'security'),
     path.join(outputDir, 'schemas', 'security'),

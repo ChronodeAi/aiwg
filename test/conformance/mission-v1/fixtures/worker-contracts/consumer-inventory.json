@@ -116,7 +116,7 @@
       "id": "canonical-codec",
       "path": "src/mission-protocol/codecs.ts",
       "owner": "B-OG-30 (#2879)",
-      "checkpoint": "S1 negotiation and lossless payload codecs",
+      "checkpoint": "S1 encodeMission/decodeMission boundary negotiation, lossless worker codecs and in-memory successor linkage; managed persisted snapshots deferred S2+ (06 §7, 11 S2–S3)",
       "definitions": [
         "workerDispatch",
         "workerDirectIntent",
@@ -129,7 +129,7 @@
         "workerVerification",
         "workerResult"
       ],
-      "advertisedWorkerSupport": false
+      "advertisedWorkerSupport": true
     },
     {
       "id": "model-policy",

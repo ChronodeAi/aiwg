@@ -101,7 +101,2123 @@
       "type": "object",
       "propertyNames": { "pattern": "^[a-z0-9][a-z0-9.-]*\\.[a-z0-9][a-z0-9._-]*$" },
       "additionalProperties": true,
+      "properties": { "aiwg.worker-dispatch": { "$ref": "#/$defs/workerDispatch" } },
       "maxProperties": 256
+    },
+    "workerArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "ref",
+        "digest"
+      ]
+    },
+    "workerEffort": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "support": {
+          "enum": [
+            "explicit",
+            "not-applicable"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "support",
+        "value"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "support": {
+                "const": "not-applicable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workerTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "member": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "cli": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "inferenceProvider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "effort": {
+          "$ref": "#/$defs/workerEffort"
+        },
+        "profileRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "qualificationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "group",
+        "member",
+        "cli",
+        "model",
+        "inferenceProvider",
+        "family",
+        "effort",
+        "profileRef",
+        "qualificationDigest"
+      ]
+    },
+    "workerLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "wallSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "tokens",
+        "costUsd",
+        "wallSeconds",
+        "maxAttempts"
+      ]
+    },
+    "workerSelectionIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "parent": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "mission",
+                "flow",
+                "ralph",
+                "job"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "taskClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "role": {
+          "enum": [
+            "efficiency",
+            "coding",
+            "reasoning"
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          },
+          "maxItems": 64
+        },
+        "ownership": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "requiredTools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "dataClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "pins": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "effort": {
+              "$ref": "#/$defs/workerEffort"
+            }
+          },
+          "required": []
+        },
+        "allowFallback": {
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "#/$defs/workerLimits"
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "criterion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "checkRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "id",
+              "criterion",
+              "checkRef"
+            ]
+          },
+          "maxItems": 32,
+          "minItems": 1
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runnerRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "independentReview": {
+              "enum": [
+                "required",
+                "advisory"
+              ]
+            },
+            "differentFamily": {
+              "enum": [
+                "require",
+                "prefer"
+              ]
+            }
+          },
+          "required": [
+            "runnerRef",
+            "independentReview",
+            "differentFamily"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "taskId",
+        "requestId",
+        "parent",
+        "objective",
+        "taskClass",
+        "role",
+        "inputs",
+        "ownership",
+        "requiredTools",
+        "dataClass",
+        "group",
+        "pins",
+        "allowFallback",
+        "limits",
+        "acceptance",
+        "verification"
+      ]
+    },
+    "workerBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "intent": {
+          "$ref": "#/$defs/workerSelectionIntent"
+        },
+        "intentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "decision": {
+          "$ref": "#/$defs/workerArtifact"
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "catalogDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "selected": {
+          "$ref": "#/$defs/workerTuple"
+        },
+        "lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "authorityRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reservationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "authorityRef",
+            "generation",
+            "reservationId"
+          ]
+        },
+        "workspace": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "baseRevision": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "path",
+            "baseRevision"
+          ]
+        },
+        "authorizationRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "delegationAllowance": {
+          "const": 0
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaRef": {
+              "const": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerClaims"
+            },
+            "resultPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "schemaRef",
+            "resultPath"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "invocationId",
+        "intent",
+        "intentDigest",
+        "decision",
+        "policyDigest",
+        "catalogDigest",
+        "selected",
+        "lease",
+        "workspace",
+        "authorizationRefs",
+        "delegationAllowance",
+        "output"
+      ]
+    },
+    "workerClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "blocked",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/workerArtifact"
+                },
+                "maxItems": 16
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "evidence"
+            ]
+          },
+          "maxItems": 64
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "change": {
+                "enum": [
+                  "created",
+                  "modified",
+                  "deleted",
+                  "unchanged"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "digest",
+              "change"
+            ]
+          },
+          "maxItems": 64
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "checkId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "exitCode": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "evidence": {
+                "$ref": "#/$defs/workerArtifact"
+              },
+              "environment": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "checkId",
+              "exitCode",
+              "evidence",
+              "environment"
+            ]
+          },
+          "maxItems": 64
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "version",
+        "status",
+        "summary",
+        "claims",
+        "artifacts",
+        "checks",
+        "limitations"
+      ]
+    },
+    "workerUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cacheTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "reasoningTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "quality": {
+          "enum": [
+            "reported",
+            "estimated",
+            "unknown"
+          ]
+        },
+        "reservedTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reservedUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "cacheTokens",
+        "reasoningTokens",
+        "costUsd",
+        "quality",
+        "reservedTokens",
+        "reservedUsd"
+      ]
+    },
+    "workerExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "timed-out",
+            "uncertain"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "requested": {
+          "$ref": "#/$defs/workerTuple"
+        },
+        "observedModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "observedFamily": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "observedEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identityEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          },
+          "maxItems": 16
+        },
+        "identityQuality": {
+          "enum": [
+            "backend-attested",
+            "runtime-configured-only",
+            "unavailable"
+          ]
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "termination": {
+          "enum": [
+            "confirmed",
+            "uncertain"
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/workerUsage"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "class": {
+                  "enum": [
+                    "rate-limit",
+                    "unavailable",
+                    "timeout",
+                    "auth",
+                    "invalid-request",
+                    "policy",
+                    "parse",
+                    "verification",
+                    "unknown"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "quotaScope": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "resetAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "class",
+                "message",
+                "retryable"
+              ]
+            }
+          ]
+        },
+        "health": {
+          "$ref": "#/$defs/workerHealthSummary"
+        }
+      },
+      "required": [
+        "status",
+        "exitCode",
+        "requested",
+        "observedModel",
+        "observedFamily",
+        "observedEffort",
+        "identityEvidence",
+        "identityQuality",
+        "startedAt",
+        "endedAt",
+        "termination",
+        "usage",
+        "failure"
+      ]
+    },
+    "workerVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected",
+            "blocked"
+          ]
+        },
+        "verifierId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runnerRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "artifactDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          },
+          "maxItems": 64
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "status",
+        "verifierId",
+        "runnerRef",
+        "artifactDigest",
+        "evidence",
+        "findings"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "accepted"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verifierId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "runnerRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "artifactDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "briefDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "execution": {
+          "$ref": "#/$defs/workerExecution"
+        },
+        "worker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerClaims"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/workerVerification"
+        }
+      },
+      "required": [
+        "version",
+        "taskId",
+        "invocationId",
+        "briefDigest",
+        "execution",
+        "worker",
+        "verification"
+      ]
+    },
+    "workerDispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "requiredFeatures": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "worker-dispatch.v1",
+              "worker-policy-origins.v1",
+              "worker-admission-fencing.v1",
+              "worker-claims.v1",
+              "worker-activation.v1",
+              "worker-health.v1"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 5,
+          "maxItems": 6,
+          "allOf": [
+            {
+              "contains": {
+                "const": "worker-dispatch.v1"
+              }
+            },
+            {
+              "contains": {
+                "const": "worker-policy-origins.v1"
+              }
+            },
+            {
+              "contains": {
+                "const": "worker-admission-fencing.v1"
+              }
+            },
+            {
+              "contains": {
+                "const": "worker-claims.v1"
+              }
+            },
+            {
+              "contains": {
+                "const": "worker-activation.v1"
+              }
+            }
+          ]
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "state": {
+          "enum": [
+            "prepared",
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed-out",
+            "uncertain"
+          ]
+        },
+        "intent": {
+          "$ref": "#/$defs/workerArtifact"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previousRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "requiredFeatures",
+        "taskId",
+        "requestId",
+        "invocationId",
+        "state",
+        "intent",
+        "brief",
+        "result",
+        "previousRecord"
+      ]
+    },
+    "workerDirectIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "parent": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "conductor-session"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "taskClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "role": {
+          "enum": [
+            "efficiency",
+            "coding",
+            "reasoning"
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          },
+          "maxItems": 64
+        },
+        "ownership": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "requiredTools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "dataClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "pins": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "effort": {
+              "$ref": "#/$defs/workerEffort"
+            }
+          },
+          "required": []
+        },
+        "allowFallback": {
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "#/$defs/workerLimits"
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "criterion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "checkRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "id",
+              "criterion",
+              "checkRef"
+            ]
+          },
+          "maxItems": 32,
+          "minItems": 1
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runnerRef": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "independentReview": {
+              "enum": [
+                "required",
+                "advisory"
+              ]
+            },
+            "differentFamily": {
+              "enum": [
+                "require",
+                "prefer"
+              ]
+            },
+            "controlledContext": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "independentReview",
+            "differentFamily",
+            "controlledContext"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "taskId",
+        "requestId",
+        "objective",
+        "taskClass",
+        "role",
+        "inputs",
+        "ownership",
+        "requiredTools",
+        "dataClass",
+        "group",
+        "pins",
+        "allowFallback",
+        "limits",
+        "acceptance",
+        "verification"
+      ]
+    },
+    "workerDirectBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "intent": {
+          "$ref": "#/$defs/workerDirectIntent"
+        },
+        "intentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "decision": {
+          "$ref": "#/$defs/workerArtifact"
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "catalogDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "selected": {
+          "$ref": "#/$defs/workerTuple"
+        },
+        "workspace": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "baseRevision": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "path",
+            "baseRevision"
+          ]
+        },
+        "authorizationRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 64
+        },
+        "delegationAllowance": {
+          "const": 0
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaRef": {
+              "const": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerClaims"
+            },
+            "resultPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "schemaRef",
+            "resultPath"
+          ]
+        },
+        "mode": {
+          "const": "direct"
+        }
+      },
+      "required": [
+        "version",
+        "invocationId",
+        "intent",
+        "intentDigest",
+        "policyDigest",
+        "catalogDigest",
+        "selected",
+        "workspace",
+        "authorizationRefs",
+        "delegationAllowance",
+        "output",
+        "mode"
+      ]
+    },
+    "workerResolvedInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "mode": {
+          "enum": [
+            "direct",
+            "managed"
+          ]
+        },
+        "transport": {
+          "enum": [
+            "shell",
+            "mcp"
+          ]
+        },
+        "selected": {
+          "$ref": "#/$defs/workerTuple"
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "catalogDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "profileDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "minItems": 1,
+          "maxItems": 512
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stdin": {
+          "enum": [
+            "closed",
+            "brief-text",
+            "brief-json"
+          ]
+        },
+        "briefPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stdoutPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stderrPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "finalPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "shellCommand": {
+          "type": "string",
+          "maxLength": 2097152
+        },
+        "envNames": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 256
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serverRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "tool": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "arguments": {
+              "type": "object",
+              "maxProperties": 64
+            },
+            "inputSchemaDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "outputSchemaDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "sessionIsolation": {
+              "enum": [
+                "per-call",
+                "per-instance",
+                "serialized"
+              ]
+            }
+          },
+          "required": [
+            "serverRef",
+            "tool",
+            "arguments",
+            "inputSchemaDigest",
+            "timeoutSeconds",
+            "outputSchemaDigest",
+            "sessionIsolation"
+          ]
+        },
+        "readiness": {
+          "enum": [
+            "preparatory",
+            "launchable"
+          ]
+        },
+        "briefDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/workerLimits"
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "effectiveCaps": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "controlEvidence": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/workerEffectiveHealth"
+        }
+      },
+      "required": [
+        "version",
+        "mode",
+        "transport",
+        "selected",
+        "policyDigest",
+        "catalogDigest",
+        "profileDigest",
+        "expiresAt",
+        "readiness",
+        "briefDigest",
+        "limits",
+        "maxOutputBytes",
+        "effectiveCaps",
+        "controlEvidence"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "shell"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "argv",
+              "cwd",
+              "stdin",
+              "shellCommand",
+              "envNames",
+              "finalPath",
+              "briefPath",
+              "stdoutPath",
+              "stderrPath"
+            ],
+            "not": {
+              "required": [
+                "mcp"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "mcp"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "shellCommand"
+                  ]
+                },
+                {
+                  "required": [
+                    "argv"
+                  ]
+                },
+                {
+                  "required": [
+                    "stdin"
+                  ]
+                },
+                {
+                  "required": [
+                    "envNames"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "readiness": {
+                "const": "launchable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "briefDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workerDirectVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected",
+            "blocked"
+          ]
+        },
+        "verifierId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runnerRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "artifactDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          },
+          "maxItems": 64
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "controlledContext": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      },
+      "required": [
+        "status",
+        "verifierId",
+        "runnerRef",
+        "artifactDigest",
+        "evidence",
+        "findings",
+        "controlledContext"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "accepted"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verifierId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "artifactDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "controlledContext": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "findings": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workerDirectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "briefDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "execution": {
+          "$ref": "#/$defs/workerExecution"
+        },
+        "worker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/workerClaims"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/workerDirectVerification"
+        },
+        "mode": {
+          "const": "direct"
+        }
+      },
+      "required": [
+        "version",
+        "taskId",
+        "invocationId",
+        "briefDigest",
+        "execution",
+        "worker",
+        "verification",
+        "mode"
+      ]
+    },
+    "workerHealthSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "state": {
+          "enum": [
+            "launching",
+            "started",
+            "active",
+            "quiet",
+            "stalled",
+            "hung",
+            "crashed",
+            "failed-to-start",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "coverage": {
+          "enum": [
+            "full",
+            "degraded",
+            "unobserved"
+          ]
+        },
+        "handshake": {
+          "enum": [
+            "semantic",
+            "process-only",
+            "unobserved"
+          ]
+        },
+        "lastObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "lastActivityAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "lastProgressAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reasonCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "termination": {
+          "enum": [
+            "running",
+            "confirmed",
+            "uncertain"
+          ]
+        },
+        "transitionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "restartCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "unavailableSignals": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "transitionRefs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerArtifact"
+          }
+        },
+        "observerGeneration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "startupDeadlineAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "hardDeadlineAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "maxCheckGapSeconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "suspected",
+            "unobserved"
+          ]
+        },
+        "handshakeAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "stalledAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "version",
+        "state",
+        "coverage",
+        "handshake",
+        "lastObservedAt",
+        "lastActivityAt",
+        "lastProgressAt",
+        "reasonCode",
+        "termination",
+        "transitionCount",
+        "restartCount",
+        "unavailableSignals",
+        "transitionRefs",
+        "observerGeneration",
+        "startupDeadlineAt",
+        "hardDeadlineAt",
+        "maxCheckGapSeconds",
+        "confidence",
+        "handshakeAt",
+        "stalledAt"
+      ]
+    },
+    "workerEffectiveHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "startupSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "checkSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "quietSeconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "stallSeconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "diagnosticGraceSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "terminateGraceSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "hardTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "stepEnforcement": {
+          "enum": [
+            "native",
+            "external",
+            "observed",
+            "unavailable"
+          ]
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "profileRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "runDir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "version",
+        "startupSeconds",
+        "checkSeconds",
+        "quietSeconds",
+        "stallSeconds",
+        "diagnosticGraceSeconds",
+        "terminateGraceSeconds",
+        "hardTimeoutSeconds",
+        "maxSteps",
+        "stepEnforcement",
+        "scale",
+        "profileRef",
+        "runDir"
+      ]
     }
   }
 }

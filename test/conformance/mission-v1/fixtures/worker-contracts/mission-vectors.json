@@ -1323,5 +1323,65 @@
     "valid": false,
     "pack": "T-OG-08/15",
     "errorKeyword": "type"
+  },
+  {
+    "id": "direct-pending-version-bump",
+    "definition": "workerDirectResult",
+    "base": "direct-pending",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "const"
+  },
+  {
+    "id": "direct-accepted-version-bump",
+    "definition": "workerDirectResult",
+    "base": "direct-accepted-no-receipt",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-15",
+    "errorKeyword": "const"
+  },
+  {
+    "id": "managed-pending-version-bump",
+    "definition": "workerResult",
+    "base": "assembled-pending",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "const"
+  },
+  {
+    "id": "managed-accepted-version-bump",
+    "definition": "workerResult",
+    "base": "managed-accepted",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-08/14",
+    "errorKeyword": "const"
   }
 ]

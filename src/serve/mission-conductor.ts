@@ -27,6 +27,7 @@ import { routeMission } from './agent-router.js';
 import type { ExecutorRegistration } from './executor-registry.js';
 import { StackAdapterRegistry } from './stack-adapters.js';
 import type { GraphExecutionMetadata, GraphRunIdentity } from '../flow/graph-metadata.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 /** A single worker cycle within a Mission — runs on exactly one stack. */
 export interface WorkerCycle {
@@ -144,6 +145,12 @@ export class MissionConductor {
    * crash-resilient resume path; their prior results are carried forward.
    */
   async conduct(plan: MissionPlan, pool: ExecutorRegistration[], resumeFrom?: MissionLedger): Promise<MissionLedger> {
+    assertMissionWorkerHandoff(plan, 'mission-conductor');
+    for (const cycle of plan.cycles) assertMissionWorkerHandoff(cycle, 'mission-conductor');
+    if (resumeFrom) {
+      assertMissionWorkerHandoff(resumeFrom, 'mission-conductor');
+      for (const cycle of resumeFrom.cycles) assertMissionWorkerHandoff(cycle, 'mission-conductor');
+    }
     if (plan.cycles.some((cycle) => cycle.graph) && !plan.graph) {
       throw new Error('Graph-projected worker cycles require MissionPlan.graph identity.');
     }

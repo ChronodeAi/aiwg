@@ -30,6 +30,51 @@ const echoAdapter = async ({ node, inputs, activation }: any) => ({
 });
 
 describe('composition-engine deterministic runtime', () => {
+  it.each(['workerName', 'workerBrief'])('runs legacy Flow schemas with their own local $defs/%s', async name => {
+    const baseline = await executeFlowGraph(fixture(), { runId: 'legacy-local-ref', invokeNode: echoAdapter });
+    const graph = fixture();
+    graph.spec.nodes[0].inputs[0].schema = {
+      ...(name === 'workerBrief' ? { $id: 'https://synthetic.invalid/legacy-flow-input' } : {}),
+      $defs: { [name]: { type: 'string' } },
+      $ref: `#/$defs/${name}`,
+    };
+    const report = await executeFlowGraph(graph, { runId: 'legacy-local-ref', invokeNode: echoAdapter });
+    expect(report.status).toBe('completed');
+    expect(report).toEqual(baseline);
+  });
+
+  it('treats worker-like keys and references in schema literals as ordinary Flow data', async () => {
+    const graph = fixture();
+    graph.spec.nodes[0].inputs[0].schema = {
+      type: 'string',
+      default: { extensions: { 'aiwg.worker-dispatch': { type: 'string' } }, $ref: 'https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerBrief' },
+    };
+    const report = await executeFlowGraph(graph, { invokeNode: echoAdapter });
+    expect(report.status).toBe('completed');
+  });
+
+  it('treats named values called extensions or metadata as data, but rejects a Mission value with a worker binding', async () => {
+    const userData = { 'aiwg.worker-dispatch': 'ordinary user data' };
+    const withValue = (value: unknown) => async ({ node }: any) => ({
+      outputs: valuesFor(node, value),
+      usage: { tokens: 1, costUsd: 0, timeMs: 1 },
+    });
+    const graph = () => {
+      const g = fixture();
+      for (const node of g.spec.nodes) for (const output of node.outputs) output.schema = { type: 'object' };
+      g.spec.nodes[1].inputs[0].schema = { type: 'object' };
+      g.spec.output.schema = { type: 'object' };
+      return g;
+    };
+    const ordinary = await executeFlowGraph(graph(), { invokeNode: withValue({ extensions: userData, metadata: userData }) });
+    expect(ordinary.status).toBe('completed');
+
+    const mission = { apiVersion: 'mission.aiwg.io/v1', kind: 'Mission', metadata: {}, spec: {}, status: {}, provenance: {}, extensions: { 'aiwg.worker-dispatch': { version: 999 } } };
+    const blocked = await executeFlowGraph(graph(), { invokeNode: withValue(mission) });
+    expect(blocked.status).toBe('failed');
+    expect(JSON.stringify(blocked)).toContain('OG_CONTRACT_UNSUPPORTED');
+  });
+
   it('replays a linear graph with identical activation, route, and join order', async () => {
     const first = await executeFlowGraph(fixture(), { runId: 'replay', adapterId: 'codex', invokeNode: echoAdapter });
     const second = await executeFlowGraph(fixture(), { runId: 'replay', adapterId: 'codex', invokeNode: echoAdapter });

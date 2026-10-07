@@ -73,6 +73,20 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
+      "path": "agentic/code/addons/composition-engine/lib/runtime.mjs",
+      "owner": "agentic/code/addons/composition-engine",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "cancelled",
+        "completed",
+        "failed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
       "path": "agentic/code/agents/personas/mc-conductor.md",
       "owner": "agentic/code/agents/personas",
       "role": "producer-consumer",
@@ -954,6 +968,16 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
+      "path": "src/mcp/helpers.mjs",
+      "owner": "src/mcp",
+      "role": "producer-consumer",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
       "path": "src/mcp/tools/agentic-sandbox.mjs",
       "owner": "src/mcp",
       "role": "producer-consumer",
@@ -1690,6 +1714,16 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/integration/mission-contract-packaging.test.ts",
+      "owner": "test/integration",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/integration/serve-executor-flow.test.ts",
       "owner": "test/integration",
       "role": "fixture-or-test",
@@ -1760,6 +1794,20 @@
       "currentVersion": "unversioned",
       "statusVocabulary": [
         "working"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/addons/composition-runtime.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "cancelled",
+        "completed",
+        "failed"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",
@@ -1889,7 +1937,56 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/unit/mcp/helpers.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "unknown"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/unit/mcp/orchestration.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/mission-protocol/handoff-boundaries.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "completed",
+        "done",
+        "failed",
+        "pending"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/mission-protocol/installed-layout.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "mission.aiwg.io/v1",
+      "statusVocabulary": [
+        "completed"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/mission-protocol/mc-worker-handoff.test.ts",
       "owner": "test/unit",
       "role": "fixture-or-test",
       "currentVersion": "unversioned",
@@ -1909,6 +2006,18 @@
         "failed",
         "incomplete",
         "running"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/mission-protocol/worker-boundaries.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "UHP 2026-08-11",
+      "statusVocabulary": [
+        "pending"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",

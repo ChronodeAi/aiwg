@@ -32,9 +32,10 @@ export function contractSchemas(): Record<string, any> {
   capability.properties.providers.additionalProperties.properties.workerAdapter = { $ref: '#/$defs/workerAdapter' };
   capability.$defs = { ...capability.$defs, ...adapterDefs, workerAdapter: adapter };
 
+  // B-OG-30 (#2879): the 05 §5.1 definitions now live in the production owner.
+  // Read them directly so shape vectors exercise shipped code; drift from the
+  // frozen fragment is a failure asserted in worker-contracts.test.ts.
   const mission = readJson('schemas/mission-v1.schema.json');
-  Object.assign(mission.$defs, fixtureJson('mission-definitions.patch.json').$defs);
-  mission.$defs.extensions.properties = { 'aiwg.worker-dispatch': { $ref: '#/$defs/workerDispatch' } };
 
   const catalog = readJson('schemas/models/model-catalog.v1.schema.json');
   const { $schema: _observationDialect, ...observation } = fixtureJson('worker-observation.fragment.json');
