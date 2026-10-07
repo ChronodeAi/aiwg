@@ -10,7 +10,8 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { validateUserProjectModelConfig } from './provider-policy.js';
+import { workerConfigDigest } from '../config/aiwg-config.js';
+import { DEFAULT_WORKER_SELECTION, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
 import type {
   ModelConfig,
   ModelConfigV1,
@@ -34,6 +35,7 @@ export interface ConfigLocations {
  */
 export class ConfigLoader {
   private cache: MergedModelConfig | null = null;
+  private cacheDigest: string | null = null;
   private readonly locations: ConfigLocations;
 
   constructor(projectPath?: string) {
@@ -52,19 +54,30 @@ export class ConfigLoader {
    * Precedence: project > user > AIWG default
    */
   async load(): Promise<MergedModelConfig> {
-    if (this.cache) {
-      return this.cache;
-    }
-
     // Load all configs
     const aiwgDefault = await this.loadAiwgDefault();
     const userConfig = await this.loadUserConfig();
     const projectConfig = await this.loadProjectConfig();
 
+    const digest = workerConfigDigest([aiwgDefault, userConfig, projectConfig]);
+    if (this.cache && this.cacheDigest === digest) return this.cache;
+
     // Merge with precedence
     const merged = this.merge(aiwgDefault, userConfig, projectConfig);
 
     this.cache = merged;
+    this.cacheDigest = digest;
+    if ([aiwgDefault, userConfig, projectConfig].some(config => config?.defaults?.workerSelection !== undefined)) {
+      const result = mergeWorkerSelection([
+        { source: this.locations.aiwgDefault, authority: 'builtin', digest: workerConfigDigest(aiwgDefault), policy: DEFAULT_WORKER_SELECTION },
+        { source: this.locations.aiwgDefault, authority: 'builtin', digest: workerConfigDigest(aiwgDefault), policy: aiwgDefault.defaults.workerSelection },
+        { source: this.locations.userConfig, authority: 'user', digest: workerConfigDigest(userConfig), policy: userConfig?.defaults?.workerSelection },
+        { source: this.locations.projectConfig, authority: 'project', digest: workerConfigDigest(projectConfig), policy: projectConfig?.defaults?.workerSelection },
+      ]);
+      if (result.diagnostics.length) throw new Error(result.diagnostics.map(d => `${d.code}: ${d.pointer}: ${d.message}; origins=${JSON.stringify(d.origins ?? [])}`).join('; '));
+      merged.defaults.workerSelection = result.policy;
+      merged.workerPolicyOrigins = result.origins;
+    }
     return merged;
   }
 
@@ -81,6 +94,7 @@ export class ConfigLoader {
         throw new Error('Invalid AIWG default config: missing required v2 fields');
       }
 
+      if (config.defaults?.workerSelection) WorkerSelectionPolicySchema.parse(config.defaults.workerSelection);
       return config;
     } catch (error) {
       throw new Error(`Failed to load AIWG default config: ${error}`);
@@ -273,6 +287,7 @@ export class ConfigLoader {
    */
   clearCache(): void {
     this.cache = null;
+    this.cacheDigest = null;
   }
 
   /**

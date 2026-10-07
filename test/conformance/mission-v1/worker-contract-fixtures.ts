@@ -16,15 +16,8 @@ export function fixtureJson(file: string): any {
 // schema ID, production capability advertisement, loader, or managed service.
 export function contractSchemas(): Record<string, any> {
   const config = readJson('vscode-extension/schemas/aiwg.config.v1.json');
-  const parallelism = fixtureJson('parallelism.fragment.json');
-  const { definitions, $schema: _configDialect, ...parallelismBody } = parallelism;
-  config.properties.parallelism = parallelismBody;
-  config.definitions = { ...config.definitions, ...definitions };
 
   const models = readJson('schemas/models/model-config-compatibility.v1.schema.json');
-  const { $defs: modelDefs, $schema: _modelDialect, ...selection } = fixtureJson('worker-selection.fragment.json');
-  models.properties.defaults.properties.workerSelection = selection;
-  models.$defs = { ...models.$defs, ...modelDefs };
 
   const capability = readJson('schemas/models/provider-model-capabilities.v1.schema.json');
   // #2880: capability vectors exercise the shipped schema without fixture patching.
@@ -35,8 +28,6 @@ export function contractSchemas(): Record<string, any> {
   const mission = readJson('schemas/mission-v1.schema.json');
 
   const catalog = readJson('schemas/models/model-catalog.v1.schema.json');
-  const { $schema: _observationDialect, ...observation } = fixtureJson('worker-observation.fragment.json');
-  catalog.$defs.workerObservation = observation;
   return { config, models, capability, mission, catalog };
 }
 

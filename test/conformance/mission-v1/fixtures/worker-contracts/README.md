@@ -8,9 +8,10 @@ historical five-feature dispatch records and six-feature records both have shape
 vectors. Health monitoring and lease reconciliation are not implemented here.
 
 The fragment files are verbatim JSON contracts from configuration spec §4/§5.1.
-They have **no new published schema IDs**. The conformance helper merges them
-in memory into the existing owners, preserving IDs, dialects, closed objects and
-unrelated extensions. `manifest.json` binds each fragment to its source section,
+They have **no new published schema IDs**. After #2878, #2879 and #2880, the
+conformance helper reads all five production owners directly. IDs, dialects,
+closed objects and unrelated extensions remain preserved. `manifest.json` binds
+each fragment to its source section,
 existing owner, merge location and SHA-256. Tests never need the gitignored
 proposal, vendor CLIs, credentials, account data, inference or managed services.
 
@@ -71,7 +72,7 @@ retaining scenario IDs and documenting any reviewed contract revision.
 | MC brief/group/decision and Mission/Flow/Ralph bindings | B-OG-16/23; B-OG-30 | `src/cli/handlers/mc.ts`, Mission conductors, composition-engine validator/runtime, Ralph | Vocabulary, offline Flow value-schema mappings and consumer inventory delivered; Mission/MC lifecycle, completion and accounting **deferred S2+** |
 | Leases, admission, fencing, cancel/reconcile | B-OG-10/12/16 | `src/serve/shared-host-scheduler.ts`, existing admission store, MC/Mission owners | Required managed data shape retained; managed runtime assertions **deferred S2+** |
 | Optional health definitions and required-feature compatibility | B-OG-49/50/54/55; B-OG-12/16 for enforcement | Existing launcher/adapters, Mission codecs, scheduler | Five/six-feature shape compatibility only; health-to-lease mappings owned by B-OG-54 and managed enforcement **deferred S2+** |
-| Catalog editor annotation discrepancy | B-OG-29 / #2878 | `schemas/models/model-catalog.v1.schema.json`, catalog loader | Existing catalog payload validates; its checked-in `$schema` annotation is undeclared by the closed owner. Test records the exact annotation explicitly; no root is opened here |
+| Catalog editor annotation discrepancy | B-OG-29 / #2878 | `schemas/models/model-catalog.v1.schema.json`, catalog loader | Resolved in #2878: the closed owner accepts the exact checked-in annotation; the complete annotated catalog validates through the production loader |
 
 ## Test lane and evidence limits
 
@@ -377,3 +378,115 @@ fails with `EPERM` creating the tsx IPC socket. The focused loader suite passes
 **32/32**. All four requested security corrections are implemented; full green
 regression/packaging evidence remains partial until the conductor can rerun the
 blocked/failing existing lanes in a permitted test environment.
+## #2878 S0 contracts / S1 direct and shared implementation
+
+The three frozen field fragments now ship in their existing production owners:
+editor `parallelism`, models `defaults.workerSelection` and catalog
+`$defs.workerObservation`. No frozen JSON fragment/vector was changed, no new
+schema family was added, and native cap resolution retains its original result
+when worker dispatch is disabled. The merged worktree also retains #2880
+capability-root/driver loading and #2879 Mission definitions/codecs/negotiation,
+with their checkpoint evidence recorded above.
+
+`policy-semantic-vectors.json` adds field/origin algebra, booleans, empty sets,
+canonical identity, null/none effort, role/reference/installation declarations
+and hard-budget control checks. `policy-route-vectors.json` adds qualified
+model-effort and identity-evidence order, pin/alias protection, denied ultra and
+self-delegation aliases, no-control/mixed groups, contributor/unknown-data,
+required role and stale-evidence exclusions. `activation-contract-vectors.json`
+freezes canonical digests, absent-model null hashing and distinct/coincident
+config copy inventories. These are synthetic facts, not live qualification.
+
+Production config readers/writers now reject malformed parallelism before
+persistence. Resolution preserves legacy provider caps and applies direct/group
+member/execution defaults without managed state. The existing nested config
+set/reset operations accept the new JSON values and validate the entire
+candidate; unsafe prototype paths are rejected before mutation.
+
+The models loader retains leaf source pointers, canonical layer digests,
+authority classes and original contributions before merging. First explicit
+values replace shipped defaults; subsequent restrictions use union,
+intersection, OR/AND, numeric minima and ordered identity evidence. Attempted
+relaxations fail with both origins. Changed builtin/user/project contents and
+removed user inputs invalidate cached results. Effective freshness is validated
+after inheritance. Data classes narrow their base policy.
+
+Catalog enrichment remains in the existing discovery owner, including separate
+installation/account rows. Runtime validation checks the production schema,
+calendar dates/URIs and consistent existing visibility/effort evidence. Cached,
+static and remote input cannot silently acquire malformed worker evidence;
+legacy rows remain usable without worker qualification. The pure route,
+reference, installation-binding and budget guards are available to downstream
+B-OG-02/04/06 consumers; this checkpoint does not add an executable resolver,
+command renderer, trusted import authority or launcher.
+
+Shared edits are scoped: `src/models/provider-policy.ts` changes only config,
+worker policy and catalog validation (capability loading is untouched);
+`worker-contract-fixtures.ts` removes only #2878's test-only schema patches.
+`tools/release/build-cli-package.mjs` adds three schema-copy lines;
+`package.json` and `packages/cli/package.json` add only corresponding published
+asset paths. The compiled CLI package loads these production assets successfully.
+
+### Acceptance and tier disposition
+
+| Criterion / pack | Status and evidence |
+|---|---|
+| AC1 shape/semantic coverage and disabled legacy behavior | **met (S0/S1 shared):** frozen shape vectors exercise production owners; added semantic vectors exercise production validators, loaders and guards; legacy suites pass |
+| AC2 distinct direct/shared and managed checkpoints | **met:** direct config/model loading creates no MC, admission, activation marker or receipt state; managed-only checks are explicitly deferred below |
+| T-OG-01 | **met for #2878's owners:** defaults/origins/restrictions, canonical identities, pins, qualified efforts, references/roles and catalog guards; executable candidate selection/ordering remains B-OG-04 |
+| T-OG-05 | **met for S0 contracts:** capacity-key shapes, hard-ceiling control rejection, digest/copy inventory; atomic reservations and runtime accounting deferred S2+ |
+| T-OG-15/17/19 | **met for scoped fixtures:** actual fake shell mechanics, typed shell/MCP contracts and provider/alias inventory still pass; runtime renderer, MCP transport chaos, doctor and live qualification remain their S1 owning drafts |
+| Coherent managed activation | **deferred-to-S2+:** writer locks, immutable paired snapshots, synchronized copies/markers, stale-digest admission checks and fault rollback belong to B-OG-02/04 after the S1 gate |
+| Leases / required evidence / managed runtime integration | **deferred-to-S2+:** unchanged owners B-OG-10/12/16; no cross-process reservation, fencing, health-to-lease enforcement or recovery claim |
+
+### Final validation evidence
+
+`npm run typecheck`: **passed**, exit 0 (1 command passed, 0 failed).
+
+Final Vitest command:
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/conformance/mission-v1/worker-policy.test.ts \
+  test/conformance/mission-v1/worker-contracts.test.ts \
+  test/unit/cli/handlers/models-worker-contracts.test.ts \
+  test/unit/mcp/worker-contracts.test.ts \
+  test/unit/models/provider-policy.test.ts \
+  test/unit/models/model-discovery.test.ts \
+  test/unit/models/resolver.test.ts \
+  test/unit/models/provider-conformance.test.ts \
+  test/unit/models/corpus-policy.test.ts \
+  test/unit/models/select-role-models.test.ts \
+  test/unit/config/aiwg-config.test.ts \
+  test/unit/config/get-set-project.test.ts \
+  test/unit/cli/config-loader.test.ts \
+  test/unit/cli/handlers/models.test.ts \
+  test/conformance/mission-v1/mission-protocol.test.ts \
+  test/unit/mcp/orchestration.test.ts \
+  test/unit/mcp/orchestration-flows.test.ts
+```
+
+**536 passed, 1 failed** across 17 files (16 passed, 1 failed). The four direct/shared
+contract lanes passed **203/203** (98 policy, 81 shared/Mission, 6 CLI, 18 MCP).
+The single failure is environmental: the existing Grok Build models CLI test
+attempts to write `/home/roctinam/.cache/aiwg/model-catalog.v1.json` and receives
+`EROFS`. Its cache environment and production behavior were left unchanged.
+No sandbox restriction was bypassed; this failure is not reported as a pass.
+
+Additional package validation: `npx tsc`,
+`node tools/scripts/copy-build-resources.mjs` and
+`node tools/release/build-cli-package.mjs --output /tmp/aiwg-2878-cli-smoke`
+passed. A Node ESM smoke invocation against the compiled staged CLI checked the
+frozen config/model/observation vectors, direct default and both package asset
+manifests: **13 assertions passed, 0 failed**. The staged package was removed.
+
+Sanitized evidence: all identities, account bindings, endpoint paths and model
+names in added vectors are synthetic. Existing fake-shell tests retain exact
+argv/cwd/stdin/output and environment-name checks, with no paid calls or real
+credentials. Policy tests reject invalid writes without changing file bytes;
+all temporary project roots are removed and absence is asserted. No tracker,
+branch, commit or push operation was performed.
+
+Conductor questions: none for the frozen contracts. Downstream direct resolvers
+must call the shared route/reference/control guards before task transmission;
+managed activation and runtime claims must await their S2+ owners.

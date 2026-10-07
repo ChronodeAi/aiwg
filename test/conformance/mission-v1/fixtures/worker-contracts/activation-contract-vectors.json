@@ -1,0 +1,57 @@
+[
+  {
+    "id": "absent-optional-model-is-null",
+    "pack": "T-OG-01/05",
+    "value": null,
+    "digest": "sha256:74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "kind": "digest"
+  },
+  {
+    "id": "canonical-object-order",
+    "pack": "T-OG-01/05",
+    "value": {
+      "z": 1,
+      "a": {
+        "z": 2,
+        "a": 3
+      }
+    },
+    "digest": "sha256:e634af6ecfc23845fdae9c393661c63b99ad304d3f05a08faab28727c785d718",
+    "kind": "digest"
+  },
+  {
+    "id": "distinct-compatibility-copy",
+    "pack": "T-OG-01/05",
+    "kind": "inventory",
+    "args": [
+      "/tmp/fixture-project",
+      "/tmp/fixture-corpus/aiwg.config",
+      "/tmp/fixture-user/models.json",
+      "/tmp/fixture-builtin/models.json"
+    ],
+    "expected": [
+      "/tmp/fixture-project/.aiwg/aiwg.config",
+      "/tmp/fixture-project/models.json",
+      "/tmp/fixture-corpus/aiwg.config",
+      "/tmp/fixture-user/models.json",
+      "/tmp/fixture-builtin/models.json"
+    ]
+  },
+  {
+    "id": "coincident-config-copy",
+    "pack": "T-OG-01/05",
+    "kind": "inventory",
+    "args": [
+      "/tmp/fixture-project",
+      "/tmp/fixture-project/.aiwg/aiwg.config",
+      "/tmp/fixture-user/models.json",
+      "/tmp/fixture-builtin/models.json"
+    ],
+    "expected": [
+      "/tmp/fixture-project/.aiwg/aiwg.config",
+      "/tmp/fixture-project/models.json",
+      "/tmp/fixture-user/models.json",
+      "/tmp/fixture-builtin/models.json"
+    ]
+  }
+]
