@@ -27,6 +27,10 @@ const roots: string[] = [];
 async function temporary(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'aiwg-2878-'));
   roots.push(root);
+  // Config validation now reads the complete enabled pair. Keep all model
+  // inputs within the fixture channel, including tests that only edit groups.
+  vi.stubEnv('AIWG_HOME', process.cwd());
+  vi.stubEnv('AIWG_CONFIG', join(root, 'user'));
   return root;
 }
 function patch(base: any, delta: any): any {
@@ -85,7 +89,11 @@ describe('B-OG-29 production policy semantics (T-OG-01/05)', () => {
 
   it('ships the frozen fragments at the existing schema paths with strict-mode declarations', () => {
     const { $schema: _dialect, definitions, ...parallelism } = fixtureJson('parallelism.fragment.json');
+    parallelism.properties.budgets.allOf[0].then.properties = { reservationUsd: {} };
     expect(schemas.config.properties.parallelism).toEqual(parallelism);
+    // Redundant declarations permit strictRequired without changing the
+    // frozen mutual-exclusion constraint or the enclosing property types.
+    definitions.cli.not.properties = { executable: {}, endpoint: {} };
     for (const [key, definition] of Object.entries(definitions)) expect(schemas.config.definitions[key]).toEqual(definition);
     const { $schema: _modelsDialect, $defs, ...selection } = fixtureJson('worker-selection.fragment.json');
     expect(schemas.models.properties.defaults.properties.workerSelection).toEqual(selection);

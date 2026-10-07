@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { workerConfigDigest } from '../config/aiwg-config.js';
+import { workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
 import { DEFAULT_WORKER_SELECTION, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
 import type {
   ModelConfig,
@@ -36,6 +36,7 @@ export interface ConfigLocations {
 export class ConfigLoader {
   private cache: MergedModelConfig | null = null;
   private cacheDigest: string | null = null;
+  private inputDigests: Pick<WorkerActivation, 'projectModelsDigest' | 'userModelsDigest' | 'builtinModelsDigest'> | null = null;
   private readonly locations: ConfigLocations;
 
   constructor(projectPath?: string) {
@@ -53,21 +54,27 @@ export class ConfigLoader {
    * Load and merge all configurations
    * Precedence: project > user > AIWG default
    */
-  async load(): Promise<MergedModelConfig> {
+  async load(parallelism?: ParallelismConfig): Promise<MergedModelConfig> {
     // Load all configs
     const aiwgDefault = await this.loadAiwgDefault();
     const userConfig = await this.loadUserConfig();
     const projectConfig = await this.loadProjectConfig();
 
-    const digest = workerConfigDigest([aiwgDefault, userConfig, projectConfig]);
+    const digest = workerConfigDigest([aiwgDefault, userConfig, projectConfig, parallelism]);
     if (this.cache && this.cacheDigest === digest) return this.cache;
 
     // Merge with precedence
     const merged = this.merge(aiwgDefault, userConfig, projectConfig);
 
-    this.cache = merged;
-    this.cacheDigest = digest;
-    if ([aiwgDefault, userConfig, projectConfig].some(config => config?.defaults?.workerSelection !== undefined)) {
+    // A group-bound wrapper's inherited exact pin survives a higher-precedence
+    // tier-only preference. Preserve the legacy unbound merge otherwise.
+    if (parallelism?.worker_dispatch) {
+      for (const [agent, override] of Object.entries(projectConfig?.agentOverrides ?? {})) {
+        merged.agentOverrides[agent] = { ...userConfig?.agentOverrides?.[agent], ...override };
+      }
+    }
+
+    if (parallelism?.worker_dispatch || [aiwgDefault, userConfig, projectConfig].some(config => config?.defaults?.workerSelection !== undefined)) {
       const result = mergeWorkerSelection([
         { source: this.locations.aiwgDefault, authority: 'builtin', digest: workerConfigDigest(aiwgDefault), policy: DEFAULT_WORKER_SELECTION },
         { source: this.locations.aiwgDefault, authority: 'builtin', digest: workerConfigDigest(aiwgDefault), policy: aiwgDefault.defaults.workerSelection },
@@ -78,6 +85,34 @@ export class ConfigLoader {
       merged.defaults.workerSelection = result.policy;
       merged.workerPolicyOrigins = result.origins;
     }
+    if (parallelism?.worker_dispatch) {
+      // Exact wrapper pins remain explainable alongside worker restrictions.
+      for (const layer of [
+        { config: userConfig, source: this.locations.userConfig, authority: 'user' as const },
+        { config: projectConfig, source: this.locations.projectConfig, authority: 'project' as const },
+      ]) {
+        for (const [agent, override] of Object.entries(layer.config?.agentOverrides ?? {})) {
+          if (override['model-override'] === undefined) continue;
+          const pointer = `/agentOverrides/${agent.replace(/~/g, '~0').replace(/\//g, '~1')}/model-override`;
+          merged.workerPolicyOrigins![pointer] ??= [];
+          merged.workerPolicyOrigins![pointer].push({
+            source: layer.source, authority: layer.authority, digest: workerConfigDigest(layer.config),
+            pointer, contribution: override['model-override'],
+          });
+        }
+      }
+      const errors = validateWorkerGroupReferences(parallelism, merged.defaults.workerSelection!);
+      if (errors.length) throw new Error(errors.join('; '));
+    }
+    // Publish only a fully validated candidate. A failed merge must not become
+    // a cache hit on the next read, nor replace the prior inspectable value.
+    this.cache = merged;
+    this.cacheDigest = digest;
+    this.inputDigests = {
+      builtinModelsDigest: workerConfigDigest(aiwgDefault),
+      userModelsDigest: workerConfigDigest(userConfig),
+      projectModelsDigest: workerConfigDigest(projectConfig),
+    };
     return merged;
   }
 
@@ -94,7 +129,7 @@ export class ConfigLoader {
         throw new Error('Invalid AIWG default config: missing required v2 fields');
       }
 
-      if (config.defaults?.workerSelection) WorkerSelectionPolicySchema.parse(config.defaults.workerSelection);
+      if (config.defaults?.workerSelection !== undefined) WorkerSelectionPolicySchema.parse(config.defaults.workerSelection);
       return config;
     } catch (error) {
       throw new Error(`Failed to load AIWG default config: ${error}`);
@@ -105,10 +140,6 @@ export class ConfigLoader {
    * Load user configuration (optional)
    */
   private async loadUserConfig(): Promise<UserProjectConfig | null> {
-    if (!existsSync(this.locations.userConfig)) {
-      return null;
-    }
-
     try {
       const content = await readFile(this.locations.userConfig, 'utf-8');
       const parsed: unknown = JSON.parse(content);
@@ -118,6 +149,7 @@ export class ConfigLoader {
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid user model config ${this.locations.userConfig}: ${error}`);
     }
   }
@@ -126,10 +158,6 @@ export class ConfigLoader {
    * Load project configuration (optional)
    */
   private async loadProjectConfig(): Promise<UserProjectConfig | null> {
-    if (!existsSync(this.locations.projectConfig)) {
-      return null;
-    }
-
     try {
       const content = await readFile(this.locations.projectConfig, 'utf-8');
       const parsed: unknown = JSON.parse(content);
@@ -139,6 +167,7 @@ export class ConfigLoader {
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid project model config ${this.locations.projectConfig}: ${error}`);
     }
   }
@@ -288,6 +317,12 @@ export class ConfigLoader {
   clearCache(): void {
     this.cache = null;
     this.cacheDigest = null;
+    this.inputDigests = null;
+  }
+
+  /** Digests of the last successful read; no marker or snapshot writes. */
+  getInputDigests(): typeof this.inputDigests {
+    return this.inputDigests ? { ...this.inputDigests } : null;
   }
 
   /**

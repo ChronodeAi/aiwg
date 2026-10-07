@@ -4,6 +4,7 @@
   "testOwnerIssue": "roctinam/aiwg#2886",
   "knownCheckpointIssues": {
     "B-OG-01": "roctinam/aiwg#2876",
+    "B-OG-02": "roctinam/aiwg#2881",
     "B-OG-27": "roctinam/aiwg#2877",
     "B-OG-29": "roctinam/aiwg#2878",
     "B-OG-30": "roctinam/aiwg#2879",
@@ -22,6 +23,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/cli/handlers/models-worker-contracts.test.ts"
       ],
@@ -182,6 +185,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/cli/handlers/models-worker-contracts.test.ts",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts"
@@ -197,6 +202,7 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/mcp/worker-contracts.test.ts",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts"
@@ -214,6 +220,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
         "test/unit/cli/handlers/models-worker-contracts.test.ts",
         "test/conformance/orchestration-v1/pack-registry.test.ts"
       ],
