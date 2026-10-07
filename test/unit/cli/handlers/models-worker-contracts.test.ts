@@ -9,6 +9,7 @@ import { mcHandler } from '../../../../src/cli/handlers/mc.js';
 import { capabilityProviderId, normalizeProviderId } from '../../../../src/cli/provider-resolution.js';
 import { listProviderDefinitions } from '../../../../src/providers/provider-definitions.js';
 import { loadCapabilityMatrix } from '../../../../src/providers/capability-matrix.js';
+import { compileModelPolicy, loadProviderModelCapabilities } from '../../../../src/models/provider-policy.js';
 import { fixtureJson, fixtureRoot, validators } from '../../../conformance/mission-v1/worker-contract-fixtures.js';
 
 const roots: string[] = [];
@@ -34,7 +35,7 @@ describe('CLI vocabulary and legacy compatibility (T-OG-01/15)', () => {
     expect(vocabulary.forbiddenNamespaces).toEqual([['mc', 'groups']]);
   });
 
-  it('preserves native resolve and JSON output in a fresh project with no managed state', async () => {
+  it.each(['codex', 'muse'])('preserves %s native resolve and JSON output in a fresh project with no managed state', async provider => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-contract-'));
     roots.push(root);
     const skillDir = path.join(root, 'agentic/code/frameworks/fixture/skills/check');
@@ -44,7 +45,7 @@ describe('CLI vocabulary and legacy compatibility (T-OG-01/15)', () => {
     const bytes = JSON.stringify(models);
     await writeFile(path.join(root, 'models.json'), bytes);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await modelsHandler.execute({ args: ['resolve', '--skill', 'check', '--provider', 'codex', '--json'], rawArgs: ['models', 'resolve'], cwd: root, frameworkRoot: root });
+    const result = await modelsHandler.execute({ args: ['resolve', '--skill', 'check', '--provider', provider, '--json'], rawArgs: ['models', 'resolve'], cwd: root, frameworkRoot: root });
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))[0]).toMatchObject({ policy: { role: 'efficiency', tier: 'economy' }, compiled: { outcome: 'unsupported' } });
     expect(await readFile(path.join(root, 'models.json'), 'utf8')).toBe(bytes);
@@ -110,6 +111,21 @@ describe('CLI vocabulary and legacy compatibility (T-OG-01/15)', () => {
 });
 
 describe('provider inventory contract (T-OG-19; no live qualification claim)', () => {
+  it.each(Object.keys(loadProviderModelCapabilities().providers))('models consumes registry provider %s without managed services', async provider => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-provider-consumer-'));
+    roots.push(root);
+    const skillDir = path.join(root, 'agentic/code/frameworks/fixture/skills/check');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: check\ndescription: Synthetic check\ncommandHint:\n  model: haiku\n---\nCheck.\n');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Exercise the consumer guard without unrelated native account discovery.
+    const result = await modelsHandler.execute({ args: ['list', '--skill', 'check', '--provider', provider, '--json'], rawArgs: ['models', 'list'], cwd: root, frameworkRoot: root });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toHaveLength(1);
+    expect(compileModelPolicy({ provider: provider as any, artifact: 'skill', policy: { role: 'efficiency', tier: 'economy' } }).provider).toBe(provider);
+    expect(await readdir(root)).toEqual(['agentic']);
+  });
+
   it('every matrix/registry provider and alias has a frozen scope, owner and consumer', () => {
     const rows = fixtureJson('provider-coverage.json').rows;
     const definitions = listProviderDefinitions();

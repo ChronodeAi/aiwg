@@ -5,6 +5,9 @@
  */
 import { z } from 'zod';
 import { createRequire } from 'node:module';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+import { satisfies, validRange } from 'semver';
 import type {
   CanonicalModelPolicy, ModelCompilationOutcome, ModelEffort, ModelRole, Provider,
 } from './types.js';
@@ -15,6 +18,8 @@ function requireModelResource(filename: string): unknown {
     `./${filename}`,
     `../../agentic/code/providers/${filename}`,
     `../../../agentic/code/providers/${filename}`,
+    `../../schemas/models/${filename}`,
+    `../../../schemas/models/${filename}`,
   ];
   for (const candidate of candidates) {
     try { return require(candidate); } catch (error: any) {
@@ -33,6 +38,45 @@ const ProviderSchema = z.enum([
 const OutcomeSchema = z.enum([
   'native', 'compiled', 'inherited', 'global-only', 'informational', 'unsupported',
 ]);
+
+export interface WorkerInvocationProfile {
+  transport: 'shell' | 'mcp';
+  supportedVersions: string;
+  controls: Record<string, { support: 'native' | 'external' | 'not-applicable' | 'unqualified'; mapping: string; evidence: string }>;
+  envAllowlist: string[];
+  pitfalls: string[];
+  mcp?: { serverRef: string; tool: string; inputSchemaDigest: string; outputSchemaDigest: string;
+    sessionIsolation: 'per-call' | 'per-instance' | 'serialized'; cancel: 'confirmed' | 'uncertain' };
+  health?: Record<string, unknown>;
+}
+export interface WorkerAdapterMetadata {
+  version: 1;
+  id: string;
+  provider: string;
+  adapterVersion: string;
+  supportedVersions: string;
+  runtimeDriver: string;
+  catalogAdapter: { kind: 'command' | 'file' | 'http' | 'module'; locator: string; parser: string;
+    argv?: string[]; timeoutSeconds?: number; maxBytes?: number };
+  invocation: { kind: 'process'; executable: string; argv: string[]; stdin: 'closed' | 'brief-json' | 'brief-text';
+    cwd: '${workspace}'; envAllowlist: string[]; versionArgv: string[]; maxOutputBytes?: number }
+    | { kind: 'http'; protocol: 'ollama' | 'llama-cpp' | 'openai-compatible'; healthPath: string;
+      modelsPath: string; generatePath: string; timeoutSeconds?: number; maxOutputBytes?: number };
+  capabilities: { output: 'native-schema' | 'validated-file' | 'text'; modelPin: 'observed' | 'requested' | 'unsupported';
+    effort: 'explicit' | 'not-applicable' | 'unsupported'; cancel: 'process-group' | 'session' | 'none';
+    resume: boolean; sandboxModes: string[]; nestedAgentsControllable: boolean; nativeFallbackControllable: boolean; hardBudget: string[] };
+  qualification: { status: 'unqualified' | 'qualified'; fixtureDigest?: string; verifiedAt?: string; evidenceRef?: string };
+  invocationProfiles?: Record<string, WorkerInvocationProfile>;
+}
+
+// Use the bundled owner for nested controls, including forward-compatible optional
+// health records. Zod must validate and preserve them, never silently strip them.
+const capabilitySchema = requireModelResource('provider-model-capabilities.v1.schema.json') as any;
+const capabilityAjv = addFormats(new Ajv2020({ strict: false, allErrors: true }));
+capabilityAjv.addSchema(capabilitySchema);
+const validateAdapter = capabilityAjv.compile({ $ref: `${capabilitySchema.$id}#/$defs/workerAdapter` });
+export const WorkerAdapterSchema = z.custom<WorkerAdapterMetadata>(value => validateAdapter(value),
+  () => ({ message: `Invalid worker adapter: ${capabilityAjv.errorsText(validateAdapter.errors)}` }));
 const CapabilityEntrySchema = z.object({
   agent: OutcomeSchema,
   skill: OutcomeSchema,
@@ -46,12 +90,19 @@ const CapabilityEntrySchema = z.object({
   verification: z.string().min(1),
   sourceUrl: z.string().url(),
   verifiedAt: z.string().date(),
-});
+  workerAdapter: WorkerAdapterSchema.optional(),
+}).strict();
 const CapabilityRegistrySchema = z.object({
+  $schema: z.enum([
+    '../../../schemas/models/provider-model-capabilities.v1.schema.json',
+    'https://aiwg.io/schemas/models/provider-model-capabilities.v1.schema.json',
+  ]).optional(),
   version: z.literal('1.0.0'),
   verifiedAt: z.string().date(),
   providers: z.record(ProviderSchema, CapabilityEntrySchema),
-});
+  workerAdapters: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerAdapterSchema)
+    .refine(value => Object.keys(value).length <= 128, 'At most 128 worker adapters').optional(),
+}).strict();
 const CatalogModelSchema = z.object({
   id: z.string().min(1),
   status: z.enum(['active', 'deprecated', 'unverified']),
@@ -141,14 +192,83 @@ let catalogCache: ProviderModelCatalog | null = null;
 
 export function loadProviderModelCapabilities(): ProviderModelCapabilityRegistry {
   if (!registryCache) {
-    registryCache = CapabilityRegistrySchema.parse(capabilityData);
-    const expected = new Set(ProviderSchema.options);
-    const actual = new Set(Object.keys(registryCache.providers));
-    if (actual.size !== expected.size || [...expected].some(id => !actual.has(id))) {
-      throw new Error('Provider model capability registry must cover all registered providers');
-    }
+    registryCache = parseProviderModelCapabilities(capabilityData);
   }
   return registryCache;
+}
+
+export function parseProviderModelCapabilities(input: unknown): ProviderModelCapabilityRegistry {
+  const registry = CapabilityRegistrySchema.parse(input);
+  const expected = new Set(ProviderSchema.options);
+  const actual = new Set(Object.keys(registry.providers));
+  if (actual.size !== expected.size || [...expected].some(id => !actual.has(id))) {
+    throw new Error('Provider model capability registry must cover all registered providers');
+  }
+  const ids = new Set<string>();
+  for (const adapter of [...Object.values(registry.providers).flatMap(p => p.workerAdapter ? [p.workerAdapter] : []),
+    ...Object.values(registry.workerAdapters ?? {})]) {
+    if (!/^[a-z][a-z0-9-]{0,62}$/.test(adapter.id) || ids.has(adapter.id)) throw new Error(`Duplicate or invalid worker adapter ID: ${adapter.id}`);
+    ids.add(adapter.id);
+  }
+  return registry;
+}
+
+/** Exact, case-sensitive references; deployment and inference provider identities differ. */
+export function resolveWorkerAdapter(registry: ProviderModelCapabilityRegistry, reference: string): WorkerAdapterMetadata {
+  const match = /^(providers|workerAdapters):([a-z][a-z0-9-]{0,62})$/.exec(reference);
+  if (!match) throw new Error(`Invalid worker adapter reference: ${reference}`);
+  const [, namespace, id] = match;
+  const adapter = namespace === 'providers'
+    ? registry.providers[id as keyof typeof registry.providers]?.workerAdapter
+    : registry.workerAdapters?.[id];
+  if (!adapter) throw new Error(`Unknown worker adapter reference: ${reference}`);
+  return WorkerAdapterSchema.parse(adapter);
+}
+
+/** Pure direct/shared mapping: no admission store, Mission or activation marker. */
+export function resolveWorkerInstallation(registry: ProviderModelCapabilityRegistry,
+  installation: { adapter: string; executable?: string; endpoint?: string }) {
+  const adapter = resolveWorkerAdapter(registry, installation.adapter);
+  if (adapter.invocation.kind === 'process') {
+    if (installation.endpoint !== undefined) throw new Error('Process adapter forbids endpoint');
+    const executable = installation.executable ?? adapter.invocation.executable;
+    if (!executable.trim() || executable.includes('\0')) throw new Error('Process adapter requires executable');
+    return { adapter, executable };
+  }
+  if (installation.executable !== undefined) throw new Error('HTTP adapter forbids executable');
+  if (!installation.endpoint) throw new Error('HTTP adapter requires endpoint');
+  const endpoint = new URL(installation.endpoint);
+  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.hash) {
+    throw new Error('Invalid HTTP adapter endpoint');
+  }
+  return { adapter, endpoint: installation.endpoint };
+}
+
+/** Qualification is transport/version scoped; deployment support is insufficient. */
+export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: {
+  profile: string; transport: 'shell' | 'mcp'; cliVersion: string; requiredControls?: string[];
+  mcp?: WorkerInvocationProfile['mcp'];
+}): WorkerInvocationProfile {
+  WorkerAdapterSchema.parse(adapter);
+  const profile = adapter.invocationProfiles?.[selection.profile];
+  if (adapter.qualification.status !== 'qualified' || !profile || profile.transport !== selection.transport) {
+    throw new Error('Worker transport/profile is unqualified');
+  }
+  if (![adapter.supportedVersions, profile.supportedVersions].every(range => validRange(range) && satisfies(selection.cliVersion, range))) {
+    throw new Error('Worker CLI version is outside qualified profile');
+  }
+  for (const name of selection.requiredControls ?? []) {
+    const control = profile.controls[name];
+    if (!control || !['native', 'external'].includes(control.support) || !control.mapping || !control.evidence) {
+      throw new Error(`Required worker control is unqualified: ${name}`);
+    }
+  }
+  if (selection.transport === 'mcp' && (!selection.mcp || !profile.mcp
+    || Object.keys(profile.mcp).some(key => profile.mcp![key as keyof NonNullable<typeof profile.mcp>]
+      !== selection.mcp![key as keyof NonNullable<typeof selection.mcp>]))) {
+    throw new Error('MCP server/tool/schema/session qualification changed');
+  }
+  return profile;
 }
 export function loadProviderModelCatalog(): ProviderModelCatalog {
   if (!catalogCache) catalogCache = CatalogSchema.parse(catalogData);

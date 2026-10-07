@@ -20,7 +20,7 @@ import {
   type WorkerConsumerSupport,
 } from '../../../src/mission-protocol/index.js';
 import { resolveParallelism } from '../../../src/config/aiwg-config.js';
-import { validateUserProjectModelConfig } from '../../../src/models/provider-policy.js';
+import { validateUserProjectModelConfig, WorkerAdapterSchema, parseProviderModelCapabilities } from '../../../src/models/provider-policy.js';
 import { fixtureJson, fixtureRoot, materialize, readJson, validators, type ContractVector } from './worker-contract-fixtures.js';
 
 const { draft07, draft2020, schemas } = validators();
@@ -123,12 +123,14 @@ describe('legacy and shared schema compatibility (T-OG-01/14)', () => {
       ? draft2020.compile({ $ref: vector.owner === 'adapter' ? `${schemas.capability.$id}#/$defs/workerAdapter` : `${schemas.catalog.$id}#/$defs/workerObservation` })
       : (vector.owner === 'config' ? draft07 : draft2020).getSchema(schemas[vector.owner].$id)!;
     expect(validate(vector.value), JSON.stringify(validate.errors)).toBe(vector.valid);
+    if (vector.owner === 'adapter') expect(WorkerAdapterSchema.safeParse(vector.value).success).toBe(vector.valid);
   });
 
   it('keeps the current capability registry annotation and catalog under the closed owner', () => {
     const registry = readJson('agentic/code/providers/model-capabilities.v1.json');
     const validate = draft2020.getSchema(schemas.capability.$id)!;
     expect(validate(registry), JSON.stringify(validate.errors)).toBe(true);
+    expect(parseProviderModelCapabilities(registry)).toEqual(registry);
     expect(validate({ ...registry, $schema: 'https://untrusted.invalid/new-schema' })).toBe(false);
     expect(validate({ ...registry, unexpectedRoot: {} })).toBe(false);
     const validateCatalog = draft2020.getSchema(schemas.catalog.$id)!;
