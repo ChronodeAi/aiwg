@@ -10,7 +10,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { mcpError, mcpJson } from '../helpers.mjs';
+import { assertNoWorkerBinding, mcpError, mcpJson } from '../helpers.mjs';
 
 const FLEET_VERSION = 'agentic-orchestration/v1';
 const ACTIVITY_VERSION = 'activity.event/v1';
@@ -143,6 +143,7 @@ export class AgenticSandboxMcpClient {
   }
 
   async request(path, { method = 'GET', body, headers = {}, validate = (value) => safeResponse(value) } = {}) {
+    assertNoWorkerBinding(body, 'mcp');
     const baseUrl = configuredBaseUrl(this.env);
     const token = await managementBearer(this.env);
     const response = await this.fetch(`${baseUrl}${path}`, {
@@ -158,6 +159,7 @@ export class AgenticSandboxMcpClient {
       else return mcpError(`sandbox returned non-JSON HTTP ${response.status}`);
     }
     try {
+      assertNoWorkerBinding(parsed, 'mcp');
       return typedResult(parsed, response.status, validate);
     } catch (error) {
       return mcpError(`${error.code ?? 'sandbox_malformed_response'}: ${error.message}`);

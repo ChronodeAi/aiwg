@@ -10,6 +10,107 @@ import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+/** Existing MCP owners have not qualified worker contracts; fail before handoff. */
+const MISSION_WORKER_SCHEMA_ID = 'https://aiwg.io/schemas/mission.aiwg.io/v1';
+const MISSION_WORKER_DEFINITIONS = new Set([
+  'workerArtifact',
+  'workerEffort',
+  'workerTuple',
+  'workerLimits',
+  'workerSelectionIntent',
+  'workerBrief',
+  'workerClaims',
+  'workerUsage',
+  'workerExecution',
+  'workerVerification',
+  'workerResult',
+  'workerDispatch',
+  'workerDirectIntent',
+  'workerDirectBrief',
+  'workerResolvedInvocation',
+  'workerDirectVerification',
+  'workerDirectResult',
+  'workerHealthSummary',
+  'workerEffectiveHealth',
+]);
+
+// Resolve against the owning schema, never infer ownership from a $defs name.
+function workerContractReference(reference, base = 'https://aiwg.invalid/local-schema') {
+  if (typeof reference !== 'string') return false;
+  try {
+    const resolved = new URL(reference, base);
+    const fragment = decodeURIComponent(resolved.hash).split('/');
+    resolved.hash = '';
+    return resolved.href === MISSION_WORKER_SCHEMA_ID
+      && fragment[0] === '#' && fragment[1] === '$defs'
+      && MISSION_WORKER_DEFINITIONS.has(fragment[2]);
+  } catch {
+    return false;
+  }
+}
+
+export function assertNoWorkerBinding(value, consumer) {
+  const seenExtensions = new Set();
+  const seenRecords = new Set();
+  const seenSchemas = new Map();
+  function unsupported() {
+    const error = new Error(`OG_CONTRACT_UNSUPPORTED: ${consumer} does not advertise worker contract support.`);
+    error.code = 'OG_CONTRACT_UNSUPPORTED';
+    throw error;
+  }
+  function extensions(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenExtensions.has(item)) return;
+    seenExtensions.add(item);
+    if (Object.hasOwn(item, 'aiwg.worker-dispatch')) unsupported();
+    for (const [key, child] of Object.entries(item)) if (key.startsWith('aiwg.source.')) {
+      extensions(child);
+      record(child);
+    }
+  }
+  function schema(item, inheritedBase = 'https://aiwg.invalid/local-schema') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    let base = inheritedBase;
+    if (typeof item.$id === 'string') {
+      try { base = new URL(item.$id, inheritedBase).href; } catch { /* invalid schemas belong to validation */ }
+    }
+    const bases = seenSchemas.get(item) ?? new Set();
+    if (bases.has(base)) return;
+    bases.add(base);
+    seenSchemas.set(item, bases);
+    if (workerContractReference(item.$ref, base) || workerContractReference(item.schemaRef, base)) unsupported();
+    // Only JSON Schema subschemas inherit an owner. const/default/examples
+    // and properties' names are data, not active references or extensions.
+    for (const key of ['$defs', 'definitions', 'properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
+      for (const child of Object.values(item[key] ?? {})) schema(child, base);
+    }
+    for (const key of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+    }
+    for (const key of ['items', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties', 'contains', 'propertyNames', 'not', 'if', 'then', 'else']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+      else schema(item[key], base);
+    }
+  }
+  function record(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenRecords.has(item)) return;
+    seenRecords.add(item);
+    // All mission-v1 carriers: /extensions and /status/artifacts/*/extensions.
+    extensions(item.extensions);
+    if (Array.isArray(item.status?.artifacts)) item.status.artifacts.forEach(record);
+    // Native protocols also use metadata and top-level artifacts.
+    extensions(item.metadata);
+    if (Array.isArray(item.artifacts)) item.artifacts.forEach(record);
+    if (typeof item.$ref === 'string' || typeof item.schemaRef === 'string'
+      || typeof item.$id === 'string' || typeof item.$schema === 'string') schema(item);
+    schema(item.schema);
+    if (workerContractReference(item.output?.schemaRef)) unsupported();
+    // Existing sandbox response envelopes own these records explicitly.
+    record(item.workload);
+    if (item.document_type === 'inventory' && Array.isArray(item.records)) item.records.forEach(record);
+  }
+  record(value);
+}
+
 /**
  * Resolve AIWG_ROOT, with safe fallback to known install locations.
  */

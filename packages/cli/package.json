@@ -30,6 +30,7 @@
     "schemas/security/",
     "schemas/decision/",
     "schemas/dataset/",
+    "schemas/mission-v1.schema.json",
     "dist/src/",
     "!dist/**/*.d.ts",
     "!dist/**/*.map",

@@ -20,6 +20,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 export type AdmissionState =
   | 'queued'
@@ -152,6 +153,7 @@ export class SharedHostScheduler {
   }
 
   submit(request: AdmissionRequest): AdmissionRecord {
+    assertMissionWorkerHandoff(request, 'managed-admission');
     this.validateRequest(request);
     return this.store.transact(snapshot => {
       const existing = snapshot.records[request.requestId];

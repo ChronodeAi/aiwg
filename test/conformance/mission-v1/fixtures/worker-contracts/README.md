@@ -137,3 +137,98 @@ Acceptance at this fixture checkpoint: disposition ownership, legacy compatibili
 unsupported-required-metadata rejection vectors, and reviewable versioned Mission
 definitions/consumer inventory are met. Production negotiation remains #2879's
 consumer-boundary work; managed runtime/leases/admission are deferred to S2+.
+
+## #2879 production boundary refinement
+
+The frozen #2876 fragments and vectors remain intact. Production validation now
+uses the bundled Mission owner. `encodeMission` and `decodeMission` negotiate and
+validate worker extensions before cloning; unqualified native projections and
+runtime handoffs reject them with `OG_CONTRACT_UNSUPPORTED`. Only canonical-codec
+advertises support after its production boundary tests pass. Consumer rows that
+name schemas or types do not introduce an executor handshake. Model selectors,
+profile registries and provider-name factories have no worker payload input;
+their future worker support remains false.
+
+`test/unit/mission-protocol/worker-boundaries.test.ts` adds aggregate UTF-8 byte
+limit/limit+1 and nesting depth 16/17/32 cases without changing the frozen shape
+vectors. Individual fields remain schema-valid in these aggregate negatives.
+The same test creates immutable pending and accepted result snapshots through
+the existing codec owner, checks unchanged prior bytes/digest, and round-trips
+linked `workerDispatch.previousRecord` updates through canonical Mission owners.
+Snapshot records are local codec return values, not new persisted schema owners.
+
+Persisted managed snapshots and completion integration remain **deferred S2+**:
+configuration spec 05 §5.1 assigns digest-addressed versions to existing
+Mission/Flow/Ralph artifacts; rules spec 06 §7 explicitly assigns immutable
+pending/accepted artifact versions to Tier 1 and permits Tier 0 verification in
+context or an optional receipt; delivery plan 11 S2–S3 schedules managed evidence
+and Flow bindings. The S1 codec preserves bytes and successor links in memory
+without requiring a database, receipt or Mission runtime.
+
+`installed-layout.test.ts` probes compiled codec modules and local validator
+dependencies under temporary installed paths for both `aiwg` and `@aiwg/cli`.
+`test/integration/mission-contract-packaging.test.ts` additionally packs/unpacks
+both publication targets offline in the existing serial packaging lane.
+
+### Fix-pass validation (2026-10-07)
+
+- `npm run typecheck`: pass.
+- `npm run lint:mission-contract`: pass, compatible, no breaking changes.
+- `npx vitest run --config config/vitest.config.js test/conformance/mission-v1/ test/unit/mission-protocol/`:
+  **243 passed / 4 failed**. Existing inventory tests fail on sandbox-denied Node
+  subprocesses (`EPERM`), including the assertion that receives empty stderr.
+- `node tools/mission-protocol/inventory.mjs` and the same command with `--write`:
+  both blocked by `spawnSync rg EPERM`. Newly added files still need inventory
+  generation/classification in an environment permitting these subprocesses.
+- `npx vitest run --config config/vitest.packaging.config.js test/integration/`:
+  **0 collected**, existing global setup fails on `prepack`'s `tsx` IPC
+  `listen EPERM`. The installed-layout checks passed separately (2/2); actual
+  tarball execution remains environmentally unverified.
+
+Related owner suites before the final UHP transmission additions: **510 passed,
+0 failed** (22 files):
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/unit/mission-protocol/handoff-boundaries.test.ts \
+  test/unit/mission-protocol/mc-worker-handoff.test.ts test/unit/a2a/ \
+  test/unit/serve/mission-conductor.test.ts \
+  test/unit/serve/fleet-mission-conductor.test.ts \
+  test/unit/serve/shared-host-scheduler.test.ts test/unit/uhp/sse-mission.test.ts \
+  test/unit/addons/composition-runtime.test.ts test/unit/mcp/agentic-sandbox.test.ts \
+  test/unit/mcp/orchestration.test.ts test/unit/cli/handlers/mc.test.ts
+```
+
+Final UHP transmission regression: **76 passed, 0 failed** (6 files):
+
+```sh
+npx vitest run --config config/vitest.config.js test/unit/uhp/ \
+  test/unit/mission-protocol/handoff-boundaries.test.ts \
+  test/unit/mission-protocol/mc-worker-handoff.test.ts
+```
+
+The related-owner command above with `test/unit/cockpit/` added (before the three
+SDK stripping tests) produced **524 passed / 13 failed**. All failures were the
+existing bridge smoke isolation suite's sandbox-denied Node permission probes
+(`spawnSync EPERM`). Broader related coverage produced **1450 passed / 32 failed**:
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/unit/mission-protocol/handoff-boundaries.test.ts \
+  test/unit/mission-protocol/mc-worker-handoff.test.ts \
+  test/unit/serve/mission-conductor.test.ts \
+  test/unit/serve/fleet-mission-conductor.test.ts \
+  test/unit/serve/shared-host-scheduler.test.ts test/unit/uhp/ \
+  test/unit/addons/ test/unit/mcp/ test/unit/cli/handlers/mc.test.ts
+```
+
+Those broader failures are in existing subprocess-evidence tests (30), a
+compound-memory context-pack schema expectation (1), and a real MCP child-pipe
+timeout (1). The subprocess tests received empty child output despite exit zero;
+this is not labeled a proven `EPERM` failure. No changed boundary test failed.
+Related package metadata/workflow checks also passed (6/6):
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/smoke/cli-package-publish-workflow.test.ts test/unit/package-metadata.test.ts
+```

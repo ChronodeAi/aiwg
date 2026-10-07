@@ -17,6 +17,7 @@ import * as ui from '../ui.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { assertMissionWorkerHandoff } from '../../mission-protocol/codecs.js';
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -467,6 +468,17 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 1 };
   }
 
+  // mission-dispatch accepts only the frozen objective envelope. Worker
+  // bindings can arrive through its existing session, so inspect that payload.
+  try {
+    assertMissionWorkerHandoff(selected, 'mc-cli');
+    for (const mission of selected.missions) assertMissionWorkerHandoff(mission, 'mc-cli');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
+  }
+
   // #1361: Check project-level parallelism cap. Active missions = running or
   // queued; if at cap, warn but still queue (FIFO behavior — the mission goes
   // into the session as 'queued' and will run when a slot frees up).
@@ -677,6 +689,14 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   }
 
   const queued = session.missions.filter((m) => m.status === 'queued');
+  try {
+    assertMissionWorkerHandoff(session, 'mc-cli');
+    for (const mission of queued) assertMissionWorkerHandoff(mission, 'mc-cli');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.error(message);
+    return { exitCode: 1, message };
+  }
   if (queued.length === 0) {
     ui.info(`No queued missions in session ${session.id}. Run \`aiwg mc dispatch ${session.id} "<objective>"\` to add one.`);
     return { exitCode: 0 };

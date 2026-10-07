@@ -9,6 +9,7 @@ import type {
   TaskState,
   TaskStatus,
 } from './types.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 export function encodePushNotificationConfig(
   version: A2AProtocolVersion,
@@ -114,6 +115,7 @@ const STATE_TO_V1 = Object.fromEntries(
 ) as Record<TaskState, string>;
 
 export function encodeMessage(version: A2AProtocolVersion, message: Message): Record<string, unknown> {
+  assertMissionWorkerHandoff(message, 'a2a');
   assertNonEmptyString(version, '$.messageId', message.messageId);
   if (message.role !== 'user' && message.role !== 'agent') {
     fail(version, '$.role', 'must be user or agent');
@@ -139,6 +141,7 @@ export function decodeMessage(
   input: unknown,
   path = '$'
 ): Message {
+  assertMissionWorkerHandoff(input, 'a2a');
   const obj = objectAt(version, path, input);
   const messageId = stringAt(version, `${path}.messageId`, obj.messageId);
   const role = decodeRole(version, obj.role, `${path}.role`);
@@ -158,6 +161,7 @@ export function decodeMessage(
 }
 
 export function encodeTask(version: A2AProtocolVersion, task: Task): Record<string, unknown> {
+  assertMissionWorkerHandoff(task, 'a2a');
   assertNonEmptyString(version, '$.id', task.id);
   const out: Record<string, unknown> = {
     id: task.id,
@@ -180,6 +184,7 @@ export function decodeTask(
   input: unknown,
   path = '$'
 ): Task {
+  assertMissionWorkerHandoff(input, 'a2a');
   const obj = objectAt(version, path, input);
   if (version === '1.0' && typeof obj.kind === 'string') {
     fail(version, `${path}.kind`, 'legacy kind discriminator is not valid in 1.0');
@@ -270,6 +275,7 @@ export function encodeArtifact(
   artifact: Artifact,
   path = '$'
 ): Record<string, unknown> {
+  assertMissionWorkerHandoff(artifact, 'a2a');
   assertNonEmptyString(version, `${path}.artifactId`, artifact.artifactId);
   if (!Array.isArray(artifact.parts) || artifact.parts.length === 0) {
     fail(version, `${path}.parts`, 'must contain at least one part');
@@ -290,6 +296,7 @@ export function decodeArtifact(
   input: unknown,
   path = '$'
 ): Artifact {
+  assertMissionWorkerHandoff(input, 'a2a');
   const obj = objectAt(version, path, input);
   const partsRaw = arrayAt(version, `${path}.parts`, obj.parts);
   if (partsRaw.length === 0) fail(version, `${path}.parts`, 'must contain at least one part');
@@ -316,6 +323,7 @@ function encodeMessageAt(version: A2AProtocolVersion, message: Message, path: st
 }
 
 function encodePart(version: A2AProtocolVersion, part: MessagePart, path: string): Record<string, unknown> {
+  assertMissionWorkerHandoff(part, 'a2a');
   const common: Record<string, unknown> = {};
   copyJsonObject(version, common, 'metadata', part.metadata, `${path}.metadata`);
   copyOptional(common, version === '0.3' ? 'mimeType' : 'mediaType', part.mediaType);
@@ -341,6 +349,7 @@ function encodePart(version: A2AProtocolVersion, part: MessagePart, path: string
 }
 
 function decodePart(version: A2AProtocolVersion, input: unknown, path: string): MessagePart {
+  assertMissionWorkerHandoff(input, 'a2a');
   const obj = objectAt(version, path, input);
   if (version === '0.3') return decodeLegacyPart(obj, path);
   return decodeV1Part(obj, path);

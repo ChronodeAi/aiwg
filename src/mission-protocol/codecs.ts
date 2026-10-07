@@ -1,5 +1,16 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import {
   MISSION_API_VERSION,
+  WORKER_BASELINE_FEATURES,
+  WORKER_CONTRACT_REVISION,
+  WORKER_DEFINITIONS,
+  WORKER_KNOWN_FEATURES,
+  WorkerContractError,
   type CanonicalMission,
   type MissionDecodeResult,
   type MissionEncodeResult,
@@ -7,6 +18,11 @@ import {
   type MissionSource,
   type MissionState,
   type MissionTarget,
+  type WorkerConsumerSupport,
+  type WorkerArtifact,
+  type WorkerDefinitionName,
+  type WorkerNegotiationRequest,
+  type WorkerNegotiationVerdict,
 } from './types.js';
 
 type RecordValue = Record<string, unknown>;
@@ -121,6 +137,7 @@ function assertSupported(version: string): void {
 
 export function validateCanonicalMission(value: unknown): CanonicalMission {
   const record = object(value, 'Canonical Mission');
+  assertMissionWorkerHandoff(record, 'canonical');
   if (record.apiVersion !== MISSION_API_VERSION) throw new Error(`Unsupported canonical Mission version '${String(record.apiVersion)}'.`);
   if (record.kind !== 'Mission') throw new Error("Canonical Mission kind must be 'Mission'.");
   const metadata = object(record.metadata, 'Mission metadata');
@@ -137,6 +154,7 @@ export function validateCanonicalMission(value: unknown): CanonicalMission {
 
 export function decodeMission(input: unknown, source: MissionSource): MissionDecodeResult {
   const record = object(input);
+  assertMissionWorkerHandoff(record, source);
   if (source === 'canonical') {
     const value = validateCanonicalMission(record);
     return { value, sourceVersion: MISSION_API_VERSION, warnings: [], preservedExtensions: structuredClone(value.extensions ?? {}), lossReport: [] };
@@ -197,6 +215,7 @@ function projectionLosses(value: CanonicalMission, target: MissionTarget): Missi
 }
 
 export function encodeMission(value: CanonicalMission, target: MissionTarget, options: { allowLoss?: boolean } = {}): MissionEncodeResult {
+  assertMissionWorkerHandoff(value, target);
   const mission = validateCanonicalMission(value);
   if (target === 'canonical') return { value: mission, targetVersion: MISSION_API_VERSION, warnings: [], lossReport: [] };
   const lossReport = projectionLosses(mission, target);
@@ -227,4 +246,292 @@ export function encodeMission(value: CanonicalMission, target: MissionTarget, op
   else if (target === 'fleet-workload-v1') projected = { mission_id: mission.metadata.id, objective: mission.spec.objective, completion_criterion: mission.spec.completionCriterion, observed_state: base.status, budgets: mission.spec.budgets, artifacts: base.artifacts, partial_output: base.partialOutput, lineage: base.lineage, metadata: base.extensions };
   else if (target === 'mission-control-session') projected = { id: mission.metadata.id, objective: mission.spec.objective, status: mission.status.state, completion: mission.spec.completionCriterion, artifacts: base.artifacts, partialOutput: base.partialOutput, extensions: base.extensions };
   return { value: projected, targetVersion: target, warnings: lossReport.map(loss => `${loss.path}: ${loss.reason}`), lossReport };
+}
+
+// Worker dispatch payloads (05 §5.1). Validators compile lazily from the
+// production schemas/mission-v1.schema.json owner, so codecs cannot drift
+// from the shipped contract. Nothing here instantiates a Mission runtime.
+
+interface WorkerValidatorSet {
+  schemaId: string;
+  bundleDigest: string;
+  validators: Map<WorkerDefinitionName, ValidateFunction>;
+}
+
+let cachedWorkerValidators: WorkerValidatorSet | undefined;
+
+function missionPackageRoot(start: string): string {
+  let current = resolve(start);
+  for (;;) {
+    try {
+      const packageJson = JSON.parse(readFileSync(join(current, 'package.json'), 'utf8')) as { name?: string };
+      if (packageJson.name === 'aiwg' || packageJson.name === '@aiwg/cli') return current;
+    } catch {
+      // Keep walking; source and compiled modules have different depths.
+    }
+    const parent = dirname(current);
+    if (parent === current) throw new Error('worker contracts: could not locate the aiwg package root');
+    current = parent;
+  }
+}
+
+function loadWorkerValidators(): WorkerValidatorSet {
+  if (!cachedWorkerValidators) {
+    const schemaPath = join(missionPackageRoot(dirname(fileURLToPath(import.meta.url))), 'schemas/mission-v1.schema.json');
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
+    if (typeof schema.$id !== 'string') throw new WorkerContractError('OG_CONTRACT_INVALID', 'Worker contract owner has no schema $id.');
+    const ajv = addFormats(new Ajv2020({ strict: false, allErrors: true }));
+    ajv.addSchema(schema);
+    const validators = new Map<WorkerDefinitionName, ValidateFunction>();
+    for (const definition of WORKER_DEFINITIONS) validators.set(definition, ajv.compile({ $ref: `${schema.$id}#/$defs/${definition}` }));
+    cachedWorkerValidators = { schemaId: schema.$id, bundleDigest: workerBundleDigestFor(schema), validators };
+  }
+  return cachedWorkerValidators;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function workerBundleDigestFor(schema: Record<string, unknown>): string {
+  const defs = schema.$defs as Record<string, unknown>;
+  const workerDefs = Object.fromEntries(WORKER_DEFINITIONS.filter(definition => definition in defs).map(definition => [definition, defs[definition]]));
+  return `sha256:${createHash('sha256').update(stableJson(workerDefs)).digest('hex')}`;
+}
+
+/** Digest of the shipped worker definition bundle; consumers advertise it back during negotiation. */
+export function workerDefinitionBundleDigest(): string {
+  return loadWorkerValidators().bundleDigest;
+}
+
+export function workerContractSchemaId(): string {
+  return loadWorkerValidators().schemaId;
+}
+
+export interface WorkerPayloadValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+// 05 §5.1: complete JSON payloads are bounded independently of field limits.
+export const WORKER_MAX_JSON_BYTES = 262_144;
+export const WORKER_MAX_NESTING_DEPTH = 16;
+
+function workerSemanticErrors(value: unknown): string[] {
+  const ancestors = new Set<object>();
+  function visit(node: unknown, depth: number): string | undefined {
+    if (!node || typeof node !== 'object') return undefined;
+    if (depth > WORKER_MAX_NESTING_DEPTH) return `JSON nesting depth exceeds ${WORKER_MAX_NESTING_DEPTH}`;
+    if (ancestors.has(node)) return 'Worker JSON must not contain cycles';
+    ancestors.add(node);
+    for (const child of Object.values(node)) {
+      const error = visit(child, depth + 1);
+      if (error) return error;
+    }
+    ancestors.delete(node);
+    return undefined;
+  }
+  // Root object/array is depth 1; scalar leaves do not add a nesting level.
+  const depthError = visit(value, 1);
+  if (depthError) return [depthError];
+  try {
+    const bytes = JSON.stringify(value);
+    if (bytes === undefined) return ['Worker payload must be JSON serializable'];
+    if (Buffer.byteLength(bytes, 'utf8') > WORKER_MAX_JSON_BYTES) return [`Serialized UTF-8 JSON exceeds ${WORKER_MAX_JSON_BYTES} bytes`];
+  } catch {
+    return ['Worker payload must be JSON serializable'];
+  }
+  return [];
+}
+
+/** Validate a worker payload against its bundled definition. Closed shapes reject unknown fields. */
+export function validateWorkerPayload(definition: WorkerDefinitionName, value: unknown): WorkerPayloadValidation {
+  const semanticErrors = workerSemanticErrors(value);
+  if (semanticErrors.length) return { valid: false, errors: semanticErrors };
+  const validate = loadWorkerValidators().validators.get(definition);
+  if (!validate) throw new WorkerContractError('OG_CONTRACT_INVALID', `Unknown worker definition '${definition}'.`);
+  const valid = validate(value) as boolean;
+  const errors = valid ? [] : (validate.errors ?? []).map(error => `${error.instancePath || '/'} ${error.message ?? error.keyword}`);
+  return { valid, errors };
+}
+
+export function assertValidWorkerPayload(definition: WorkerDefinitionName, value: unknown): void {
+  const { valid, errors } = validateWorkerPayload(definition, value);
+  if (!valid) throw new WorkerContractError('OG_CONTRACT_INVALID', `Invalid ${definition}: ${errors.join('; ') || 'shape mismatch'}.`);
+}
+
+/**
+ * Fail-closed negotiation before any task data handoff. Absent or unknown
+ * required features, incompatible digests/revisions, or codecs without
+ * lossless round trips yield OG_CONTRACT_UNSUPPORTED.
+ */
+export function workerSupportBlockers(consumer: WorkerConsumerSupport, required: WorkerNegotiationRequest): string[] {
+  const blockers: string[] = [];
+  if (consumer.revision !== WORKER_CONTRACT_REVISION) blockers.push(`unsupported revision ${String(consumer.revision)}; required ${WORKER_CONTRACT_REVISION}`);
+  if (consumer.bundleDigest !== required.bundleDigest) blockers.push('definition-bundle digest mismatch');
+  if (consumer.lossless !== true) blockers.push('codec does not guarantee lossless round trips');
+  if (!Array.isArray(consumer.features)) blockers.push('absent consumer feature metadata');
+  else {
+    for (const feature of required.requiredFeatures) {
+      if (!(WORKER_KNOWN_FEATURES as readonly string[]).includes(feature)) blockers.push(`unknown required feature '${feature}'`);
+      else if (!consumer.features.includes(feature)) blockers.push(`missing required feature '${feature}'`);
+    }
+  }
+  return blockers;
+}
+
+export function negotiateWorkerSupport(consumer: WorkerConsumerSupport, required: WorkerNegotiationRequest): WorkerNegotiationVerdict {
+  return workerSupportBlockers(consumer, required).length ? 'OG_CONTRACT_UNSUPPORTED' : 'supported';
+}
+
+/** Block old consumers before payload handling or spawn. */
+export function assertWorkerConsumerSupported(consumer: WorkerConsumerSupport, required: WorkerNegotiationRequest): void {
+  const blockers = workerSupportBlockers(consumer, required);
+  if (blockers.length) throw new WorkerContractError('OG_CONTRACT_UNSUPPORTED', `OG_CONTRACT_UNSUPPORTED: ${blockers.join('; ')}.`);
+}
+
+export interface WorkerPayloadGate {
+  consumer: WorkerConsumerSupport;
+  requiredFeatures?: readonly string[];
+  bundleDigest?: string;
+}
+
+function gateRequest(gate: WorkerPayloadGate): WorkerNegotiationRequest {
+  return {
+    requiredFeatures: [...(gate.requiredFeatures ?? WORKER_BASELINE_FEATURES)],
+    bundleDigest: gate.bundleDigest ?? workerDefinitionBundleDigest(),
+  };
+}
+
+/** Trusted registration for the codec only; runtime consumers remain unqualified. */
+function canonicalWorkerSupport(): WorkerConsumerSupport {
+  return { revision: WORKER_CONTRACT_REVISION, bundleDigest: workerDefinitionBundleDigest(), features: [...WORKER_KNOWN_FEATURES], lossless: true };
+}
+
+function workerDispatchRecord(value: unknown): RecordValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', 'Invalid workerDispatch: must be an object.');
+  }
+  return value as RecordValue;
+}
+
+/**
+ * Existing Mission/native owners call this before cloning, projection or launch.
+ * Only the canonical codec has qualified worker preservation. An open native
+ * extension map never qualifies an executor, renderer or runtime by itself.
+ */
+export function assertMissionWorkerHandoff(input: unknown, consumer: MissionSource | string): void {
+  const seen = new Set<object>();
+  const seenRecords = new Set<object>();
+  function visitExtensions(value: unknown): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || seen.has(value)) return;
+    seen.add(value);
+    const record = value as RecordValue;
+    if (Object.hasOwn(record, 'aiwg.worker-dispatch')) {
+      const dispatch = workerDispatchRecord(record['aiwg.worker-dispatch']);
+      if (dispatch.version !== WORKER_CONTRACT_REVISION) {
+        throw new WorkerContractError('OG_CONTRACT_UNSUPPORTED', `OG_CONTRACT_UNSUPPORTED: unsupported worker revision ${String(dispatch.version)}.`);
+      }
+      const support = canonicalWorkerSupport();
+      assertWorkerConsumerSupported({ ...support, lossless: consumer === 'canonical', ...(consumer === 'canonical' ? {} : { features: [] }) }, {
+        requiredFeatures: Array.isArray(dispatch.requiredFeatures) ? dispatch.requiredFeatures : [...WORKER_BASELINE_FEATURES],
+        bundleDigest: workerDefinitionBundleDigest(),
+      });
+      assertValidWorkerPayload('workerDispatch', dispatch);
+    }
+    // aiwg.source.* contains preserved native extension maps and records.
+    // Other vendor values and output data are opaque, even if their keys
+    // happen to match a worker extension name.
+    for (const [key, child] of Object.entries(record)) if (key.startsWith('aiwg.source.')) {
+      visitExtensions(child);
+      visitRecord(child);
+    }
+  }
+  function visitRecord(value: unknown): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || seenRecords.has(value)) return;
+    seenRecords.add(value);
+    const record = value as RecordValue;
+    // All mission-v1 carriers: /extensions and /status/artifacts/*/extensions.
+    visitExtensions(record.extensions);
+    const status = record.status as RecordValue | undefined;
+    if (Array.isArray(status?.artifacts)) for (const artifact of status.artifacts) visitRecord(artifact);
+    // Native protocols carry extensions in metadata and top-level artifacts.
+    visitExtensions(record.metadata);
+    if (Array.isArray(record.artifacts)) for (const artifact of record.artifacts) visitRecord(artifact);
+  }
+  visitRecord(input);
+}
+
+function assertWorkerPayloadHandoff(definition: WorkerDefinitionName, value: unknown, gate?: WorkerPayloadGate): void {
+  const consumer = gate?.consumer ?? canonicalWorkerSupport();
+  const request = gate ? gateRequest(gate) : { requiredFeatures: [...WORKER_BASELINE_FEATURES], bundleDigest: workerDefinitionBundleDigest() };
+  assertWorkerConsumerSupported(consumer, request);
+  if (definition === 'workerDispatch') {
+    const dispatch = workerDispatchRecord(value);
+    if (dispatch.version !== WORKER_CONTRACT_REVISION) throw new WorkerContractError('OG_CONTRACT_UNSUPPORTED', 'OG_CONTRACT_UNSUPPORTED: unsupported worker revision.');
+    // Payload requirements are authoritative even if a caller supplies a gate
+    // with a weaker list. Negotiation cannot be bypassed through options.
+    assertWorkerConsumerSupported(consumer, {
+      ...request,
+      requiredFeatures: [...new Set([...request.requiredFeatures, ...(Array.isArray(dispatch.requiredFeatures) ? dispatch.requiredFeatures : [])])],
+    });
+  }
+  assertValidWorkerPayload(definition, value);
+}
+
+/**
+ * Validate and losslessly clone a worker payload for transmission. When a
+ * consumer gate is absent, the trusted codec registration is used. Unsupported
+ * consumers are blocked before validation/cloning. Decoding mirrors encoding:
+ * no normalization is applied,
+ * so decode(encode(value)) is deep-equal to value.
+ */
+export function encodeWorkerPayload<T = unknown>(definition: WorkerDefinitionName, value: T, gate?: WorkerPayloadGate): T {
+  assertWorkerPayloadHandoff(definition, value, gate);
+  return structuredClone(value);
+}
+
+export function decodeWorkerPayload<T = unknown>(definition: WorkerDefinitionName, value: T, gate?: WorkerPayloadGate): T {
+  assertWorkerPayloadHandoff(definition, value, gate);
+  return structuredClone(value);
+}
+
+/** In-memory codec snapshot, not a new persisted contract or storage owner. */
+export interface WorkerPayloadSnapshot {
+  readonly definition: WorkerDefinitionName;
+  readonly bytes: string;
+  readonly artifact: Readonly<WorkerArtifact>;
+  readonly previousRecord: Readonly<WorkerArtifact> | null;
+}
+
+/**
+ * 05 §5.1 / 06 §7: retain hashed bytes and link a successor rather than rewrite
+ * the pending version. Tier 0 callers can keep these in context; Tier 1 owners
+ * persist them in existing Mission/Flow/Ralph artifacts (S2+).
+ */
+export function encodeWorkerPayloadSnapshot<T>(definition: WorkerDefinitionName, value: T, previous?: WorkerPayloadSnapshot): WorkerPayloadSnapshot {
+  const encoded = encodeWorkerPayload(definition, value);
+  if (previous) {
+    if (previous.definition !== definition || `sha256:${createHash('sha256').update(previous.bytes, 'utf8').digest('hex')}` !== previous.artifact.digest) {
+      throw new WorkerContractError('OG_CONTRACT_INVALID', 'Prior worker snapshot definition or digest does not match its preserved bytes.');
+    }
+    const prior = decodeWorkerPayload(definition, JSON.parse(previous.bytes)) as RecordValue;
+    const next = encoded as RecordValue;
+    for (const identity of ['taskId', 'requestId', 'invocationId', 'briefDigest']) {
+      if (prior[identity] !== next[identity]) throw new WorkerContractError('OG_CONTRACT_INVALID', `Worker successor changes ${identity}.`);
+    }
+    if (definition === 'workerDispatch') {
+      const link = next.previousRecord as WorkerArtifact | null;
+      if (link?.digest !== previous.artifact.digest || link?.ref !== previous.artifact.ref) {
+        throw new WorkerContractError('OG_CONTRACT_INVALID', 'Worker dispatch successor must link previousRecord to its prior snapshot.');
+      }
+    }
+  }
+  const bytes = JSON.stringify(encoded);
+  const digest = `sha256:${createHash('sha256').update(bytes, 'utf8').digest('hex')}`;
+  return Object.freeze({ definition, bytes, artifact: Object.freeze({ ref: `artifact:${digest}`, digest }), previousRecord: previous ? Object.freeze({ ...previous.artifact }) : null });
 }

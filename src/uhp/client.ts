@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DEFAULT_UHP_LIMITS, isUhpLoopback, isUhpPrivateAddress, resolveUhpLimits, validateUhpEndpoint } from './config.js';
 import { parseUhpError, redactUhpText, UhpError } from './errors.js';
 import { parseUhpEventStream } from './sse.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 import {
   UHP_VERSION,
   type UhpDiscovery,
@@ -97,6 +98,7 @@ function ensureDiscovery(value: unknown): UhpDiscovery {
 }
 
 function ensureResponse(value: unknown): UhpResponse {
+  assertMissionWorkerHandoff(value, 'uhp');
   if (!value || typeof value !== 'object') throw new UhpError('invalid_response', 'UHP response must be an object', { remoteState: 'unknown' });
   const response = value as UhpResponse;
   if (response.object !== 'response' || !ID_PATTERNS.response.test(response.id)
@@ -218,6 +220,7 @@ export class UhpClient {
   }
 
   async createResponse(request: UhpResponseRequest, options: { idempotencyKey?: string; signal?: AbortSignal } = {}): Promise<UhpResponse> {
+    assertMissionWorkerHandoff(request, 'uhp');
     const normalized = { ...request, stream: false, metadata: { ...request.metadata, ...(request.metadata?.harness_id || !this.profile.defaultHarness ? {} : { harness_id: this.profile.defaultHarness }) }, ...(request.model || !this.profile.defaultModel ? {} : { model: this.profile.defaultModel }) };
     if ((normalized.timeout_seconds ?? this.limits.maxTaskSeconds) > this.limits.maxTaskSeconds) throw new UhpError('task_budget_exceeded', 'Requested UHP task duration exceeds the profile limit', { remoteState: 'not-started' });
     const digest = canonicalUhpRequestDigest(normalized);
@@ -244,6 +247,7 @@ export class UhpClient {
   }
 
   async *streamResponse(request: UhpResponseRequest, options: { idempotencyKey?: string; signal?: AbortSignal } = {}): AsyncGenerator<UhpEvent> {
+    assertMissionWorkerHandoff(request, 'uhp');
     const normalized = { ...request, stream: true, metadata: { ...request.metadata, ...(request.metadata?.harness_id || !this.profile.defaultHarness ? {} : { harness_id: this.profile.defaultHarness }) } };
     const digest = canonicalUhpRequestDigest(normalized);
     const key = options.idempotencyKey ?? `aiwg-${digest}`;
@@ -258,7 +262,11 @@ export class UhpClient {
     if (response.headers.get('UHP-Version') !== UHP_VERSION) throw new UhpError('protocol_version_mismatch', 'UHP stream response did not preserve the pinned version', { remoteState: 'unknown' });
     if (!response.ok) throw parseUhpError(response.status, parseJson(await readBounded(response)), secret ? [secret] : []);
     if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') || !response.body) throw new UhpError('invalid_stream', 'UHP streaming response must be text/event-stream', { remoteState: 'unknown' });
-    yield* parseUhpEventStream(response.body, { inactivityTimeoutMs: this.limits.inactivityTimeoutMs, secrets: secret ? [secret] : [], signal: options.signal });
+    for await (const event of parseUhpEventStream(response.body, { inactivityTimeoutMs: this.limits.inactivityTimeoutMs, secrets: secret ? [secret] : [], signal: options.signal })) {
+      assertMissionWorkerHandoff(event, 'uhp');
+      if (event.response) assertMissionWorkerHandoff(event.response, 'uhp');
+      yield event;
+    }
   }
 
   async readResponse(responseId: string): Promise<UhpResponse> {
@@ -271,6 +279,7 @@ export class UhpClient {
   }
 
   async continueResponse(previousResponseId: string, request: UhpResponseRequest, options: { idempotencyKey?: string; signal?: AbortSignal } = {}): Promise<UhpResponse> {
+    assertMissionWorkerHandoff(request, 'uhp');
     const previous = await this.readResponse(previousResponseId);
     const harness = previous.metadata.harness_id;
     if (request.metadata?.harness_id && harness && request.metadata.harness_id !== harness) throw new UhpError('harness_mismatch', 'Continuation harness does not match the existing UHP session', { remoteState: 'not-started' });

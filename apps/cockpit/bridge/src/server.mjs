@@ -2249,7 +2249,34 @@ function normalizeMissionStatus(status) {
   return value;
 }
 
+function assertNoWorkerMissionBinding(value) {
+  const seen = new Set();
+  const seenRecords = new Set();
+  function extensions(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seen.has(item)) return;
+    seen.add(item);
+    if (Object.hasOwn(item, 'aiwg.worker-dispatch')) {
+      throw Object.assign(new Error('OG_CONTRACT_UNSUPPORTED: Cockpit projection does not advertise worker contract support.'), { code: 'OG_CONTRACT_UNSUPPORTED' });
+    }
+    for (const [key, child] of Object.entries(item)) if (key.startsWith('aiwg.source.')) {
+      extensions(child);
+      record(child);
+    }
+  }
+  function record(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenRecords.has(item)) return;
+    seenRecords.add(item);
+    // Every mission-v1 carrier, plus native protocol metadata/artifacts.
+    extensions(item.extensions);
+    extensions(item.metadata);
+    if (Array.isArray(item.status?.artifacts)) item.status.artifacts.forEach(record);
+    if (Array.isArray(item.artifacts)) item.artifacts.forEach(record);
+  }
+  record(value);
+}
+
 export function missionSummary(mission) {
+  assertNoWorkerMissionBinding(mission);
   const canonical = mission?.apiVersion === 'mission.aiwg.io/v1' && mission?.kind === 'Mission';
   const canonicalStatus = canonical ? mission.status ?? {} : {};
   const canonicalMetadata = canonical ? mission.metadata ?? {} : {};
@@ -2436,7 +2463,8 @@ function fleetParentState(records) {
   return 'active';
 }
 
-function fleetMissionProjection(record, sessionId) {
+export function fleetMissionProjection(record, sessionId) {
+  assertNoWorkerMissionBinding(record);
   const lineage = record.lineage ?? {};
   const status = record.status ?? {};
   const artifacts = Array.isArray(status.artifacts) ? status.artifacts : [];
