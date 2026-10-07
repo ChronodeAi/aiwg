@@ -73,9 +73,52 @@ export interface HookWiring {
   context_file: string;
 }
 
+/**
+ * S0 route-feasibility evidence (B-OG-27). One row per matrix provider:
+ * whether the target is in or out of MVP worker scope, the identity
+ * evidence class, the native evidence channel, hidden fan-out state, and
+ * the synthetic probe budget and its operator authorization provenance.
+ * Help text, flag acceptance and worker echoes never qualify; unknown fan-out blocks
+ * strict use. Final qualification stays with B-OG-07/08/09/28.
+ */
+export type RouteFeasibilityScope = 'in' | 'out';
+
+export type RouteIdentityClass =
+  | 'backend-attested'
+  | 'runtime-configured-only'
+  | 'unavailable';
+
+export type RouteEvidenceGrade = 'H' | 'R' | 'D';
+
+export type RouteFanout = 'none' | 'controlled' | 'unknown';
+
+export type RouteProbeBudget = {
+  calls: number;
+  tokens: number;
+} & (
+  | { status: 'proposed' }
+  | {
+    status: 'authorized';
+    authorized_by: string;
+    /** ISO calendar date (YYYY-MM-DD). */
+    authorized_at: `${number}-${number}-${number}`;
+    hosts: [string, ...string[]];
+  }
+);
+
+export interface RouteFeasibility {
+  scope: RouteFeasibilityScope;
+  identity: RouteIdentityClass;
+  evidence: RouteEvidenceGrade;
+  channel: string;
+  fanout: RouteFanout;
+  probe_budget: RouteProbeBudget;
+}
+
 export interface ProviderCapabilities {
   display_name: string;
   aliases?: string[];
+  route_feasibility?: RouteFeasibility;
   status: ProviderStatus;
   /** Primary daemon support tier. @issue #656 */
   daemon_tier: DaemonTier;
@@ -251,6 +294,17 @@ export function getProviderCapabilities(
   }
 
   return undefined;
+}
+
+/**
+ * Get the S0 route-feasibility row for a provider by key or alias.
+ * Returns undefined when the matrix carries no row (e.g. registry-only
+ * `generic`, which is not a matrix provider).
+ */
+export function getRouteFeasibility(
+  providerKey: string,
+): RouteFeasibility | undefined {
+  return getProviderCapabilities(providerKey)?.route_feasibility;
 }
 
 export function getAgentCapabilities(
