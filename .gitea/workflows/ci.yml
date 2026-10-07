@@ -102,24 +102,16 @@ jobs:
       - name: Verify test child-process timeouts
         run: npm run lint:test-process-timeouts
 
+      - name: Verify orchestration pack wiring (#2886 S0)
+        # Partial/planned packs remain visible; fake mechanics never qualify a
+        # vendor profile and missing qualification cannot be reported as a pass.
+        run: npm run lint:orchestration-packs
+
       - name: Enforce measured testing-quality and audit-foundation coverage
         run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
 
       - name: Run source-bound testing conformance example
         run: npm run test:conformance:example
-
-      - name: Preserve testing conformance evidence
-        if: always()
-        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
-        with:
-          name: testing-conformance-${{ gitea.sha }}
-          path: |
-            test-results/conformance-example
-            test-results/test-registration.json
-            test-results/testing-quality-coverage
-            test-results/audit-foundations-coverage
-            test-results/coverage-enforcement
-          if-no-files-found: error
 
       - name: Lint schemas
         # Validates schemas/executor-v1.json (draft-2020-12) and all
@@ -152,11 +144,28 @@ jobs:
       - name: Run contracts in their owning Vitest and Node lanes
         run: npm run test:contract
 
-      - name: Run conformance suite (fixture mode)
+      - name: Run conformance suite (offline fixtures, including orchestration S0)
         # Exercises the executor-contract v1 dispatch path via fixture replay.
+        # Includes frozen worker contracts and fake CLI/stdio MCP self-tests;
+        # no vendor binaries, credentials, network or paid calls are required.
         # Runs as a separate step (not folded into test:ci) to keep the existing
         # CI budget intact. Zero network I/O — fully deterministic. (#1183)
         run: npm run test:conformance
+
+      - name: Preserve testing conformance evidence
+        if: always()
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
+        with:
+          name: testing-conformance-${{ gitea.sha }}
+          path: |
+            test-results/conformance-example
+            test-results/test-registration.json
+            test-results/orchestration-pack-registry.json
+            test-results/conformance-fixtures.json
+            test-results/testing-quality-coverage
+            test-results/audit-foundations-coverage
+            test-results/coverage-enforcement
+          if-no-files-found: error
 
       - name: Run Dataset Intelligence conformance contracts (#2242)
         run: npm run test:conformance:dataset

@@ -1,0 +1,236 @@
+{
+  "revision": 1,
+  "checkpoint": "S0 wiring only; issue remains open through S5",
+  "testOwnerIssue": "roctinam/aiwg#2886",
+  "knownCheckpointIssues": {
+    "B-OG-01": "roctinam/aiwg#2876",
+    "B-OG-27": "roctinam/aiwg#2877",
+    "B-OG-29": "roctinam/aiwg#2878",
+    "B-OG-30": "roctinam/aiwg#2879",
+    "B-OG-31": "roctinam/aiwg#2880",
+    "B-OG-19": "roctinam/aiwg#2886"
+  },
+  "packs": {
+    "T-OG-01": {
+      "name": "Policy/schema/resolver",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-02",
+        "B-OG-04",
+        "B-OG-29"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/cli/handlers/models-worker-contracts.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-02": {
+      "name": "Catalog/freshness",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-03"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-03": {
+      "name": "Adapter conformance",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-31"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/providers/grok-build-headless.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-04": {
+      "name": "Isolation/verification",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-13"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-05": {
+      "name": "Admission/budgets",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-10",
+        "B-OG-12",
+        "B-OG-32"
+      ],
+      "status": "planned",
+      "testFiles": [],
+      "laterSlices": [
+        "S4"
+      ]
+    },
+    "T-OG-06": {
+      "name": "Recovery/chaos",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-11",
+        "B-OG-12"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-07": {
+      "name": "Guidance/lineage",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-17"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-08": {
+      "name": "Mission/Flow/Ralph bindings",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-16",
+        "B-OG-30"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics.",
+      "laterSlices": [
+        "S3"
+      ]
+    },
+    "T-OG-09": {
+      "name": "Evidence/accounting",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-15"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-10": {
+      "name": "Security negatives",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-13",
+        "B-OG-15"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-11": {
+      "name": "Local qualification",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-09"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-12": {
+      "name": "Doctor/steward/usability",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-18"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-14": {
+      "name": "Package/platform/extension",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-30",
+        "B-OG-31"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-15": {
+      "name": "Direct command contract",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-33",
+        "B-OG-34"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-17": {
+      "name": "MCP worker transport",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-35"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/mcp/worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-19": {
+      "name": "Registry completeness/readiness",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S0",
+      "mechanismOwners": [
+        "B-OG-18",
+        "B-OG-27",
+        "B-OG-47"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/pack-registry.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics.",
+      "laterSlices": [
+        "S1"
+      ]
+    }
+  },
+  "qualificationResults": [
+    {
+      "id": "S0-fake-fixtures",
+      "qualification": "missing",
+      "result": "unqualified",
+      "evidence": {
+        "kind": "synthetic"
+      }
+    }
+  ]
+}
