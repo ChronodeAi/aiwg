@@ -109,6 +109,8 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     await mkdir(path.dirname(destination), { recursive: true });
     await cp(path.join(repoRoot, filename), destination);
   }
+  await mkdir(path.join(outputDir, 'vscode-extension', 'schemas'), { recursive: true });
+  await cp(path.join(repoRoot, 'vscode-extension', 'schemas', 'aiwg.config.v1.json'), path.join(outputDir, 'vscode-extension', 'schemas', 'aiwg.config.v1.json'));
   await cp(
     path.join(repoRoot, 'schemas', 'security'),
     path.join(outputDir, 'schemas', 'security'),

@@ -1,3 +1,5 @@
+import { validateWorkerCatalogDiscovery } from './provider-policy.js';
+import type { WorkerModelObservation } from './types.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -127,6 +129,7 @@ export const PROVIDER_DISCOVERY_DECISIONS: Record<string, ProviderDiscoveryDecis
 };
 
 export interface DiscoveredModel {
+  worker?: WorkerModelObservation;
   id: string;
   /** Provider-local selector. For Grok Build this is the config table alias, not necessarily an API id. */
   alias?: string;
@@ -156,6 +159,7 @@ export interface ProviderModelPolicyReport {
 }
 
 export interface ProviderModelDiscovery {
+  accountBinding?: string;
   provider: string;
   source: ModelCatalogSource;
   observedAt: string;
@@ -195,6 +199,7 @@ export interface DynamicModelCatalog {
     remoteError?: string;
     inventorySignature?: string;
     providers: Record<string, ProviderModelDiscovery>;
+    instances?: Record<string, ProviderModelDiscovery>;
   };
 }
 
@@ -424,6 +429,7 @@ async function readCatalog(file: string): Promise<DynamicModelCatalog | null> {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as DynamicModelCatalog;
     if (!parsed.version || !parsed.providers || typeof parsed.providers !== 'object') return null;
+    if (validateWorkerCatalogDiscovery(parsed.discovery).length) return null;
     return parsed;
   } catch {
     return null;
@@ -655,6 +661,7 @@ export async function resolveDynamicModelCatalog(
         fetchedAt: now.toISOString(),
         inventorySignature: signature,
         providers: {},
+        ...(staticCatalog.discovery?.instances ? { instances: staticCatalog.discovery.instances } : {}),
       },
     };
   }
@@ -671,7 +678,7 @@ export async function resolveDynamicModelCatalog(
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const remote = await response.json() as DynamicModelCatalog;
-      if (!remote.version || !remote.providers) throw new Error('invalid catalog shape');
+      if (!remote.version || !remote.providers || validateWorkerCatalogDiscovery(remote.discovery).length) throw new Error('invalid catalog shape');
       catalog = remote;
       source = 'remote';
     } catch (error) {
@@ -749,6 +756,7 @@ export async function resolveDynamicModelCatalog(
       ...(remoteError ? { remoteError } : {}),
       inventorySignature: signature,
       providers: providerDiscovery,
+      ...(catalog.discovery?.instances ? { instances: catalog.discovery.instances } : {}),
     },
   };
   await atomicWrite(cacheFile, `${JSON.stringify(resolved, null, 2)}\n`);

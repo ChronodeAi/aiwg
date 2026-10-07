@@ -32,6 +32,7 @@
     "schemas/dataset/",
     "schemas/mission-v1.schema.json",
     "schemas/models/",
+    "vscode-extension/schemas/aiwg.config.v1.json",
     "dist/src/",
     "!dist/**/*.d.ts",
     "!dist/**/*.map",

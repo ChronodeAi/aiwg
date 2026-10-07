@@ -19,8 +19,8 @@ import {
   workerDefinitionBundleDigest,
   type WorkerConsumerSupport,
 } from '../../../src/mission-protocol/index.js';
-import { resolveParallelism } from '../../../src/config/aiwg-config.js';
-import { validateUserProjectModelConfig, WorkerAdapterSchema, parseProviderModelCapabilities } from '../../../src/models/provider-policy.js';
+import { resolveParallelism, validateParallelismConfig } from '../../../src/config/aiwg-config.js';
+import { validateUserProjectModelConfig, WorkerAdapterSchema, parseProviderModelCapabilities, validateWorkerModelObservation, parseProviderModelCatalog } from '../../../src/models/provider-policy.js';
 import { fixtureJson, fixtureRoot, materialize, readJson, validators, type ContractVector } from './worker-contract-fixtures.js';
 
 const { draft07, draft2020, schemas } = validators();
@@ -124,6 +124,9 @@ describe('legacy and shared schema compatibility (T-OG-01/14)', () => {
       : (vector.owner === 'config' ? draft07 : draft2020).getSchema(schemas[vector.owner].$id)!;
     expect(validate(vector.value), JSON.stringify(validate.errors)).toBe(vector.valid);
     if (vector.owner === 'adapter') expect(WorkerAdapterSchema.safeParse(vector.value).success).toBe(vector.valid);
+    if (vector.owner === 'config') expect(validateParallelismConfig(vector.value.parallelism).length === 0).toBe(vector.valid);
+    if (vector.owner === 'models') expect(validateUserProjectModelConfig(vector.value).valid).toBe(vector.valid);
+    if (vector.owner === 'observation') expect(validateWorkerModelObservation(vector.value).length === 0).toBe(vector.valid);
   });
 
   it('keeps the current capability registry annotation and catalog under the closed owner', () => {
@@ -135,11 +138,11 @@ describe('legacy and shared schema compatibility (T-OG-01/14)', () => {
     expect(validate({ ...registry, unexpectedRoot: {} })).toBe(false);
     const validateCatalog = draft2020.getSchema(schemas.catalog.$id)!;
     const { $schema: annotation, ...catalogPayload } = readJson('agentic/code/providers/model-catalog.v1.json');
-    // The existing catalog owner does not declare its checked-in editor
-    // annotation. Freeze that known discrepancy for B-OG-29, rather than open
-    // the closed schema or silently claim the complete annotated file passes.
     expect(annotation).toBe('../../../schemas/models/model-catalog.v1.schema.json');
     expect(validateCatalog(catalogPayload), JSON.stringify(validateCatalog.errors)).toBe(true);
+    const complete = readJson('agentic/code/providers/model-catalog.v1.json');
+    expect(validateCatalog(complete), JSON.stringify(validateCatalog.errors)).toBe(true);
+    expect(parseProviderModelCatalog(complete).$schema).toBe(annotation);
   });
 });
 

@@ -276,6 +276,9 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
+  if (key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+    try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
+  }
   if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
     try {
       value = JSON.parse(raw);
@@ -377,6 +380,9 @@ function getDottedPath(obj: Record<string, unknown>, key: string): unknown {
 /** Write a dotted path into a nested record, creating intermediate objects. */
 function setDottedPath(obj: Record<string, unknown>, key: string, value: unknown): void {
   const parts = key.split('.');
+  if (parts.some(part => ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new AiwgError({ code: 'ERR_INVALID_KEY', message: 'Unsafe configuration path', exitCode: EXIT_CODES.USAGE });
+  }
   const last = parts.pop()!;
   let cur: Record<string, unknown> = obj;
   for (const p of parts) {
@@ -592,6 +598,18 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
   }
 
   if (key.startsWith('parallelism.')) {
+    const workerField = key.split('.')[1];
+    if (['worker_dispatch', 'worker_mode', 'clis', 'groups', 'admission', 'budgets', 'retry', 'health', 'activation'].includes(workerField)) {
+      const parts = key.split('.').slice(1);
+      const last = parts.pop()!;
+      let current = cfg.parallelism as Record<string, any> | undefined;
+      for (const part of parts) current = current?.[part];
+      if (current) delete current[last];
+      await writeAiwgConfig(projectDir, cfg);
+      console.log(`Reset --project ${key}`);
+      return;
+    }
+
     const field = key.slice('parallelism.'.length) as keyof typeof defaults;
     if (field in defaults) {
       cfg.parallelism = cfg.parallelism ?? {};

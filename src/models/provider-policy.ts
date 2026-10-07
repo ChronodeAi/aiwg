@@ -3,13 +3,17 @@
  * @implements #1802
  * @implements #1805
  */
+import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
 import { satisfies, validRange } from 'semver';
 import type {
   CanonicalModelPolicy, ModelCompilationOutcome, ModelEffort, ModelRole, Provider,
+  WorkerModelObservation, WorkerSelectionPolicy, WorkerDataPolicy, WorkerPolicyOrigin, WorkerPolicyDiagnostic,
 } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -118,22 +122,214 @@ const CatalogProviderSchema = z.object({
   sourceUrl: z.string().url(),
   verifiedAt: z.string().date(),
 });
+let catalogValidators: { catalog: ValidateFunction; observation: ValidateFunction; discovery: ValidateFunction } | undefined;
+function getCatalogValidators(): NonNullable<typeof catalogValidators> {
+  if (!catalogValidators) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const file = [resolve(here, '../../schemas/models/model-catalog.v1.schema.json'), resolve(here, '../../../schemas/models/model-catalog.v1.schema.json')].find(existsSync);
+    if (!file) throw new Error('Model catalog schema is unavailable');
+    const schema = JSON.parse(readFileSync(file, 'utf8'));
+    const ajv = addFormats(new Ajv2020({ strict: false, allErrors: true }));
+    ajv.addSchema(schema);
+    catalogValidators = { catalog: ajv.getSchema(schema.$id)!, observation: ajv.compile({ $ref: `${schema.$id}#/$defs/workerObservation` }), discovery: ajv.compile({ $ref: `${schema.$id}#/properties/discovery` }) };
+  }
+  return catalogValidators;
+}
+export function validateWorkerModelObservation(input: unknown): string[] {
+  const validate = getCatalogValidators().observation;
+  return validate(input) ? [] : (validate.errors ?? []).map(error => `${error.instancePath}: ${error.message}`);
+}
+const WorkerObservationSchema = z.custom<WorkerModelObservation>(input => validateWorkerModelObservation(input).length === 0);
+const DiscoveredWorkerModelSchema = z.object({
+  id: z.string().min(1), apiModelId: z.string().optional(), llmProvider: z.string().optional(),
+  hidden: z.boolean().optional(), reasoningEfforts: z.array(z.string()).optional(), worker: WorkerObservationSchema.optional(),
+}).passthrough().superRefine((model, context) => {
+  if (!model.worker) return;
+  if (model.hidden !== undefined && model.worker.visibility !== (model.hidden ? 'hidden' : 'listed')) context.addIssue({ code: 'custom', path: ['worker', 'visibility'], message: 'Conflicting visibility evidence' });
+  const efforts = model.reasoningEfforts ?? [];
+  const observed = model.worker.efforts.map(e => e.id);
+  if (efforts.length !== observed.length || new Set(observed).size !== observed.length || efforts.some(e => !observed.includes(e))) context.addIssue({ code: 'custom', path: ['worker', 'efforts'], message: 'Conflicting effort evidence' });
+});
+const ProviderDiscoverySchema = z.object({
+  provider: z.string(), source: z.enum(['native', 'cache', 'remote', 'static']), observedAt: z.string().datetime({ offset: true }),
+  runtimeVersion: z.string().optional(), accountScope: z.enum(['local-account', 'local-runtime', 'public-feed', 'static']),
+  accountBinding: z.string().min(1).optional(), models: z.array(DiscoveredWorkerModelSchema),
+}).passthrough();
+const DiscoverySchema = z.object({
+  source: z.enum(['native', 'cache', 'remote', 'static']), upstreamSource: z.enum(['native', 'remote', 'static']).optional(),
+  fetchedAt: z.string().datetime({ offset: true }), remoteUrl: z.string().url().optional(), remoteError: z.string().optional(),
+  inventorySignature: z.string().optional(), providers: z.record(z.string(), ProviderDiscoverySchema),
+  instances: z.record(z.string(), ProviderDiscoverySchema).optional(),
+}).strict();
+
+/** Optional enrichment is checked without tightening legacy catalog rows. */
+export function validateWorkerCatalogDiscovery(input: unknown): string[] {
+  if (input === undefined) return [];
+  const validate = getCatalogValidators().discovery;
+  if (!validate(input)) return (validate.errors ?? []).map(error => `${error.instancePath}: ${error.message}`);
+  const parsed = DiscoverySchema.safeParse(input);
+  return parsed.success ? [] : parsed.error.issues.map(issue => `${issue.path.join('/')}: ${issue.message}`);
+}
+
 const CatalogSchema = z.object({
   version: z.literal('1.0.0'),
+  $schema: z.literal('../../../schemas/models/model-catalog.v1.schema.json').optional(),
+  discovery: DiscoverySchema.optional(),
   refreshedAt: z.string().date(),
   staleAfterDays: z.number().int().positive(),
   providers: z.record(ProviderSchema, CatalogProviderSchema),
-});
+}).strict();
 const PolicySchema = z.object({
   role: z.enum(['reasoning', 'coding', 'efficiency']),
   tier: z.enum(['economy', 'standard', 'premium']),
   effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
   override: z.string().min(1).optional(),
 }).strict();
+const uniqueStrings = z.array(z.string().min(1)).refine(values => new Set(values).size === values.length, 'Duplicate entries');
+const WorkerDataPolicySchema = z.object({
+  allowedProcessing: z.array(z.enum(['local', 'remote'])).refine(values => new Set(values).size === values.length).optional(),
+  allowProductImprovement: z.boolean().optional(),
+  allowUnknown: z.boolean().optional(),
+  maxRetentionDays: z.number().int().nonnegative().optional(),
+}).strict();
+const WorkerRoleSchema = z.object({
+  groups: uniqueStrings.refine(values => values.length > 0),
+  tier: z.enum(['economy', 'standard', 'premium', 'max-quality']),
+  initialEffort: z.string().min(1).nullable(),
+  effortLadder: uniqueStrings,
+  escalateAfter: z.number().int().positive().optional(),
+  maxEscalations: z.number().int().nonnegative().optional(),
+  deescalateAfter: z.number().int().positive().optional(),
+  allowNotApplicableEffort: z.boolean().optional(),
+}).strict();
+export const WorkerSelectionPolicySchema = z.object({
+  roleGuidance: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerRoleSchema).optional(),
+  guards: z.object({
+    deniedEfforts: uniqueStrings.optional(),
+    deniedModels: uniqueStrings.optional(),
+    denySelfDelegation: z.boolean().optional(),
+    requireExactModel: z.boolean().optional(),
+    allowedVisibility: z.array(z.enum(['listed', 'hidden'])).refine(v => new Set(v).size === v.length).optional(),
+    allowedLifecycle: z.array(z.enum(['active', 'deprecated'])).refine(v => new Set(v).size === v.length).optional(),
+    minimumIdentityEvidence: z.enum(['runtime-configured', 'backend-attested']).optional(),
+  }).strict().optional(),
+  dataPolicy: WorkerDataPolicySchema.optional(),
+  dataClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerDataPolicySchema).optional(),
+  freshness: z.object({
+    warnHours: z.number().int().positive().optional(),
+    blockHours: z.number().int().positive().optional(),
+    policyDays: z.number().int().positive().optional(),
+  }).strict().optional(),
+  taskClasses: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), z.string().min(1)).optional(),
+}).strict().superRefine((policy, context) => {
+  for (const [role, guidance] of Object.entries(policy.roleGuidance ?? {})) {
+    if (!['efficiency', 'coding', 'reasoning'].includes(role)) context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Unknown worker role' });
+    if (guidance.effortLadder.includes('none') || (guidance.initialEffort === 'none' ? guidance.effortLadder.length !== 0 : guidance.initialEffort !== null && !guidance.effortLadder.includes(guidance.initialEffort))) {
+      context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Initial effort must belong to the ladder; real none requires an empty ladder' });
+    }
+    if (guidance.initialEffort === null && (guidance.allowNotApplicableEffort !== true || guidance.effortLadder.length !== 0)) {
+      context.addIssue({ code: 'custom', path: ['roleGuidance', role], message: 'Null effort requires an empty ladder and allowNotApplicableEffort=true' });
+    }
+  }
+  for (const key of policy.guards?.deniedModels ?? []) {
+    if (!isCanonicalWorkerModelKey(key)) context.addIssue({ code: 'custom', path: ['guards', 'deniedModels'], message: 'Noncanonical inference model key' });
+  }
+  if (policy.freshness?.warnHours !== undefined && policy.freshness.blockHours !== undefined && policy.freshness.warnHours > policy.freshness.blockHours) {
+    context.addIssue({ code: 'custom', path: ['freshness'], message: 'warnHours must not exceed blockHours' });
+  }
+  for (const role of Object.values(policy.taskClasses ?? {})) {
+    if (!['coding', 'reasoning', 'efficiency'].includes(role)) context.addIssue({ code: 'custom', path: ['taskClasses'], message: 'Unknown worker role' });
+  }
+});
+
+/** Canonical RFC3986 identity; installation and account never enter the key. */
+export function workerModelKey(inferenceProvider: string, apiModelId: string): string {
+  if (!/^[a-z][a-z0-9-]{0,62}$/.test(inferenceProvider) || !apiModelId) throw new Error('OG_CONFIG_REFERENCE: invalid inference model identity');
+  return `${inferenceProvider}/${encodeURIComponent(apiModelId).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+}
+export function isCanonicalWorkerModelKey(key: string): boolean {
+  const slash = key.indexOf('/');
+  try { return slash > 0 && workerModelKey(key.slice(0, slash), decodeURIComponent(key.slice(slash + 1))) === key; } catch { return false; }
+}
+
+export const DEFAULT_WORKER_SELECTION: WorkerSelectionPolicy = {
+  guards: { deniedEfforts: ['ultra'], deniedModels: [], denySelfDelegation: true, requireExactModel: true, allowedVisibility: ['listed'], allowedLifecycle: ['active'], minimumIdentityEvidence: 'runtime-configured' },
+  dataPolicy: { allowedProcessing: ['local', 'remote'], allowProductImprovement: false, allowUnknown: false },
+  freshness: { warnHours: 24, blockHours: 168, policyDays: 30 },
+  taskClasses: { inventory: 'efficiency', implementation: 'coding', architecture: 'reasoning', review: 'reasoning' },
+};
+
+export interface WorkerPolicyLayer {
+  source: string;
+  authority: WorkerPolicyOrigin['authority'];
+  digest: string;
+  policy?: WorkerSelectionPolicy;
+}
+
+/** Merge leaves, preserving pre-merge explicit origins and attempted relaxations. */
+export function mergeWorkerSelection(layers: WorkerPolicyLayer[]): {
+  policy: WorkerSelectionPolicy; origins: Record<string, WorkerPolicyOrigin[]>; diagnostics: WorkerPolicyDiagnostic[];
+} {
+  const policy: Record<string, any> = {};
+  const origins: Record<string, WorkerPolicyOrigin[]> = {};
+  const diagnostics: WorkerPolicyDiagnostic[] = [];
+  const visit = (target: Record<string, any>, input: Record<string, any>, parts: string[], layer: WorkerPolicyLayer): void => {
+    for (const [key, value] of Object.entries(input)) {
+      const path = [...parts, key];
+      const pointer = `/defaults/workerSelection/${path.map(p => p.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`;
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        target[key] ??= {};
+        visit(target[key], value, path, layer);
+        continue;
+      }
+      const origin: WorkerPolicyOrigin = { source: layer.source, authority: layer.authority, digest: layer.digest, pointer, contribution: structuredClone(value) };
+      const prior = origins[pointer] ?? [];
+      const explicit = prior.filter(o => o.authority !== 'builtin');
+      let effective = structuredClone(value);
+      let relaxation = false;
+      if (layer.authority !== 'builtin' && explicit.length > 0) {
+        const previous = target[key];
+        if (['deniedEfforts', 'deniedModels'].includes(key)) effective = [...new Set([...previous, ...value])];
+        else if (['allowedVisibility', 'allowedLifecycle', 'allowedProcessing'].includes(key)) {
+          relaxation = value.some((v: string) => !previous.includes(v));
+          effective = previous.filter((v: string) => value.includes(v));
+        } else if (['denySelfDelegation', 'requireExactModel'].includes(key)) {
+          relaxation = previous === true && value === false;
+          effective = previous || value;
+        } else if (['allowUnknown', 'allowProductImprovement'].includes(key)) {
+          relaxation = previous === false && value === true;
+          effective = previous && value;
+        } else if (['maxRetentionDays', 'warnHours', 'blockHours', 'policyDays'].includes(key)) {
+          relaxation = value > previous;
+          effective = Math.min(previous, value);
+        } else if (key === 'minimumIdentityEvidence') {
+          relaxation = previous === 'backend-attested' && value !== previous;
+          effective = previous === 'backend-attested' ? previous : value;
+        }
+      }
+      if (relaxation) diagnostics.push({ code: 'OG_POLICY_RELAXATION', pointer, message: 'Explicit restriction cannot relax an inherited restriction', origins: [...explicit, origin] });
+      target[key] = effective;
+      origins[pointer] = [...prior, origin];
+    }
+  };
+  for (const layer of layers) if (layer.policy) visit(policy, layer.policy, [], layer);
+  const validation = WorkerSelectionPolicySchema.safeParse(policy);
+  if (!validation.success) for (const issue of validation.error.issues) diagnostics.push({ code: 'OG_CONFIG_REFERENCE', pointer: `/defaults/workerSelection/${issue.path.join('/')}`, message: issue.message });
+  // Data classes are applied as further restrictions to the base path.
+  for (const dataClass of Object.values(policy.dataClasses ?? {}) as WorkerDataPolicy[]) {
+    const base = policy.dataPolicy ?? {};
+    if (dataClass.allowedProcessing) dataClass.allowedProcessing = dataClass.allowedProcessing.filter(p => !base.allowedProcessing || base.allowedProcessing.includes(p));
+    for (const key of ['allowUnknown', 'allowProductImprovement'] as const) if (base[key] === false) dataClass[key] = false;
+    if (base.maxRetentionDays !== undefined) dataClass.maxRetentionDays = Math.min(dataClass.maxRetentionDays ?? base.maxRetentionDays, base.maxRetentionDays);
+  }
+  return { policy, origins, diagnostics };
+}
+
 const UserProjectModelConfigSchema = z.object({
   defaults: z.object({
     tier: z.enum(['economy', 'standard', 'premium', 'max-quality']).optional(),
     provider: ProviderSchema.optional(),
+    workerSelection: WorkerSelectionPolicySchema.optional(),
   }).strict().optional(),
   agentOverrides: z.record(z.string(), z.object({
     'model-tier': z.enum(['economy', 'standard', 'premium', 'max-quality']).optional(),
@@ -159,7 +355,7 @@ export type ModelPolicyProvider = Exclude<Provider, 'openai'>;
 export type ModelDiagnosticSeverity = 'error' | 'warning' | 'info';
 export interface ModelDiagnostic {
   code:
-    | 'MODEL_POLICY_INVALID' | 'MODEL_PROVIDER_UNKNOWN'
+    | 'MODEL_POLICY_INVALID' | 'MODEL_PROVIDER_UNKNOWN' | 'OG_CONFIG_REFERENCE'
     | 'MODEL_SURFACE_UNSUPPORTED' | 'MODEL_SURFACE_DEGRADED'
     | 'MODEL_EFFORT_UNSUPPORTED' | 'MODEL_CATALOG_DEPRECATED'
     | 'MODEL_CATALOG_UNVERIFIED' | 'MODEL_CATALOG_STALE'
@@ -167,6 +363,7 @@ export interface ModelDiagnostic {
   severity: ModelDiagnosticSeverity;
   message: string;
   provider?: Provider;
+  pointer?: string;
 }
 export interface CompileModelPolicyInput {
   provider: ModelPolicyProvider;
@@ -270,8 +467,14 @@ export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
   }
   return profile;
 }
+
+export function parseProviderModelCatalog(input: unknown): ProviderModelCatalog {
+  const validate = getCatalogValidators().catalog;
+  if (!validate(input)) throw new Error(`MODEL_POLICY_INVALID: ${validate.errors?.map(e => `${e.instancePath} ${e.message}`).join('; ')}`);
+  return CatalogSchema.parse(input);
+}
 export function loadProviderModelCatalog(): ProviderModelCatalog {
-  if (!catalogCache) catalogCache = CatalogSchema.parse(catalogData);
+  if (!catalogCache) catalogCache = parseProviderModelCatalog(catalogData);
   return catalogCache;
 }
 export function validateCanonicalModelPolicy(
@@ -300,7 +503,8 @@ export function validateUserProjectModelConfig(input: unknown): {
   return {
     valid: false,
     diagnostics: parsed.error.issues.map(issue => ({
-      code: 'MODEL_POLICY_INVALID',
+      code: issue.path.includes('workerSelection') ? 'OG_CONFIG_REFERENCE' : 'MODEL_POLICY_INVALID',
+      pointer: `/${issue.path.map(p => String(p).replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`,
       severity: 'error',
       message: `${issue.path.join('.') || 'config'}: ${issue.message}`,
     })),
@@ -432,4 +636,60 @@ export function renderCodexAgentToml(definition: CodexAgentDefinition): string {
 export function resetModelPolicyCachesForTests(): void {
   registryCache = null;
   catalogCache = null;
+}
+
+/** Validate a resolved route without launching or creating managed state. */
+export function validateWorkerPolicyRoute(input: {
+  policy: WorkerSelectionPolicy;
+  role: string;
+  inferenceProvider: string;
+  apiModelId: string;
+  selectedModel: string;
+  effort: string | null;
+  identityEvidence: 'runtime-configured' | 'backend-attested' | 'unknown' | 'mismatched';
+  observation: WorkerModelObservation;
+  wrapperPin?: string;
+  dataClass?: string;
+  now?: Date;
+}): WorkerPolicyDiagnostic[] {
+  const diagnostics: WorkerPolicyDiagnostic[] = [];
+  const deny = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): void => { diagnostics.push({ code, pointer, message }); };
+  const shapeErrors = validateWorkerModelObservation(input.observation);
+  if (shapeErrors.length) return [{ code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/worker', message: shapeErrors.join('; ') }];
+  const observation = input.observation;
+  const guards = input.policy.guards ?? DEFAULT_WORKER_SELECTION.guards!;
+  const guidance = input.policy.roleGuidance?.[input.role];
+  if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence');
+  if (!guidance) deny('OG_CONFIG_REFERENCE', `/defaults/workerSelection/roleGuidance/${input.role}`, 'Role guidance is unavailable');
+  if (input.wrapperPin && input.wrapperPin !== input.selectedModel) deny('OG_PIN_MISMATCH', '/agentOverrides', 'Wrapper exact pin differs from selected model');
+  if (guards.requireExactModel !== false && input.selectedModel !== input.apiModelId) deny('OG_PIN_MISMATCH', '/worker/id', 'Selected model is not the exact observed API model');
+  let modelKey: string | undefined;
+  try { modelKey = workerModelKey(input.inferenceProvider, input.apiModelId); } catch { deny('OG_CONFIG_REFERENCE', '/worker/id', 'Invalid inference model identity'); }
+  if (modelKey && guards.deniedModels?.includes(modelKey)) deny('OG_MODEL_UNAPPROVED', '/defaults/workerSelection/guards/deniedModels', 'Inference model is denied');
+  if (input.identityEvidence === 'unknown' || input.identityEvidence === 'mismatched' || (guards.minimumIdentityEvidence === 'backend-attested' && input.identityEvidence !== 'backend-attested')) deny('OG_ADAPTER_UNQUALIFIED', '/defaults/workerSelection/guards/minimumIdentityEvidence', 'Identity evidence does not meet the required order');
+  if (!(guards.allowedVisibility ?? ['listed']).includes(observation.visibility as 'listed' | 'hidden') || !(guards.allowedLifecycle ?? ['active']).includes(observation.lifecycle as 'active' | 'deprecated') || observation.availability !== 'accessible') deny('OG_MODEL_UNAPPROVED', '/worker', 'Visibility, lifecycle or availability is ineligible');
+  if (input.effort === null) {
+    if (observation.effortSupport !== 'not-applicable' || guidance?.allowNotApplicableEffort !== true) deny('OG_EFFORT_DENIED', '/worker/effortSupport', 'Null effort requires qualified absence of an effort control');
+  } else {
+    const effort = observation.efforts.find(e => e.id === input.effort);
+    if (observation.effortSupport !== 'explicit' || !effort || !(input.effort === 'none' ? guidance?.initialEffort === 'none' && guidance.effortLadder.length === 0 : guidance?.effortLadder.includes(input.effort)) || (guards.deniedEfforts ?? ['ultra']).includes(input.effort) || (guards.denySelfDelegation !== false && effort.selfDelegates !== false)) deny('OG_EFFORT_DENIED', '/worker/efforts', 'Unsupported, denied or self-delegating effort');
+  }
+  const data = { ...DEFAULT_WORKER_SELECTION.dataPolicy, ...input.policy.dataPolicy };
+  if (input.dataClass) {
+    const narrowed = input.policy.dataClasses?.[input.dataClass];
+    if (!narrowed) deny('OG_DATA_POLICY', '/defaults/workerSelection/dataClasses', 'Unknown data class');
+    else {
+      if (narrowed.allowedProcessing) data.allowedProcessing = data.allowedProcessing?.filter(p => narrowed.allowedProcessing!.includes(p));
+      if (narrowed.allowUnknown === false) data.allowUnknown = false;
+      if (narrowed.allowProductImprovement === false) data.allowProductImprovement = false;
+      if (narrowed.maxRetentionDays !== undefined) data.maxRetentionDays = Math.min(data.maxRetentionDays ?? Infinity, narrowed.maxRetentionDays);
+    }
+  }
+  const facts = observation.dataUse;
+  if ((facts.processing === 'unknown' && data.allowUnknown !== true) || (facts.processing !== 'unknown' && !data.allowedProcessing?.includes(facts.processing)) || (facts.productImprovement === null && data.allowUnknown !== true) || (facts.productImprovement === true && data.allowProductImprovement !== true) || (data.maxRetentionDays !== undefined && (facts.retentionDays === null ? data.allowUnknown !== true : facts.retentionDays > data.maxRetentionDays))) deny('OG_DATA_POLICY', '/worker/dataUse', 'Execution path data facts do not satisfy policy');
+  const now = (input.now ?? new Date()).getTime();
+  const observed = Date.parse(observation.observedAt);
+  const verified = Date.parse(observation.verifiedAt);
+  if (observed > now || verified > now || now - observed > (input.policy.freshness?.blockHours ?? 168) * 3600000 || now - verified > (input.policy.freshness?.policyDays ?? 30) * 86400000) deny('OG_ADAPTER_UNQUALIFIED', '/worker/observedAt', 'Model evidence is stale or from the future');
+  return diagnostics;
 }

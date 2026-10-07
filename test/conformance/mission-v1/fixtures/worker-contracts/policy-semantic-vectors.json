@@ -1,0 +1,1310 @@
+[
+  {
+    "id": "first-explicit-visibility-replaces-default",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "allowedVisibility": [
+          "listed",
+          "hidden"
+        ]
+      }
+    },
+    "project": null,
+    "expected": {
+      "guards": {
+        "allowedVisibility": [
+          "listed",
+          "hidden"
+        ]
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "later-visibility-expansion-rejected",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "allowedVisibility": [
+          "listed"
+        ]
+      }
+    },
+    "project": {
+      "guards": {
+        "allowedVisibility": [
+          "listed",
+          "hidden"
+        ]
+      }
+    },
+    "expected": {
+      "guards": {
+        "allowedVisibility": [
+          "listed"
+        ]
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "allow-intersection",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "allowedProcessing": [
+          "local",
+          "remote"
+        ]
+      }
+    },
+    "project": {
+      "dataPolicy": {
+        "allowedProcessing": [
+          "local"
+        ]
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowedProcessing": [
+          "local"
+        ]
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "empty-allowlist-denies-all",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "allowedVisibility": []
+      }
+    },
+    "project": null,
+    "expected": {
+      "guards": {
+        "allowedVisibility": []
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "empty-cannot-expand",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "allowedProcessing": []
+      }
+    },
+    "project": {
+      "dataPolicy": {
+        "allowedProcessing": [
+          "remote"
+        ]
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowedProcessing": []
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "deny-union",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "deniedEfforts": [
+          "ultra",
+          "max"
+        ],
+        "deniedModels": [
+          "vendor/a%2Fb%25c"
+        ]
+      }
+    },
+    "project": {
+      "guards": {
+        "deniedEfforts": [
+          "max",
+          "alias"
+        ],
+        "deniedModels": [
+          "vendor/other"
+        ]
+      }
+    },
+    "expected": {
+      "guards": {
+        "deniedEfforts": [
+          "ultra",
+          "max",
+          "alias"
+        ],
+        "deniedModels": [
+          "vendor/a%2Fb%25c",
+          "vendor/other"
+        ]
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "empty-denials-preserve-explicit",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "deniedEfforts": [
+          "ultra"
+        ]
+      }
+    },
+    "project": {
+      "guards": {
+        "deniedEfforts": []
+      }
+    },
+    "expected": {
+      "guards": {
+        "deniedEfforts": [
+          "ultra"
+        ]
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "boolean-or-denySelfDelegation",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "denySelfDelegation": true
+      }
+    },
+    "project": {
+      "guards": {
+        "denySelfDelegation": false
+      }
+    },
+    "expected": {
+      "guards": {
+        "denySelfDelegation": true
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "first-explicit-false-denySelfDelegation",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": null,
+    "project": {
+      "guards": {
+        "denySelfDelegation": false
+      }
+    },
+    "expected": {
+      "guards": {
+        "denySelfDelegation": false
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "boolean-or-requireExactModel",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "requireExactModel": true
+      }
+    },
+    "project": {
+      "guards": {
+        "requireExactModel": false
+      }
+    },
+    "expected": {
+      "guards": {
+        "requireExactModel": true
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "first-explicit-false-requireExactModel",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": null,
+    "project": {
+      "guards": {
+        "requireExactModel": false
+      }
+    },
+    "expected": {
+      "guards": {
+        "requireExactModel": false
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "boolean-and-allowUnknown",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "allowUnknown": false
+      }
+    },
+    "project": {
+      "dataPolicy": {
+        "allowUnknown": true
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowUnknown": false
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "omitted-user-has-no-ceiling-allowUnknown",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {},
+    "project": {
+      "dataPolicy": {
+        "allowUnknown": true
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowUnknown": true
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "boolean-and-allowProductImprovement",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "allowProductImprovement": false
+      }
+    },
+    "project": {
+      "dataPolicy": {
+        "allowProductImprovement": true
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowProductImprovement": false
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "omitted-user-has-no-ceiling-allowProductImprovement",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {},
+    "project": {
+      "dataPolicy": {
+        "allowProductImprovement": true
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "allowProductImprovement": true
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "identity-evidence-order",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "guards": {
+        "minimumIdentityEvidence": "backend-attested"
+      }
+    },
+    "project": {
+      "guards": {
+        "minimumIdentityEvidence": "runtime-configured"
+      }
+    },
+    "expected": {
+      "guards": {
+        "minimumIdentityEvidence": "backend-attested"
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "numeric-minimum-zero-retention",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "maxRetentionDays": 0
+      }
+    },
+    "project": {
+      "dataPolicy": {
+        "maxRetentionDays": 4
+      }
+    },
+    "expected": {
+      "dataPolicy": {
+        "maxRetentionDays": 0
+      }
+    },
+    "codes": [
+      "OG_POLICY_RELAXATION"
+    ]
+  },
+  {
+    "id": "merged-freshness-invalid",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "freshness": {
+        "blockHours": 24
+      }
+    },
+    "project": {
+      "freshness": {
+        "warnHours": 48
+      }
+    },
+    "expected": {},
+    "codes": [
+      "OG_CONFIG_REFERENCE"
+    ]
+  },
+  {
+    "id": "data-class-narrows-base",
+    "kind": "merge",
+    "pack": "T-OG-01",
+    "user": {
+      "dataPolicy": {
+        "allowedProcessing": [
+          "local"
+        ],
+        "allowUnknown": false
+      },
+      "dataClasses": {
+        "secret": {
+          "allowedProcessing": [
+            "remote"
+          ],
+          "allowUnknown": true
+        }
+      }
+    },
+    "project": null,
+    "expected": {
+      "dataClasses": {
+        "secret": {
+          "allowedProcessing": [],
+          "allowUnknown": false
+        }
+      }
+    },
+    "codes": []
+  },
+  {
+    "id": "null-effort-local",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": null,
+              "effortLadder": [],
+              "allowNotApplicableEffort": true
+            }
+          }
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "null-effort-without-permission",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": null,
+              "effortLadder": [],
+              "allowNotApplicableEffort": false
+            }
+          }
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "null-effort-with-ladder",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": null,
+              "effortLadder": [
+                "high"
+              ],
+              "allowNotApplicableEffort": true
+            }
+          }
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "empty-groups",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [],
+              "tier": "economy",
+              "initialEffort": null,
+              "effortLadder": [],
+              "allowNotApplicableEffort": true
+            }
+          }
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "restriction-null",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "guards": {
+            "deniedEfforts": null
+          }
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "boolean-is-not-string",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "guards": {
+            "denySelfDelegation": "false"
+          }
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "identity-a%2Fb%25c",
+    "kind": "identity",
+    "pack": "T-OG-01",
+    "provider": "vendor",
+    "model": "a/b%c",
+    "key": "vendor/a%2Fb%25c",
+    "valid": true
+  },
+  {
+    "id": "identity-quotes%20%21%27%28%29%2A",
+    "kind": "identity",
+    "pack": "T-OG-01",
+    "provider": "vendor",
+    "model": "quotes !'()*",
+    "key": "vendor/quotes%20%21%27%28%29%2A",
+    "valid": true
+  },
+  {
+    "id": "identity-%E9%9B%AA",
+    "kind": "identity",
+    "pack": "T-OG-01",
+    "provider": "vendor",
+    "model": "\u96ea",
+    "key": "vendor/%E9%9B%AA",
+    "valid": true
+  },
+  {
+    "id": "reject-key-vendor/a%2fb",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/a%2fb",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/%61",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/%61",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/a/b",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/a/b",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/a%b",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/a%b",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/a b",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/a b",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/",
+    "valid": false
+  },
+  {
+    "id": "reject-key-Vendor/x",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "Vendor/x",
+    "valid": false
+  },
+  {
+    "id": "reject-key-vendor/%FF",
+    "kind": "identity-invalid",
+    "pack": "T-OG-01",
+    "key": "vendor/%FF",
+    "valid": false
+  },
+  {
+    "id": "optional-installation-binding",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "unknown-installation",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "missing",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "unknown-fallback",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ],
+          "fallback": [
+            "missing"
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "duplicate-member-id",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            },
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "other",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "optional-roles-do-not-block",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "required-role-missing",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ],
+          "requiredRoles": [
+            "reasoning"
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "disabled-role-not-covered",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ],
+              "enabled": false
+            }
+          ],
+          "requiredRoles": [
+            "coding"
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "member-cap-group-local",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "admission": {
+        "memberCaps": {
+          "fixture/code": 1
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "member-cap-unknown",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "admission": {
+        "memberCaps": {
+          "other/code": 1
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "model-cap-canonical",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "admission": {
+        "modelCaps": {
+          "vendor/a%2Fb%25c": 2
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "model-cap-noncanonical",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "admission": {
+        "modelCaps": {
+          "vendor/a%2fb": 2
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "unknown-cost-reserve-needs-amount",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "budgets": {
+        "unknownCost": "reserve"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "zero-queued-allowed",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "admission": {
+        "maxQueued": 0
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "zero-worker-cap-rejected",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "max_parallel_subagents": 0
+    },
+    "valid": false
+  },
+  {
+    "id": "boolean-dispatch-shape",
+    "kind": "parallelism",
+    "pack": "T-OG-01",
+    "value": {
+      "groups": {
+        "fixture": {
+          "members": [
+            {
+              "id": "code",
+              "cli": "codex",
+              "model": "fixture-code",
+              "roles": [
+                "coding"
+              ]
+            }
+          ]
+        }
+      },
+      "worker_dispatch": "true"
+    },
+    "valid": false
+  },
+  {
+    "id": "process-inherits-binary",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "process",
+        "executable": "fixture-worker"
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "process-missing-binary",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "process"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "process-endpoint-forbidden",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic",
+          "endpoint": "http://127.0.0.1:1234"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "process",
+        "executable": "fixture-worker"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "http-needs-endpoint",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "http"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "http-explicit-endpoint",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic",
+          "endpoint": "http://127.0.0.1:1234"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "http"
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "http-executable-forbidden",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic",
+          "executable": "fixture-worker"
+        }
+      }
+    },
+    "adapters": {
+      "workerAdapters:fixture": {
+        "transport": "http"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "unknown-trusted-binding",
+    "kind": "binding",
+    "pack": "T-OG-01",
+    "value": {
+      "clis": {
+        "fixture": {
+          "adapter": "workerAdapters:fixture",
+          "accountScope": "synthetic",
+          "quotaScope": "synthetic"
+        }
+      }
+    },
+    "adapters": {},
+    "valid": false
+  },
+  {
+    "id": "real-none-empty-ladder",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "valid": true,
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": "none",
+              "effortLadder": []
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "none-is-not-escalation-step",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "valid": false,
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": "none",
+              "effortLadder": [
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "initial-effort-outside-ladder",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "valid": false,
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": "high",
+              "effortLadder": [
+                "medium"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "unknown-role-guidance",
+    "kind": "models",
+    "pack": "T-OG-01",
+    "valid": false,
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "review": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": "none",
+              "effortLadder": []
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "budget-hard-False",
+    "kind": "budget",
+    "pack": "T-OG-05",
+    "budgets": {
+      "enforcement": "hard",
+      "perTask": {
+        "tokens": 1,
+        "costUsd": 0,
+        "wallSeconds": 1
+      }
+    },
+    "enforceable": [],
+    "valid": false
+  },
+  {
+    "id": "budget-hard-True",
+    "kind": "budget",
+    "pack": "T-OG-05",
+    "budgets": {
+      "enforcement": "hard",
+      "perTask": {
+        "tokens": 1,
+        "costUsd": 0,
+        "wallSeconds": 1
+      }
+    },
+    "enforceable": [
+      "tokens",
+      "costUsd",
+      "wallSeconds"
+    ],
+    "valid": true
+  },
+  {
+    "id": "budget-observed-True",
+    "kind": "budget",
+    "pack": "T-OG-05",
+    "budgets": {
+      "enforcement": "observed",
+      "perTask": {
+        "tokens": 1,
+        "costUsd": 0,
+        "wallSeconds": 1
+      }
+    },
+    "enforceable": [],
+    "valid": true
+  }
+]
