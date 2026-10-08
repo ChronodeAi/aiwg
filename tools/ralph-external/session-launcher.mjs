@@ -37,6 +37,8 @@ import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync } 
 import { dirname, join } from 'path';
 import { EventEmitter } from 'events';
 import { homedir } from 'os';
+import { checkWorkerDispatch } from '../scripts/resource-preflight.mjs';
+import { launchIsolatedWorker } from './lib/worker-isolation.mjs';
 
 /**
  * @typedef {Object} LaunchOptions
@@ -766,6 +768,107 @@ export async function getClaudeVersion() {
       resolve(null);
     });
   });
+}
+
+/**
+ * Tier 0 direct-dispatch gate-then-launch helper (FR-OG-107/108, #2954, #2888).
+ *
+ * `SessionLauncher` above is the Claude-headless-loop launcher and is
+ * untouched by this addition. A conductor following the subagent-scoping
+ * Tier 0 procedure that wants to launch a *non-Claude* resolved worker
+ * command (step 6: "Launch within caps") through this module's existing
+ * primitives composes the already-qualified host-resource gate
+ * (`checkWorkerDispatch`, #2954) with the isolated-launch builder
+ * (`launchIsolatedWorker`, #2954) in the fixed order the rule documents:
+ * gate first, launch only on a passing gate, never the reverse. This is a
+ * pure composition — it adds no new subsystem, store, or mandatory command;
+ * callers that already gate and launch themselves may keep doing so.
+ *
+ * A blocked gate never spawns. A gate that is off (`parallelism.worker_dispatch`
+ * disabled) is legacy behavior and launches unconditionally, matching
+ * `checkWorkerDispatch`'s own `{ enabled: false, ok: true }` contract.
+ *
+ * Accepts the complete resolved #2887 invocation (`src/serve/worker-invocation.ts`
+ * `prepareWorkerInvocation()` / `aiwg models resolve --format json`) via the
+ * `invocation` option and preserves its contract end to end — argv, cwd, stdin
+ * source (the brief), the `envNames` allowlist and the separate stdout/stderr
+ * destinations — through both `launchIsolatedWorker`'s confined (systemd-unit)
+ * path and its degraded path. Flat options (`command`/`args`/`cwd`/`stdinPath`/
+ * `envNames`/`stdoutPath`/`stderrPath`) remain accepted directly and win over
+ * `invocation` when both are given, for callers that assemble their own plan.
+ * `allowDegraded` only ever permits an *unconfined* launch when the caller
+ * explicitly opts in, and even then the worker's environment is still built
+ * from the `envNames` allowlist alone (never `process.env`) — the functional
+ * equivalent of `env -i NAME=value ...`; there is no code path in this helper
+ * that inherits the conductor's full environment.
+ *
+ * @param {object} options
+ * @param {string} [options.name] - Human-readable worker label for the unit name.
+ * @param {number} options.memoryMaxGb - Resource ceiling for the isolated worker.
+ * @param {import('../../src/mission-protocol/types.js').WorkerResolvedInvocation} [options.invocation] -
+ *   The resolved #2887 invocation to launch; supplies defaults for the flat
+ *   options below when they are not given directly.
+ * @param {string} [options.command] - Absolute path to the resolved worker binary
+ *   (defaults to `invocation.argv[0]`).
+ * @param {string[]} [options.args] - Resolved worker argv, never shell-assembled
+ *   (defaults to `invocation.argv.slice(1)`).
+ * @param {string} [options.cwd] - Absolute worktree path (defaults to `invocation.cwd`).
+ * @param {string} [options.logFile] - Absolute combined stdout/stderr log path,
+ *   used only when `stdoutPath`/`stderrPath` are not given.
+ * @param {string} [options.stdinPath] - Absolute path the worker reads its brief
+ *   from (defaults to `invocation.briefPath` unless `invocation.stdin === 'closed'`,
+ *   matching the frozen 'closed' meaning of empty stdin from #2887's shell renderer).
+ * @param {string} [options.stdoutPath] - Absolute stdout destination (defaults to
+ *   `invocation.stdoutPath`).
+ * @param {string} [options.stderrPath] - Absolute stderr destination, distinct from
+ *   `stdoutPath` (defaults to `invocation.stderrPath`).
+ * @param {string[]} [options.envNames] - Environment-variable allowlist; only these
+ *   names are ever forwarded to the worker, confined or degraded (defaults to
+ *   `invocation.envNames`, then `['PATH', 'HOME']`).
+ * @param {Record<string, string>} [options.env] - Source of allowlisted values
+ *   (defaults to the conductor's own `process.env`; never forwarded wholesale).
+ * @param {import('../../src/config/aiwg-config.js').AiwgConfig} [options.config] - Current effective config.
+ * @param {boolean} [options.allowDegraded] - Explicit opt-in to an unconfined launch
+ *   when no systemd user manager is reachable (recorded as degraded, never silent).
+ * @returns {{ launched: boolean, blocked?: boolean, failures?: unknown[], mode?: string }}
+ *   Same result shape as `launchIsolatedWorker`; a blocked result carries the
+ *   dispatch gate's typed failures and never reaches a spawn call.
+ */
+export function planDirectWorkerLaunch({
+  name = 'worker',
+  memoryMaxGb,
+  invocation,
+  command = invocation?.argv?.[0],
+  args = invocation?.argv?.slice(1) ?? [],
+  cwd = invocation?.cwd,
+  logFile,
+  stdinPath = invocation !== undefined && invocation.stdin !== 'closed' ? invocation.briefPath : undefined,
+  stdoutPath = invocation?.stdoutPath,
+  stderrPath = invocation?.stderrPath,
+  envNames = invocation?.envNames,
+  env,
+  config,
+  allowDegraded = false,
+  // Test-only passthroughs mirroring checkWorkerDispatch's own injectable
+  // signals/isolation detector; production callers omit these and sample
+  // the real host / systemd user manager.
+  live,
+  readers,
+  thresholdOverlay,
+  isolation,
+  spawn,
+  spawnAsync,
+  proposeUnit,
+  kind,
+} = {}) {
+  const gate = checkWorkerDispatch({ config, live, readers, thresholdOverlay });
+  if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
+  return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
+    gate, config, allowDegraded,
+    ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
+    ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
+    ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
+    ...(kind !== undefined ? { kind } : {}) });
 }
 
 export default SessionLauncher;
