@@ -17,6 +17,7 @@ import {
   hasSelectionRelevantConflicts, workerContextHeadroom, workerModelKey, isCanonicalWorkerModelKey,
   WorkerSelectionPolicySchema, validateWorkerCatalogDiscovery,
   type ProviderModelCapabilityRegistry, type WorkerInvocationProfile, type WorkerContextEstimate,
+  type WorkerBoundary,
 } from './provider-policy.js';
 import type { DiscoveredModel, DynamicModelCatalog } from './model-discovery.js';
 import { MODEL_WRAPPERS } from './provider-models.js';
@@ -351,6 +352,7 @@ export interface WorkerResolutionBinding {
   profile: string;
   identityEvidence: WorkerIdentityEvidence;
   mcp?: WorkerInvocationProfile['mcp'];
+  boundary?: WorkerBoundary;
 }
 
 export interface WorkerPlanSnapshot {
@@ -588,8 +590,8 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             if (binding.identityEvidence === 'backend-attested' && adapter.capabilities.modelPin !== 'observed') throw new Error('Requested-only mapping cannot attest backend identity');
             if (group.execution?.sandbox && !adapter.capabilities.sandboxModes.includes(group.execution.sandbox)) throw new Error('Requested sandbox mode is unqualified');
             qualifyWorkerInvocationProfile(adapter, { profile: binding.profile, transport, cliVersion: binding.cliVersion,
-              requiredControls: ['model', 'workdir', 'sandbox', 'approval', 'fallback', ...(policy.guards?.denySelfDelegation === false ? [] : ['children']),
-                ...(effort === null ? [] : ['effort']), ...(request.requiredControls ?? [])], mcp: binding.mcp });
+              policy, permissions, effort, boundary: binding.boundary,
+              requiredControls: request.requiredControls, mcp: binding.mcp });
             const { maxAttempts: _maxAttempts, ...budgetLimits } = plan.ceilings;
             const budgetDimensions = { tokens: 'tokens', cost: 'costUsd', 'wall-time': 'wallSeconds' } as const;
             const enforceable = adapter.capabilities.hardBudget.map(key => budgetDimensions[key as keyof typeof budgetDimensions]);

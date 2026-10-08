@@ -87,7 +87,10 @@ describe('S1 production capability contracts (T-OG-03/14/15/17/19)', () => {
 
   it('version/transport qualification cannot silently drop required controls', () => {
     const value = adapter();
-    const selection = { profile: 'fixture-shell', transport: 'shell' as const, cliVersion: '1.2.3', requiredControls: ['model'] };
+    const selection = { profile: 'fixture-shell', transport: 'shell' as const, cliVersion: '1.2.3', requiredControls: ['model'], policy: {}, permissions: { sandbox: 'workspace-write' as const }, effort: null };
+    for (const [name, control] of Object.entries(value.invocationProfiles['fixture-shell'].controls) as any) {
+      if (!['effort', 'stepCap'].includes(name)) control.support = 'native';
+    }
     expect(() => qualifyWorkerInvocationProfile(value, selection)).toThrow('unqualified');
     value.qualification = { status: 'qualified', fixtureDigest: `sha256:${'1'.repeat(64)}`, verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:only' };
     expect(qualifyWorkerInvocationProfile(value, selection)).toEqual(value.invocationProfiles['fixture-shell']);
@@ -103,6 +106,7 @@ describe('S1 production capability contracts (T-OG-03/14/15/17/19)', () => {
     const value = materialize(vectors[1], vectors);
     value.qualification = { status: 'qualified', fixtureDigest: `sha256:${'1'.repeat(64)}`, verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:only' };
     const profile = value.invocationProfiles['fixture-shell'];
+    for (const control of Object.values(profile.controls) as any[]) control.support = 'native';
     const selection = { profile: 'fixture-shell', transport: 'mcp' as const, cliVersion: '1.2.3', mcp: profile.mcp };
     expect(qualifyWorkerInvocationProfile(value, selection)).toEqual(profile);
     expect(() => qualifyWorkerInvocationProfile(value, { ...selection, mcp: undefined })).toThrow();
@@ -110,4 +114,19 @@ describe('S1 production capability contracts (T-OG-03/14/15/17/19)', () => {
       expect(() => qualifyWorkerInvocationProfile(value, { ...selection, mcp: { ...profile.mcp, [key]: 'changed' } })).toThrow('qualification changed');
     }
   });
+
+  it.each(['claude', 'muse', 'hermes', 'external-control', 'external-permission'])
+    ('requires installation qualification for a caller-asserted %s sandbox boundary', provider => {
+      const value = adapter();
+      value.provider = ['external-control', 'external-permission'].includes(provider) ? 'codex' : provider;
+      value.qualification = { status: 'qualified', fixtureDigest: `sha256:${'1'.repeat(64)}`,
+        verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:only' };
+      const profile = value.invocationProfiles['fixture-shell'];
+      for (const control of Object.values(profile.controls) as any[]) control.support = 'native';
+      if (provider === 'external-control') profile.controls.sandbox.support = 'external';
+      const selection = { profile: 'fixture-shell', transport: 'shell' as const, cliVersion: '1.2.3',
+        permissions: { sandbox: provider === 'external-permission' ? 'external' as const : 'workspace-write' as const },
+        boundary: { kind: 'os' as const, identity: 'caller-asserted', digest: `sha256:${'1'.repeat(64)}`, controls: ['sandbox'] } };
+      expect(() => qualifyWorkerInvocationProfile(value, selection)).toThrow(/sandbox.*installation qualification/i);
+    });
 });

@@ -13,6 +13,7 @@ function adapter(): WorkerAdapterMetadata {
     status: 'qualified', fixtureDigest: `sha256:${'a'.repeat(64)}`,
     verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:synthetic-only',
   };
+  for (const control of Object.values(value.invocationProfiles!['fixture-shell'].controls)) control.support = 'native';
   return value;
 }
 const selection = { profile: 'fixture-shell', transport: 'shell' as const, cliVersion: '1.2.3' };
@@ -54,8 +55,8 @@ describe('S1 installation metadata and required control guards (T-OG-03/10/14)',
     value.capabilities[capability] = false;
     expect(() => qualifyWorkerInvocationProfile(value, { ...selection, requiredControls: [control] }))
       .toThrow(`Required worker control is unqualified: ${control}`);
-    // A task that does not require the control preserves the existing contract.
-    expect(qualifyWorkerInvocationProfile(value, selection)).toEqual(value.invocationProfiles!['fixture-shell']);
+    // Missing policy cannot waive controls through omission.
+    expect(() => qualifyWorkerInvocationProfile(value, selection)).toThrow(`Required worker control is unqualified: ${control}`);
     value.capabilities[capability] = true;
     expect(qualifyWorkerInvocationProfile(value, { ...selection, requiredControls: [control] }))
       .toEqual(value.invocationProfiles!['fixture-shell']);

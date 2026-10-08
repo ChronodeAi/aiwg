@@ -218,6 +218,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-policy.test.ts",
@@ -239,6 +241,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
@@ -262,6 +266,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-policy.test.ts",

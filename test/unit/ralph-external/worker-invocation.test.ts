@@ -26,10 +26,12 @@ function setup(transport: 'shell' | 'mcp' = 'shell') {
     verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:synthetic-only' };
   const profile = metadata.invocationProfiles['fixture-shell'];
   profile.transport = transport;
-  profile.controls.workdir.support = 'external';
+  for (const [name, control] of Object.entries(profile.controls) as any) {
+    if (!['effort', 'stepCap'].includes(name)) control.support = 'native';
+  }
   metadata.invocationProfiles = { [invocation.selected.profileRef]: profile };
   const qualification: any = { adapter: metadata, cliVersion: '1.0.0', now: Date.parse('2026-10-07T00:00:00Z'),
-    platform: 'linux', requiredControls: ['workdir'], role: 'efficiency',
+    platform: 'linux', permissions: { sandbox: 'workspace-write', approval: 'never' }, requiredControls: ['workdir'], role: 'efficiency',
     policy: { roleGuidance: { efficiency: { groups: ['synthesis'], tier: 'economy',
       initialEffort: null, effortLadder: [], allowNotApplicableEffort: true } } },
     modelObservation: { observedAt: '2026-10-07T00:00:00Z', lifecycle: 'active',
@@ -239,7 +241,7 @@ describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () 
     ['unqualified', (f: any) => { f.qualification.adapter.qualification.status = 'unqualified'; }, /unqualified/],
     ['unsupported-version', (f: any) => { f.qualification.cliVersion = '2.0.0'; }, /version/],
     ['required-control', (f: any) => { f.qualification.requiredControls.push('stepCap'); }, /control/],
-    ['implicit-controls', (f: any) => { delete f.qualification.requiredControls; }, /declare/],
+    ['missing-policy-source', (f: any) => { delete f.qualification.permissions; }, /control/],
     ['unknown-profile', (f: any) => { f.invocation.selected.profileRef = 'missing'; }, /unqualified/],
     ['explicit-effort', (f: any) => { f.invocation.selected.effort = { support: 'explicit', value: 'high' }; }, /control/],
     ['expired', (f: any) => { f.qualification.now = Date.parse(f.invocation.expiresAt); }, /expired/],
@@ -253,10 +255,39 @@ describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () 
     ['undeclared-env', (f: any) => { f.invocation.envNames.push('UNRELATED_SECRET'); }, /allowlist/],
     ['environment-syntax', (f: any) => { f.invocation.envNames.push('PATH; touch injected'); }, /Invalid/],
     ['wrong-adapter', (f: any) => { f.qualification.adapter.id = 'wrong'; }, /identity/],
+    ['changed-qualification', (f: any) => { f.invocation.selected.qualificationDigest = `sha256:${'0'.repeat(64)}`; }, /digest changed/],
+    ['stale-installation', (f: any) => { f.qualification.adapter.qualification.verifiedAt = '2026-01-01T00:00:00Z'; }, /stale/],
     ['unknown-transport', (f: any) => { f.invocation.transport = 'msp'; }, /Invalid/],
   ] as const)('T-OG-03/14 rejects %s before returning a command', async (_id, mutate, error) => {
     const f = setup(); mutate(f);
     await expect(adapter.prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toThrow(error);
+  });
+
+  it.each(['claude', 'muse', 'hermes'])('#2956 preparation cannot waive %s sandbox with caller controls', async provider => {
+    const f = setup();
+    f.qualification.adapter.id = provider;
+    f.qualification.boundary = { kind: 'native' };
+    f.qualification.requiredControls = ['model'];
+    const { prepareWorkerInvocation } = await import('../../../src/serve/worker-invocation.js');
+    await expect(prepareWorkerInvocation(f.invocation, { ...f.qualification, adapterId: provider })).rejects.toThrow(/sandbox.*external/);
+    delete f.qualification.policy;
+    f.invocation.selected.effort = { support: 'explicit', value: 'medium' };
+    await expect(prepareWorkerInvocation(f.invocation, { ...f.qualification, adapterId: provider })).rejects.toThrow(/sandbox.*external/);
+  });
+
+  it.each(['shell', 'mcp'] as const)('#2956 %s refuses a synthetic external boundary without installation evidence', async transport => {
+    const f = setup(transport);
+    f.qualification.adapter.provider = 'claude';
+    f.qualification.boundary = { kind: 'os', identity: 'caller-asserted', digest: `sha256:${'1'.repeat(64)}`, controls: ['sandbox'] };
+    const { prepareWorkerInvocation } = await import('../../../src/serve/worker-invocation.js');
+    for (const prepare of [() => prepareWorkerInvocation(f.invocation, { ...f.qualification, adapterId: 'fixture' }),
+      () => adapter.prepareWorkerInvocation(f.invocation, f.qualification)]) {
+      await expect(prepare()).rejects.toThrow(/installation qualification/i);
+    }
+    f.profile.installationQualification = { scopeDigest: f.invocation.selected.qualificationDigest,
+      fixtureDigest: f.invocation.selected.qualificationDigest, verifiedAt: '2026-10-07T00:00:00Z', evidenceRef: 'fixture:synthetic-only' };
+    await expect(prepareWorkerInvocation(f.invocation, { ...f.qualification, adapterId: 'fixture' }))
+      .rejects.toThrow(/installation.*(evidence|qualification|recheck)/i);
   });
 
   it.each([
