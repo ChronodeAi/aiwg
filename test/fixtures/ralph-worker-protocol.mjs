@@ -21,6 +21,13 @@ export const workerInputSchema = {
   },
 };
 
+// #2892 F3: a qualified MCP worker's output schema, advertised by the
+// fixture server on every scenario except the dedicated
+// 'schema-missing-output' one (see ralph-worker-mcp.mjs), so a qualification
+// that records `mcpSchemas.output` (buildFixture in worker-invoke.test.ts)
+// matches the live tool by default.
+export const workerOutputSchema = { type: 'object' };
+
 export function config() {
   if (!process.env.AIWG_FAKE_WORKER_CONFIG) throw new Error('AIWG_FAKE_WORKER_CONFIG must name a synthetic fixture config');
   return JSON.parse(readFileSync(process.env.AIWG_FAKE_WORKER_CONFIG, 'utf8'));

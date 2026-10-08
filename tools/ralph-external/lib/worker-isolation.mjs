@@ -120,7 +120,29 @@ export function detectWorkerIsolation({ spawn = spawnSync, env = process.env } =
  * `--scope` execs directly as a child of the `systemd-run` client itself
  * (confirmed empirically — it inherits that process's environment wholesale,
  * ignoring `UnsetEnvironment`), so this guarantee applies only to `kind:
- * 'unit'`, the default and the only kind any production caller uses.
+ * 'unit'`, not `'scope'`.
+ *
+ * `attached: true` (#2892 B2 / #2895) is `kind: 'unit'` plus `--wait --pipe
+ * --quiet`: systemd-run itself stays attached for the lifetime of the unit,
+ * connecting the unit's stdin/stdout/stderr directly to systemd-run's own
+ * (i.e. to whatever stdio the *caller* gave the systemd-run child process),
+ * and systemd-run's own exit mirrors the unit's exit status. This is how an
+ * MCP stdio worker can be launched resource-confined while still giving the
+ * conductor a live, bidirectional stdio stream to speak JSON-RPC over — the
+ * same resource ceiling (`MemoryMax`/`MemorySwapMax`) and environment-
+ * allowlist contract as the fire-and-forget `'unit'` path, just attached
+ * instead of detached, plus the transport-bootstrap hardening
+ * (`KillMode=control-group`/`ExitType=cgroup`/`UMask=0077`, refusal of
+ * `NODE_OPTIONS`/`LD_PRELOAD`/etc. in the allowlist) `launchIsolatedWorker`
+ * layers on top. Attached is therefore incompatible with `stdinPath`/
+ * `stdoutPath`/`stderrPath`/`logFile` (those redirect to files; `--pipe`
+ * redirects to the systemd-run client's own stdio) — passing any of them
+ * with `attached: true` is refused rather than silently ignored.
+ *
+ * `pipe`/`wait` are separate boolean flags (independent of `attached`) for a
+ * synchronous verification caller that wants `--pipe`/`--wait` (and, when
+ * both are set, the mandatory `--quiet` below) without the attached/async
+ * child contract — see `verification-isolation.mjs`.
  *
  * `stdinPath`, when given, feeds the worker's stdin from that file
  * (`StandardInputFile=`) instead of the default `StandardInput=null` — this
@@ -166,6 +188,9 @@ export function buildWorkerIsolationArgs({
     if (typeof token !== 'string' || token.includes('\0')) throw new Error('Worker isolation argv must be NUL-free strings');
   }
   if (kind !== 'unit' && kind !== 'scope') throw new Error("Worker isolation kind must be 'unit' or 'scope'");
+  if (attached && (stdinPath !== undefined || stdoutPath !== undefined || stderrPath !== undefined || logFile !== undefined)) {
+    throw new Error('Worker isolation attached mode connects stdio directly through systemd-run and cannot also redirect stdinPath/stdoutPath/stderrPath/logFile');
+  }
   if (cwd !== undefined) assertAbsolute('working directory', cwd);
   if (logFile !== undefined) assertAbsolute('log file', logFile);
   if (stdinPath !== undefined) assertAbsolute('stdin brief', stdinPath);
@@ -259,6 +284,15 @@ export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
  *   record. Degraded launches never claim isolation.
  * - Degraded launches return an async child/pid handle without a deadline.
  *   `spawn` (manager queries), `spawnAsync`, and `proposeUnit` are injectable.
+ * - `attached: true` (#2892 B2) launches with live stdio pipes instead of
+ *   file redirection/`/dev/null`, for callers (e.g. an in-process MCP stdio
+ *   client) that need to read/write the worker's stdin/stdout directly
+ *   rather than poll for termination afterward. Incompatible with
+ *   `stdinPath`/`stdoutPath`/`stderrPath`/`logFile` (refused, not ignored).
+ *   Degraded-attached returns the usual `{ mode: 'degraded', child }`; the
+ *   confined path returns `{ mode: 'systemd-unit', child }` where `child` is
+ *   the live `systemd-run --pipe --wait` process itself — its stdio IS the
+ *   unit's stdio, and its own `close` event fires with the unit's exit code.
  */
 export function launchIsolatedWorker({
   name = 'worker',
@@ -277,10 +311,10 @@ export function launchIsolatedWorker({
   allowDegraded = false,
   isolation,
   kind = 'unit',
+  attached = false,
   spawn = spawnSync,
   spawnAsync = nodeSpawn,
   proposeUnit = proposeWorkerUnitName,
-  attached = false,
   stdin = 'closed',
   ownedGroup = false,
   runDir,
@@ -326,16 +360,23 @@ export function launchIsolatedWorker({
       const value = env?.[key];
       if (value !== undefined) allowedEnv[key] = value;
     }
-    const supervised = attached && runDir;
-    if (supervised && envNames.some(variable => transportBootstrapVariables.includes(variable))) {
+    // #2892 F6: the transport-bootstrap refusal and the private wrapper
+    // routing both apply to EVERY attached launch, with or without a
+    // `runDir` — a caller that supplies no `runDir` (e.g. the MCP bridge,
+    // which has no need for the wrapper's own identity/exit record files)
+    // must still never spawn the worker directly with an unwrapped,
+    // potentially bootstrap-altering environment. `runDir` only toggles
+    // whether the wrapper is ALSO given `--run-dir`/`--invocation-id` to
+    // write those record files; it never toggles whether the wrapper runs
+    // at all.
+    if (attached && envNames.some(variable => transportBootstrapVariables.includes(variable))) {
       throw new Error('Worker environment cannot alter trusted transport bootstrap');
     }
     let child;
     if (attached) {
-      const launchCommand = supervised ? process.execPath : command;
-      const launchArgs = supervised ? [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
-        '--run-dir', runDir, '--invocation-id', name, '--', command, ...args] : args;
-      child = spawnAsync(launchCommand, launchArgs, { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      const launchArgs = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+        ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args];
+      child = spawnAsync(process.execPath, launchArgs, { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) });
     } else {
       // Opening the brief/output files ourselves (rather than letting the
@@ -359,7 +400,7 @@ export function launchIsolatedWorker({
     const outcome = {
       launched: Number.isInteger(child.pid) && child.pid > 0,
       mode: 'degraded', child, pid: child.pid,
-      ...(supervised ? { transportSupervisor: true } : {}),
+      ...(attached ? { transportSupervisor: true } : {}),
       diagnostic: `launched without resource confinement: ${detected.reason}`,
       gate: resolvedGate,
     };
@@ -394,6 +435,17 @@ export function launchIsolatedWorker({
   const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command: isolatedCommand, args: isolatedArgs,
     cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind, attached });
   if (attached) {
+    // The spawned transport wrapper's OWN process env is `{...process.env,
+    // ...env}` (minus bootstrap vars) so systemd-run's bare `--setenv=NAME`
+    // (see buildWorkerIsolationArgs' doc comment) can import allowlisted
+    // values that live only in a caller-supplied `env` map (e.g. an MCP
+    // worker server's own registered credentials) and not in the
+    // conductor's own `process.env` — `process.env` is spread first so
+    // systemd-run can still reach its D-Bus user session. The wrapper
+    // itself then builds the REAL worker's environment purely from
+    // `envNames`/`env` (never from this spawn env), so this merge only
+    // widens what systemd-run's CLIENT can import from, never what the
+    // worker receives.
     const child = spawnAsync(argv[0], argv.slice(1), { cwd,
       env: Object.fromEntries(Object.entries({ ...process.env, ...env })
         .filter(([variable]) => !transportBootstrapVariables.includes(variable))),
@@ -463,7 +515,9 @@ export function getWorkerIsolationStatus(unit, { spawn = spawnSync } = {}) {
  * already holds. It does not itself confirm anything — issuing the stop
  * request and having it take effect are different claims. Callers must
  * recheck `getWorkerIsolationStatus(unit)` afterward and treat an
- * unconfirmed stop as uncertain, never as a confirmed termination.
+ * unconfirmed stop as uncertain, never as a confirmed termination. Idempotent
+ * on an already-stopped/unknown unit — `systemctl --user stop` on a unit
+ * that no longer exists is not an error worth surfacing to the caller.
  */
 export function stopWorkerUnit(unit, { spawn = spawnSync } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {

@@ -1326,6 +1326,9 @@ export async function getClaudeVersion() {
  *   (defaults to the worker `cwd`/worktree, never the conductor's cwd).
  * @param {boolean} [options.allowDegraded] - Explicit opt-in to an unconfined launch
  *   when no systemd user manager is reachable (recorded as degraded, never silent).
+ * @param {boolean} [options.attached] - Launch with live stdio pipes instead of
+ *   file redirection (#2892 B2), for an in-process client (e.g. an MCP stdio
+ *   client) that needs to read/write the worker's stdin/stdout directly.
  * @returns {{ launched: boolean, blocked?: boolean, failures?: unknown[], mode?: string }}
  *   Same result shape as `launchIsolatedWorker`; a blocked result carries the
  *   dispatch gate's typed failures and never reaches a spawn call.
@@ -1357,6 +1360,12 @@ export function planDirectWorkerLaunch({
   spawnAsync,
   proposeUnit,
   kind,
+  attached = false,
+  // #2892: forwarded only when explicitly given, so every existing caller
+  // (which omits it) keeps #2895's own `attached` default (`stdin: 'closed'`
+  // -> stdio[0] 'ignore') unchanged. An MCP stdio worker passes `'open'` to
+  // get a live, writable stdin pipe for JSON-RPC requests.
+  stdin,
 } = {}) {
   // Free disk is sampled on the worktree filesystem the worker will actually
   // write to — never the conductor's process cwd. Without live signals or
@@ -1367,11 +1376,11 @@ export function planDirectWorkerLaunch({
   });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
   return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
-    gate, config, allowDegraded,
+    gate, config, allowDegraded, attached,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
     ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
-    ...(kind !== undefined ? { kind } : {}) });
+    ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}) });
 }
 
 export default SessionLauncher;

@@ -36,7 +36,7 @@ const FRAMEWORKS = {
 /**
  * Create and configure the AIWG MCP Server
  */
-export function createServer() {
+export async function createServer() {
   const server = new McpServer({
     name: 'aiwg',
     version: '1.0.0'
@@ -70,11 +70,25 @@ export function createServer() {
   // Opt-in subsystem toolsets (#1322-#1332)
   //
   // Enabled via AIWG_MCP_TOOLSETS env or `aiwg mcp serve --toolsets=`.
-  // Known: flows, missions, memory, kb, research, activity-log, index, ralph, mc, ops, sandbox, all
+  // Known: flows, missions, memory, kb, research, activity-log, index, ralph, mc, ops, sandbox, decision, all
+  // `workers` (#2892 direct worker run/status/cancel) needs an EXPLICIT name;
+  // `all` deliberately does not reach it (src/mcp/tools/subsystems.mjs).
   // Default: none (core only — discovery + command-run)
   // ============================================
   const requested = parseToolsets(process.env.AIWG_MCP_TOOLSETS || '');
-  registerOptInToolsets(server, requested);
+  // #2892 B1: the `workers` toolset's served project root is resolved ONCE,
+  // here, at registration time — never lazily from `process.cwd()` inside
+  // the tool handler on first request. A project root that cannot be found
+  // (not running inside an AIWG project) means `workers` is simply not
+  // registered; `registerWorkerInvokeToolset` refuses rather than falling
+  // back to an implicit cwd.
+  let projectRoot;
+  try {
+    projectRoot = await findProjectRoot();
+  } catch {
+    projectRoot = undefined;
+  }
+  await registerOptInToolsets(server, requested, { projectRoot });
 
   // Tool: artifact-read
   server.registerTool('artifact-read', {
@@ -611,7 +625,7 @@ async function scanDirectory(dir, type) {
  * Start the MCP server with stdio transport
  */
 export async function startServer() {
-  const server = createServer();
+  const server = await createServer();
   const transport = new StdioServerTransport();
 
   console.error('[AIWG MCP] Starting server...');
