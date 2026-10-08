@@ -143,6 +143,8 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
 
 /** Trusted #2885 installation owner supplies driver bindings, never task input. */
 export interface WorkerInvocationDriver {
+  /** Existing adapter extraction; raw stream remains separate and untrusted. */
+  extractFinal?(stdout: string): unknown;
   qualification: Omit<WorkerInvocationQualification, 'policy' | 'permissions' | 'role' | 'now' | 'modelObservation' | 'defaultObservation'>;
   mcpRegistry?: Pick<McpServerRegistry, 'get'> & Partial<Pick<McpServerRegistry, 'assertWorkerQualified'>>;
   mcpProfile?: Pick<McpProfile, 'servers' | 'providerOverrides'>;
@@ -201,8 +203,9 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
 
 const bytesDigest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
-async function inspectPath(filename: string, kind: 'file' | 'directory' | 'output'): Promise<boolean> {
+export async function inspectWorkerPath(filename: string, kind: 'file' | 'directory' | 'output'): Promise<boolean> {
   if (!path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute NUL-free paths are required');
+  if (filename.split('/').includes('..')) throw new Error('Worker path traversal is not allowed');
   const normalized = path.resolve(filename);
   let current = normalized;
   while (true) {
@@ -223,6 +226,7 @@ async function inspectPath(filename: string, kind: 'file' | 'directory' | 'outpu
     }
   }
 }
+const inspectPath = inspectWorkerPath;
 
 async function readBrief(filename: string): Promise<Buffer | null> {
   if (!await inspectPath(filename, 'file')) return null;
@@ -242,7 +246,27 @@ async function readBrief(filename: string): Promise<Buffer | null> {
   } finally { await handle.close(); }
 }
 
-export type WorkerCommandPlan = WorkerResolutionPlan & { invocation?: WorkerResolvedInvocation };
+export type WorkerCommandPlan = WorkerResolutionPlan & { invocation?: WorkerResolvedInvocation; request?: WorkerCommandRequest };
+
+/** Re-resolve saved JSON through the same trusted owners; saved argv is never authority. */
+export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, snapshot: WorkerPlanSnapshot,
+  drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString()): Promise<WorkerResolvedInvocation> {
+  if (!saved.request || saved.mode !== 'direct' || saved.status !== 'eligible'
+    || saved.invocation?.readiness !== 'launchable' || Date.parse(saved.invocation.expiresAt) <= Date.parse(now)) {
+    throw new Error('A fresh launchable models resolve JSON plan is required');
+  }
+  assertValidWorkerPayload('workerResolvedInvocation', saved.invocation);
+  const current = await resolveWorkerInvocation(snapshot, saved.request, drivers, now,
+    { digests: saved.digests, briefDigest: saved.invocation.briefDigest ?? null });
+  // Expiry is calculated from the resolution clock. All execution bindings,
+  // controls, thresholds and paths must remain byte-for-byte digest equivalent.
+  if (!current.invocation || current.status !== 'eligible'
+    || Date.parse(saved.invocation.expiresAt) > Date.parse(current.invocation.expiresAt)
+    || qualificationDigest({ ...current.invocation, expiresAt: saved.invocation.expiresAt }) !== qualificationDigest(saved.invocation)) {
+    throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Saved invocation differs from current qualified plan; resolve again');
+  }
+  return structuredClone(saved.invocation);
+}
 
 /** Snapshot/driver inputs are supplied by the existing trusted installation owner.
  * This function does no probing, spawning, registration, admission or writes. */
@@ -276,6 +300,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
         inputTokens: 0, toolOutputAllowance: 1024, reservedOutput: 1024 },
       requiredControls: snapshot.config.parallelism?.health?.requireStepCap ? ['stepCap'] : [],
     });
+    plan.request = structuredClone(request);
     if (!plan.selected) return plan;
     const tuple = plan.selected;
     pointer = `/parallelism/clis/${tuple.cli}`;

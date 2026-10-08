@@ -146,6 +146,227 @@ return `outcome.child` and `outcome.pid` immediately, without a worker deadline;
 the caller owns output draining, completion, cancellation and qualification
 recording.
 
+## Attached one-shot capture (S1, #2895)
+
+The existing Ralph command can supervise one resolved shell invocation:
+
+```sh
+install -d -m 700 /private/attempt
+aiwg models resolve --role coding --task implementation --group qualified-group \
+  --brief /private/brief.json --workdir /absolute/worktree \
+  --final-output /private/attempt/final.json --format=json > /private/plan.json
+aiwg ralph-external --launch-worker --invocation /private/plan.json \
+  --run-dir /private/attempt
+```
+
+`FILE` is the complete JSON plan from `models resolve`, including its invocation
+and input digests. The launcher rechecks it against current trusted configuration,
+catalog, installation and brief inputs before spawning; a bare argv array or an
+edited shell command cannot grant launch authority. Prepare fresh invocation and
+final paths for each attempt. The run directory must be outside the worker's
+writable worktree and within the authorized output scope. The launcher opens
+captures before spawning, rejects symlink/traversal paths and pre-existing attempt
+outputs, and writes directories with mode 0700 and files with mode 0600.
+An existing run directory must be empty, private and conductor-owned. A used
+directory or final path is refused. Assigned final files may be inside that
+directory only when the qualified boundary grants that leaf. **This grants no
+filesystem isolation from the rest of the run directory's trusted metadata**:
+the worker runs as the same UID as the conductor (no sandboxing user, no
+mount namespace separating them), so it can read and write every file the
+conductor placed there, including `worker-exit.json`, `worker-identity.json`
+and `process.json`. Mode 0700/0600 keeps other users out; it does not keep
+the worker out. The launcher therefore never derives `exitCode`, `signal`,
+`termination` or `confirmed` from a file in the run directory — only from the
+kernel-observed wait() status of its own direct child (the trusted transport,
+never the worker) or, for `systemd-unit` mode, from `getWorkerIsolationStatus`
+queried against the unit by name. A worker that plants its own
+`worker-exit.json` claiming a clean exit is recorded only as an
+unauthenticated, informational `workerReportedExit`/`workerTermination`
+hint; it cannot make a real failure read back as success.
+
+The live dispatch gate runs first. Available isolation uses the existing
+`launchIsolatedWorker` owner; a host without isolation requires the explicit
+`--allow-degraded-worker` option. A degraded launch records unavailable resource
+confinement and cannot claim that boundary. This mode stays attached to exactly
+one attempt: no retry, queue, daemon, Mission or MC state is created. The legacy
+Ralph launch API and installed package paths remain the same.
+An unconfined process group can escape via `setsid`; degraded descendant stop
+therefore remains uncertain even after the direct child's owning wait completes,
+and degraded mode can never report a confirmed stop — there is no cgroup to
+prove no descendant escaped. The CLI's `--launch-worker` exit code reflects
+this directly: 0 is a confirmed success, 1 is a confirmed failure (error,
+timeout, or a confirmed stop with a nonzero/signaled exit), and 2 is an
+uncertain termination — a degraded run can look entirely clean and still
+exit 2, because "clean" is not the same claim as "confirmed." Callers must
+treat 2 as neither success nor failure, not coerce it to one.
+For `systemd-unit` mode, a hard timeout stops the unit itself
+(`systemctl --user stop <unit>`, which `KillMode=control-group` turns into a
+cgroup-wide kill) rather than attempting a PID/PGID signal that may still be
+unresolved; the unit's own retained state is then what confirms or fails to
+confirm the stop, never the act of having requested it.
+The attached transport refuses `NODE_OPTIONS`, `NODE_PATH` and native loader
+override variables in the worker allowlist, and removes them at the service
+boundary before its supervisor starts. Requalify a profile that needs those
+variables through another supported direct handoff.
+File operations pin Linux directory handles and reject symlink ancestors;
+permission cleanup acts on opened inodes rather than worker-replaced paths.
+
+`invocation.json` records a digest-bound, sanitized command, environment variable
+**names**, the prompt reference/digest, workspace and output bindings, and
+thresholds. It contains no environment values or prompt text. `process.json`
+distinguishes the supervisor from the actual worker and records available PID,
+PGID, UID, host/boot, executable, parent and process-start identity. Unknown facts
+are null. Restricted stdout and stderr remain separate captures; JSONL naming
+applies only to a qualified event format. Adapter final extraction writes a
+separate candidate final and preserves the event stream. Final presence and exit
+zero are evidence for conductor verification, not proof of task correctness.
+`final-evidence.json` binds that candidate's path and digest to this invocation.
+The run directory retains private canonical captures as well as the exact
+stdout/stderr output paths declared by the resolved plan.
+
+`exit.json` comes from the owning wait or native terminal evidence, retaining an
+unknown exit code as null. Stop certainty includes owned descendants. Sending a
+signal or seeing the supervisor exit alone cannot prove termination. Before each
+signal, ownership is rechecked against boot/start identity and the isolated group;
+the conductor's group, reused identities and uncertain ownership are refused.
+Completed timers are cleared so they cannot later signal a reused PID.
+
+### Manual launch and adoption
+
+An owning shell can apply the same convention without calling the Ralph helper.
+Recheck the full plan and dispatch gate first, authorize any degraded boundary,
+and use only its literal typed argv and allowlisted environment. Never evaluate
+`shellCommand` or execute a command supplied by worker output. The following Bash
+procedure uses the shell's own `wait` and Node's standard library; replace the example argv with the exact
+qualified argv, including the fresh output references:
+
+```bash
+umask 077
+run=$(mktemp -d /tmp/aiwg-worker.XXXXXXXX) || exit 1
+chmod 700 "$run" || exit 1
+brief=/absolute/private/brief.json
+plan=/absolute/private/rechecked-plan.json
+workdir=/absolute/authorized/worktree
+final=/absolute/authorized/outputs/fresh-final.json
+stdout="$final.stdout"              # Exact #2887 output bindings.
+stderr="$final.stderr"
+argv=('/absolute/qualified-binary' 'literal argument from the rechecked plan')
+record_manual() {
+  node --input-type=module - "$run" "$plan" "$1" "$$" "${worker-}" "${wait_status-}" \
+    "$workdir" "$brief" "$stdout" "$stderr" "$final" "${argv[@]}" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {createHash, randomUUID} from 'node:crypto';
+const [run, filename, stage, shell, child, waited, cwd, brief, stdout, stderr, final, ...argv] = process.argv.slice(2);
+const normalize = v => Array.isArray(v) ? v.map(normalize) : v && typeof v === 'object'
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, normalize(v[k])])) : v;
+const digest = v => 'sha256:' + createHash('sha256').update(JSON.stringify(normalize(v))).digest('hex');
+const bytesDigest = v => 'sha256:' + createHash('sha256').update(v).digest('hex');
+function safe(p) {
+  if (!path.isAbsolute(p) || p.split('/').includes('..')) throw Error('unsafe path');
+  let current = '/';
+  for (const part of p.split('/').filter(Boolean)) {
+    current = path.join(current, part);
+    try { if (fs.lstatSync(current).isSymbolicLink()) throw Error('symlink'); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+}
+for (const p of [run, filename, cwd, brief, stdout, stderr, final]) safe(p);
+const runStat = fs.statSync(run);
+if (runStat.uid !== process.getuid() || (runStat.mode & 0o077)) throw Error('unowned/private directory');
+function read(p, limit) {
+  const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try { const s = fs.fstatSync(fd); if (!s.isFile() || s.nlink !== 1 || s.size > limit) throw Error('unbounded input');
+    return fs.readFileSync(fd); } finally { fs.closeSync(fd); }
+}
+function write(name, value) {
+  const target = path.join(run, name); safe(target);
+  const temp = path.join(run, '.' + randomUUID());
+  const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try { fs.writeFileSync(fd, JSON.stringify(value) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(temp, target);
+}
+function identity(pid) {
+  if (!Number(pid)) return null;
+  try { const s = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); const f = s.slice(s.lastIndexOf(')') + 2).split(/\s+/);
+    return {pid:Number(pid), pgid:Number(f[2]), parentPid:Number(f[1]), sessionId:Number(f[3]), startTicks:f[19],
+      uid:Number(/^Uid:\s+(\d+)/m.exec(fs.readFileSync(`/proc/${pid}/status`, 'utf8'))[1]),
+      host:os.hostname(), bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), executable:fs.readlinkSync(`/proc/${pid}/exe`)};
+  } catch { return null; }
+}
+if (stage === 'before') {
+  const p = JSON.parse(read(filename, 1048576)); const i = p.invocation;
+  if (p.mode !== 'direct' || p.status !== 'eligible' || i.readiness !== 'launchable' || Date.parse(i.expiresAt) <= Date.now()
+    || JSON.stringify(i.argv) !== JSON.stringify(argv) || [i.cwd,i.briefPath,i.stdoutPath,i.stderrPath,i.finalPath].join('\0') !== [cwd,brief,stdout,stderr,final].join('\0')
+    || bytesDigest(read(brief, 262144)) !== i.briefDigest || fs.readdirSync(run).length) throw Error('plan binding changed');
+  const invocationId = randomUUID();
+  write('invocation.json', {invocationId, origin:'manual', planDigest:digest(p), invocationDigest:digest(i),
+    argv:i.argv.map((v,n) => n === 0 ? v : '<argument:' + bytesDigest(v) + '>'), argvDigest:digest(i.argv),
+    envNames:i.envNames, prompt:{path:brief,digest:i.briefDigest}, selected:i.selected,
+    cwd, worktree:{path:cwd,baseRevision:null}, paths:{stdout,stderr,final}, health:i.health,
+    attemptId:invocationId, previousAttemptId:null});
+  write('process.json', {invocationId, origin:'manual', supervisor:identity(shell), worker:null});
+} else if (stage === 'started') {
+  const old = JSON.parse(read(path.join(run,'process.json'),65536));
+  write('process.json', {...old,worker:identity(child),launchTime:new Date().toISOString(),monotonicStart:process.hrtime.bigint().toString(),ownership:'unknown'});
+} else {
+  const old = JSON.parse(read(path.join(run,'process.json'),65536)); const status = Number(waited);
+  write('exit.json', {invocationId:old.invocationId, waitStatus:status, exitCode:status < 128 ? status : null,
+    signal:null, endedAt:new Date().toISOString(), termination:'uncertain', descendants:'unknown'});
+}
+JS
+}
+record_manual before || exit 1
+# Open every capture before spawn; failure ends the attempt without a worker.
+set -C                            # Refuse existing capture/final files.
+exec {out}>"$stdout" || exit 1
+exec {err}>"$stderr" || exit 1
+: >"$final" || exit 1
+# PATH/HOME here are examples: use exactly the qualified envNames.
+# Run with job control off; verify $! against actual PID/PGID/start identity.
+set +m
+(cd "$workdir" &&
+  while IFS= read -r name; do
+    case "$name" in PATH|HOME) ;; *) unset "$name" || exit 1 ;; esac
+  done < <(compgen -e)
+  exec setsid "${argv[@]}") \
+  < /dev/null >&"$out" 2>&"$err" &
+worker=$!
+# For brief-text/brief-json, replace /dev/null with "$brief"; EOF follows the file.
+if ! record_manual started; then
+  printf '%s\n' 'Metadata unavailable; retain the shell/child references and unknown ownership in conductor context.' >&2
+fi
+if wait "$worker"; then wait_status=0; else wait_status=$?; fi
+exec {out}>&-
+exec {err}>&-
+record_manual ended || exit 1
+# Bash statuses >128 can also be ordinary exits: without native evidence, record
+# exact code/signal as null and retain wait_status. Never invent exit code zero.
+# Owned descendants not independently proven stopped => termination uncertain.
+# Extract a separate final through the qualified parser; retain both captures.
+```
+
+The metadata steps use exclusive temporary regular files
+and atomic rename under the private directory, reject symlink/hardlink aliases,
+and preserve mode 0600. Native isolation remains required whenever the profile
+needs it; `setsid` establishes a process group, not a filesystem or resource
+sandbox. A hand-launched process that shares its parent's group remains
+inspectable but grants no group-kill rights.
+
+`SessionLauncher.adoptWorker({ runDir?, invocationId?, worker?, paths? })` accepts
+known manual references with `origin: 'manual'`, returns explicit nulls for
+unknown identities/terminal facts and does not signal processes. It never scans
+by process name or trusts an adopted PID as cancellation authority. Omit
+`runDir` when writable scratch is unavailable: the returned observation stays in
+conductor context, with unavailable deadline/stop guarantees explicit. No status
+query can discover absent records, and no automatic MC fallback occurs.
+
+Retention and disposition belong to the conductor. Restricted raw prompts/logs
+default to 24 hours after confirmed termination and disposition; live or uncertain
+attempts are preserved. Dirty/partial worktrees require explicit disposition.
+This helper supplies evidence; it does not run a retention service.
+
 ## Validation limits and cleanup
 
 The focused and related Vitest command ran ten files: 402 passed, zero failed

@@ -8,9 +8,98 @@
  */
 
 import { EventEmitter } from 'events';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
+import { hostname } from 'node:os';
 import { join, dirname } from 'path';
 import { execFileSync } from 'child_process';
+
+/** Side-effect-free Linux sample. Unknown identity never grants signal authority. */
+export function sampleWorkerIdentity(pid) {
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    const uid = Number(/^Uid:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]);
+    const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    const executable = readlinkSync(`/proc/${pid}/exe`);
+    if (!Number.isSafeInteger(uid) || !bootId || !fields[19]) return null;
+    return { pid, pgid: Number(fields[2]), uid, parentPid: Number(fields[1]), sessionId: Number(fields[3]),
+      host: hostname(), bootId, startTicks: fields[19], executable, state: fields[0],
+      cpuTicks: Number(fields[11]) + Number(fields[12]) };
+  } catch { return null; }
+}
+
+export function sameWorkerIdentity(expected, actual) {
+  return !!expected && !!actual && ['pid', 'pgid', 'uid', 'parentPid', 'sessionId', 'host', 'bootId', 'startTicks', 'executable']
+    .every(key => expected[key] === actual[key]);
+}
+
+/** A failed/partial process listing is unavailable, never proof of absence. */
+export function sampleWorkerGroup(pgid) {
+  if (!Number.isSafeInteger(pgid) || pgid <= 0 || process.platform !== 'linux') return null;
+  try {
+    const members = [];
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      const identity = sampleWorkerIdentity(Number(entry));
+      // A disappeared process is normal; an inaccessible live member is not.
+      if (!identity) {
+        try {
+          const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+          if (Number(stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[2]) === pgid) return null;
+        } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') return null; }
+      } else if (identity.pgid === pgid && identity.state !== 'Z') members.push(identity);
+    }
+    return members;
+  } catch { return null; }
+}
+
+/** Read /proc/<pid>/cgroup verbatim, for comparing kernel-reported cgroup
+ * containment against a systemd unit's own ControlGroup. Side-effect-free;
+ * unreadable/absent is null, never a forged match. */
+export function sampleProcessCgroup(pid) {
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    const raw = readFileSync(`/proc/${pid}/cgroup`, 'utf8').trim();
+    if (!raw) return null;
+    // cgroup v2 (the unified hierarchy systemd --user units use): a single
+    // "0::<path>" line. Normalize to the bare path so this compares equal to
+    // systemd's own `ControlGroup` property, which omits the "0::" prefix.
+    // Falls back to the raw multi-line content on cgroup v1/hybrid hosts.
+    const unified = raw.split('\n').find(line => line.startsWith('0::'));
+    return unified ? unified.slice(3) : raw;
+  } catch { return null; }
+}
+
+/** Walk the real /proc ppid chain starting at `pid`, re-sampling each
+ * ancestor directly from the kernel. Never trusts a worker-reported
+ * parentPid value from a disk record -- each step re-reads /proc/<ppid>
+ * itself. Returns null when the starting pid cannot be sampled (unknown
+ * ancestry never satisfies a containment check); stops at pid 1 or
+ * `maxDepth` ancestors. */
+export function sampleProcessAncestry(pid, maxDepth = 32) {
+  let current = sampleWorkerIdentity(pid);
+  if (!current) return null;
+  const chain = [current];
+  let steps = 0;
+  while (current.pid !== 1 && steps < maxDepth) {
+    const next = sampleWorkerIdentity(current.parentPid);
+    if (!next || next.pid === current.pid) break;
+    chain.push(next);
+    current = next;
+    steps += 1;
+  }
+  return chain;
+}
+
+/** Sample only the children of a known native transport supervisor. */
+export function sampleWorkerChildren(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    return readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim().split(/\s+/)
+      .filter(Boolean).map(value => sampleWorkerIdentity(Number(value))).filter(Boolean);
+  } catch { return null; }
+}
 
 /**
  * @typedef {Object} ProcessHealth

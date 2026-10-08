@@ -29,7 +29,7 @@ export interface ModelsWorkerServices {
   now?(): string;
 }
 
-async function loadWorkerInputs(ctx: HandlerContext) {
+export async function loadWorkerInputs(ctx: HandlerContext) {
   const config = await readAiwgConfig(ctx.cwd) ?? emptyConfig();
   const loader = new ConfigLoader(ctx.cwd);
   const models = await loader.load(config.parallelism);

@@ -218,7 +218,8 @@
         "test/integration/worker-adapter-package.test.ts",
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/models/worker-installation-metadata.test.ts",
-        "test/unit/ralph-external/installed-worker-adapter.test.ts"
+        "test/unit/ralph-external/installed-worker-adapter.test.ts",
+        "test/unit/ralph-external/worker-single-invocation.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
@@ -232,6 +233,7 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",
         "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
@@ -328,6 +330,24 @@
       "laterSlices": [
         "S1"
       ]
+    },
+    "T-OG-20": {
+      "name": "Run identity and signals",
+      "ownerIssue": "roctinam/aiwg#2895",
+      "slice": "S1",
+      "mechanismOwners": ["B-OG-49"],
+      "status": "partial",
+      "testFiles": ["test/unit/ralph-external/worker-single-invocation.test.ts"],
+      "remaining": "S1 one-shot capture, exact bindings, EOF, timeout and explicit manual unknowns only. Semantic handshake, progress clocks and diagnosis belong to B-OG-50/51; managed supervision remains S2+. No live provider qualification."
+    },
+    "T-OG-23": {
+      "name": "Security/MCP/observer loss",
+      "ownerIssue": "roctinam/aiwg#2895",
+      "slice": "S1",
+      "mechanismOwners": ["B-OG-49"],
+      "status": "partial",
+      "testFiles": ["test/unit/ralph-external/worker-single-invocation.test.ts"],
+      "remaining": "S1 capture refusal, private metadata, traversal/symlink rejection and owned-group identity guards only. MCP transport and observer-loss scenarios remain with B-OG-50-53/55; managed runtime remains S2+."
     }
   },
   "qualificationResults": [

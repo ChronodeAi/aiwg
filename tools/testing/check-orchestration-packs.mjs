@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-export const requiredPacks = [...Array.from({ length: 12 }, (_, i) => i + 1), 14, 15, 16, 17, 18, 19].map(id => `T-OG-${String(id).padStart(2, '0')}`);
+export const requiredPacks = [...Array.from({ length: 12 }, (_, i) => i + 1), 14, 15, 16, 17, 18, 19, 20, 23].map(id => `T-OG-${String(id).padStart(2, '0')}`);
 export const registryPath = 'test/conformance/orchestration-v1/packs.json';
 
 // A successful fake run proves mechanics, never live qualification. This same
