@@ -16,6 +16,7 @@ import { resolveOmpPaths } from '../providers/omp-paths.mjs';
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
+import { qualificationDigest } from '../models/qualification-digest.mjs';
 import { dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
@@ -75,6 +76,13 @@ function validateCredentialReferences(def) {
   }
 }
 
+// The typed worker dispatch boundary owns qualification. Legacy runtime edits
+// invalidate its binding without importing the TypeScript policy owner.
+export function workerServerDigest(server) {
+  const { workerQualification, description, injectedProviders, addedAt, updatedAt, ...execution } = server;
+  return qualificationDigest(execution);
+}
+
 export class McpServerRegistry {
   #configDir;
   #cache = null;
@@ -123,6 +131,7 @@ export class McpServerRegistry {
 
     data.servers[def.name] = {
       ...def,
+      workerQualification: undefined,
       injectedProviders: [],
       addedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -156,6 +165,8 @@ export class McpServerRegistry {
       updatedAt: new Date().toISOString(),
     };
     validateCredentialReferences(next);
+    next.workerQualification = workerServerDigest(next) === workerServerDigest(data.servers[name])
+      ? data.servers[name].workerQualification : undefined;
     data.servers[name] = next;
 
     await this.save();

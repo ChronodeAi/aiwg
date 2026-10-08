@@ -491,3 +491,18 @@ branch, commit or push operation was performed.
 Conductor questions: none for the frozen contracts. Downstream direct resolvers
 must call the shared route/reference/control guards before task transmission;
 managed activation and runtime claims must await their S2+ owners.
+
+## #2885 S1 installation qualification contract amendment
+
+The frozen `worker-adapter.fragment.json` adds optional
+`invocationProfile.installationQualification` in the existing capability owner.
+The closed record binds the installation/profile scope digest, negative-fixture
+digest, verification timestamp and evidence reference. Its manifest digest is
+updated; exact-match assertions remain unchanged. Existing profiles stay valid,
+but this optional metadata alone does not enable an installation: the adapter
+qualification owner must verify the current scoped installation and controls.
+Required children/fallback controls also require the corresponding adapter
+capability, preventing a profile mapping from claiming uncontrolled behavior.
+
+This is the S1 direct/shared contract checkpoint. Managed executor admission,
+leases and verification settlement remain deferred to S2+.

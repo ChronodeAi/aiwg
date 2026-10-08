@@ -13,7 +13,9 @@ import { resolveOmpPaths } from '../providers/omp-paths.mjs';
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname, resolve } from 'path';
+import { qualificationDigest } from '../models/qualification-digest.mjs';
+import { qualifyWorkerInvocationProfile, type WorkerAdapterMetadata, type WorkerInvocationProfile } from '../models/provider-policy.js';
+import { dirname, isAbsolute, resolve } from 'path';
 import { resolveConfigDir } from '../config/user-config.js';
 import { getProviderDefinition } from '../providers/provider-definitions.js';
 
@@ -63,6 +65,9 @@ export interface McpServerDefinition {
   auth?: { type: 'oauth' | 'apikey'; credentialId?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; resource?: string };
   oauth?: { clientId?: string; clientSecret?: string; redirectUri?: string; callbackPort?: number; callbackPath?: string; prompt?: string; scope?: string };
 
+  /** Host qualification only; never grants task authority or substitutes for a live installation recheck. */
+  workerQualification?: McpWorkerQualification;
+
   /** Providers this server has been injected into */
   injectedProviders?: string[];
 
@@ -74,6 +79,32 @@ export interface McpServerDefinition {
 
   /** When this entry was last updated */
   updatedAt?: string;
+}
+
+export interface McpWorkerQualification {
+  serverDigest: string;
+  adapterDigest: string;
+  profile: string;
+  cliVersion: string;
+  scopeDigest: string;
+  fixtureDigest: string;
+  requiredControls: string[];
+}
+
+/** Supply the trusted host probe result, after rechecking its live installation scope. */
+export interface McpWorkerQualificationInput {
+  /** Captured by the trusted host before probing and included in installation scope. */
+  authorizedServerDigest: string;
+  adapter: WorkerAdapterMetadata;
+  profile: string;
+  cliVersion: string;
+  requiredControls: string[];
+  mcp: NonNullable<WorkerInvocationProfile['mcp']>;
+  installationQualification: {
+    status: 'ENABLED'; scopeDigest: string; fixtureDigest: string;
+    verifiedAt: string; evidenceRef: string; cliVersion: string; platform: string;
+    serverDigest?: string;
+  };
 }
 
 export interface McpRegistryData {
@@ -121,6 +152,57 @@ function validateCredentialReferences(def: Pick<McpServerDefinition, 'headerEnv'
       throw new Error(`Invalid MCP header environment variable reference "${envName}"`);
     }
   }
+}
+
+export function workerServerDigest(server: McpServerDefinition): string {
+  const { workerQualification, description, injectedProviders, addedAt, updatedAt, ...execution } = server;
+  return qualificationDigest(execution);
+}
+
+function workerQualificationBinding(server: McpServerDefinition, input: McpWorkerQualificationInput): McpWorkerQualification {
+  if (!Array.isArray(input.requiredControls) || input.requiredControls.some(name =>
+    typeof name !== 'string' || !name || !Object.hasOwn(input.adapter.invocationProfiles?.[input.profile]?.controls ?? {}, name))) {
+    throw new Error('MCP worker must declare valid required controls');
+  }
+  if (server.enabled === false || input.mcp.serverRef !== server.name) {
+    throw new Error('MCP worker server is disabled or does not match the qualified profile');
+  }
+  if (input.authorizedServerDigest !== workerServerDigest(server)) {
+    throw new Error('MCP server command, endpoint or configuration lacks matching host authorization');
+  }
+  if (server.type === 'stdio') {
+    if (!server.command || !isAbsolute(server.command) || server.command.includes('\0')
+        || (server.args ?? []).some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
+      throw new Error('MCP worker requires an authorized absolute local command and typed argv');
+    }
+  } else {
+    let endpoint: URL;
+    try { endpoint = new URL(server.url ?? ''); } catch { throw new Error('MCP worker endpoint is invalid'); }
+    if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.hash) {
+      throw new Error('MCP worker endpoint must be an authorized HTTP URL without credentials or fragment');
+    }
+  }
+  const profile = qualifyWorkerInvocationProfile(input.adapter, { ...input, transport: 'mcp' });
+  const installed = input.installationQualification;
+  if (installed?.serverDigest !== input.authorizedServerDigest) {
+    throw new Error('MCP worker installation does not cover the authorized registration');
+  }
+  const evidence = profile.installationQualification;
+  if (!installed || installed.status !== 'ENABLED' || installed.platform !== 'linux' || installed.cliVersion !== input.cliVersion
+      || !evidence || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key =>
+        installed[key as keyof typeof evidence] !== evidence[key as keyof typeof evidence])) {
+    throw new Error('MCP worker requires current trusted installation qualification');
+  }
+  if (Object.keys(server.env ?? {}).some(key => !profile.envAllowlist.includes(key))
+      || Object.values(server.headerEnv ?? {}).some(key => !profile.envAllowlist.includes(key))) {
+    throw new Error('MCP worker server environment exceeds the qualified profile allowlist');
+  }
+  return {
+    serverDigest: workerServerDigest(server), adapterDigest: qualificationDigest(input.adapter),
+    profile: input.profile, cliVersion: input.cliVersion,
+    scopeDigest: installed.scopeDigest, fixtureDigest: installed.fixtureDigest,
+    requiredControls: [...new Set(input.requiredControls)].sort(),
+  };
 }
 
 export class McpServerRegistry {
@@ -175,6 +257,7 @@ export class McpServerRegistry {
 
     data.servers[def.name] = {
       ...def,
+      workerQualification: undefined,
       injectedProviders: [],
       addedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -210,9 +293,36 @@ export class McpServerRegistry {
       updatedAt: new Date().toISOString(),
     };
     validateCredentialReferences(next);
+    // Ordinary registration edits cannot mint qualification, including a copied binding.
+    next.workerQualification = workerServerDigest(next) === workerServerDigest(data.servers[name])
+      ? data.servers[name].workerQualification : undefined;
     data.servers[name] = next;
 
     await this.save();
+  }
+
+  /** Bind an already qualified host installation to this exact MCP registration. */
+  async recordWorkerQualification(name: string, input: McpWorkerQualificationInput): Promise<McpWorkerQualification> {
+    this.clearCache();
+    const server = await this.get(name);
+    if (!server) throw new Error(`Server "${name}" not found.`);
+    const binding = workerQualificationBinding(server, input);
+    server.workerQualification = binding;
+    await this.save();
+    return structuredClone(binding);
+  }
+
+  /** Recheck immediately before use; direct shell invocations do not use this registry. */
+  async assertWorkerQualified(name: string, input: McpWorkerQualificationInput): Promise<McpServerDefinition> {
+    // Other trusted registry writers may have changed the registration since load().
+    this.clearCache();
+    const server = await this.get(name);
+    if (!server) throw new Error(`Server "${name}" not found.`);
+    const current = workerQualificationBinding(server, input);
+    if (!server.workerQualification || qualificationDigest(server.workerQualification) !== qualificationDigest(current)) {
+      throw new Error('MCP worker registration qualification is missing or changed');
+    }
+    return structuredClone(server);
   }
 
   /** Get a specific server definition */

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Line-delimited stdio JSON-RPC/MCP endpoint. No socket, CLI or account access.
+// Line-delimited stdio JSON-RPC/MCP endpoint; the permission fixture probes loopback.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import Ajv from 'ajv';
-import { claims, config, fixtureRevision, workerInputSchema } from './ralph-worker-protocol.mjs';
+import { claims, config, fixtureRevision, workerInputSchema, permissionChecks } from './ralph-worker-protocol.mjs';
 
 const settings = config();
 const validate = new Ajv({ strict: false }).compile(workerInputSchema);
@@ -14,7 +14,7 @@ const error = (id, code, message) => write({ jsonrpc: '2.0', id, error: { code, 
 const record = event => appendFileSync(settings.recordPath, `${JSON.stringify({ fixtureRevision, ...event })}\n`);
 const complete = (id, worker) => reply(id, { content: [{ type: 'text', text: JSON.stringify(claims(worker)) }], structuredContent: claims(worker), isError: false });
 
-createInterface({ input: process.stdin }).on('line', line => {
+createInterface({ input: process.stdin }).on('line', async line => {
   let request;
   try { request = JSON.parse(line); } catch { error(null, -32700, 'Invalid JSON'); return; }
   const { id, method, params } = request;
@@ -22,6 +22,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     reply(id, { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'synthetic-worker', version: '1' } });
   } else if (method === 'ping') {
     reply(id, {});
+  } else if (method === 'fixture/permissions' && settings.permissions) {
+    reply(id, await permissionChecks(settings.permissions));
   } else if (method === 'tools/list') {
     // schema-change deliberately changes the advertised digest without executing a worker.
     const inputSchema = settings.scenario === 'schema-change'

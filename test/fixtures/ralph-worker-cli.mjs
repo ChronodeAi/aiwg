@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // Real child process, fake protocol. Control data stays outside recorded argv.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { claims, config, fixtureRevision, scenarios } from './ralph-worker-protocol.mjs';
+import { claims, config, fixtureRevision, scenarios, permissionChecks } from './ralph-worker-protocol.mjs';
 
 const settings = config();
+if (process.argv.length === 3 && process.argv[2] === '--qualification-version') {
+  if (settings.probe === 'hang') await new Promise(() => { setInterval(() => {}, 1000); });
+  const output = settings.probe === 'oversize' ? 'x'.repeat(8192) : settings.version ?? '1.0.0';
+  await new Promise(resolve => process.stdout.write(output, resolve));
+  process.exit(0);
+}
 const scenario = settings.scenario ?? 'success';
 if (!scenarios.includes(scenario)) throw new Error(`Unknown fixture scenario: ${scenario}`);
 const argv = process.argv.slice(2);
@@ -19,6 +25,7 @@ writeFileSync(settings.recordPath, JSON.stringify({
   fixtureRevision, scenarioId: settings.scenarioId ?? scenario, scenario,
   argv, cwd: process.cwd(), stdin: readFileSync(0, 'utf8'),
   envNames: Object.keys(process.env).sort(), outputPaths,
+  ...(settings.permissions ? { permissions: await permissionChecks(settings.permissions) } : {}),
 }));
 
 const final = JSON.stringify({ type: 'result', result: claims(settings.worker) });

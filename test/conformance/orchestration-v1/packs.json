@@ -6,6 +6,7 @@
     "B-OG-01": "roctinam/aiwg#2876",
     "B-OG-02": "roctinam/aiwg#2881",
     "B-OG-04": "roctinam/aiwg#2883",
+    "B-OG-06": "roctinam/aiwg#2885",
     "B-OG-27": "roctinam/aiwg#2877",
     "B-OG-29": "roctinam/aiwg#2878",
     "B-OG-30": "roctinam/aiwg#2879",
@@ -58,9 +59,12 @@
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/providers/grok-build-headless.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
-        "test/integration/worker-adapter-package.test.ts"
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
     "T-OG-04": {
       "name": "Isolation/verification",
@@ -147,8 +151,15 @@
         "B-OG-13",
         "B-OG-15"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/serve/executor-registry.test.ts",
+        "test/unit/ralph-external/installed-worker-adapter.test.ts"
+      ],
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Managed runtime, verifier isolation and retention controls remain deferred to S2+."
     },
     "T-OG-11": {
       "name": "Local qualification",
@@ -183,9 +194,12 @@
       "testFiles": [
         "test/conformance/mission-v1/worker-contracts.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
-        "test/integration/worker-adapter-package.test.ts"
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/ralph-external/installed-worker-adapter.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
     "T-OG-15": {
       "name": "Direct command contract",
@@ -204,9 +218,10 @@
         "test/unit/cli/handlers/models-worker-contracts.test.ts",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
-        "test/integration/worker-adapter-package.test.ts"
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
     "T-OG-17": {
       "name": "MCP worker transport",
@@ -223,9 +238,11 @@
         "test/unit/mcp/worker-contracts.test.ts",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
-        "test/integration/worker-adapter-package.test.ts"
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
     "T-OG-19": {
       "name": "Registry completeness/readiness",
@@ -242,9 +259,11 @@
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-policy.test.ts",
         "test/unit/cli/handlers/models-worker-contracts.test.ts",
-        "test/conformance/orchestration-v1/pack-registry.test.ts"
+        "test/conformance/orchestration-v1/pack-registry.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics.",
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open.",
       "laterSlices": [
         "S1"
       ]

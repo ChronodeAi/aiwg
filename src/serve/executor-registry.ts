@@ -828,38 +828,26 @@ export class ExecutorRegistry extends EventEmitter {
     const candidates = [...this.executors.values()].filter((e) => e.connected);
     const rejected: Array<{ executorId: string; reason: string }> = [];
 
-    // If executor_id is pinned, target it directly
+    // A pin selects an identity; it cannot waive the same controls used by automatic routing.
+    const rejection = (executor: ExecutorRegistration): string | undefined => {
+      if (longRunning && !executor.capabilities.includes('resumable')) {
+        return 'long_running requires resumable capability';
+      }
+      const missing = (filter.capabilities ?? []).filter(capability => !executor.capabilities.includes(capability));
+      if (missing.length > 0) return `missing capabilities: ${missing.join(', ')}`;
+      return undefined;
+    };
     if (filter.executor_id) {
       const pinned = this.executors.get(filter.executor_id);
-      if (!pinned) {
-        return null;
-      }
-      if (!pinned.connected) {
-        return null;
-      }
-      if (longRunning && !pinned.capabilities.includes('resumable')) {
-        return null;
-      }
+      if (!pinned?.connected || rejection(pinned)) return null;
       return { executor: pinned, reason: 'pinned by executor_id', rejected: [] };
     }
 
-    // Filter by required capabilities
     const filtered: ExecutorRegistration[] = [];
     for (const executor of candidates) {
-      // Long-running requires resumable
-      if (longRunning && !executor.capabilities.includes('resumable')) {
-        rejected.push({ executorId: executor.executorId, reason: 'long_running requires resumable capability' });
-        continue;
-      }
-      // All requested capabilities must be present
-      if (filter.capabilities && filter.capabilities.length > 0) {
-        const missing = filter.capabilities.filter((c) => !executor.capabilities.includes(c));
-        if (missing.length > 0) {
-          rejected.push({ executorId: executor.executorId, reason: `missing capabilities: ${missing.join(', ')}` });
-          continue;
-        }
-      }
-      filtered.push(executor);
+      const reason = rejection(executor);
+      if (reason) rejected.push({ executorId: executor.executorId, reason });
+      else filtered.push(executor);
     }
 
     if (filtered.length === 0) return null;
