@@ -460,7 +460,7 @@ export function assertWorkerSelectionAllowed(selected: {
   if (isWorkerEffortDenied(selected.effort.value, policy)) {
     throw new Error(`Worker invocation denied effort: ${selected.effort.value}`);
   }
-  if (/(?:^|[-_:/.])contributor(?:$|[-_:/.])/i.test(selected.model)
+  if (isContributorWorkerModel(selected.model)
     || isWorkerModelDenied(workerModelKey(selected.inferenceProvider, selected.model), policy)) {
     throw new Error(`Worker invocation denied model: ${selected.model}`);
   }
@@ -712,6 +712,9 @@ export function resetModelPolicyCachesForTests(): void {
 
 // Dispatch rechecks consume the effective policy from resolution. Keep these
 // predicates shared with route validation so defaults and restrictions agree.
+function isContributorWorkerModel(model: string): boolean {
+  return /(?:^|[-_:/.])contributor(?:$|[-_:/.])/i.test(model);
+}
 function isWorkerModelDenied(modelKey: string, policy: WorkerSelectionPolicy): boolean {
   return (policy.guards?.deniedModels ?? DEFAULT_WORKER_SELECTION.guards!.deniedModels!).includes(modelKey);
 }
@@ -753,7 +756,7 @@ function isWorkerEvidenceStale(observation: { observedAt: string; verifiedAt?: s
 
 /** Optional catalog facts do not veto otherwise qualified selection. */
 export function hasSelectionRelevantConflicts(observation: WorkerModelObservation): boolean {
-  const relevant = /^\/(?:lifecycle|availability|visibility|hidden|efforts|effortSupport|reasoningEfforts|sunsetAt|retiredAt|replacementModelId|supersededBy|dataUse|id|apiModelId|cliId|family|runtimeVersion|accountScope|endpointFingerprint|identityEvidence)(?:\/|$)/;
+  const relevant = /^\/(?:lifecycle|availability|visibility|hidden|efforts|effortSupport|reasoningEfforts|sunsetAt|retiredAt|replacementModelId|supersededBy|dataUse|id|apiModelId|llmProvider|cliId|family|runtimeVersion|accountScope|endpointFingerprint|identityEvidence|contextTokens|maxOutputTokens|qualification)(?:\/|$)/;
   return observation.conflicts?.some(conflict => relevant.test(conflict.field)) ?? false;
 }
 
@@ -768,8 +771,11 @@ export function validateWorkerPolicyRoute(input: {
   identityEvidence: 'runtime-configured' | 'backend-attested' | 'unknown' | 'mismatched';
   observation: WorkerModelObservation;
   wrapperPin?: string;
+  /** Recorded replacement from resolution, which also checks the group/member match. */
+  substitution?: { model: string; effort: string | null; rationale: string };
   dataClass?: string;
   now?: Date;
+  context?: WorkerContextEstimate;
 }): WorkerPolicyDiagnostic[] {
   const diagnostics: WorkerPolicyDiagnostic[] = [];
   const deny = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): void => { diagnostics.push({ code, pointer, message }); };
@@ -785,11 +791,19 @@ export function validateWorkerPolicyRoute(input: {
   const guidance = input.policy.roleGuidance?.[input.role];
   if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence');
   if (!guidance) deny('OG_CONFIG_REFERENCE', `/defaults/workerSelection/roleGuidance/${input.role}`, 'Role guidance is unavailable');
-  if (input.wrapperPin && input.wrapperPin !== input.selectedModel) deny('OG_PIN_MISMATCH', '/agentOverrides', 'Wrapper exact pin differs from selected model');
+  const substitution = input.substitution?.model === input.selectedModel
+    && input.substitution.effort === input.effort && input.substitution.rationale.trim();
+  if (input.wrapperPin && input.wrapperPin !== input.selectedModel && !substitution) deny('OG_PIN_MISMATCH', '/agentOverrides', 'Wrapper exact pin differs from selected model');
   if (guards.requireExactModel !== false && input.selectedModel !== input.apiModelId) deny('OG_PIN_MISMATCH', '/worker/id', 'Selected model is not the exact observed API model');
   let modelKey: string | undefined;
   try { modelKey = workerModelKey(input.inferenceProvider, input.apiModelId); } catch { deny('OG_CONFIG_REFERENCE', '/worker/id', 'Invalid inference model identity'); }
-  if (modelKey && isWorkerModelDenied(modelKey, input.policy)) deny('OG_MODEL_UNAPPROVED', '/defaults/workerSelection/guards/deniedModels', 'Inference model is denied');
+  // The dispatch guard checks the selected model; when requireExactModel is
+  // false that can differ from apiModelId, so deny on either identity.
+  let selectedKey: string | undefined;
+  try { selectedKey = workerModelKey(input.inferenceProvider, input.selectedModel); } catch { /* reported via apiModelId */ }
+  if (isContributorWorkerModel(input.apiModelId) || isContributorWorkerModel(input.selectedModel)
+    || (modelKey && isWorkerModelDenied(modelKey, input.policy))
+    || (selectedKey && isWorkerModelDenied(selectedKey, input.policy))) deny('OG_MODEL_UNAPPROVED', '/defaults/workerSelection/guards/deniedModels', 'Inference model is denied');
   if (input.identityEvidence === 'unknown' || input.identityEvidence === 'mismatched' || (guards.minimumIdentityEvidence === 'backend-attested' && input.identityEvidence !== 'backend-attested')) deny('OG_ADAPTER_UNQUALIFIED', '/defaults/workerSelection/guards/minimumIdentityEvidence', 'Identity evidence does not meet the required order');
   if (!(guards.allowedVisibility ?? ['listed']).includes(observation.visibility as 'listed' | 'hidden') || !(guards.allowedLifecycle ?? ['active']).includes(observation.lifecycle as 'active' | 'deprecated') || observation.availability !== 'accessible') deny('OG_MODEL_UNAPPROVED', '/worker', 'Visibility, lifecycle or availability is ineligible');
   if (input.effort === null) {
@@ -802,6 +816,39 @@ export function validateWorkerPolicyRoute(input: {
   if (unknownDataClass) deny('OG_DATA_POLICY', '/defaults/workerSelection/dataClasses', 'Unknown data class');
   if (isWorkerDataUseDenied(observation.dataUse, data)) deny('OG_DATA_POLICY', '/worker/dataUse', 'Execution path data facts do not satisfy policy');
   const now = (input.now ?? new Date()).getTime();
+  if (observation.retiredAt != null && Date.parse(observation.retiredAt) <= now
+    || observation.sunsetAt && Date.parse(observation.sunsetAt) <= now) {
+    deny('OG_MODEL_UNAPPROVED', '/worker/lifecycle', 'Model retirement or sunset is effective');
+  }
   if (isWorkerEvidenceStale(observation, input.policy, now)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/observedAt', 'Model evidence is stale or from the future');
+  else if (now - Date.parse(observation.observedAt) > (input.policy.freshness?.warnHours ?? DEFAULT_WORKER_SELECTION.freshness!.warnHours!) * 3600000) {
+    diagnostics.push({ code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/worker/observedAt', blocking: false, message: 'Model observation exceeds the freshness warning threshold' });
+  }
+  if (input.context && !workerContextHeadroom(input.context, observation).fits) {
+    deny('OG_MODEL_UNAPPROVED', '/worker/contextTokens', 'Bounded context and output do not fit qualified limits');
+  }
   return diagnostics;
+}
+
+/** Every term is an upper bound from the conductor's named tokenizer/estimator. */
+export interface WorkerContextEstimate {
+  estimator: string;
+  briefTokens: number;
+  inputTokens: number;
+  toolOutputAllowance: number;
+  reservedOutput: number;
+  safetyMargin?: number;
+}
+
+export function workerContextHeadroom(estimate: WorkerContextEstimate,
+  observation: Pick<WorkerModelObservation, 'contextTokens' | 'maxOutputTokens'>) {
+  const safetyMargin = Math.max(estimate.safetyMargin ?? 0, Math.ceil((observation.contextTokens ?? 0) * 0.1));
+  const terms = [estimate.briefTokens, estimate.inputTokens, estimate.toolOutputAllowance, estimate.reservedOutput, safetyMargin];
+  const total = terms.reduce((sum, value) => sum + value, 0);
+  const fits = Boolean(estimate.estimator.trim()) && terms.every(value => Number.isSafeInteger(value) && value >= 0)
+    && (estimate.safetyMargin === undefined || Number.isSafeInteger(estimate.safetyMargin) && estimate.safetyMargin >= 0)
+    && Number.isSafeInteger(total) && observation.contextTokens !== null && observation.maxOutputTokens !== null
+    && total <= observation.contextTokens && estimate.reservedOutput <= observation.maxOutputTokens;
+  return { ...estimate, safetyMargin, total, qualifiedContextTokens: observation.contextTokens,
+    qualifiedMaxOutputTokens: observation.maxOutputTokens, fits };
 }
