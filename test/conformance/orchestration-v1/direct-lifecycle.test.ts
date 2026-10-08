@@ -436,7 +436,10 @@ describe('T-OG-16 effort escalation stays within policy: ultra is denied through
 });
 
 describe('T-OG-16 EPERM is environment evidence, not a passing or a proven code-defect result', () => {
-  it('a write-denied worktree directory produces a non-zero exit that must be diagnosed, not bypassed', async () => {
+  it('a write-denied worktree directory produces a non-zero exit that must be diagnosed, not bypassed', async context => {
+    // Root bypasses DAC permission bits, so chmod cannot deny writes there
+    // (CI containers run as root). Skip explicitly rather than pass vacuously.
+    if (process.getuid?.() === 0) { context.skip(); return; }
     const root = await worktree();
     const locked = path.join(root, 'locked');
     await mkdir(locked);
