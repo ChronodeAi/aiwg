@@ -15,7 +15,7 @@
       "source": "05-configuration-spec.md ### 4.1 Existing",
       "owner": "vscode-extension/schemas/aiwg.config.v1.json",
       "target": "properties.parallelism",
-      "sha256": "917c4fb42179a9dbdefdd4d9e55e5f5f71669b6d16666e0d693cdf2f9bceb531"
+      "sha256": "554a18583b9711955070836de7f304843342d4c1bb89eb04592082422c809696"
     },
     {
       "file": "worker-selection.fragment.json",

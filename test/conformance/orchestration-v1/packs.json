@@ -155,8 +155,11 @@
       "mechanismOwners": [
         "B-OG-15"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/dispatch-evidence.test.ts"
+      ],
+      "remaining": "S1 direct/shared mapping only: optional direct receipts, 0700/0600 storage, prompt cleanup after confirmed stop, dirty/uncertain retention, disk-pressure admission, redacted export with retained usage confidence, and digest-only effect links through the existing ledger. Managed durability, required evidence and Tier 1 registration stay with S2+ (#2891)."
     },
     "T-OG-10": {
       "name": "Security negatives",
@@ -178,7 +181,8 @@
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/unit/ralph-external/trusted-verification.test.ts",
-        "test/unit/ralph-external/worktree-preparation.test.ts"
+        "test/unit/ralph-external/worktree-preparation.test.ts",
+        "test/conformance/orchestration-v1/dispatch-evidence.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping, plus protected-check/package-script-escape, env-allowlist and worktree-escape negatives, only; no live provider qualification. A registered Tier 1 qualified isolated verifier executor, managed runtime, authority/ledger/admission-credential exclusion proofs and retention controls remain deferred to S2+."
     },

@@ -135,28 +135,74 @@ describe('dispatch live-signal parsers (FR-OG-107)', () => {
       },
       coreCount: () => 8,
       countWorkers: () => 2,
+      statfs: () => ({ bavail: 16n * 1024n * 1024n * 1024n, bsize: 1n }),
     });
     expect(live).toMatchObject({
       supported: true, availMemGb: 8, load1: 4.0, cores: 8, loadRatio: 0.5,
-      memPsiAvg10: 5, memPsiAvg60: 4, workers: 2,
+      memPsiAvg10: 5, memPsiAvg60: 4, workers: 2, freeDiskGb: 16,
     });
+  });
+
+  it('samples free disk on caller-supplied paths and takes the minimum', () => {
+    const seen = [];
+    const live = readLiveHostResources({
+      readText: (path) => {
+        if (path === '/proc/meminfo') return 'MemAvailable:     8388608 kB\n';
+        if (path === '/proc/loadavg') return '4.0 3.0 2.0 1/100 200\n';
+        throw new Error(`ENOENT: ${path}`);
+      },
+      coreCount: () => 8,
+      countWorkers: () => 0,
+      paths: ['/evidence/attempt-1', '/work/tree-1'],
+      statfsPath: (path) => {
+        seen.push(path);
+        return path.includes('attempt') ? { bavail: 4n * 1024n ** 3n, bsize: 1n } : { bavail: 64n * 1024n ** 3n, bsize: 1n };
+      },
+    });
+    expect(seen.sort()).toEqual(['/evidence/attempt-1', '/work/tree-1']);
+    expect(live.freeDiskGb).toBe(4);
+  });
+
+  it('rejects non-finite, negative and unreadable disk samples instead of admitting on cwd', () => {
+    const base = {
+      readText: () => { throw new Error('ENOENT'); },
+      coreCount: () => 8,
+      countWorkers: () => 0,
+    };
+    for (const statfs of [
+      () => ({ bavail: Number.NaN, bsize: 512 }),
+      () => ({ bavail: Number.POSITIVE_INFINITY, bsize: 512 }),
+      () => ({ bavail: -1, bsize: 512 }),
+      () => { throw new Error('EACCES'); },
+    ]) {
+      expect(readLiveHostResources({ ...base, statfs }).freeDiskGb).toBeUndefined();
+    }
+    expect(readLiveHostResources({ ...base, paths: [] }).freeDiskGb).toBeUndefined();
+    expect(readLiveHostResources({
+      ...base,
+      paths: ['/evidence/a', '/work/b'],
+      statfsPath: (path) => (path.endsWith('/a') ? { bavail: 8n * 1024n ** 3n, bsize: 1n } : { bavail: -2, bsize: 512 }),
+    }).freeDiskGb).toBeUndefined();
+    // No caller-supplied filesystem at all: unknown, never the process cwd.
+    expect(readLiveHostResources(base).freeDiskGb).toBeUndefined();
   });
 });
 
 describe('dispatch gate (FR-OG-107)', () => {
   const healthyLive = {
     supported: true, availMemGb: 24, load1: 8, cores: 32, loadRatio: 0.25,
-    memPsiAvg10: 2, memPsiAvg60: 1, memPsiAvg300: 1, workers: 1,
+    memPsiAvg10: 2, memPsiAvg60: 1, memPsiAvg300: 1, workers: 1, freeDiskGb: 64,
   };
   // Titan incident shape: 32 cores, load 60-100, PSI avg60 ~62.
   const incidentLive = {
     supported: true, availMemGb: 4, load1: 80, cores: 32, loadRatio: 2.5,
-    memPsiAvg10: 62.24, memPsiAvg60: 62.58, memPsiAvg300: 62.97, workers: 6,
+    memPsiAvg10: 62.24, memPsiAvg60: 62.58, memPsiAvg300: 62.97, workers: 6, freeDiskGb: 0.4,
   };
 
   it('resolves conservative defaults and validates thresholds', () => {
     expect(resolveDispatchThresholds()).toMatchObject({
       min_avail_mem_gb: 8, max_load_ratio: 1.0, max_mem_psi_avg10: 30, max_mem_psi_avg60: 10,
+      min_free_disk_gb: 2,
     });
     expect(resolveDispatchThresholds({}).max_workers).toBeUndefined();
     expect(() => resolveDispatchThresholds({ overlay: { max_load_ratio: -1 } })).toThrow(/non-negative/);
@@ -173,7 +219,7 @@ describe('dispatch gate (FR-OG-107)', () => {
     const result = evaluateDispatchGate(incidentLive, resolveDispatchThresholds());
     expect(result.ok).toBe(false);
     expect(result.failures.map((failure) => failure.signal)).toEqual([
-      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60',
+      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'free-disk',
     ]);
   });
 
@@ -189,7 +235,7 @@ describe('dispatch gate (FR-OG-107)', () => {
     const unknown = evaluateDispatchGate({ supported: true }, resolveDispatchThresholds());
     expect(unknown.ok).toBe(false);
     expect(unknown.failures.map((failure) => failure.signal)).toEqual([
-      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60',
+      'avail-mem', 'load', 'mem-psi-avg10', 'mem-psi-avg60', 'free-disk',
     ]);
     const platform = evaluateDispatchGate({ supported: false, reason: 'no /proc here' }, resolveDispatchThresholds());
     expect(platform.ok).toBe(false);
@@ -219,7 +265,7 @@ describe('checkWorkerDispatch Tier 0 entry point', () => {
       config,
       live: {
         supported: true, availMemGb: 1, load1: 64, cores: 32, loadRatio: 2,
-        memPsiAvg10: 50, memPsiAvg60: 40, workers: 0,
+        memPsiAvg10: 50, memPsiAvg60: 40, workers: 0, freeDiskGb: 0.5,
       },
     });
     expect(blocked.enabled).toBe(true);
@@ -230,7 +276,7 @@ describe('checkWorkerDispatch Tier 0 entry point', () => {
       config,
       live: {
         supported: true, availMemGb: 32, load1: 4, cores: 32, loadRatio: 0.125,
-        memPsiAvg10: 1, memPsiAvg60: 1, workers: 0,
+        memPsiAvg10: 1, memPsiAvg60: 1, workers: 0, freeDiskGb: 32,
       },
     });
     expect(allowed).toMatchObject({ enabled: true, ok: true });
@@ -243,7 +289,7 @@ describe('checkWorkerDispatch Tier 0 entry point', () => {
     };
     const live = {
       supported: true, availMemGb: 3, load1: 4, cores: 32, loadRatio: 0.125,
-      memPsiAvg10: 1, memPsiAvg60: 1, workers: 0,
+      memPsiAvg10: 1, memPsiAvg60: 1, workers: 0, freeDiskGb: 32,
     };
     // Admission cannot lower the configured memory floor.
     expect(checkWorkerDispatch({ config, live }).ok).toBe(false);
@@ -270,7 +316,7 @@ describe('dispatch regression checks (#2954 review)', () => {
       parallelism: { worker_dispatch: true, admission: { hostResources: { max_load_ratio: 10 } } },
       build: { resource_preflight: { dispatch: { max_load_ratio: 1 } } },
     };
-    const live = { supported: true, availMemGb: 32, loadRatio: 2, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0 };
+    const live = { supported: true, availMemGb: 32, loadRatio: 2, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0, freeDiskGb: 32 };
     for (const candidate of [config, { parallelism: { worker_dispatch: true } }]) {
       for (const thresholdOverlay of [undefined, { max_load_ratio: 10 }]) {
         expect(checkWorkerDispatch({ config: candidate, live, thresholdOverlay }).failures).toContainEqual(expect.objectContaining({ signal: 'load', threshold: 1 }));
@@ -279,9 +325,45 @@ describe('dispatch regression checks (#2954 review)', () => {
   });
 
   it('blocks the next launch at the exact worker cap', () => {
-    const live = { supported: true, availMemGb: 32, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, workers: 3 };
+    const live = { supported: true, availMemGb: 32, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, workers: 3, freeDiskGb: 32 };
     expect(evaluateDispatchGate(live, resolveDispatchThresholds({ overlay: { max_workers: 3 } })).ok).toBe(false);
     expect(evaluateDispatchGate({ ...live, workers: 2 }, resolveDispatchThresholds({ overlay: { max_workers: 3 } })).ok).toBe(true);
+  });
+
+  it('fails closed on pre-sampled NaN, Infinity and negative free disk', () => {
+    const base = { supported: true, availMemGb: 32, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0 };
+    for (const freeDiskGb of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0.5]) {
+      const result = evaluateDispatchGate({ ...base, freeDiskGb }, resolveDispatchThresholds());
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContainEqual(expect.objectContaining({ signal: 'free-disk', reason: 'free disk not detectable on this host' }));
+    }
+  });
+
+  it('threads caller-supplied paths into free-disk sampling and fails closed without them', () => {
+    const config = { parallelism: { worker_dispatch: true } };
+    const readers = {
+      readText: () => { throw new Error('ENOENT'); },
+      coreCount: () => 8,
+      countWorkers: () => 0,
+      statfsPath: (path) => ({ bavail: path.endsWith('roomy') ? 64n * 1024n ** 3n : 1n * 1024n ** 3n, bsize: 1n }),
+    };
+    const tight = checkWorkerDispatch({ config, readers, paths: ['/evidence/tight', '/work/roomy'] });
+    expect(tight.live.freeDiskGb).toBe(1);
+    expect(tight.ok).toBe(false);
+    expect(tight.failures.map((failure) => failure.signal)).toContain('free-disk');
+    // No live signals and no caller-supplied paths: unknown disk fails closed.
+    const closed = checkWorkerDispatch({ config });
+    expect(closed.ok).toBe(false);
+    expect(closed.failures.map((failure) => failure.signal)).toContain('free-disk');
+  });
+
+  it('tightens the free-disk floor field-by-field and rejects invalid values', () => {
+    expect(resolveDispatchThresholds({ buildDispatch: { min_free_disk_gb: 5 } }).min_free_disk_gb).toBe(5);
+    expect(resolveDispatchThresholds({
+      buildDispatch: { min_free_disk_gb: 5 }, admissionHostResources: {}, overlay: { min_free_disk_gb: 1 },
+    }).min_free_disk_gb).toBe(5);
+    expect(() => resolveDispatchThresholds({ overlay: { min_free_disk_gb: Number.NaN } })).toThrow(/non-negative/);
+    expect(() => resolveDispatchThresholds({ overlay: { min_free_disk_gb: -1 } })).toThrow(/non-negative/);
   });
 
   it('counts only exact worker comm names for the current UID', () => {

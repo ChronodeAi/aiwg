@@ -132,6 +132,11 @@
               "minimum": 0,
               "default": 10
             },
+            "min_free_disk_gb": {
+              "type": "number",
+              "minimum": 0,
+              "default": 2
+            },
             "max_workers": {
               "type": "integer",
               "minimum": 1

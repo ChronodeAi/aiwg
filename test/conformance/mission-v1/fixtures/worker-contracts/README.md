@@ -90,6 +90,32 @@ cut right after the `result` line still fails there if the process did not
 also report a confirmed, clean exit. This is now documented at the parser
 call site, not only here.
 
+#### #2891 fix pass: `min_free_disk_gb` admission floor
+
+The frozen `parallelism.fragment.json` `admission.hostResources` object is
+amended additively with `min_free_disk_gb` (`type: number, minimum: 0,
+default: 2`), the same shape as the existing numeric `hostResources` fields
+it sits alongside (`min_avail_mem_gb`, `max_load_ratio`, `max_mem_psi_avg10`,
+`max_mem_psi_avg60`, `max_workers`). No existing field, default or required
+list is touched. The fragment and manifest SHA-256 are amended together; the
+exact-match test (`worker-contracts.test.ts`) continues to compare the frozen
+fragment and the production schema field-for-field with no relaxation. The
+production schema (`vscode-extension/schemas/aiwg.config.v1.json`
+`parallelism.admission.hostResources`) and the `DispatchHostThresholds`
+TypeScript interface (`src/config/aiwg-config.ts`) carry the identical field,
+so a configured free-disk floor validates through both the shipped JSON
+schema and `resolveDispatchHostThresholds`/`resolveDispatchThresholds`
+(`tools/scripts/resource-preflight.mjs`), which share one conservative
+default set (`DEFAULT_DISPATCH_HOST_THRESHOLDS` /
+`DEFAULT_DISPATCH_THRESHOLDS`, `min_free_disk_gb: 2`). The #2954 dispatch
+admission gate (`checkWorkerDispatch`, threaded through
+`checkDispatchAdmission` in `tools/ralph-external/lib/dispatch-evidence.mjs`
+for #2891) samples the actual attempt-root and worktree filesystems — never
+the conductor's process `cwd` — and fails closed on non-finite, negative or
+undetectable free disk; it never silently passes an unprovable sample.
+Shared enforced admission remains **deferred S2+**, unchanged by this
+amendment.
+
 Every disposition below names an owning draft and consuming source owner.
 The machine-readable consumer inventory extends the existing Mission matrix
 without altering its established consumer IDs. Downstream issues should extend

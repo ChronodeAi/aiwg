@@ -679,6 +679,8 @@ export interface DispatchHostThresholds {
   max_mem_psi_avg10?: number;
   /** Maximum memory PSI `some avg60` (percent). Default 10. */
   max_mem_psi_avg60?: number;
+  /** Minimum free disk (bavail) in GiB on the evidence/worktree filesystem. Default 2. */
+  min_free_disk_gb?: number;
   /**
    * Maximum running worker/test processes before dispatch queues. Unset by
    * default: counts are reported but do not block unless configured, because

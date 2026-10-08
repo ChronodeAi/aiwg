@@ -4,6 +4,8 @@ export const DEFAULT_DISPATCH_HOST_THRESHOLDS = Object.freeze({
   max_load_ratio: 1.0,
   max_mem_psi_avg10: 30,
   max_mem_psi_avg60: 10,
+  // 08 brief/evidence retention: stop new admissions when less than 2 GiB free remains.
+  min_free_disk_gb: 2,
 });
 
 /**
