@@ -141,11 +141,19 @@ export function buildWorkerIsolationArgs({
   envNames = ['PATH', 'HOME'],
   managerEnvNames = [],
   kind = 'unit',
+  extraProperties = [],
+  pipe = false,
+  wait = false,
+  memoryMax,
 } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
     throw new Error('Worker isolation requires a unit-safe unit name');
   }
-  if (!Number.isFinite(memoryMaxGb) || memoryMaxGb <= 0) {
+  const hasMemoryMaxGb = memoryMaxGb !== undefined;
+  if (hasMemoryMaxGb && (!Number.isFinite(memoryMaxGb) || memoryMaxGb <= 0)) {
+    throw new Error('Worker isolation requires a positive memoryMaxGb ceiling');
+  }
+  if (!hasMemoryMaxGb && memoryMax === undefined) {
     throw new Error('Worker isolation requires a positive memoryMaxGb ceiling');
   }
   assertAbsolute('worker binary', command);
@@ -158,10 +166,22 @@ export function buildWorkerIsolationArgs({
   if (stdinPath !== undefined) assertAbsolute('stdin brief', stdinPath);
   if (stdoutPath !== undefined) assertAbsolute('stdout path', stdoutPath);
   if (stderrPath !== undefined) assertAbsolute('stderr path', stderrPath);
+  if (!Array.isArray(extraProperties) || extraProperties.some(entry => typeof entry !== 'string' || entry.includes('\0'))) {
+    throw new Error('Worker isolation extraProperties must be an array of NUL-free "Name=value" strings');
+  }
 
   const argv = ['systemd-run', '--user', '--expand-environment=no'];
   if (kind === 'unit') argv.push(`--unit=${unit}`);
   else argv.push('--scope');
+  if (pipe) argv.push('--pipe');
+  if (wait) argv.push('--wait');
+  // --pipe connects the unit's stdio directly to systemd-run's own, but
+  // systemd-run still writes its *own* "Running as unit:.../Finished with
+  // result:..." status lines to that same stderr unless --quiet is given —
+  // verified empirically on this host. A synchronous verification caller
+  // needs the check's actual stderr, not systemd-run's narration mixed into
+  // it, so --quiet is mandatory whenever both --pipe and --wait are used.
+  if (pipe && wait) argv.push('--quiet');
   const requestedNames = [];
   for (const name of envNames) {
     const value = env?.[name];
@@ -174,16 +194,42 @@ export function buildWorkerIsolationArgs({
     const toUnset = managerEnvNames.filter(name => !requestedNames.includes(name) && !UNAVOIDABLE_UNIT_ENV_NAMES.includes(name));
     if (toUnset.length > 0) argv.push('-p', `UnsetEnvironment=${toUnset.join(' ')}`);
   }
+  // stdin defaults to /dev/null unless the caller pipes it (verification
+  // callers want systemd-run's own --pipe to carry stdout/stderr back
+  // synchronously; stdin is still /dev/null unless a brief file is given).
   argv.push('-p', stdinPath !== undefined ? `StandardInputFile=${stdinPath}` : 'StandardInput=null');
-  argv.push('-p', `MemoryMax=${memoryMaxGb}G`);
+  if (hasMemoryMaxGb) argv.push('-p', `MemoryMax=${memoryMaxGb}G`);
+  else if (memoryMax !== undefined) argv.push('-p', `MemoryMax=${memoryMax}`);
   argv.push('-p', 'MemorySwapMax=0');
   const outPath = stdoutPath ?? logFile;
   const errPath = stderrPath ?? logFile;
-  if (outPath !== undefined) argv.push('-p', `StandardOutput=truncate:${outPath}`);
-  if (errPath !== undefined) argv.push('-p', `StandardError=truncate:${errPath}`);
+  if (!pipe && outPath !== undefined) argv.push('-p', `StandardOutput=truncate:${outPath}`);
+  if (!pipe && errPath !== undefined) argv.push('-p', `StandardError=truncate:${errPath}`);
+  // Additional conductor-supplied confinement properties (ReadOnlyPaths,
+  // ReadWritePaths, NoNewPrivileges, PrivateUsers, PrivateNetwork, ...),
+  // appended verbatim as repeated `-p Name=value` pairs. Callers are
+  // responsible for probing which of these this host's systemd/AppArmor
+  // policy actually enforces (see verification-isolation.mjs) — some
+  // properties silently no-op or fall back without a non-zero exit on
+  // kernels/policies that deny the namespace privilege they need.
+  for (const property of extraProperties) argv.push('-p', property);
   if (cwd !== undefined) argv.push(`--working-directory=${cwd}`);
   argv.push('--', command, ...args);
   return argv;
+}
+
+/**
+ * Query the user manager's own inherited-environment variable names
+ * (`systemctl --user show-environment`), required so a `kind: 'unit'`
+ * launch can `UnsetEnvironment=` every manager-injected name that is not on
+ * the caller's allowlist (see `buildWorkerIsolationArgs`' doc comment).
+ * Extracted from `launchIsolatedWorker` so verification callers can reuse
+ * the exact same security-relevant query instead of re-deriving it.
+ */
+export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
+  const shown = spawn('systemctl', ['--user', 'show-environment'], { encoding: 'utf8', timeout: 10000 });
+  if (shown.error || shown.status !== 0) throw new Error(shown.error?.message ?? (String(shown.stderr ?? '').trim() || `exit ${shown.status}`));
+  return String(shown.stdout ?? '').split('\n').map(line => line.slice(0, line.indexOf('='))).filter(Boolean);
 }
 
 /**
@@ -296,9 +342,7 @@ export function launchIsolatedWorker({
   // refused in favor of an explicit failure.
   let managerEnvNames;
   try {
-    const shown = spawn('systemctl', ['--user', 'show-environment'], { encoding: 'utf8', timeout: 10000 });
-    if (shown.error || shown.status !== 0) throw new Error(shown.error?.message ?? (String(shown.stderr ?? '').trim() || `exit ${shown.status}`));
-    managerEnvNames = String(shown.stdout ?? '').split('\n').map(line => line.slice(0, line.indexOf('='))).filter(Boolean);
+    managerEnvNames = resolveManagerEnvNames({ spawn });
   } catch (error) {
     return {
       launched: false,
