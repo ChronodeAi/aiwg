@@ -242,6 +242,12 @@ export class ProviderAdapter {
    * Qualified drivers supply explicit argv; legacy buildSessionArgs defaults
    * must never be used as a fallback for a worker profile.
    *
+   * Callers gate-then-launch through `checkWorkerDispatch()` (from
+   * `tools/scripts/resource-preflight.mjs`) and `launchIsolatedWorker()` (from
+   * `./worker-isolation.mjs`): over resource threshold means queue, pick
+   * another qualified host, or reject — never launch. Preparation itself stays
+   * launch-free and performs no resource gating (#2954).
+   *
    * @param {Object} invocation - Existing workerResolvedInvocation payload
    * @param {Object} qualification - Trusted adapter, cliVersion, requiredControls,
    *   now (epoch milliseconds), platform, current mcp/schema bindings, and optional

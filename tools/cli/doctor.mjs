@@ -1958,6 +1958,61 @@ async function runDoctor() {
     // Non-fatal — skip silently
   }
 
+  // 11d-bis. Live host resources and worker isolation mode (#2954).
+  // Read-only: samples /proc signals and probes the systemd user manager.
+  // Never launches workers and never mutates configuration.
+  try {
+    const projectDir = process.cwd();
+    const aiwgCfgPath = path.join(projectDir, '.aiwg', 'aiwg.config');
+    let dispatchRaw = null;
+    if (await fileExists(aiwgCfgPath)) {
+      try {
+        dispatchRaw = JSON.parse(await fs.readFile(aiwgCfgPath, 'utf-8'));
+      } catch {
+        dispatchRaw = null;
+      }
+    }
+    const { checkWorkerDispatch, readLiveHostResources } = await import('../scripts/resource-preflight.mjs');
+    const { detectWorkerIsolation } = await import('../ralph-external/lib/worker-isolation.mjs');
+    const live = readLiveHostResources();
+    const formatSignal = (value, digits = 1) => (value === undefined ? 'unknown' : Number(value).toFixed(digits));
+    if (live.supported) {
+      check(
+        'Host Resources',
+        'ok',
+        `avail=${formatSignal(live.availMemGb)}GB load=${live.load1 ?? 'unknown'}/${live.cores ?? '?'}cores `
+        + `psi10=${live.memPsiAvg10 ?? 'unknown'} psi60=${live.memPsiAvg60 ?? 'unknown'} workers=${live.workers ?? 'unknown'}`,
+      );
+    } else {
+      check('Host Resources', 'info', `live signals unavailable: ${live.reason}`);
+    }
+    const isolation = detectWorkerIsolation();
+    const dispatchCapable = Boolean(dispatchRaw?.parallelism?.worker_dispatch);
+    if (!dispatchCapable) {
+      check(
+        'Worker Isolation',
+        'info',
+        `worker_dispatch is off (legacy, no gating); isolation mode would be ${isolation.mode}`
+        + (isolation.mode === 'degraded' ? ` (${isolation.reason})` : ''),
+      );
+    } else if (isolation.mode !== 'systemd-unit') {
+      check(
+        'Worker Isolation',
+        'warn',
+        `dispatch-capable config with no isolation: ${isolation.reason}; `
+        + 'workers would launch unconfined unless the caller records an explicit degraded mode',
+      );
+    } else {
+      const gate = checkWorkerDispatch({ config: dispatchRaw, live });
+      const gateLabel = gate.ok
+        ? 'dispatch gate: OK'
+        : `dispatch gate: BLOCK (${gate.failures.map(failure => failure.signal).join(', ')})`;
+      check('Worker Isolation', gate.ok ? 'ok' : 'warn', `systemd user units enforce MemoryMax/MemorySwapMax=0; ${gateLabel}`);
+    }
+  } catch (error) {
+    check('Host Resources', 'info', `live host signals unavailable: ${error.message}`);
+  }
+
   // 11e. Validate configurable forge-content threat policy (#1938).
   try {
     const threatConfigPath = path.join(process.cwd(), '.aiwg', 'aiwg.config');

@@ -73,8 +73,11 @@
       "mechanismOwners": [
         "B-OG-13"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-isolation.test.ts"
+      ],
+      "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, and guarded live OOM containment coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording and managed integration remain with the owning B-OG-13 checkpoint."
     },
     "T-OG-05": {
       "name": "Admission/budgets",
@@ -85,8 +88,12 @@
         "B-OG-12",
         "B-OG-32"
       ],
-      "status": "planned",
-      "testFiles": [],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/tools/resource-preflight.test.js",
+        "test/unit/config/dispatch-thresholds.test.ts"
+      ],
+      "remaining": "Tier 0 dispatch gating against synthetic /proc fixtures only; shared enforced admission, budgets, and S4 host scope remain with the owning B-OG-10/12/32 checkpoints.",
       "laterSlices": [
         "S4"
       ]
