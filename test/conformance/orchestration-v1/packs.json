@@ -82,9 +82,11 @@
       "testFiles": [
         "test/unit/ralph-external/worker-isolation.test.ts",
         "test/unit/ralph-external/worker-finals.test.ts",
-        "test/unit/mission-protocol/worker-results.test.ts"
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/ralph-external/worktree-preparation.test.ts",
+        "test/unit/ralph-external/trusted-verification.test.ts"
       ],
-      "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, and guarded live OOM containment coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording and managed integration remain with the owning B-OG-13 checkpoint."
+      "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, guarded live OOM containment, conductor-owned worktree/base-digest preparation, claim-conflict serialize/fail, symlink/hardlink escape denial, and sandbox-vs-real-failure classification coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording, a registered Tier 1 isolated verifier executor, managed disk reservations and leases remain with the owning B-OG-13 checkpoint's S2+ slice."
     },
     "T-OG-05": {
       "name": "Admission/budgets",
@@ -174,9 +176,11 @@
         "test/unit/serve/executor-registry.test.ts",
         "test/unit/ralph-external/installed-worker-adapter.test.ts",
         "test/unit/ralph-external/worker-finals.test.ts",
-        "test/unit/mission-protocol/worker-results.test.ts"
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/ralph-external/trusted-verification.test.ts",
+        "test/unit/ralph-external/worktree-preparation.test.ts"
       ],
-      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Managed runtime, verifier isolation and retention controls remain deferred to S2+."
+      "remaining": "S1 synthetic installation, registration and control mapping, plus protected-check/package-script-escape, env-allowlist and worktree-escape negatives, only; no live provider qualification. A registered Tier 1 qualified isolated verifier executor, managed runtime, authority/ledger/admission-credential exclusion proofs and retention controls remain deferred to S2+."
     },
     "T-OG-11": {
       "name": "Local qualification",
