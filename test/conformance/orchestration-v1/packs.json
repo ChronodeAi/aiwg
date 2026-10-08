@@ -37,8 +37,11 @@
       "mechanismOwners": [
         "B-OG-03"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/discovery-freshness.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
     },
     "T-OG-03": {
       "name": "Adapter conformance",

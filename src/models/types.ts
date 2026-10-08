@@ -221,6 +221,12 @@ export interface WorkerModelObservation {
   pricing: { costClass: 'economy' | 'standard' | 'premium' | 'unknown'; billing: 'metered' | 'subscription' | 'local' | 'unknown'; currency: 'USD'; inputPerMillion: number | null; outputPerMillion: number | null };
   dataUse: { processing: 'local' | 'remote' | 'unknown'; productImprovement: boolean | null; retentionDays: number | null };
   qualification: { status: 'qualified' | 'unqualified'; roles: string[]; fixtureDigest?: string; verifiedAt?: string; evidenceRef?: string };
+  /** Stable digest of material source facts, independent of cache read time. */
+  evidenceDigest?: string;
+  conflicts?: Array<{
+    field: string;
+    evidence: Array<{ value: unknown; source: string; pointer: string; observedAt: string; digest: string }>;
+  }>;
   provenance: Array<{ fields: string[]; source: string; kind: 'native' | 'official' | 'operator' | 'derived'; observedAt: string; digest: string; confidence: 'verified' | 'reported' | 'derived' | 'unknown' }>;
   firstObservedAt: string;
   fetchedAt: string;
@@ -271,6 +277,8 @@ export interface WorkerPolicyDiagnostic {
   code: 'OG_POLICY_RELAXATION' | 'OG_CONFIG_REFERENCE' | 'OG_EFFORT_DENIED' | 'OG_MODEL_UNAPPROVED' | 'OG_DATA_POLICY' | 'OG_PIN_MISMATCH' | 'OG_ADAPTER_UNQUALIFIED' | 'OG_BUDGET_UNMEASURABLE';
   pointer: string;
   message: string;
+  /** Diagnostics block by default; optional evidence conflicts are advisory. */
+  blocking?: boolean;
   origins?: WorkerPolicyOrigin[];
 }
 
