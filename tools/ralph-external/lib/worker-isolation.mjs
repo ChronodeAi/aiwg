@@ -31,9 +31,15 @@
  */
 
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
+import { openSync, closeSync } from 'node:fs';
 import { checkWorkerDispatch } from '../../scripts/resource-preflight.mjs';
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
+
+// Never unset these from a unit's environment even when the manager reports
+// them and they are not allowlisted; see buildWorkerIsolationArgs' doc
+// comment for why XDG_RUNTIME_DIR specifically must survive.
+const UNAVOIDABLE_UNIT_ENV_NAMES = ['XDG_RUNTIME_DIR'];
 
 /** Derive a unit-safe `aiwg-worker-<name>-<epoch>` unit name. */
 export function proposeWorkerUnitName(name, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -84,8 +90,42 @@ export function detectWorkerIsolation({ spawn = spawnSync, env = process.env } =
  * Failed units require explicit `systemctl --user reset-failed <unit>` cleanup
  * after Result/ExecMainStatus have been recorded; --collect would erase them.
  * `env` supplies passthrough values (defaults to the conductor's current
- * `PATH`/`HOME`); only the allowlisted `envNames` are forwarded and their
- * values are passed via `--setenv`, never rendered into shell syntax.
+ * `PATH`/`HOME`); only the allowlisted `envNames` are forwarded, and their
+ * values are never written into argv. Each is requested with bare
+ * `--setenv=NAME` (no `=value`), which (systemd >= 230; confirmed on this
+ * host's systemd 259) imports the value from systemd-run's *own* invoking
+ * process environment rather than rendering it into the unit's argv — so a
+ * secret value never appears in `/proc/<systemd-run-pid>/cmdline`. That
+ * import is additive to whatever the user manager already injects into every
+ * unit (`systemctl --user show-environment`: LANG, XDG_*, SSH_AUTH_SOCK,
+ * etc. on an interactive manager), so `managerEnvNames` — the caller's own
+ * live snapshot of that list — drives a single `-p UnsetEnvironment=...`
+ * removing every manager-injected name that is not on the allowlist, except
+ * `XDG_RUNTIME_DIR` (`UNAVOIDABLE_UNIT_ENV_NAMES`): unsetting it is harmless
+ * to secrecy (it is just `/run/user/<uid>`, not a secret) but was verified
+ * empirically to make the launched unit's own `/proc/<pid>/environ`
+ * unreadable (EACCES) even to the same-UID conductor that just started
+ * it — on this host with `kernel.yama.ptrace_scope=1`, removing it strips
+ * the unit of whatever ties it to the login session that would otherwise
+ * grant that read. Carrying it through is the "systemd's minimal unit
+ * variables if unavoidable" carve-out. The result is a unit environment
+ * containing exactly the allowlisted names, `XDG_RUNTIME_DIR`, and whatever
+ * few variables systemd itself always injects into a unit (`INVOCATION_ID`,
+ * `MANAGERPID`, `MEMORY_PRESSURE_WATCH`, ...) — never a secret, never an
+ * unrelated inherited variable. `kind: 'scope'` is exempt:
+ * `--scope` execs directly as a child of the `systemd-run` client itself
+ * (confirmed empirically — it inherits that process's environment wholesale,
+ * ignoring `UnsetEnvironment`), so this guarantee applies only to `kind:
+ * 'unit'`, the default and the only kind any production caller uses.
+ *
+ * `stdinPath`, when given, feeds the worker's stdin from that file
+ * (`StandardInputFile=`) instead of the default `StandardInput=null` — this
+ * is how a resolved #2887 invocation's brief reaches the worker. `stdoutPath`
+ * / `stderrPath`, when given, route stdout/stderr to distinct files; either
+ * falls back to the combined `logFile` when omitted, so existing combined-log
+ * callers are unaffected. Both use systemd's `truncate:` output mode
+ * (systemd >= 248) rather than `file:` (which appends with O_APPEND), so a
+ * pre-existing file at that path is replaced, not appended to.
  */
 export function buildWorkerIsolationArgs({
   unit,
@@ -94,8 +134,12 @@ export function buildWorkerIsolationArgs({
   args = [],
   cwd,
   logFile,
+  stdinPath,
+  stdoutPath,
+  stderrPath,
   env = process.env,
   envNames = ['PATH', 'HOME'],
+  managerEnvNames = [],
   kind = 'unit',
 } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
@@ -111,23 +155,32 @@ export function buildWorkerIsolationArgs({
   if (kind !== 'unit' && kind !== 'scope') throw new Error("Worker isolation kind must be 'unit' or 'scope'");
   if (cwd !== undefined) assertAbsolute('working directory', cwd);
   if (logFile !== undefined) assertAbsolute('log file', logFile);
+  if (stdinPath !== undefined) assertAbsolute('stdin brief', stdinPath);
+  if (stdoutPath !== undefined) assertAbsolute('stdout path', stdoutPath);
+  if (stderrPath !== undefined) assertAbsolute('stderr path', stderrPath);
 
   const argv = ['systemd-run', '--user', '--expand-environment=no'];
   if (kind === 'unit') argv.push(`--unit=${unit}`);
   else argv.push('--scope');
+  const requestedNames = [];
   for (const name of envNames) {
     const value = env?.[name];
     if (value === undefined) continue;
     if (typeof value !== 'string' || value.includes('\0')) throw new Error(`Worker isolation environment value for ${name} is not a NUL-free string`);
-    argv.push(`--setenv=${name}=${value}`);
+    requestedNames.push(name);
+    argv.push(`--setenv=${name}`);
   }
-  argv.push('-p', 'StandardInput=null');
+  if (kind === 'unit') {
+    const toUnset = managerEnvNames.filter(name => !requestedNames.includes(name) && !UNAVOIDABLE_UNIT_ENV_NAMES.includes(name));
+    if (toUnset.length > 0) argv.push('-p', `UnsetEnvironment=${toUnset.join(' ')}`);
+  }
+  argv.push('-p', stdinPath !== undefined ? `StandardInputFile=${stdinPath}` : 'StandardInput=null');
   argv.push('-p', `MemoryMax=${memoryMaxGb}G`);
   argv.push('-p', 'MemorySwapMax=0');
-  if (logFile !== undefined) {
-    argv.push('-p', `StandardOutput=file:${logFile}`);
-    argv.push('-p', `StandardError=file:${logFile}`);
-  }
+  const outPath = stdoutPath ?? logFile;
+  const errPath = stderrPath ?? logFile;
+  if (outPath !== undefined) argv.push('-p', `StandardOutput=truncate:${outPath}`);
+  if (errPath !== undefined) argv.push('-p', `StandardError=truncate:${errPath}`);
   if (cwd !== undefined) argv.push(`--working-directory=${cwd}`);
   argv.push('--', command, ...args);
   return argv;
@@ -155,6 +208,11 @@ export function launchIsolatedWorker({
   args = [],
   cwd,
   logFile,
+  stdinPath,
+  stdoutPath,
+  stderrPath,
+  env = process.env,
+  envNames = ['PATH', 'HOME'],
   gate,
   config,
   allowDegraded = false,
@@ -185,10 +243,40 @@ export function launchIsolatedWorker({
   if (detected.mode === 'degraded') {
     assertAbsolute('worker binary', command);
     if (cwd !== undefined) assertAbsolute('working directory', cwd);
+    if (stdinPath !== undefined) assertAbsolute('stdin brief', stdinPath);
+    if (stdoutPath !== undefined) assertAbsolute('stdout path', stdoutPath);
+    if (stderrPath !== undefined) assertAbsolute('stderr path', stderrPath);
     if (!Array.isArray(args) || args.some(token => typeof token !== 'string' || token.includes('\0'))) {
       throw new Error('Worker isolation argv must be NUL-free strings');
     }
-    const child = spawnAsync(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Degraded mode has no systemd unit to confine the environment, so this
+    // module builds the allowlisted environment itself and passes it as the
+    // child's *entire* environment (the `env` option replaces, never merges
+    // with, the current process environment) — the functional equivalent of
+    // `env -i NAME=value ...`. The conductor's own environment (secrets,
+    // NODE_OPTIONS, etc.) is therefore never inherited, allowlisted or not.
+    const allowedEnv = {};
+    for (const key of envNames) {
+      const value = env?.[key];
+      if (value !== undefined) allowedEnv[key] = value;
+    }
+    // Opening the brief/output files ourselves (rather than letting the
+    // worker inherit a stream) is what lets a degraded launch still honor a
+    // resolved #2887 invocation's stdin source and separate stdout/stderr
+    // destinations; `openSync` throws rather than silently falling back.
+    // 'w' truncates a pre-existing file at open time (matching the #2887
+    // shell renderer's `>`/`2>` contract); the previous 'a' silently kept
+    // appending onto a stale file across repeated degraded launches.
+    const stdin = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
+    const stdout = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
+    const stderr = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
+    const child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdin, stdout, stderr] });
+    // Node dup()s a numeric stdio fd into the child and never closes the
+    // parent's own copy; the child's duplicated fd keeps working after this
+    // call returns (verified empirically), so closing here is what the
+    // previous code was missing — every launch otherwise leaked up to three
+    // fds in the long-running conductor process.
+    for (const fd of [stdin, stdout, stderr]) if (typeof fd === 'number') closeSync(fd);
     const outcome = {
       launched: Number.isInteger(child.pid) && child.pid > 0,
       mode: 'degraded', child, pid: child.pid,
@@ -199,8 +287,28 @@ export function launchIsolatedWorker({
     child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
     return outcome;
   }
+  // The unit path's security contract (see buildWorkerIsolationArgs' doc
+  // comment) depends on knowing exactly which names the user manager would
+  // otherwise inject, so it can unset every one of them that is not
+  // allowlisted. Without a trustworthy answer to that query, launching would
+  // either omit `UnsetEnvironment` (silently falling back to the padded,
+  // non-exact environment this fix exists to remove) or guess — both are
+  // refused in favor of an explicit failure.
+  let managerEnvNames;
+  try {
+    const shown = spawn('systemctl', ['--user', 'show-environment'], { encoding: 'utf8', timeout: 10000 });
+    if (shown.error || shown.status !== 0) throw new Error(shown.error?.message ?? (String(shown.stderr ?? '').trim() || `exit ${shown.status}`));
+    managerEnvNames = String(shown.stdout ?? '').split('\n').map(line => line.slice(0, line.indexOf('='))).filter(Boolean);
+  } catch (error) {
+    return {
+      launched: false,
+      mode: 'systemd-unit',
+      diagnostic: `unable to determine the user manager's inherited environment (required to isolate the worker's environment exactly): ${error.message}`,
+      gate: resolvedGate,
+    };
+  }
   const unit = proposeUnit(name);
-  const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command, args, cwd, logFile, kind });
+  const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind });
   const child = spawn(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 30000 });
   if (child.error || child.status !== 0) {
     const stderr = String(child.stderr ?? '').trim();
