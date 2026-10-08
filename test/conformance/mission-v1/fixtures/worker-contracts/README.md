@@ -51,6 +51,45 @@ extension round trips; other consumers advertise no worker support in
 
 ## Disposition and consumer ownership
 
+### #2890 S1 structured-final realization
+
+The Mission definition fragment now encodes the normative terminal invariants:
+completed execution requires confirmed termination, an end timestamp, no failure
+and a zero or absent (MCP) process exit code; accepted results require completed
+execution and completed claims. The fragment and manifest digest are amended
+together; the exact-match test remains strict. No field or schema ID is added.
+The existing adapter parser validates bounded UTF-8 claims for shell and MCP;
+the Mission codec producer map and immutable snapshots own trusted assembly.
+Observed identity and exact artifact bytes are checked at acceptance, while
+unknown usage remains null. Managed scheduling, leases and verifier-runner
+qualification remain with their S2+ owners; synthetic finals do not qualify a CLI.
+
+#### #2890 fix pass: unknown usage must carry null counts
+
+The initial amendment above stated that "unknown usage remains null" but the
+shipped `workerUsage` definition never enforced it: a `quality: "unknown"`
+usage object with all-zero (or otherwise non-null) token/cost counts still
+validated. The fragment and the production schema now carry an additive
+`allOf`/`if`/`then` on `workerUsage` (the same terminal-style conditional
+already used on `workerExecution`): when `quality` is `"unknown"`,
+`inputTokens`, `outputTokens`, `cacheTokens`, `reasoningTokens` and `costUsd`
+are each required to be `null`. `reservedTokens`/`reservedUsd` are untouched —
+reservations are adapter/pool bookkeeping, not a worker-reported count, so an
+`unknown`-quality worker can still carry a known reservation. The manifest
+digest for `mission-definitions.patch.json` is updated to match; the
+exact-match test (`worker-contracts.test.ts`) continues to compare the frozen
+fragment and the production schema field-for-field with no relaxation.
+
+The strict jsonl `{"type":"terminal","status":"completed"}` line stays
+optional: 03 §11.4 requires a "qualified successful terminal
+event/exit", i.e. either is acceptable evidence, not both. The authoritative
+truncation backstop is the adapter-owned process/transport observation
+(`options.observation`), enforced unconditionally by `assertWorkerTerminal()`
+in `parseWorkerOutput()` whether or not the terminal line is present; a stream
+cut right after the `result` line still fails there if the process did not
+also report a confirmed, clean exit. This is now documented at the parser
+call site, not only here.
+
 Every disposition below names an owning draft and consuming source owner.
 The machine-readable consumer inventory extends the existing Mission matrix
 without altering its established consumer IDs. Downstream issues should extend
@@ -507,3 +546,106 @@ capability, preventing a profile mapping from claiming uncontrolled behavior.
 
 This is the S1 direct/shared contract checkpoint. Managed executor admission,
 leases and verification settlement remain deferred to S2+.
+
+## #2890 S1 final validation (2026-10-08)
+
+New production paths are the existing adapter's `parseWorkerOutput` reached through
+the async `parseWorkerFinal()` entry point (`parseOutput` keeps its synchronous
+legacy contract with no group mode), and the existing Mission codec's
+`assembleWorkerResult`. JSON/JSONL/MCP framing is selected explicitly by the
+qualified caller; provider-specific native event normalization and live profile
+qualification remain with their adapter owners. The parser returns only claims.
+The separately supplied observation must confirm successful transport completion;
+acceptance additionally checks qualified observed identity, verifier evidence and
+actual artifact bytes. Calling code owns process observation, protected checks,
+and the artifact/tree-manifest read. No worker-selected command is executed.
+
+Required checks:
+
+- `npm run typecheck`: passed, exit 0.
+- `npm run lint:schemas`: passed, 236 registered schemas, 0 errors, 2 existing fixture warnings.
+- `npm run lint:orchestration-packs`: passed, 18 packs; new tests registered as partial.
+- `node tools/mission-protocol/inventory.mjs --write`: blocked with `spawnSync rg EPERM`; no generated inventory was hand-edited or subprocess restriction bypassed.
+- `git diff --check`: passed.
+
+Final focused source and installed-layout validation: **115 passed, 0 failed**:
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/unit/ralph-external/worker-finals.test.ts \
+  test/unit/mission-protocol/worker-results.test.ts \
+  test/unit/mission-protocol/worker-boundaries.test.ts \
+  test/unit/mission-protocol/installed-layout.test.ts
+```
+
+Broader unit/neighbour run: **613 passed, 19 failed** (before three final added
+negative cases). Four inventory tests fail on synchronous subprocess EPERM;
+remaining failures concern empty subprocess version/protocol output and MCP
+connections closing before protocol output. These are validation limitations,
+not passing qualification. No assertions or environment restrictions were relaxed.
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/unit/ralph-external/worker-finals.test.ts \
+  test/unit/ralph-external/provider-adapter.test.ts \
+  test/unit/ralph-external/worker-invocation.test.ts \
+  test/unit/ralph-external/installed-worker-adapter.test.ts \
+  test/unit/ralph-external/worker-installation.test.ts \
+  test/unit/mission-protocol \
+  test/unit/mcp/worker-contracts.test.ts \
+  test/unit/mcp/worker-qualification.test.ts \
+  test/unit/cli/handlers/models-worker-contracts.test.ts \
+  test/unit/cli/handlers/models-direct-invocation.test.ts \
+  test/unit/cli/handlers/models-production-invocation.test.ts
+```
+
+Conformance: **197 passed, 18 failed**. Three pack-registry subprocess cases fail
+with EPERM, thirteen CLI/MCP fixture cases lose stdio/disconnect, and two trusted
+verifier cases lose stdout/stderr. The final direct-lifecycle rerun retains
+**15 passed, 2 failed**, with the same missing verifier output. Source loading for
+the verifier uses `node --import tsx` and an explicit source selection so clean
+checkouts need no stale/prebuilt dist. Both positive/negative verifier exit codes
+are observed, but missing diagnostics keep these cases failed.
+
+```sh
+npx vitest run --config config/vitest.conformance.config.js \
+  test/conformance/mission-v1/worker-contracts.test.ts \
+  test/conformance/orchestration-v1/worker-fixtures.test.ts \
+  test/conformance/orchestration-v1/direct-lifecycle.test.ts \
+  test/conformance/orchestration-v1/direct-security.test.ts \
+  test/conformance/orchestration-v1/worker-resolution.test.ts \
+  test/conformance/orchestration-v1/pack-registry.test.ts
+```
+
+Additional default-lane Mission/policy checks passed **240/240**:
+
+```sh
+npx vitest run --config config/vitest.config.js \
+  test/unit/ralph-external/worker-finals.test.ts \
+  test/unit/mission-protocol/worker-results.test.ts \
+  test/conformance/mission-v1/worker-policy.test.ts \
+  test/conformance/mission-v1/mission-protocol.test.ts \
+  test/unit/models/provider-policy.test.ts
+```
+
+Legacy adapter Node lane:
+`node --test test/unit/ralph/deepseek-harness-adapter.test.mjs test/unit/ralph/muse-adapter.test.mjs test/unit/ralph/pi-adapter.test.mjs`
+reported 1 passing file and 2 failing files. Direct diagnostic runs of the latter
+files reported Muse **8 passed/4 failed**, Pi **7 passed/7 failed**; failures concern
+empty subprocess output, missing parsed session results and abort/input behavior.
+These are retained as environmental/subprocess limitations, not silently skipped.
+
+Acceptance: claims-only, forged-field rejection, bounded/consistent finals,
+producer separation, inert instruction text, unknown usage and original 09
+round-trip vectors are met at the S1 shared contract boundary. Exact digest
+acceptance/tamper checks pass in the codec; subprocess verifier evidence remains
+partial under the above environment. Managed admission/lifecycle integration and
+qualified verifier runners remain S2+ owners. No live CLI is newly qualified.
+Temporary test workspaces are removed by existing teardown; no credentials or
+paid calls were used. Open action: rerun inventory and failed subprocess lanes
+in a permitted environment before asserting complete validation.
+
+Final frozen-contract rerun:
+`npx vitest run --config config/vitest.conformance.config.js test/conformance/mission-v1/worker-contracts.test.ts`
+passed **142/142**, including strict fragment/manifest equality and original
+unresolved-intent, admitted-brief and assembled-evidence round trips.

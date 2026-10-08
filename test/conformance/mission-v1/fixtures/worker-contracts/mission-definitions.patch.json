@@ -692,6 +692,39 @@
         "quality",
         "reservedTokens",
         "reservedUsd"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "quality": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "quality"
+            ]
+          },
+          "then": {
+            "properties": {
+              "inputTokens": {
+                "type": "null"
+              },
+              "outputTokens": {
+                "type": "null"
+              },
+              "cacheTokens": {
+                "type": "null"
+              },
+              "reasoningTokens": {
+                "type": "null"
+              },
+              "costUsd": {
+                "type": "null"
+              }
+            }
+          }
+        }
       ]
     },
     "workerExecution": {
@@ -842,6 +875,40 @@
         "termination",
         "usage",
         "failure"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "termination": {
+                "const": "confirmed"
+              },
+              "endedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "exitCode": {
+                "enum": [
+                  0,
+                  null
+                ]
+              },
+              "failure": {
+                "type": "null"
+              }
+            }
+          }
+        }
       ]
     },
     "workerVerification": {
@@ -987,6 +1054,54 @@
         "execution",
         "worker",
         "verification"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verification": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "accepted"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "verification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "execution": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "worker": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        }
       ]
     },
     "workerDispatch": {
@@ -1855,6 +1970,54 @@
         "worker",
         "verification",
         "mode"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verification": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "accepted"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "verification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "execution": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "worker": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        }
       ]
     },
     "workerHealthSummary": {
