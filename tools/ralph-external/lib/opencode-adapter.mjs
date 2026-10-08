@@ -27,6 +27,7 @@
  */
 
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { healthEventMatchesBinding } from './worker-health.mjs';
 
 /**
  * Model mapping from generic names to OpenCode provider/model format.
@@ -43,6 +44,15 @@ const MODEL_MAP = {
 };
 
 export class OpenCodeAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.sessionID }, binding)) return null;
+    // --format json is JSONL despite the legacy streamJson=false boolean.
+    // The evidenced text/part.text grammar proves activity; accepted-start,
+    // completed-step and terminal timing need independent qualification.
+    return event.type === 'text' && typeof event.part?.text === 'string'
+      ? { kind: 'activity', key: event.part.id } : null;
+  }
   /** @returns {string} */
   getBinary() {
     return 'opencode';

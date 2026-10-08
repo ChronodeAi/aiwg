@@ -25,13 +25,41 @@ export function sampleWorkerIdentity(pid) {
     if (!Number.isSafeInteger(uid) || !bootId || !fields[19]) return null;
     return { pid, pgid: Number(fields[2]), uid, parentPid: Number(fields[1]), sessionId: Number(fields[3]),
       host: hostname(), bootId, startTicks: fields[19], executable, state: fields[0],
-      cpuTicks: Number(fields[11]) + Number(fields[12]) };
+      // /proc stat fields 14/15 are utime/stime; 16/17 are cutime/cstime
+      // accumulated for waited-for children, including child-heavy CLIs.
+      cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]) };
   } catch { return null; }
 }
 
 export function sameWorkerIdentity(expected, actual) {
   return !!expected && !!actual && ['pid', 'pgid', 'uid', 'parentPid', 'sessionId', 'host', 'bootId', 'startTicks', 'executable']
     .every(key => expected[key] === actual[key]);
+}
+
+let workerTickRate;
+/** Host-qualified conversion, not an assumed Linux HZ constant. */
+export function qualifyWorkerCpuTickRate(probe = execFileSync) {
+  if (process.platform !== 'linux') return null;
+  if (probe === execFileSync && workerTickRate !== undefined) return workerTickRate;
+  let rate = null;
+  try {
+    const getconf = ['/usr/bin/getconf', '/bin/getconf'].find(filename => existsSync(filename));
+    if (!getconf) return null;
+    const value = Number(String(probe(getconf, ['CLK_TCK'], { timeout: 1000, maxBuffer: 1024,
+      stdio: ['ignore', 'pipe', 'ignore'] })).trim());
+    if (Number.isSafeInteger(value) && value > 0 && value <= 1000000) rate = value;
+  } catch { /* unavailable conversion stays null */ }
+  if (probe === execFileSync) workerTickRate = rate;
+  return rate;
+}
+
+export function sampleWorkerCpuTime(expected, actual, tickRate, previous = null) {
+  if (!sameWorkerIdentity(expected, actual) || !Number.isFinite(tickRate) || tickRate <= 0
+    || !Number.isSafeInteger(actual.cpuTicks) || actual.cpuTicks < 0) return { cpuTimeMs: null, deltaMs: null };
+  const cpuTimeMs = actual.cpuTicks * 1000 / tickRate;
+  const deltaMs = previous && sameWorkerIdentity(expected, previous) && Number.isSafeInteger(previous.cpuTicks)
+    && actual.cpuTicks >= previous.cpuTicks ? (actual.cpuTicks - previous.cpuTicks) * 1000 / tickRate : null;
+  return { cpuTimeMs, deltaMs };
 }
 
 /** A failed/partial process listing is unavailable, never proof of absence. */

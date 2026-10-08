@@ -93,6 +93,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   // Include the installed loader's imports, not the Ralph runners and fixtures.
   const workerAdapterFiles = [
     'tools/ralph-external/lib/provider-adapter.mjs',
+    'tools/ralph-external/lib/worker-health.mjs',
     'tools/ralph-external/lib/claude-adapter.mjs',
     'tools/ralph-external/lib/codex-adapter.mjs',
     'tools/ralph-external/lib/opencode-adapter.mjs',

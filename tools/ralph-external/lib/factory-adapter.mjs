@@ -32,6 +32,9 @@ const MODEL_MAP = {
 };
 
 export class FactoryAdapter extends ProviderAdapter {
+  // stream-json is evidenced, but live droid event grammar is unqualified.
+  // Session exports and another provider's event names cannot qualify it.
+  observeHealthEvent() { return null; }
   /** @returns {string} */
   getBinary() {
     return 'droid';

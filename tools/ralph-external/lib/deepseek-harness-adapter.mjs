@@ -3,6 +3,9 @@ import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
 import { assertSupportedDshVersion } from '../../providers/deepseek-harness-transport.mjs';
 
 export class DeepSeekHarnessAdapter extends ProviderAdapter {
+  // The headless surface supplies plain final/exit only. Cordis logs remain
+  // unavailable until their locator, ownership and grammar are qualified.
+  observeHealthEvent() { return null; }
   getBinary() { return process.env.AIWG_DSH_BIN || 'dsh'; }
   getName() { return 'deepseek-harness'; }
   getCapabilities() {

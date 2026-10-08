@@ -276,6 +276,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
       'tools/ralph-external/lib/provider-adapter.mjs',
+      'tools/ralph-external/lib/worker-health.mjs',
       'tools/ralph-external/lib/claude-adapter.mjs',
       'tools/ralph-external/lib/codex-adapter.mjs',
       'tools/ralph-external/lib/opencode-adapter.mjs',

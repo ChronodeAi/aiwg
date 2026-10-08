@@ -1,0 +1,4 @@
+{"type":"agent_start"}
+{"type":"tool_execution_end","toolCallId":"omp-tool-1","toolName":"read","isError":false,"result":{"content":[]}}
+{"type":"agent_end","willContinue":true}
+{"type":"agent_end","willContinue":false,"messages":[{"role":"assistant","content":[{"type":"text","text":"synthetic answer"}],"stopReason":"stop"}]}

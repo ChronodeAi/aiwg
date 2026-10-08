@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { satisfies, validRange } from 'semver';
 import type { WorkerExecution } from '../config/aiwg-config.js';
 import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
+import { qualificationDigest } from './qualification-digest.mjs';
 import type {
   CanonicalModelPolicy, ModelCompilationOutcome, ModelEffort, ModelRole, Provider,
   WorkerModelObservation, WorkerSelectionPolicy, WorkerDataPolicy, WorkerPolicyOrigin, WorkerPolicyDiagnostic,
@@ -45,6 +46,39 @@ const OutcomeSchema = z.enum([
   'native', 'compiled', 'inherited', 'global-only', 'informational', 'unsupported',
 ]);
 
+export interface WorkerProfileHealth {
+  version: 1;
+  handshake: 'semantic' | 'process-only' | 'unobserved';
+  outputFraming: 'jsonl' | 'plain' | 'final-json' | 'http-stream' | 'mcp-progress' | 'opaque';
+  signalParser: string;
+  sessionLogLocator: string | null;
+  progressEvidence: string[];
+  stopEvidence: string;
+  fixtureRef: string;
+  qualifiedAt: string | null;
+  statusOperation: string | null;
+  cancelOperation: string | null;
+  coverage?: 'full' | 'degraded' | 'unobserved';
+  qualificationTarget?: 'semantic' | 'process-only' | 'unobserved';
+  evidenceGrades?: Array<'H' | 'R' | 'D'>;
+  provenance?: Array<{ kind: 'help' | 'repository' | 'documentation' | 'synthetic'; ref: string;
+    observedAt: string; cliVersion: string | null }>;
+  qualificationOwner?: string;
+  qualification?: { status: 'unqualified' | 'synthetic' | 'live-qualified'; scopeDigest: string | null;
+    cliVersion: string | null; accountScope: string | null; profileRef: string | null;
+    modelKey: string | null; effort: string | null; authorizedLive: boolean };
+}
+
+export interface WorkerHealthCoverage {
+  scope: 'out';
+  coverage: 'unobserved';
+  handshake: 'unobserved';
+  evidenceGrades: Array<'H' | 'R' | 'D'>;
+  qualificationOwner: string;
+  provenance: string[];
+  reason: string;
+}
+
 export interface WorkerInvocationProfile {
   transport: 'shell' | 'mcp';
   supportedVersions: string;
@@ -53,7 +87,7 @@ export interface WorkerInvocationProfile {
   pitfalls: string[];
   mcp?: { serverRef: string; tool: string; inputSchemaDigest: string; outputSchemaDigest: string;
     sessionIsolation: 'per-call' | 'per-instance' | 'serialized'; cancel: 'confirmed' | 'uncertain' };
-  health?: Record<string, unknown>;
+  health?: WorkerProfileHealth;
   installationQualification?: { scopeDigest: string; fixtureDigest: string; verifiedAt: string; evidenceRef: string };
 }
 export interface WorkerAdapterMetadata {
@@ -98,6 +132,14 @@ const CapabilityEntrySchema = z.object({
   sourceUrl: z.string().url(),
   verifiedAt: z.string().date(),
   workerAdapter: WorkerAdapterSchema.optional(),
+  // Descriptive health coverage is not an installed executable registration.
+  workerHealthAdapter: WorkerAdapterSchema.optional(),
+  workerHealthCoverage: z.object({
+    scope: z.literal('out'), coverage: z.literal('unobserved'), handshake: z.literal('unobserved'),
+    evidenceGrades: z.array(z.enum(['H', 'R', 'D'])).max(3),
+    qualificationOwner: z.string().regex(/^B-OG-[0-9]{2}$/),
+    provenance: z.array(z.string().min(1).max(4096)).min(1).max(16), reason: z.string().min(1).max(4096),
+  }).strict().optional(),
 }).strict();
 const CapabilityRegistrySchema = z.object({
   $schema: z.enum([
@@ -109,6 +151,8 @@ const CapabilityRegistrySchema = z.object({
   providers: z.record(ProviderSchema, CapabilityEntrySchema),
   workerAdapters: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerAdapterSchema)
     .refine(value => Object.keys(value).length <= 128, 'At most 128 worker adapters').optional(),
+  workerHealthAdapters: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), WorkerAdapterSchema)
+    .refine(value => Object.keys(value).length <= 128, 'At most 128 worker health descriptors').optional(),
 }).strict();
 const CatalogModelSchema = z.object({
   id: z.string().min(1),
@@ -615,6 +659,46 @@ export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
     throw new Error('Required worker control sandbox needs matching installation qualification for its external boundary');
   }
   return profile;
+}
+
+export interface WorkerHealthQualificationScope {
+  profileRef: string;
+  cliVersion: string;
+  accountScope: string;
+  inferenceProvider: string;
+  model: string;
+  effort: string | null;
+}
+
+/** Health timing evidence belongs to the exact execution profile and tuple.
+ * Fixture qualification does not become authenticated/live qualification. */
+export function workerHealthScopeDigest(profile: WorkerInvocationProfile, scope: WorkerHealthQualificationScope): string {
+  const { installationQualification: _installation, health, ...executionProfile } = profile;
+  const { qualification: _qualification, ...signals } = health ?? {};
+  return qualificationDigest({ profile: executionProfile, health: signals,
+    profileRef: scope.profileRef, cliVersion: scope.cliVersion, accountScope: scope.accountScope,
+    modelKey: workerModelKey(scope.inferenceProvider, scope.model), effort: scope.effort });
+}
+
+/** Reused by observation and invocation owners before using qualified health.
+ * Older profiles have no qualification record and retain degraded observation. */
+export function assertWorkerHealthQualification(profile: WorkerInvocationProfile, scope: WorkerHealthQualificationScope): void {
+  const evidence = profile.health?.qualification;
+  if (!evidence) return;
+  if (evidence.status === 'unqualified') {
+    if (profile.health?.coverage === 'full' || profile.health?.handshake === 'semantic') {
+      throw new Error('Unqualified worker health cannot assert full or semantic coverage');
+    }
+    return;
+  }
+  const modelKey = workerModelKey(scope.inferenceProvider, scope.model);
+  if (evidence.cliVersion !== scope.cliVersion || evidence.accountScope !== scope.accountScope
+    || evidence.profileRef !== scope.profileRef || evidence.modelKey !== modelKey || evidence.effort !== scope.effort
+    || !profile.health?.qualifiedAt || !Number.isFinite(Date.parse(profile.health.qualifiedAt))
+    || evidence.scopeDigest !== workerHealthScopeDigest(profile, scope)
+    || (evidence.status === 'live-qualified' && evidence.authorizedLive !== true)) {
+    throw new Error('Worker health qualification scope changed or lacks live authorization');
+  }
 }
 
 export function parseProviderModelCatalog(input: unknown): ProviderModelCatalog {

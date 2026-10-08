@@ -36,7 +36,7 @@ describe('T-OG-14 published package installed adapter paths', () => {
     const packed = JSON.parse(stdout)[0];
     expect(packed.name).toBe(target);
     const files = new Set(packed.files.map((file: any) => file.path));
-    for (const required of ['tools/ralph-external/lib/provider-adapter.mjs', 'tools/_resolve-impl.mjs',
+    for (const required of ['tools/ralph-external/lib/provider-adapter.mjs', 'tools/ralph-external/lib/worker-health.mjs', 'tools/_resolve-impl.mjs',
       'dist/src/models/provider-policy.js', 'dist/src/serve/worker-invocation.js', 'schemas/models/provider-model-capabilities.v1.schema.json']) expect(files.has(required), required).toBe(true);
     if (target === 'aiwg') expect(files.has('tools/ralph-external/index.mjs')).toBe(true);
     const npmEnv = { PATH: process.env.PATH, npm_config_cache: process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(root, 'cache'),

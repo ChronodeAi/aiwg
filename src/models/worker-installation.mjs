@@ -720,6 +720,10 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy })
       }
       drivers[cli] = {
         extractFinal: output => instance.parseOutput(output),
+        ...(typeof instance.parseWorkerFinal === 'function'
+          ? { parseWorkerFinal: (output, options) => instance.parseWorkerFinal(output, options) } : {}),
+        ...(typeof instance.createHealthObserver === 'function'
+          ? { createHealthObserver: options => instance.createHealthObserver(options) } : {}),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,
           platform: process.platform, installation, ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
         buildInvocation: async input => profile.transport === 'shell' ? {

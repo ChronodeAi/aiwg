@@ -8,12 +8,37 @@ import { workerConfigDigest } from '../config/aiwg-config.js';
 import type { McpServerRegistry, McpWorkerQualificationInput } from '../mcp/registry.js';
 import type { McpProfile } from '../mcp/profiles.js';
 import { assertValidWorkerPayload } from '../mission-protocol/codecs.js';
-import type { WorkerResolvedInvocation } from '../mission-protocol/types.js';
+import type { WorkerResolvedInvocation, WorkerEffectiveHealth } from '../mission-protocol/types.js';
 import type { WorkerPolicyDiagnostic } from '../models/types.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
-import type { WorkerExecution } from '../config/aiwg-config.js';
+import type { WorkerExecution, ParallelismConfig } from '../config/aiwg-config.js';
 import { qualifyWorkerInvocationProfile, assertWorkerSelectionAllowed,
-  requiredWorkerControls, requiresWorkerExternalBoundary, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
+  requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
+
+/** Frozen per-attempt windows; parent/transport ceilings include time already spent. */
+export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health'], input: {
+  role: string; effort: string | null; modelKey: string; profileRef: string; wallSeconds: number;
+  transportSeconds?: number; remainingSteps?: number; stepEnforcement: WorkerEffectiveHealth['stepEnforcement'];
+}): WorkerEffectiveHealth {
+  const roleDefaults: Record<string, number> = { efficiency: 1, coding: 1, reasoning: 2 };
+  const effortDefaults: Record<string, number> = { xhigh: 2, max: 3 };
+  if (!Object.hasOwn(roleDefaults, input.role) || !isCanonicalWorkerModelKey(input.modelKey)) throw new Error('Invalid worker health role/model identity');
+  const factors = [config?.roleScale?.[input.role as 'efficiency' | 'coding' | 'reasoning'] ?? roleDefaults[input.role] ?? 1,
+    input.effort === null ? 1 : config?.effortScale?.[input.effort] ?? effortDefaults[input.effort] ?? 1,
+    config?.modelScale?.[input.modelKey] ?? 1];
+  if (factors.some(factor => !Number.isFinite(factor) || factor <= 0)) throw new Error('Invalid worker health scale');
+  const scale = Math.max(1, Math.min(6, Math.max(...factors)));
+  const health: WorkerEffectiveHealth = { version: 1,
+    startupSeconds: config?.modelStartupSeconds?.[input.modelKey] ?? config?.startupSeconds ?? 60,
+    checkSeconds: config?.checkSeconds ?? 15, quietSeconds: (config?.quietSeconds ?? 90) * scale,
+    stallSeconds: (config?.stallSeconds ?? 300) * scale, diagnosticGraceSeconds: config?.diagnosticGraceSeconds ?? 60,
+    terminateGraceSeconds: config?.terminateGraceSeconds ?? 5,
+    hardTimeoutSeconds: Math.min(1800, config?.hardTimeoutSeconds ?? 1800, input.wallSeconds, input.transportSeconds ?? Infinity),
+    maxSteps: Math.min(config?.maxSteps ?? 100, input.remainingSteps ?? 10000),
+    stepEnforcement: input.stepEnforcement, scale, profileRef: input.profileRef, runDir: null };
+  assertValidWorkerPayload('workerEffectiveHealth', health);
+  return health;
+}
 
 /**
  * The exact digest formula an MCP worker binding's `inputSchemaDigest`/
@@ -63,7 +88,11 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
   const result = structuredClone(invocation) as CompleteInvocation;
   // shellCommand is derived syntax, never authority supplied by a brief.
   if (result.transport === 'shell') result.shellCommand = '';
-  assertValidWorkerPayload('workerResolvedInvocation', result);
+  // Validate the established invocation shape first. Health is optional and
+  // is checked after policy, installation and transport qualification below.
+  const contract = { ...result };
+  delete contract.health;
+  assertValidWorkerPayload('workerResolvedInvocation', contract);
   if ((qualification.platform ?? process.platform) !== 'linux') {
     throw new Error('Unsupported worker invocation platform; Linux is required');
   }
@@ -151,6 +180,17 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     if (!validate(binding.arguments)) throw new Error('MCP worker arguments violate the pinned input schema');
   }
   assertValidWorkerPayload('workerResolvedInvocation', result);
+  if (result.health !== undefined) {
+    if (result.health.profileRef !== result.selected.profileRef
+      || result.health.hardTimeoutSeconds > Math.min(1800, result.limits.wallSeconds, result.mcp?.timeoutSeconds ?? Infinity)) {
+      throw new Error('Worker health profile or wall ceiling mismatch');
+    }
+    if (['native', 'external'].includes(result.health.stepEnforcement)
+      && profile.controls.stepCap?.support !== result.health.stepEnforcement) throw new Error('Unqualified worker step enforcement');
+  }
+  assertWorkerHealthQualification(profile, { profileRef: result.selected.profileRef, cliVersion: qualification.cliVersion,
+    accountScope: qualification.installation?.accountScope ?? '', inferenceProvider: result.selected.inferenceProvider,
+    model: result.selected.model, effort: result.selected.effort.value });
   return result;
 }
 
@@ -158,6 +198,8 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
 export interface WorkerInvocationDriver {
   /** Existing adapter extraction; raw stream remains separate and untrusted. */
   extractFinal?(stdout: string): unknown;
+  parseWorkerFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
+  createHealthObserver?(options: Record<string, unknown>): unknown;
   qualification: Omit<WorkerInvocationQualification, 'policy' | 'permissions' | 'role' | 'now' | 'modelObservation' | 'defaultObservation'>;
   mcpRegistry?: Pick<McpServerRegistry, 'get'> & Partial<Pick<McpServerRegistry, 'assertWorkerQualified'>>;
   mcpProfile?: Pick<McpProfile, 'servers' | 'providerOverrides'>;
@@ -169,6 +211,7 @@ export interface WorkerInvocationDriver {
     selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
     cwd: string; briefPath: string; brief: string; finalPath: string;
     limits: WorkerResolvedInvocation['limits'];
+    health: WorkerEffectiveHealth;
   }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp'>>;
 }
 
@@ -383,8 +426,14 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
     pointer = `/parallelism/clis/${tuple.cli}/invocationProfile`;
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
+    const effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, { role: request.role, effort: tuple.effort,
+      modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: limits.wallSeconds,
+      transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
+      stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' });
     const transport = await driver.buildInvocation({ selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
-      cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits) });
+      cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
+      health: structuredClone(effectiveHealth) });
+    effectiveHealth.hardTimeoutSeconds = Math.min(effectiveHealth.hardTimeoutSeconds, transport.mcp?.timeoutSeconds ?? Infinity);
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
     const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
@@ -395,12 +444,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       limits, maxOutputBytes: adapter.invocation.maxOutputBytes ?? 10485760,
       effectiveCaps: tuple.effectiveMaxParallel === null ? {} : { parallel: tuple.effectiveMaxParallel },
       controlEvidence: controls.map(name => profile.controls[name].evidence),
-      health: { version: 1, startupSeconds: healthConfig?.startupSeconds ?? 60, checkSeconds: healthConfig?.checkSeconds ?? 15,
-        quietSeconds: healthConfig?.quietSeconds ?? 120, stallSeconds: healthConfig?.stallSeconds ?? 300,
-        diagnosticGraceSeconds: healthConfig?.diagnosticGraceSeconds ?? 30, terminateGraceSeconds: healthConfig?.terminateGraceSeconds ?? 10,
-        hardTimeoutSeconds: Math.min(healthConfig?.hardTimeoutSeconds ?? limits.wallSeconds, limits.wallSeconds),
-        maxSteps: healthConfig?.maxSteps ?? 100, stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'observed',
-        scale: 1, profileRef: tuple.profile, runDir: null },
+      health: effectiveHealth,
     };
     const invocationQualification: WorkerInvocationQualification = { ...qualification, now: Date.parse(now),
       policy: plan.policy, permissions: tuple.permissions, role: request.role, modelObservation: observation,

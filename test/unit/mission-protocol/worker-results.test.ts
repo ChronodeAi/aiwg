@@ -13,6 +13,15 @@ function input(direct = true) {
 }
 
 describe('T-OG-03/04/10 producer-separated Mission realization', () => {
+  it('fractional effective health round-trips while worker health authority is rejected', () => {
+    const health = { version: 1, startupSeconds: 60, checkSeconds: 15, quietSeconds: 90, stallSeconds: 300,
+      diagnosticGraceSeconds: 30, terminateGraceSeconds: 10, hardTimeoutSeconds: 900, maxSteps: 200,
+      stepEnforcement: 'unavailable', scale: 1, profileRef: 'workerAdapters:fixture/fixture-shell', runDir: null };
+    Object.assign(health, { scale: 1.25, quietSeconds: 112.5, stallSeconds: 375 });
+    expect(validateWorkerPayload('workerEffectiveHealth', health).valid).toBe(true);
+    expect(() => decodeWorkerProducedPayload('workerHealthSummary', 'worker', {})).toThrow(/cannot author/);
+    expect(validateWorkerPayload('workerEffectiveHealth', { ...health, quietSeconds: 375 }).valid).toBe(false);
+  });
   it.each(['workerExecution', 'workerVerification', 'workerDirectVerification', 'workerResult', 'workerDirectResult'] as const)('worker cannot author %s', definition => {
     expect(() => decodeWorkerProducedPayload(definition, 'worker', {})).toThrow(/cannot author/);
   });

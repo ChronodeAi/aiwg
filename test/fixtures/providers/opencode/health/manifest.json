@@ -1,0 +1,16 @@
+{
+  "scenarioId": "T-OG-03-opencode-own-grammar",
+  "provider": "opencode",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "stream.ndjson",
+  "expectedKinds": [
+    null,
+    "activity",
+    null
+  ],
+  "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
+  "sanitizedEvidence": "synthetic content and identifiers only",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}

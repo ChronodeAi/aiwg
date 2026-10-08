@@ -41,7 +41,9 @@ import { dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
 import { importImpl } from '../_resolve-impl.mjs';
-import { sampleWorkerIdentity, sameWorkerIdentity, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry } from './process-monitor.mjs';
+import { sampleWorkerIdentity, sameWorkerIdentity, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
+  qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
+import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
 /**
@@ -201,7 +203,7 @@ async function launchOneWorker(owner, options) {
   const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
   if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
     filename === options.invocationPath || filename === invocation.briefPath
-    || ['invocation.json', 'process.json', 'exit.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
+    || ['invocation.json', 'process.json', 'exit.json', 'health.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
       'stdout.log', 'stdout.events.jsonl', 'stderr.log', '.launch-owner'].some(name => filename === join(runDir, name)))) {
     throw new Error('Worker output paths must be distinct from trusted metadata and capture files');
   }
@@ -274,6 +276,7 @@ async function launchOneWorker(owner, options) {
     if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
     const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
       .map(name => [name, process.env[name]]));
+    const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
     outcome = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: invocation.argv[0], args: invocation.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
@@ -281,7 +284,7 @@ async function launchOneWorker(owner, options) {
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
     return await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, options, brief, runDir });
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, runDir });
   } catch (error) {
     if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
       endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
@@ -303,6 +306,8 @@ async function captureOneWorker(owner, ctx) {
   let output = Buffer.alloc(0);
   let total = 0;
   let timedOut = false;
+  let stopRequested = false;
+  let stopReason = null;
   let errorCode = null;
   let settled = false;
   let waitCode = null;
@@ -310,9 +315,27 @@ async function captureOneWorker(owner, ctx) {
   let sawExit = false;
   let sawClose = false;
   let nativeSupervisor = null;
+  const driver = ctx.inputs.drivers[invocation.selected.cli];
+  const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
+    effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
+    launchTime, contentDigest: ctx.baselineContent, sessionId: options.healthSessionLog?.sessionId ?? null,
+    runId: options.healthSessionLog?.runId ?? null, maxOutputBytes: invocation.maxOutputBytes };
+  const observer = driver.createHealthObserver?.(observationOptions) ?? createWorkerHealthObserver(observationOptions);
+  const tickRate = qualifyWorkerCpuTickRate();
+  let previousCpu = null;
+  let stdoutOffset = 0;
+  let stderrOffset = 0;
+  let logCursor = { inode: null, offset: 0, generation: 0 };
+  const reportHealth = async () => {
+    const health = observer.snapshot();
+    owner.emit('health', health);
+    try { await publish('health.json', { origin: 'observer', invocationId, health, evidence: observer.evidence() }); }
+    catch { observer.gap('CAPTURE_WRITE'); }
+    return health;
+  };
   const timers = new Set();
   const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
-  const graceMs = (invocation.health?.terminateGraceSeconds ?? 10) * 1000;
+  const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
   const signal = value => !settled && signalOwnedWorker(identity, value, { supervisor });
   const readNative = () => { try { return (options.isolationStatus ?? getWorkerIsolationStatus)(outcome.unit); } catch { return null; } };
   const transportRecord = async filename => {
@@ -334,26 +357,30 @@ async function captureOneWorker(owner, ctx) {
   // unit's own retained state (checked in finish() via readNative()) is what
   // confirms or fails to confirm that the stop took effect.
   const stopUnit = () => { try { return (options.stopUnit ?? stopWorkerUnit)(outcome.unit); } catch { return { ok: false }; } };
-  const stop = () => {
-    if (settled || timedOut) return;
-    timedOut = true;
+  const stop = (cause = errorCode ? 'PROVIDER_ERROR' : 'CANCELLED') => {
+    if (settled || stopRequested) return;
+    stopRequested = true; stopReason = cause;
+    timedOut = ['HARD_DEADLINE', 'STARTUP_DEADLINE', 'NO_PROGRESS'].includes(cause);
     if (outcome.mode === 'systemd-unit' && outcome.unit) {
       stopUnit();
       // Backstop: if the unit's own exit does not reach us promptly, force
       // resolution so the caller is never left hanging. finish() still
       // derives confirmed/uncertain from the unit's retained state, not from
       // the fact that a stop was requested.
-      later(() => { if (!settled) finish(); }, graceMs);
+      later(() => { if (!settled) finish(); }, Math.min(graceMs, hardRemaining()));
       return;
     }
     signal('SIGTERM');
-    later(() => { signal('SIGKILL'); later(() => finish(), 100); }, graceMs);
+    const remainingGrace = Math.min(graceMs, hardRemaining());
+    if (remainingGrace === 0) { signal('SIGKILL'); later(() => finish(), 100); }
+    else later(() => { signal('SIGKILL'); later(() => finish(), 100); }, remainingGrace);
   };
   owner.currentProcess = child;
   owner.workerStop = stop;
   const onSignal = () => stop();
   process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
   child.stdout.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stdout', id: 'stdout', generation: 0, offset: stdoutOffset }); stdoutOffset += chunk.length;
     total += chunk.length;
     const remaining = Math.max(0, Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) - output.length);
     if (remaining) { const bounded = chunk.subarray(0, remaining); output = Buffer.concat([output, bounded]); streams[0].write(bounded); streams[2].write(bounded); }
@@ -362,6 +389,7 @@ async function captureOneWorker(owner, ctx) {
   });
   let stderrBytes = 0;
   child.stderr.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
     const remaining = Math.max(0, 10485760 - stderrBytes);
     streams[1].write(chunk.subarray(0, remaining)); streams[3].write(chunk.subarray(0, remaining)); stderrBytes += chunk.length;
     if (stderrBytes > 10485760) { errorCode = 'OUTPUT_LIMIT'; stop(); }
@@ -411,7 +439,8 @@ async function captureOneWorker(owner, ctx) {
       ? signalNumberToName[native.execMainStatus] ?? null : waitSignal;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
-      descendants: confirmed ? 'stopped' : 'unknown', timedOut, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
+      descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
+      cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
       // Unauthenticated: reported by the worker-writable transport record, not
       // kernel-observed. Never used above for exitCode/signal/termination.
       workerTermination: hasTransport ? workerExit && !workerExit.errorCode ? 'confirmed' : 'uncertain' : sawExit ? 'confirmed' : 'uncertain',
@@ -420,8 +449,8 @@ async function captureOneWorker(owner, ctx) {
       nativeExitCode: native?.execMainCode === 1 ? native.execMainStatus : null,
       captureCoverage: sawClose ? 'complete' : 'gap', isolation: outcome.mode, nativeResult: native?.result ?? null,
       publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
+    let healthFinalValid = false;
     try {
-      const driver = ctx.inputs.drivers[invocation.selected.cli];
       const finalStat = await lstat(paths.final);
       if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
       await ctx.inspect(paths.final, 'file');
@@ -442,6 +471,20 @@ async function captureOneWorker(owner, ctx) {
       await publish('final-evidence.json', { invocationId, path: paths.final, digest: bytesDigest(finalBytes),
         source: extracted ? 'adapter-extraction' : 'worker-output', candidate: true, verified: false,
         terminalSuccess: result.exitCode === 0 && !result.timedOut && !result.errorCode });
+      // Consume #2890's strict final contract when supplied by the installed
+      // driver. Legacy extraction remains a candidate, never health authority.
+      if (driver.parseWorkerFinal) {
+        try {
+          // Strict validation consumes original bytes. A legacy extracted
+          // object may already have lost duplicate keys and cannot authorize
+          // completion through reserialization.
+          await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+            format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
+            status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
+            termination: result.termination, exitCode: result.exitCode } });
+          healthFinalValid = true;
+        } catch { /* failed strict claims remain unverified candidate evidence */ }
+      }
     } catch { result.errorCode ??= 'FINAL_OUTPUT_INVALID'; }
     // The final exit.json publish must always be attempted, independent of
     // whether the preceding recordProcess() write succeeded: a failing
@@ -456,17 +499,35 @@ async function captureOneWorker(owner, ctx) {
       try { await publish('exit.json', result); }
       catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
     }
+    result.health = observer.finish({ ...result, finalValid: healthFinalValid });
+    result.healthEvidence = observer.evidence();
+    try { await publish('exit.json', result); }
+    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
+    await reportHealth();
     owner.emit('complete', result);
     resolveDone(result);
   };
-  child.once('error', error => { errorCode = error.code ?? 'SPAWN_ERROR'; later(() => finish(), 0); });
+  child.once('error', error => {
+    errorCode = error.code ?? 'SPAWN_ERROR';
+    observer.observe(classifyWorkerHealthFailure({ code: errorCode }, { source: { kind: 'stderr' } }));
+    later(() => finish(), 0);
+  });
   child.once('exit', (code, sig) => { sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs); });
   // sawExit/waitCode/waitSignal come solely from the 'exit' handler above; a
   // failed spawn (e.g. ENOENT) never emits 'exit' in this Node, so they stay
   // at their unset defaults (false/null/null) here, which is already correct
   // — there is no real exit to report.
   child.once('close', () => { sawClose = true; finish(); });
-  later(stop, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000);
+  const hardRemaining = () => Math.max(0, Math.min(1800, invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+    invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
+  // Grace is clipped at stop time; forceful cancellation is never scheduled
+  // beyond this fixed ceiling, including tasks shorter than startup/grace.
+  later(() => {
+    observer.check();
+    // Snapshot/IPC diagnostics precede stop. A slow disk cannot postpone the
+    // monotonic hard cancellation target.
+    reportHealth(); stop('HARD_DEADLINE');
+  }, hardRemaining());
   const observeIdentity = async () => {
     if (settled) return;
     if (!identity && hasTransport) {
@@ -488,11 +549,54 @@ async function captureOneWorker(owner, ctx) {
           && contained(children[0].pid)) identity = children[0];
       }
     }
+    if (identity) observer.processStarted(identity);
     recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
     if (!identity && hasTransport) later(observeIdentity, 50);
   };
   observeIdentity();
-  owner.emit('started', { invocationId, pid: identity?.pid ?? null, supervisorPid: process.pid, isolation: outcome.mode });
+  const sampleLog = async () => {
+    const locator = options.healthSessionLog;
+    if (!locator || !ctx.profile.health?.sessionLogLocator || !locator.sessionId) return;
+    const filename = locator.path;
+    let handle;
+    try {
+      // Explicit trusted locator only; never search global/private transcripts.
+      await ctx.inspect(filename, 'file');
+      handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1) throw new Error('Unavailable session source');
+      if (logCursor.inode !== null && (logCursor.inode !== stat.ino || stat.size < logCursor.offset)) {
+        observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' });
+        logCursor = { inode: stat.ino, offset: 0, generation: logCursor.generation + 1 };
+      }
+      logCursor.inode = stat.ino;
+      const bytes = Buffer.alloc(Math.min(65536, Math.max(0, stat.size - logCursor.offset)));
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, logCursor.offset);
+      observer.feed(bytes.subarray(0, bytesRead), { kind: 'session-log', id: 'session-log', generation: logCursor.generation, offset: logCursor.offset });
+      logCursor.offset += bytesRead;
+    } catch { observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' }); }
+    finally { await handle?.close(); }
+  };
+  const sampleHealth = async () => {
+    if (settled) return;
+    const current = identity ? sampleWorkerIdentity(identity.pid) : null;
+    const cpu = identity ? sampleWorkerCpuTime(identity, current, tickRate, previousCpu) : { cpuTimeMs: null };
+    previousCpu = current;
+    const content = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
+    await sampleLog();
+    if (settled) return;
+    observer.sampleActivity({ running: current && sameWorkerIdentity(identity, current) ? true : null, cpu: cpu.cpuTimeMs, content });
+    const health = observer.check();
+    await reportHealth(); // diagnostics are captured before requesting stop
+    if (settled) return;
+    if (observer.shouldStop?.() || ['hung', 'failed-to-start'].includes(health.state) || ['HARD_DEADLINE', 'STEP_LIMIT'].includes(health.reasonCode)) stop(health.reasonCode);
+    else later(sampleHealth, Math.min(observer.nextDelayMs(), hardRemaining()));
+  };
+  sampleHealth().catch(() => { observer.gap(); later(sampleHealth, (invocation.health?.checkSeconds ?? 15) * 1000); });
+  // Notification of OS launch stays separate from semantic/task acceptance.
+  const launchEvent = { invocationId, pid: identity?.pid ?? null, supervisorPid: process.pid, isolation: outcome.mode };
+  owner.emit('started', launchEvent); // Preserve the public OS-launch event API.
+  owner.emit('launched', launchEvent);
   return done;
 }
 
@@ -584,12 +688,17 @@ export class SessionLauncher extends EventEmitter {
     const binding = request ?? record.request ?? {};
     const requestFields = ['serverRef', 'requestId', 'sessionId', 'taskTokenRef', 'endpointIdentity'];
     const requestIdentity = Object.fromEntries(requestFields.map(key => [key, binding[key] ?? null]));
+    const observedWorker = Number.isSafeInteger(identity.pid) ? sampleWorkerIdentity(identity.pid) : null;
+    const health = createWorkerHealthObserver({ invocationId: invocationId ?? record.invocationId ?? 'manual',
+      health: { handshake: 'unobserved', outputFraming: 'opaque', coverage: 'unobserved' } }).snapshot();
+    health.startupDeadlineAt = null; health.hardDeadlineAt = null;
+    health.termination = 'uncertain'; health.unavailableSignals.push('enforced-deadline', 'confirmed-stop');
     return { origin: 'manual', invocationId: invocationId ?? record.invocationId ?? null, worker: identity,
       request: requestIdentity,
       supervisor: null, paths, runDir: runDir ?? null, coverage: runDir ? 'known-files-only' : 'conductor-context-only',
       termination: 'uncertain', exitCode: null, signal: null, ownership: 'unknown',
       unavailable: [...fields.filter(key => identity[key] === null), ...requestFields.filter(key => requestIdentity[key] === null), 'enforced-deadline', 'confirmed-stop'],
-      observedWorker: Number.isSafeInteger(identity.pid) ? sampleWorkerIdentity(identity.pid) : null };
+      observedWorker, health };
   }
 
   /**
