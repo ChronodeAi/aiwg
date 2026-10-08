@@ -93,7 +93,7 @@ describe('S0 reusable fake CLI mechanics (T-OG-03/15; no provider qualification)
     running.child.stdin.end(input);
     expect(await running.closed).toEqual({ code: 0, signal: null });
     const record = JSON.parse(readFileSync(settings.recordPath, 'utf8'));
-    expect(record).toMatchObject({ fixtureRevision: 1, scenarioId: 'success', argv: args, cwd: settings.root, stdin: input, outputPaths: { final: settings.final, '--final-output': settings.final } });
+    expect(record).toMatchObject({ fixtureRevision: 2, scenarioId: 'success', argv: args, cwd: settings.root, stdin: input, outputPaths: { final: settings.final, '--final-output': settings.final } });
     expect(record.envNames).toEqual(['AIWG_FAKE_WORKER_CONFIG', 'SYNTHETIC_SECRET']);
     expect(JSON.stringify(record)).not.toContain(syntheticSecret);
     expect(existsSync(path.join(settings.root, 'should-not-exist'))).toBe(false);

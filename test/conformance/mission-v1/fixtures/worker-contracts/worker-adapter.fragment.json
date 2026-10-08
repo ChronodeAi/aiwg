@@ -453,6 +453,34 @@
             "cancel"
           ]
         },
+        "installationQualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scopeDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "fixtureDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "verifiedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "evidenceRef": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "scopeDigest",
+            "fixtureDigest",
+            "verifiedAt",
+            "evidenceRef"
+          ]
+        },
         "health": {
           "type": "object",
           "additionalProperties": false,

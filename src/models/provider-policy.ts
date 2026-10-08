@@ -52,6 +52,7 @@ export interface WorkerInvocationProfile {
   mcp?: { serverRef: string; tool: string; inputSchemaDigest: string; outputSchemaDigest: string;
     sessionIsolation: 'per-call' | 'per-instance' | 'serialized'; cancel: 'confirmed' | 'uncertain' };
   health?: Record<string, unknown>;
+  installationQualification?: { scopeDigest: string; fixtureDigest: string; verifiedAt: string; evidenceRef: string };
 }
 export interface WorkerAdapterMetadata {
   version: 1;
@@ -527,6 +528,10 @@ export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
     throw new Error('Worker CLI version is outside qualified profile');
   }
   for (const name of selection.requiredControls ?? []) {
+    if ((name === 'children' && !adapter.capabilities.nestedAgentsControllable)
+      || (name === 'fallback' && !adapter.capabilities.nativeFallbackControllable)) {
+      throw new Error(`Required worker control is unqualified: ${name}`);
+    }
     const control = profile.controls[name];
     if (!control || !['native', 'external'].includes(control.support) || !control.mapping || !control.evidence) {
       throw new Error(`Required worker control is unqualified: ${name}`);

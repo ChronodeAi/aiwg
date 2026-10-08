@@ -17,6 +17,80 @@ import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
 import { importImpl } from '../../_resolve-impl.mjs';
 
+// Shipped negative-suite definition. Evidence producers hash this definition,
+// including case semantics and permission rows; arbitrary fixture labels cannot
+// qualify an installation. Passed observations still come from the trusted host.
+export const workerNegativeFixtureSuite = Object.freeze({
+  revision: 2,
+  cases: Object.freeze({
+    'forbidden-write': 'Deny sibling/home writes; observe an allowed workspace write as a positive control.',
+    'denied-egress': 'Observe an attempted forbidden connection and its denial at the enforcing boundary.',
+    'authority-request': 'Reject requests to widen permissions without host authority.',
+    children: 'Deny or bound child workers under the same authority.',
+    fallback: 'Deny unapproved provider or model fallback.',
+    'tool-allowlist': 'Reject a tool outside the authorized allowlist.',
+    'model-pin': 'Observe the selected model and reject substitution.',
+    'workspace-trust': 'Reject an untrusted workspace without a trust bypass.',
+    'run-config': 'Reject changed or unscoped per-run configuration.',
+  }),
+  baseCases: Object.freeze(['forbidden-write', 'denied-egress', 'authority-request']),
+  // Canonical provider IDs only. Alias authority remains provider-definitions.
+  providers: Object.freeze({
+    codex: Object.freeze({ externalSandbox: false, cases: Object.freeze([]) }),
+    claude: Object.freeze({ externalSandbox: true, cases: Object.freeze(['tool-allowlist', 'model-pin']) }),
+    muse: Object.freeze({ externalSandbox: true, cases: Object.freeze(['workspace-trust', 'model-pin']) }),
+    hermes: Object.freeze({ externalSandbox: true, cases: Object.freeze(['run-config', 'model-pin']) }),
+  }),
+  defaultPolicy: 'External boundary and every negative case, regardless of requested controls.',
+});
+
+export async function workerNegativeFixtureDigest() {
+  const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+  return qualificationDigest(workerNegativeFixtureSuite);
+}
+
+async function workerPermissionRequirements(provider, requiredControls) {
+  const { normalizeProviderDefinitionId } = await importImpl(import.meta.url, 'providers/provider-definitions.js');
+  const id = normalizeProviderDefinitionId(provider);
+  const rows = workerNegativeFixtureSuite.providers;
+  const row = id && Object.hasOwn(rows, id) ? rows[id] : null;
+  return {
+    provider: id,
+    externalBoundary: !row || (row.externalSandbox && requiredControls.includes('sandbox')),
+    cases: row ? [...workerNegativeFixtureSuite.baseCases,
+      ...['children', 'fallback'].filter(name => requiredControls.includes(name)), ...row.cases]
+      : Object.keys(workerNegativeFixtureSuite.cases),
+  };
+}
+
+// Scoped native process mappings are exact argv tokens: either one flag or a
+// JSON array for a contiguous flag/value sequence. Prose is not executable proof.
+// External controls also require their declared tokens when they use argv;
+// boundary-only prose mappings are checked against the qualified host boundary.
+function hasControlArgvMapping(control) {
+  return control.support === 'native' || (control.support === 'external'
+    && (control.mapping.startsWith('[') || control.mapping.startsWith('-')));
+}
+
+function assertWorkerControlArgv(profile, argv) {
+  if (!Array.isArray(argv) || argv.some(token => typeof token !== 'string' || token.includes('\0'))) {
+    throw new Error('Worker control requires typed argv');
+  }
+  for (const [name, control] of Object.entries(profile.controls)) {
+    if (!hasControlArgvMapping(control)) continue;
+    let tokens;
+    try { tokens = control.mapping.startsWith('[') ? JSON.parse(control.mapping) : [control.mapping]; }
+    catch { throw new Error(`Worker control ${name} has invalid argv mapping`); }
+    const endOfOptions = argv.indexOf('--');
+    const options = endOfOptions < 0 ? argv : argv.slice(0, endOfOptions);
+    if (!Array.isArray(tokens) || !tokens.length || typeof tokens[0] !== 'string' || !/^--?[^-\s]/.test(tokens[0])
+      || tokens.some(token => typeof token !== 'string' || !token || token.includes('\0'))
+      || !options.some((_, index) => tokens.every((token, offset) => options[index + offset] === token))) {
+      throw new Error(`Worker control ${name} is absent from authorized argv`);
+    }
+  }
+}
+
 /**
  * Whether the optional muse exec Ralph adapter is registered.
  * Enabled by default; set `AIWG_MUSE_RALPH_ENABLED` to `0`, `false`, `no`,
@@ -109,6 +183,58 @@ export class ProviderAdapter {
     throw new Error('Not implemented: buildSessionArgs()');
   }
 
+  /** Qualified drivers own exact argv mapping; legacy bypass defaults are forbidden. */
+  buildWorkerArgs(invocation, profile) {
+    throw new Error('Not implemented: buildWorkerArgs()');
+  }
+
+  /**
+   * Inspect a trusted host installation, without importing code or running inference.
+   * The returned digest binds negative qualification evidence to this exact scope.
+   * Install roots and the enforcing boundary must remain protected by the host.
+   */
+  async inspectWorkerInstallation(options) {
+    return inspectWorkerInstallation(this, structuredClone(options));
+  }
+
+  /**
+   * Bounded version probe plus host-owned negative evidence, never worker claims.
+   * Missing, unsupported or changed installations stay DISABLED. No downloads,
+   * login, credentials discovery, server startup or managed state is involved.
+   */
+  async qualifyWorkerInstallation(options) {
+    try {
+      const request = structuredClone(options);
+      const scope = await this.inspectWorkerInstallation(request);
+      const { evidence, now } = request;
+      if (!Number.isFinite(now) || !evidence || evidence.scopeDigest !== scope.scopeDigest
+        || evidence.fixtureDigest !== await workerNegativeFixtureDigest()
+        || !Number.isFinite(Date.parse(evidence.verifiedAt)) || Date.parse(evidence.verifiedAt) > now
+        || typeof evidence.evidenceRef !== 'string' || !evidence.evidenceRef.trim()) {
+        throw new Error('Missing or stale installation evidence binding');
+      }
+      const { cases: requiredCases } = await workerPermissionRequirements(request.adapter.provider, request.requiredControls);
+      if (requiredCases.some(id => evidence.cases?.[id] !== 'passed')) {
+        throw new Error('Installation negative evidence is incomplete');
+      }
+      const version = await boundedVersionProbe(scope.binary.realpath,
+        request.adapter.invocation.versionArgv, request.environment ?? {}, request.cwd,
+        request.timeoutMs ?? 10_000, request.maxBytes ?? 5 * 1024 * 1024);
+      if (version !== request.cliVersion) throw new Error('Installed CLI version changed');
+      // Detect changes during the probe as well as on subsequent dispatch.
+      if ((await this.inspectWorkerInstallation(request)).scopeDigest !== scope.scopeDigest) {
+        throw new Error('Installation changed during qualification');
+      }
+      return { status: 'ENABLED', scopeDigest: scope.scopeDigest, fixtureDigest: evidence.fixtureDigest,
+        verifiedAt: evidence.verifiedAt, evidenceRef: evidence.evidenceRef,
+        cliVersion: request.cliVersion, platform: request.platform ?? process.platform,
+        ...(request.mcpServerDigest ? { serverDigest: request.mcpServerDigest } : {}) };
+    } catch {
+      // Probe output, env values, argv and filesystem errors may contain secrets.
+      return { status: 'DISABLED', reason: 'Installation missing, unsupported, changed or not qualified' };
+    }
+  }
+
   /**
    * Prepare one policy-resolved invocation through the supported installed path.
    * This only validates/renders data: the conductor still owns path/digest
@@ -190,6 +316,47 @@ export class ProviderAdapter {
       const { default: addFormats } = await import('ajv-formats');
       const validate = addFormats(new Ajv2020({ strict: true, allErrors: true })).compile(qualification.mcpSchemas.input);
       if (!validate(binding.arguments)) throw new Error('MCP worker arguments violate the pinned input schema');
+    }
+    if (profile.installationQualification) {
+      const installation = qualification.installation;
+      if (!installation) throw new Error('Worker installation recheck is required');
+      if (['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key =>
+        installation.evidence?.[key] !== profile.installationQualification[key])
+        || installation.evidence?.fixtureDigest !== await workerNegativeFixtureDigest()) {
+        throw new Error('Worker installation evidence changed');
+      }
+      const scope = await this.inspectWorkerInstallation({ ...installation,
+        adapter: qualification.adapter, profile: result.selected.profileRef,
+        cliVersion: qualification.cliVersion, requiredControls: qualification.requiredControls,
+        mcp: qualification.mcp });
+      if (scope.scopeDigest !== profile.installationQualification.scopeDigest
+        || result.selected.qualificationDigest !== scope.scopeDigest) {
+        throw new Error('Worker installation qualification changed');
+      }
+      if (await realpath(result.cwd) !== scope.cwd) {
+        throw new Error('Worker cwd differs from the qualified workspace');
+      }
+      for (const key of ['briefPath', 'stdoutPath', 'stderrPath', 'finalPath']) {
+        const target = await canonicalFuturePath(result[key]);
+        const roots = key === 'briefPath' ? scope.inputRoots : scope.outputRoots;
+        if (!roots.some(root => inside(root, target))) throw new Error('Worker input/output path is outside the qualified scope');
+      }
+      if (result.transport === 'shell') {
+        const workerArgs = this.buildWorkerArgs(result, profile);
+        assertWorkerControlArgv(profile, workerArgs);
+        const expected = [scope.binary.realpath, ...workerArgs];
+        if (JSON.stringify(expected) !== JSON.stringify(result.argv)
+          || result.stdin !== qualification.adapter.invocation.stdin) {
+          throw new Error('Worker argv/stdin differs from the authorized driver mapping');
+        }
+        // Shell plans contain names, never credential values. Recheck the named
+        // launch environment now; the conductor must repeat preparation if it
+        // changes before copying the command into its shell.
+        if (JSON.stringify([...result.envNames].sort()) !== JSON.stringify(Object.keys(installation.environment ?? {}).sort())
+          || result.envNames.some(name => process.env[name] !== installation.environment[name])) {
+          throw new Error('Worker launch environment differs from qualification');
+        }
+      }
     }
     assertValidWorkerPayload('workerResolvedInvocation', result);
     return result;
@@ -327,6 +494,165 @@ const installedModules = new Map();
 let installedLoad = Promise.resolve();
 // Same default byte ceiling as workerAdapter.catalogAdapter.maxBytes.
 const installedModuleMaxBytes = 5 * 1024 * 1024;
+
+async function binaryIdentity(filename, workerWritableRoots) {
+  if (typeof filename !== 'string' || !path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute installed binary required');
+  const canonical = await realpath(filename);
+  for (const root of workerWritableRoots) {
+    if (inside(await realpath(root), canonical)) throw new Error('Worker-writable binary');
+  }
+  const handle = await open(canonical, 'r');
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || !(stat.mode & 0o111) || (stat.mode & 0o022)
+      || (stat.nlink > 1 && (stat.mode & 0o222))) throw new Error('Untrusted binary permissions');
+    const hash = createHash('sha256');
+    // Incremental, bounded reads: never allocate the size reported by the binary.
+    const buffer = Buffer.alloc(64 * 1024);
+    let total = 0;
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      total += bytesRead;
+      if (total > 256 * 1024 * 1024) throw new Error('Binary exceeds qualification byte bound');
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return { realpath: canonical, sha256: `sha256:${hash.digest('hex')}` };
+  } finally { await handle.close(); }
+}
+
+// Resolve existing ancestors too: a not-yet-created output can traverse a symlink.
+async function canonicalFuturePath(filename) {
+  try { return await realpath(filename); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    // A dangling link is not a new output: following it may leave the scope.
+    try { if ((await lstat(filename)).isSymbolicLink()) throw new Error('Dangling worker path'); }
+    catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+    const parent = path.dirname(filename);
+    if (parent === filename) throw error;
+    return path.join(await canonicalFuturePath(parent), path.basename(filename));
+  }
+}
+
+async function inspectWorkerInstallation(instance, request) {
+  const { qualifyWorkerInvocationProfile } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+  const { adapter, profile: profileId, cliVersion, requiredControls, workerWritableRoots,
+    effectiveConfigDigest, accountScope, boundary, cwd } = request;
+  const platform = request.platform ?? process.platform;
+  if (platform !== 'linux' || adapter.id !== instance.getName()) throw new Error('Unsupported installation identity/platform');
+  if (!Array.isArray(requiredControls) || !Array.isArray(workerWritableRoots)
+    || !path.isAbsolute(cwd ?? '') || !/^sha256:[a-f0-9]{64}$/.test(effectiveConfigDigest)
+    || typeof accountScope !== 'string' || !accountScope) throw new Error('Missing installation scope');
+  const profile = qualifyWorkerInvocationProfile(adapter, { profile: profileId,
+    transport: adapter.invocationProfiles?.[profileId]?.transport, cliVersion, requiredControls, mcp: request.mcp });
+  if (profile.transport === 'mcp' && !/^sha256:[a-f0-9]{64}$/.test(request.mcpServerDigest)) {
+    throw new Error('MCP registration binding required');
+  }
+  if (adapter.invocation.kind !== 'process') throw new Error('HTTP installation requires its qualified local transport driver');
+  if (!boundary || !['native', 'os', 'executor'].includes(boundary.kind)
+    || typeof boundary.identity !== 'string' || !boundary.identity
+    || !/^sha256:[a-f0-9]{64}$/.test(boundary.digest) || !Array.isArray(boundary.controls)) throw new Error('Missing enforcing boundary');
+  if (requiredControls.some(name => profile.controls[name].support === 'external' && !boundary.controls.includes(name))) {
+    throw new Error('External control lacks an enforcing boundary');
+  }
+  const permissionRequirements = await workerPermissionRequirements(adapter.provider, requiredControls);
+  if (permissionRequirements.externalBoundary && boundary.kind === 'native') {
+    throw new Error('Profile requires an external enforcing boundary');
+  }
+  let controlArgv = null;
+  if (Object.values(profile.controls).some(hasControlArgvMapping)) {
+    if (!request.invocation) throw new Error('Worker control qualification requires representative argv invocation');
+    controlArgv = instance.buildWorkerArgs(structuredClone(request.invocation), profile);
+    assertWorkerControlArgv(profile, controlArgv);
+  }
+  const environment = request.environment ?? {};
+  if (Object.entries(environment).some(([name, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+    || !profile.envAllowlist.includes(name) || !adapter.invocation.envAllowlist.includes(name)
+    || typeof value !== 'string' || value.includes('\0'))) throw new Error('Unscoped worker environment');
+  const endpoints = request.endpoints ?? [];
+  for (const endpoint of endpoints) {
+    const url = new URL(endpoint);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash
+      || !request.allowedEndpoints?.includes(endpoint)) throw new Error('Endpoint is not explicitly authorized');
+  }
+  // The allowlist is supplied by the installation authority, never a downloaded manifest.
+  const references = [adapter.runtimeDriver, ...(adapter.catalogAdapter.kind === 'module' ? [adapter.catalogAdapter.locator] : [])];
+  const modules = [];
+  for (const reference of new Set(references)) {
+    const matches = (request.modules ?? []).filter(entry => entry.reference === reference);
+    if (matches.length !== 1) throw new Error('Missing trusted module');
+    const inspected = await inspectInstalledModule(matches[0], workerWritableRoots, platform);
+    if (reference === adapter.runtimeDriver && (inspected.entry.packageVersion !== adapter.adapterVersion
+      || !inspected.entry.adapterIds.includes(adapter.id))) throw new Error('Installed driver identity mismatch');
+    modules.push({ reference, filename: inspected.filename, key: inspected.key });
+  }
+  const binary = await binaryIdentity(request.executable, workerWritableRoots);
+  const canonicalCwd = await realpath(cwd);
+  const canonicalWritableRoots = await Promise.all(workerWritableRoots.map(root => realpath(root)));
+  const inputRoots = await Promise.all((request.inputRoots ?? [cwd]).map(root => realpath(root)));
+  const outputRoots = await Promise.all((request.outputRoots ?? workerWritableRoots).map(root => realpath(root)));
+  if (!Array.isArray(request.runtimeFiles)) throw new Error('Declared runtime dependency closure is required');
+  const runtimeFiles = [];
+  for (const filename of request.runtimeFiles) {
+    if (!path.isAbsolute(filename)) throw new Error('Runtime dependency must be installed');
+    const canonical = await realpath(filename);
+    for (const root of workerWritableRoots) {
+      if (inside(await realpath(root), canonical)) throw new Error('Worker-writable runtime dependency');
+    }
+    const stat = await lstat(canonical);
+    if ((stat.mode & 0o022) || (stat.nlink > 1 && (stat.mode & 0o222))) throw new Error('Untrusted runtime dependency');
+    runtimeFiles.push({ filename: canonical, sha256: `sha256:${createHash('sha256').update(await readInstalledFile(canonical)).digest('hex')}` });
+  }
+  const metadata = structuredClone(adapter);
+  for (const entry of Object.values(metadata.invocationProfiles ?? {})) delete entry.installationQualification;
+  return { binary, cwd: canonicalCwd, inputRoots, outputRoots, scopeDigest: qualificationDigest({ metadata, profileId, cliVersion, platform, binary, modules, runtimeFiles,
+    permissionRequirements, controlArgv, fixtureDigest: await workerNegativeFixtureDigest(),
+    requiredControls: [...requiredControls].sort(), effectiveConfigDigest, accountScope, boundary, cwd: canonicalCwd,
+    workerWritableRoots: canonicalWritableRoots, inputRoots, outputRoots, environmentDigest: qualificationDigest(environment), endpoints, mcp: request.mcp ?? null,
+    mcpServerDigest: request.mcpServerDigest ?? null }) };
+}
+
+function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000
+    || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 5 * 1024 * 1024
+    || !Array.isArray(argv) || argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
+    throw new Error('Invalid probe bounds');
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, argv, { cwd, env: environment, stdio: 'pipe', detached: true, shell: false });
+    let output = '';
+    let size = 0;
+    let failed = false;
+    const stop = () => {
+      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ } }
+    };
+    // Never rely on close: an escaped descendant may retain the pipe descriptors.
+    const abort = () => {
+      failed = true; stop();
+      child.stdout.destroy(); child.stderr.destroy(); child.stdin.destroy(); child.unref();
+      reject(new Error('Bounded version probe failed'));
+    };
+    const timer = setTimeout(abort, timeoutMs);
+    const consume = (chunk, stdout) => {
+      size += chunk.length;
+      if (size > maxBytes) { clearTimeout(timer); abort(); }
+      else if (stdout) output += chunk.toString();
+    };
+    child.stdout.on('data', chunk => consume(chunk, true));
+    child.stderr.on('data', chunk => consume(chunk, false));
+    child.stdin.on('error', () => {});
+    child.stdin.end();
+    child.once('error', () => { clearTimeout(timer); stop(); reject(new Error('Version probe unavailable')); });
+    child.once('exit', stop);
+    child.once('close', code => {
+      clearTimeout(timer); stop();
+      if (failed || code !== 0) reject(new Error('Bounded version probe failed'));
+      else resolve(output.trim());
+    });
+  });
+}
 
 function inside(root, target) {
   const relative = path.relative(root, target);

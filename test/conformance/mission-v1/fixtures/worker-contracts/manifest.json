@@ -29,7 +29,7 @@
       "source": "05-configuration-spec.md ### 4.3 Existing",
       "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
       "target": "$defs.workerAdapter",
-      "sha256": "ee8e9be50d2cb50052ca189639e779c35c48c117829befe5b69dd7331b1f320f"
+      "sha256": "a052cabb9792cd9aa477cb112280a6c2d5f4f07d2aa939ac60125e19853cbe9b"
     },
     {
       "file": "capability-root.patch.json",

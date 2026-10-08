@@ -424,6 +424,21 @@ describe('ExecutorRegistry', () => {
       expect(result!.executor.executorId).toBe(VALID_EXECUTOR_ID);
     });
 
+    it.each(['x-filesystem:workspace-only', 'x-network:denied', 'x-nested-agents:bounded', 'x-fallback:disabled'])(
+      'T-OG-10 pinned executor cannot bypass missing %s control', capability => {
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
+        expect(registry.pickByFilter({ capabilities: [capability] })).toBeNull();
+        registry.register({ ...VALID_REGISTER_REQUEST, capabilities: [...VALID_REGISTER_REQUEST.capabilities, capability] });
+        registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })?.executor.executorId)
+          .toBe(VALID_EXECUTOR_ID);
+        // Re-registration with weaker controls immediately invalidates the same pin.
+        registry.register(VALID_REGISTER_REQUEST);
+        registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
+      },
+    );
+
     it('returns null when pinned executor not found', () => {
       const result = registry.pickByFilter({ executor_id: '00000000-0000-0000-0000-000000000000' });
       expect(result).toBeNull();
