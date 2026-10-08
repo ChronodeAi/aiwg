@@ -9,6 +9,9 @@
  * @implements #621
  */
 
+import { resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
+export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
+
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { readFileSync, existsSync } from 'node:fs';
@@ -659,6 +662,31 @@ export interface BuildResourceRequirements {
   min_swap_gb?: number;
 }
 
+/**
+ * Live host-resource thresholds gating worker dispatch and heavy verification
+ * runs (FR-OG-107, #2954). Default thresholds apply to memory/load/pressure;
+ * the optional worker-count cap is enforced only when configured. Defaults mirror the
+ * titan oomd incident prototype (`resource-gate.sh`): load above core count,
+ * single-digit free-memory headroom, and sustained memory pressure all queued
+ * work instead of launching into them.
+ */
+export interface DispatchHostThresholds {
+  /** Minimum available memory (MemAvailable) in GiB. Default 8. */
+  min_avail_mem_gb?: number;
+  /** Maximum 1-minute load relative to core count. Default 1.0. */
+  max_load_ratio?: number;
+  /** Maximum memory PSI `some avg10` (percent). Default 30. */
+  max_mem_psi_avg10?: number;
+  /** Maximum memory PSI `some avg60` (percent). Default 10. */
+  max_mem_psi_avg60?: number;
+  /**
+   * Maximum running worker/test processes before dispatch queues. Unset by
+   * default: counts are reported but do not block unless configured, because
+   * count caps alone cannot bound memory/CPU/pressure (see #2954).
+   */
+  max_workers?: number;
+}
+
 /** Cheap host-resource preflight run before expensive build commands (#1692). */
 export interface BuildResourcePreflightConfig {
   /** Enable preflight checks for project build scripts. Defaults to false when absent. */
@@ -670,6 +698,12 @@ export interface BuildResourcePreflightConfig {
   mode?: BuildResourcePreflightMode;
   /** Project-specific minimum host resources. */
   requirements?: BuildResourceRequirements;
+  /**
+   * Live dispatch thresholds (FR-OG-107, #2954). Checked by the `dispatch`
+   * preflight profile before worker launches and heavy verification runs.
+   * Unset fields fall back to {@link DEFAULT_DISPATCH_HOST_THRESHOLDS}.
+   */
+  dispatch?: DispatchHostThresholds;
 }
 
 /** Project build policy block (#1692). */
@@ -920,6 +954,13 @@ export interface WorkerParallelism {
     groupCaps?: Record<string, number>; cliCaps?: Record<string, number>;
     memberCaps?: Record<string, number>; modelCaps?: Record<string, number>; quotaCaps?: Record<string, number>;
     queueTimeoutSeconds?: number; leaseSeconds?: number; maxQueued?: number; authorityRef?: string;
+    /**
+     * Live host-resource thresholds (FR-OG-107, #2954). Tightens
+     * `build.resource_preflight.dispatch` field-by-field; unset fields fall back to
+     * {@link DEFAULT_DISPATCH_HOST_THRESHOLDS}. File-based admission wiring is
+     * advisory for Tier 0 conductors; shared enforced admission lands in S2.
+     */
+    hostResources?: DispatchHostThresholds;
   };
   budgets?: {
     perRun?: { tokens?: number; costUsd?: number; wallSeconds?: number };
@@ -978,6 +1019,13 @@ export function validateParallelismConfig(value: unknown): string[] {
     if (extra !== undefined || !policy.groups?.[group]?.members.some(m => m.id === member)) error('admission/memberCaps', 'Unknown group/member');
   }
   for (const key of Object.keys(admission?.modelCaps ?? {})) if (!isCanonicalWorkerModelKey(key)) error('admission/modelCaps', 'Noncanonical inference model key');
+  if (admission?.hostResources !== undefined) {
+    try {
+      resolveDispatchHostThresholds(undefined, admission.hostResources);
+    } catch (validation) {
+      error('admission/hostResources', validation instanceof Error ? validation.message : String(validation));
+    }
+  }
   return errors;
 }
 

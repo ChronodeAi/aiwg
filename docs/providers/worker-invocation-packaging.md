@@ -80,6 +80,70 @@ cancellation and verification remain with their existing owners. Managed
 admission, retries, checkpointing, budget settlement and completion are deferred
 to S2+; none is instantiated by preparation.
 
+## Dispatch gate and worker isolation (Tier 0, #2954)
+
+After preparation and before launch, the conductor runs the live
+resource gate, then launches the prepared command in its own resource scope:
+
+```js
+import { checkWorkerDispatch } from '../../tools/scripts/resource-preflight.mjs';
+import { launchIsolatedWorker } from '../../tools/ralph-external/lib/worker-isolation.mjs';
+
+// From the project config: build.resource_preflight.dispatch thresholds,
+// tightened field-by-field by parallelism.admission.hostResources
+// (conservative defaults when unset). worker_dispatch off means legacy:
+// { enabled: false, ok: true } with no signal sampling.
+const gate = checkWorkerDispatch({ config });
+if (!gate.ok) {
+  // Queue, pick another qualified host, or reject with gate.failures
+  // (each names its signal: avail-mem, load, mem-psi-avg10, mem-psi-avg60,
+  // workers, platform, thresholds). Never launch.
+}
+const outcome = launchIsolatedWorker({
+  name, memoryMaxGb, command: prepared.argv[0], args: prepared.argv.slice(1),
+  cwd: prepared.cwd, logFile, gate,
+});
+// outcome.mode is 'systemd-unit' (own unit, MemoryMax + MemorySwapMax=0,
+// PATH/HOME passthrough, stdin /dev/null) or, where no systemd user manager
+// exists, an explicit degraded diagnostic — never a silent unconfined launch
+// unless the caller passes allowDegraded: true and records the degraded mode
+// in the qualification record.
+```
+
+The `dispatch` preflight profile exposes the same gate on the command line
+(`node tools/scripts/resource-preflight.mjs --profile dispatch`), and
+`aiwg doctor` reports the live host state plus the isolation mode read-only.
+No mandatory enforcement is wired into `prepareWorkerInvocation` or the
+managed dispatch internals here; this section is the consumable API the
+Tier 0 conductor procedure and #2888 dispatch templates must call before launch:
+`prepareWorkerInvocation` → `checkWorkerDispatch` with the actual project config
+and current host signals → `launchIsolatedWorker` with that gate result.
+Omitting the gate refuses launch. Explicit `gate: 'disabled'` is allowed only
+when the supplied config has worker_dispatch off.
+
+Threshold precedence is monotonic: build dispatch, admission hostResources,
+and caller/task overlay are combined per field. Minimum thresholds take MAX;
+maximum thresholds (including max_workers) take MIN. No layer can relax another
+configured limit or the conservative defaults, which form the base layer. All
+layers are validated, including values superseded by stricter limits. At N
+running workers, max_workers=N blocks the next launch. Counts use current-user
+`aiwg-worker-*` service units when available; otherwise exact `codex`/`muse-bin`
+process names owned by the current UID. Legacy build bypass environment flags
+never disable the dispatch profile.
+
+Serialize heavy verification runs per host, and checkpoint progress before
+heavy steps in long runs (NFR-OG-023). Run the live gate before each heavy
+verification step as well as before each worker launch.
+
+Systemd launches disable environment expansion so prepared argv stays literal.
+Units are retained for `getWorkerIsolationStatus(outcome.unit)`, which returns
+`{ active, result, execMainStatus, memoryMax }` (memoryMax in bytes). Record OOM
+results before explicit cleanup with `systemctl --user reset-failed <unit>`;
+automatic collection would discard that evidence. Degraded opt-in launches
+return `outcome.child` and `outcome.pid` immediately, without a worker deadline;
+the caller owns output draining, completion, cancellation and qualification
+recording.
+
 ## Validation limits and cleanup
 
 The focused and related Vitest command ran ten files: 402 passed, zero failed

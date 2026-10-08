@@ -20,13 +20,19 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
     expect(report.result).toBe('wiring-valid');
     expect(report.releaseQualification).toBe('unqualified');
     expect(Object.values(report.packs).some((pack: any) => pack.status === 'implemented')).toBe(false);
-    expect(report.packs['T-OG-05'].testFiles).toEqual([]);
+    // T-OG-04/05 carry Tier 0 fixture coverage (#2954); T-OG-06 still has no
+    // managed-runtime files, so the file-less rejection cases below use it.
+    expect(report.packs['T-OG-04'].status).toBe('partial');
+    expect(report.packs['T-OG-04'].testFiles.length).toBeGreaterThan(0);
+    expect(report.packs['T-OG-05'].status).toBe('partial');
+    expect(report.packs['T-OG-05'].testFiles.length).toBeGreaterThan(0);
+    expect(report.packs['T-OG-06'].testFiles).toEqual([]);
   });
 
   it.each(['partial', 'implemented'])('rejects %s without test files', status => {
     const value = registry();
-    value.packs['T-OG-04'].status = status;
-    expect(inspectPackRegistry(value, root).errors).toContain(`T-OG-04: ${status} without test files`);
+    value.packs['T-OG-06'].status = status;
+    expect(inspectPackRegistry(value, root).errors).toContain(`T-OG-06: ${status} without test files`);
   });
 
   it('rejects a declared file that has not landed rather than treating it as implemented', () => {
@@ -80,7 +86,7 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
       }
     }
     if (scenario === 'missing-qualification-pass') value.qualificationResults = [{ id: 'fake', qualification: 'missing', result: 'passed' }];
-    if (scenario === 'implemented-without-files') value.packs['T-OG-04'].status = 'implemented';
+    if (scenario === 'implemented-without-files') value.packs['T-OG-06'].status = 'implemented';
     mkdirSync(path.dirname(path.join(directory, registryPath)), { recursive: true });
     writeFileSync(path.join(directory, registryPath), JSON.stringify(value));
     const script = `import { runPackGate } from ${JSON.stringify(checker)}; runPackGate({ repositoryRoot: ${JSON.stringify(directory)} });`;
@@ -92,6 +98,6 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
     expect(report.result).toBe(scenario === 'valid' ? 'wiring-valid' : 'failed');
     expect(report.releaseQualification).toBe('unqualified');
     if (scenario === 'missing-qualification-pass') expect(report.errors).toContain('fake: missing qualification cannot be reported as a pass');
-    if (scenario === 'implemented-without-files') expect(report.errors).toContain('T-OG-04: implemented without test files');
+    if (scenario === 'implemented-without-files') expect(report.errors).toContain('T-OG-06: implemented without test files');
   });
 });
