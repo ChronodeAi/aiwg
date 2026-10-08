@@ -147,6 +147,9 @@ describe('worker isolation detection', () => {
 
 describe('launchIsolatedWorker gate-then-launch', () => {
   const passingGate = { enabled: true, ok: true, failures: [] };
+  // Synthetic user-manager environment: these tests must not depend on the
+  // host having a systemd user manager (CI containers have none).
+  const managerSpawn = (() => ({ status: 0, stdout: 'LANG=C.UTF-8\nNODE_OPTIONS=--synthetic\nLD_PRELOAD=/synthetic.so\n', stderr: '' })) as never;
 
   it('attaches separate pipes and passes only environment names in systemd argv', () => {
     let binary: string | undefined;
@@ -156,7 +159,7 @@ describe('launchIsolatedWorker gate-then-launch', () => {
     const outcome = launchIsolatedWorker({ command: '/qualified/worker', args: ['literal $HOME'], memoryMaxGb: 2,
       gate: passingGate, attached: true, ownedGroup: true, stdin: 'brief-text',
       isolation: { mode: 'systemd-unit', reason: 'synthetic' },
-      env: { SYNTHETIC_SECRET: 'never-in-argv' }, envNames: ['SYNTHETIC_SECRET'],
+      env: { SYNTHETIC_SECRET: 'never-in-argv' }, envNames: ['SYNTHETIC_SECRET'], spawn: managerSpawn,
       spawnAsync: ((command: string, args: string[], opts: any) => { binary = command; argv = args; options = opts; return child; }) as never,
     });
     expect(outcome).toMatchObject({ mode: 'systemd-unit', child, launched: true });
@@ -181,7 +184,7 @@ describe('launchIsolatedWorker gate-then-launch', () => {
       expect(() => launchIsolatedWorker({ command: '/qualified/worker', memoryMaxGb: 2, gate: passingGate,
         attached: true, runDir: '/private/run', allowDegraded: true,
         isolation: { mode, reason: 'synthetic' }, env: { [name]: 'synthetic-unsafe-bootstrap' }, envNames: [name],
-        spawnAsync })).toThrow(/transport bootstrap/);
+        spawn: managerSpawn, spawnAsync })).toThrow(/transport bootstrap/);
     }
     expect(spawnAsync).not.toHaveBeenCalled();
   });
