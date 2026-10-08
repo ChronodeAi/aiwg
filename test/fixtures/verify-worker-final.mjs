@@ -8,12 +8,13 @@
 // subprocess the test spawns and waits on, not a JS function called inline
 // in the same process as the assertion.
 //
-// Usage: node verify-worker-final.mjs --final <path> --expect-digest sha256:<hex>
+// Usage (source checkout): node --import tsx verify-worker-final.mjs --final <path> --expect-digest sha256:<hex>
 // Exit 0 and print the recomputed digest on success; exit 1 and print a
 // diagnostic to stderr on any failure (missing file, digest mismatch, or an
 // output that is not a well-formed completed `result` claim).
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { ProviderAdapter } from '../../tools/ralph-external/lib/provider-adapter.mjs';
 
 function arg(flag) {
   const index = process.argv.indexOf(flag);
@@ -41,16 +42,21 @@ if (digest !== expectDigest) {
   process.exit(1);
 }
 
-let event;
+let claims;
 try {
-  event = JSON.parse(bytes.toString('utf8'));
+  // Synthetic shape/digest check only. The conductor independently observes the
+  // actual worker termination and supplies execution to trusted result assembly.
+  class FixtureAdapter extends ProviderAdapter {}
+  claims = await new FixtureAdapter().parseWorkerOutput(bytes, {
+    observation: { transport: 'shell', status: 'completed', exitCode: 0, termination: 'confirmed' },
+  });
 } catch (error) {
-  process.stderr.write(`final output is not valid JSON: ${error.message}\n`);
+  process.stderr.write(`final output is not a completed result claim: ${error.message}\n`);
   process.exit(1);
 }
 
-if (event?.type !== 'result' || event?.result?.status !== 'completed') {
-  process.stderr.write(`final output is not a completed result claim (type=${event?.type}, status=${event?.result?.status})\n`);
+if (claims.status !== 'completed') {
+  process.stderr.write(`final output is not a completed result claim (status=${claims.status})\n`);
   process.exit(1);
 }
 

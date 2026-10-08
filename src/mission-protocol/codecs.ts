@@ -9,6 +9,7 @@ import {
   WORKER_BASELINE_FEATURES,
   WORKER_CONTRACT_REVISION,
   WORKER_DEFINITIONS,
+  WORKER_DEFINITION_PRODUCERS,
   WORKER_KNOWN_FEATURES,
   WorkerContractError,
   type CanonicalMission,
@@ -23,6 +24,13 @@ import {
   type WorkerDefinitionName,
   type WorkerNegotiationRequest,
   type WorkerNegotiationVerdict,
+  type WorkerDefinitionProducer,
+  type WorkerClaims,
+  type WorkerExecution,
+  type WorkerBrief,
+  type WorkerDirectBrief,
+  type WorkerVerification,
+  type WorkerDirectVerification,
 } from './types.js';
 
 type RecordValue = Record<string, unknown>;
@@ -362,6 +370,95 @@ export function validateWorkerPayload(definition: WorkerDefinitionName, value: u
 export function assertValidWorkerPayload(definition: WorkerDefinitionName, value: unknown): void {
   const { valid, errors } = validateWorkerPayload(definition, value);
   if (!valid) throw new WorkerContractError('OG_CONTRACT_INVALID', `Invalid ${definition}: ${errors.join('; ') || 'shape mismatch'}.`);
+}
+
+/** The producer is supplied by trusted calling code, never read from payload data. */
+export function decodeWorkerProducedPayload<T>(definition: WorkerDefinitionName, producer: WorkerDefinitionProducer, value: T): T {
+  if (WORKER_DEFINITION_PRODUCERS[definition] !== producer) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', `Producer ${producer} cannot author ${definition}.`);
+  }
+  return decodeWorkerPayload(definition, value);
+}
+
+/** Shared CLI/MCP terminal gate. Transport observations are adapter-owned. */
+export interface WorkerTerminalObservation {
+  transport: 'shell' | 'mcp';
+  status: WorkerExecution['status'];
+  termination: WorkerExecution['termination'];
+  exitCode: number | null;
+  isError?: boolean;
+}
+
+export function assertWorkerTerminal(observation: WorkerTerminalObservation): void {
+  if (!observation || !['shell', 'mcp'].includes(observation.transport)
+    || observation.status !== 'completed' || observation.termination !== 'confirmed'
+    || (observation.transport === 'shell' ? observation.exitCode !== 0 : observation.exitCode !== null && observation.exitCode !== 0)
+    || (observation.isError !== undefined && observation.isError !== false)) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', 'Worker terminal evidence is missing, erroneous or uncertain; exit zero alone is insufficient.');
+  }
+}
+
+/**
+ * Assemble detached, immutable evidence from separately attributed producers.
+ * artifactBytes are read by the conductor from the exact artifact (or protected
+ * canonical tree manifest) being verified/integrated, never a worker digest.
+ * This is a shared value operation; no Mission/lease/store is needed in direct mode.
+ */
+// Ordered weakest-to-strongest, matching WorkerExecution['identityQuality'] exactly
+// (05 §5.1 / BLOCKER #2890): a required tier is satisfied by that tier or any
+// stronger one. Keep this the single source of truth for both the valid-value
+// check and the ordering comparison below, so a renamed/added quality tier
+// cannot silently resurrect the former `requiredIdentity: 'runtime-configured'`
+// no-op (the option never matched any real `identityQuality` value).
+const IDENTITY_QUALITY_ORDER = ['unavailable', 'runtime-configured-only', 'backend-attested'] as const;
+
+export function assembleWorkerResult(input: {
+  brief: WorkerBrief | WorkerDirectBrief;
+  execution: WorkerExecution;
+  worker: WorkerClaims | null;
+  verification: WorkerVerification | WorkerDirectVerification;
+  artifactBytes?: Uint8Array;
+  requiredIdentity?: WorkerExecution['identityQuality'];
+}, previous?: WorkerPayloadSnapshot): WorkerPayloadSnapshot {
+  if (input.requiredIdentity !== undefined && !(IDENTITY_QUALITY_ORDER as readonly string[]).includes(input.requiredIdentity)) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', 'Unknown required identity evidence.');
+  }
+  const direct = 'mode' in input.brief && input.brief.mode === 'direct';
+  const briefDefinition = direct ? 'workerDirectBrief' : 'workerBrief';
+  const brief = decodeWorkerProducedPayload(briefDefinition, 'conductor', input.brief);
+  const execution = decodeWorkerProducedPayload('workerExecution', 'adapter', input.execution);
+  const worker = input.worker === null ? null : decodeWorkerProducedPayload('workerClaims', 'worker', input.worker);
+  const verification = decodeWorkerProducedPayload(direct ? 'workerDirectVerification' : 'workerVerification', 'verifier', input.verification);
+  if (stableJson(execution.requested) !== stableJson(brief.selected)) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', 'Adapter requested identity differs from the bound brief.');
+  }
+  if (verification.status === 'accepted') {
+    if (execution.status !== 'completed' || execution.termination !== 'confirmed'
+      || execution.endedAt === null || Date.parse(execution.endedAt) < Date.parse(execution.startedAt) || execution.failure !== null
+      || (execution.exitCode !== null && execution.exitCode !== 0) || worker?.status !== 'completed') {
+      throw new WorkerContractError('OG_CONTRACT_INVALID', 'Acceptance requires completed claims and confirmed successful execution.');
+    }
+    if (execution.identityQuality === 'unavailable' || !execution.identityEvidence.length
+      || (input.requiredIdentity !== undefined
+        && IDENTITY_QUALITY_ORDER.indexOf(execution.identityQuality) < IDENTITY_QUALITY_ORDER.indexOf(input.requiredIdentity))
+      || execution.observedModel !== brief.selected.model || execution.observedFamily !== brief.selected.family
+      || stableJson(execution.observedEffort) !== stableJson(brief.selected.effort)) {
+      throw new WorkerContractError('OG_CONTRACT_INVALID', 'Acceptance requires matching qualified observed identity.');
+    }
+    if (!(input.artifactBytes instanceof Uint8Array)
+      || `sha256:${createHash('sha256').update(input.artifactBytes).digest('hex')}` !== verification.artifactDigest) {
+      throw new WorkerContractError('OG_CONTRACT_INVALID', 'Verified artifact digest differs from the exact artifact bytes.');
+    }
+  }
+  const briefSnapshot = encodeWorkerPayloadSnapshot(briefDefinition, brief);
+  return encodeWorkerPayloadSnapshot(direct ? 'workerDirectResult' : 'workerResult', {
+    version: WORKER_CONTRACT_REVISION,
+    taskId: brief.intent.taskId,
+    invocationId: brief.invocationId,
+    briefDigest: briefSnapshot.artifact.digest,
+    execution, worker, verification,
+    ...(direct ? { mode: 'direct' } : {}),
+  }, previous);
 }
 
 /**

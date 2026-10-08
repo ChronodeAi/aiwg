@@ -11,7 +11,8 @@
     "B-OG-29": "roctinam/aiwg#2878",
     "B-OG-30": "roctinam/aiwg#2879",
     "B-OG-31": "roctinam/aiwg#2880",
-    "B-OG-19": "roctinam/aiwg#2886"
+    "B-OG-19": "roctinam/aiwg#2886",
+    "B-OG-14": "roctinam/aiwg#2890"
   },
   "packs": {
     "T-OG-01": {
@@ -52,7 +53,8 @@
       "slice": "S1",
       "mechanismOwners": [
         "B-OG-06",
-        "B-OG-31"
+        "B-OG-31",
+        "B-OG-14"
       ],
       "status": "partial",
       "testFiles": [
@@ -62,7 +64,9 @@
         "test/integration/worker-adapter-package.test.ts",
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/models/worker-installation-metadata.test.ts",
-        "test/unit/mcp/worker-qualification.test.ts"
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
@@ -71,11 +75,14 @@
       "ownerIssue": "roctinam/aiwg#2886",
       "slice": "S1",
       "mechanismOwners": [
-        "B-OG-13"
+        "B-OG-13",
+        "B-OG-14"
       ],
       "status": "partial",
       "testFiles": [
-        "test/unit/ralph-external/worker-isolation.test.ts"
+        "test/unit/ralph-external/worker-isolation.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts"
       ],
       "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, and guarded live OOM containment coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording and managed integration remain with the owning B-OG-13 checkpoint."
     },
@@ -156,7 +163,8 @@
       "mechanismOwners": [
         "B-OG-06",
         "B-OG-13",
-        "B-OG-15"
+        "B-OG-15",
+        "B-OG-14"
       ],
       "status": "partial",
       "testFiles": [
@@ -164,7 +172,9 @@
         "test/unit/models/worker-installation-metadata.test.ts",
         "test/unit/mcp/worker-qualification.test.ts",
         "test/unit/serve/executor-registry.test.ts",
-        "test/unit/ralph-external/installed-worker-adapter.test.ts"
+        "test/unit/ralph-external/installed-worker-adapter.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Managed runtime, verifier isolation and retention controls remain deferred to S2+."
     },
@@ -253,7 +263,8 @@
       "ownerIssue": "roctinam/aiwg#2886",
       "slice": "S1",
       "mechanismOwners": [
-        "B-OG-35"
+        "B-OG-35",
+        "B-OG-14"
       ],
       "status": "partial",
       "testFiles": [
@@ -267,7 +278,9 @@
         "test/unit/ralph-external/worker-invocation.test.ts",
         "test/integration/worker-adapter-package.test.ts",
         "test/unit/ralph-external/worker-installation.test.ts",
-        "test/unit/mcp/worker-qualification.test.ts"
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },

@@ -35,7 +35,10 @@ const digestOf = (bytes: Buffer | string) => `sha256:${createHash('sha256').upda
  */
 function runTrustedCheck(finalPath: string, expectDigest: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [path.join(fixtureRoot, 'verify-worker-final.mjs'), '--final', finalPath, '--expect-digest', expectDigest], { stdio: 'pipe' });
+    // Exercise current source without requiring a pre-existing compiled checkout.
+    const child = spawn(process.execPath, ['--import', 'tsx', path.join(fixtureRoot, 'verify-worker-final.mjs'), '--final', finalPath, '--expect-digest', expectDigest], {
+      stdio: 'pipe', env: { AIWG_RESOLVE_IMPL_FROM: 'src' },
+    });
     children.push(child);
     let stdout = ''; let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });

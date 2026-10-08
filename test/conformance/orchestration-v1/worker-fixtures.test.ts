@@ -4,7 +4,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
+
+class FixtureAdapter extends ProviderAdapter {}
+const adapter = new FixtureAdapter();
+const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+beforeEach(() => vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src'));
 
 const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
 const roots: string[] = [];
@@ -76,6 +82,7 @@ const worker = (invocationId: string, workspace: string, model = 'synthetic-mode
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const { child, closed } of children.splice(0)) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await closed;
@@ -101,6 +108,7 @@ describe('S0 reusable fake CLI mechanics (T-OG-03/15; no provider qualification)
     expect(readFileSync(settings.final, 'utf8')).toBe(running.output().stdout);
     expect(running.output().stderr).toBe('');
     expect(running.output().timedOut).toBe(false);
+    expect(await adapter.parseWorkerOutput(running.output().stdout, { observation })).toMatchObject({ status: 'completed' });
   });
 
   it.each(['exit-zero-error', 'missing-final', 'double-final', 'truncated-final'])('emits the intended %s fault with exit zero', async scenario => {
@@ -113,6 +121,7 @@ describe('S0 reusable fake CLI mechanics (T-OG-03/15; no provider qualification)
     expect(timedOut).toBe(false);
     expect(JSON.parse(readFileSync(settings.recordPath, 'utf8')).scenario).toBe(scenario);
     expect(readFileSync(settings.final, 'utf8')).toBe(stdout);
+    await expect(adapter.parseWorkerOutput(stdout, { observation })).rejects.toThrow();
     if (scenario === 'truncated-final') expect(() => JSON.parse(stdout)).toThrow();
     else {
       const events = stdout.trim().split('\n').map(line => JSON.parse(line));
@@ -164,6 +173,8 @@ describe('S0 fake stdio MCP mechanics (T-OG-17; no managed services)', () => {
       cli.child.stdin.end(task.brief);
       expect(await cli.closed).toEqual({ code: 0, signal: null });
       expect(JSON.parse(cli.output().stdout).result).toEqual(message.result.structuredContent);
+      expect(await adapter.parseWorkerOutput(message.result, { format: 'mcp', observation: { ...observation, transport: 'mcp', exitCode: null } }))
+        .toEqual(await adapter.parseWorkerOutput(cli.output().stdout, { observation }));
     }
     const records = readFileSync(settings.recordPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     const calls = records.filter(record => record.event === 'call');
@@ -179,6 +190,7 @@ describe('S0 fake stdio MCP mechanics (T-OG-17; no managed services)', () => {
     if (scenario === 'isError') expect(message.result.isError).toBe(true);
     else expect(() => JSON.parse(message.result.content[0].text)).toThrow();
     expect(message.result.structuredContent).toBeUndefined();
+    await expect(adapter.parseWorkerOutput(message.result, { format: 'mcp', observation: { ...observation, transport: 'mcp', exitCode: null } })).rejects.toThrow();
   });
 
   it('advertises a changed input schema so consumers can detect digest drift', async () => {
@@ -223,6 +235,7 @@ describe('S0 fake stdio MCP mechanics (T-OG-17; no managed services)', () => {
     server.notify('fixture/release', { requestId: id });
     const late = await server.response(id);
     expect(JSON.parse(late.result.structuredContent.summary)).toEqual(task);
+    await expect(adapter.parseWorkerOutput(late.result, { format: 'mcp', observation: { ...observation, transport: 'mcp', exitCode: null, termination: 'uncertain' } })).rejects.toThrow();
     const records = readFileSync(settings.recordPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(records.map(record => record.event)).toEqual(['call', 'cancel-delivered', 'late-completion']);
     expect(records.every(record => record.requestId === id)).toBe(true);
