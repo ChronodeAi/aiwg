@@ -14,7 +14,7 @@ import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
-import { qualifyWorkerInvocationProfile, type WorkerAdapterMetadata, type WorkerInvocationProfile } from '../models/provider-policy.js';
+import { qualifyWorkerInvocationProfile, requiredWorkerControls, type WorkerAdapterMetadata, type WorkerInvocationProfile } from '../models/provider-policy.js';
 import { dirname, isAbsolute, resolve } from 'path';
 import { resolveConfigDir } from '../config/user-config.js';
 import { getProviderDefinition } from '../providers/provider-definitions.js';
@@ -99,6 +99,10 @@ export interface McpWorkerQualificationInput {
   profile: string;
   cliVersion: string;
   requiredControls: string[];
+  policy?: Parameters<typeof requiredWorkerControls>[0]['policy'];
+  permissions?: Parameters<typeof requiredWorkerControls>[0]['permissions'];
+  effort?: string | null;
+  boundary?: Parameters<typeof qualifyWorkerInvocationProfile>[1]['boundary'];
   mcp: NonNullable<WorkerInvocationProfile['mcp']>;
   installationQualification: {
     status: 'ENABLED'; scopeDigest: string; fixtureDigest: string;
@@ -201,7 +205,7 @@ function workerQualificationBinding(server: McpServerDefinition, input: McpWorke
     serverDigest: workerServerDigest(server), adapterDigest: qualificationDigest(input.adapter),
     profile: input.profile, cliVersion: input.cliVersion,
     scopeDigest: installed.scopeDigest, fixtureDigest: installed.fixtureDigest,
-    requiredControls: [...new Set(input.requiredControls)].sort(),
+    requiredControls: requiredWorkerControls(input).sort(),
   };
 }
 

@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
 import { satisfies, validRange } from 'semver';
+import type { WorkerExecution } from '../config/aiwg-config.js';
+import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
 import type {
   CanonicalModelPolicy, ModelCompilationOutcome, ModelEffort, ModelRole, Provider,
   WorkerModelObservation, WorkerSelectionPolicy, WorkerDataPolicy, WorkerPolicyOrigin, WorkerPolicyDiagnostic,
@@ -442,6 +444,14 @@ export function resolveWorkerInstallation(registry: ProviderModelCapabilityRegis
   return { adapter, endpoint: installation.endpoint };
 }
 
+/** Typed policy failures let public surfaces retain the cause without exposing internal details. */
+export class WorkerPolicyError extends Error {
+  constructor(public readonly code: WorkerPolicyDiagnostic['code'], message: string) {
+    super(message);
+    this.name = 'WorkerPolicyError';
+  }
+}
+
 /**
  * Dispatch-time safety checks belong here, alongside transport qualification.
  * Like route validation, rendering requires observation evidence; a default
@@ -459,19 +469,19 @@ export function assertWorkerSelectionAllowed(selected: {
 }): void {
   const policy = context.policy ?? DEFAULT_WORKER_SELECTION;
   if (isWorkerEffortDenied(selected.effort.value, policy)) {
-    throw new Error(`Worker invocation denied effort: ${selected.effort.value}`);
+    throw new WorkerPolicyError('OG_EFFORT_DENIED', `Worker invocation denied effort: ${selected.effort.value}`);
   }
   if (isContributorWorkerModel(selected.model)
     || isWorkerModelDenied(workerModelKey(selected.inferenceProvider, selected.model), policy)) {
-    throw new Error(`Worker invocation denied model: ${selected.model}`);
+    throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', `Worker invocation denied model: ${selected.model}`);
   }
   const { data, unknownDataClass } = workerRouteDataPolicy(policy, context.dataClass);
-  if (unknownDataClass) throw new Error('Worker invocation has denied data-use: unknown data class');
+  if (unknownDataClass) throw new WorkerPolicyError('OG_DATA_POLICY', 'Worker invocation has denied data-use: unknown data class');
   const observation = context.modelObservation ?? context.defaultObservation;
-  if (!observation) throw new Error('Worker invocation requires model or default observation evidence');
+  if (!observation) throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', 'Worker invocation requires model or default observation evidence');
   const guidance = context.role ? policy.roleGuidance?.[context.role] : undefined;
   if (isWorkerNullEffortDenied(selected.effort.value, observation, guidance)) {
-    throw new Error('Worker invocation denied effort: null effort requires qualified absence of an effort control');
+    throw new WorkerPolicyError('OG_EFFORT_DENIED', 'Worker invocation denied effort: null effort requires qualified absence of an effort control');
   }
   for (const [kind, observation] of [
     ['model', context.modelObservation], ['default', context.defaultObservation],
@@ -480,7 +490,7 @@ export function assertWorkerSelectionAllowed(selected: {
     if (observation.lifecycle === 'retired'
       || (observation.retiredAt != null && Date.parse(observation.retiredAt) <= context.now)
       || (observation.sunsetAt != null && Date.parse(observation.sunsetAt) <= context.now)) {
-      throw new Error(`Worker invocation ${kind} observation is retired`);
+      throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', `Worker invocation ${kind} observation is retired`);
     }
     const blockMs = (policy.freshness?.blockHours ?? DEFAULT_WORKER_SELECTION.freshness!.blockHours!) * 3_600_000;
     const observedAt = Date.parse(observation.observedAt);
@@ -488,17 +498,17 @@ export function assertWorkerSelectionAllowed(selected: {
       || !Number.isFinite(blockMs) || blockMs <= 0
       || (observation.verifiedAt !== undefined && !Number.isFinite(Date.parse(observation.verifiedAt)))
       || isWorkerEvidenceStale(observation, policy, context.now)) {
-      throw new Error(`Worker invocation ${kind} observation is stale or invalid`);
+      throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', `Worker invocation ${kind} observation is stale or invalid`);
     }
     if (hasSelectionRelevantConflicts(observation as WorkerModelObservation)) {
-      throw new Error(`Worker invocation ${kind} observation has conflicting selection-relevant evidence`);
+      throw new WorkerPolicyError('OG_MODEL_UNAPPROVED', `Worker invocation ${kind} observation has conflicting selection-relevant evidence`);
     }
     if (observation.dataUse && isWorkerDataUseDenied({
       processing: observation.dataUse.processing ?? 'unknown',
       productImprovement: observation.dataUse.productImprovement ?? null,
       retentionDays: observation.dataUse.retentionDays ?? null,
     }, data)) {
-      throw new Error(`Worker invocation ${kind} observation has denied data-use`);
+      throw new WorkerPolicyError('OG_DATA_POLICY', `Worker invocation ${kind} observation has denied data-use`);
     }
   }
 }
@@ -514,11 +524,55 @@ interface WorkerSelectionObservation {
   conflicts?: WorkerModelObservation['conflicts'];
 }
 
-/** Qualification is transport/version scoped; deployment support is insufficient. */
-export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: {
+export interface WorkerBoundary {
+  kind: 'native' | 'os' | 'executor';
+  identity: string;
+  digest: string;
+  controls: string[];
+}
+
+const WORKER_CONTROLS = ['model', 'effort', 'sandbox', 'approval', 'workdir',
+  'finalOutput', 'stdin', 'structuredOutput', 'stepCap', 'trust', 'children', 'fallback'];
+
+/** Caller controls only add restrictions. Absent resolved authority, require all controls. */
+export function requiredWorkerControls(context: {
+  policy?: WorkerSelectionPolicy; permissions?: WorkerExecution; effort?: string | null;
+  requiredControls?: string[];
+}): string[] {
+  if (context.requiredControls !== undefined && (!Array.isArray(context.requiredControls)
+    || context.requiredControls.some(name => typeof name !== 'string' || !name))) {
+    throw new Error('Worker required controls must be an array of control names');
+  }
+  const controls = new Set(WORKER_CONTROLS);
+  if (context.policy && context.permissions) {
+    if (context.effort === null) controls.delete('effort');
+    // Step limits are observed unless explicitly required by the trusted route.
+    controls.delete('stepCap');
+    if (context.policy.guards?.denySelfDelegation === false) controls.delete('children');
+  }
+  for (const name of context.requiredControls ?? []) controls.add(name);
+  return [...controls];
+}
+
+interface WorkerProfileSelection {
   profile: string; transport: 'shell' | 'mcp'; cliVersion: string; requiredControls?: string[];
+  policy?: WorkerSelectionPolicy; permissions?: WorkerExecution; effort?: string | null;
+  boundary?: WorkerBoundary;
   mcp?: WorkerInvocationProfile['mcp'];
-}): WorkerInvocationProfile {
+}
+
+/** The same sandbox requirement governs inspection, resolution and rendering. */
+export function requiresWorkerExternalBoundary(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): boolean {
+  const providers = [adapter.id, adapter.provider].map(normalizeProviderDefinitionId);
+  return requiredWorkerControls(selection).includes('sandbox')
+    && (providers.some(provider => provider && ['claude', 'muse', 'hermes'].includes(provider))
+      || adapter.invocationProfiles?.[selection.profile]?.controls.sandbox?.support === 'external'
+      || selection.permissions?.sandbox === 'external');
+}
+
+/** Inspect declared controls before installation evidence can be produced. This
+ * does not authorize invocation; consumers must use qualifyWorkerInvocationProfile. */
+export function inspectWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): WorkerInvocationProfile {
   WorkerAdapterSchema.parse(adapter);
   const profile = adapter.invocationProfiles?.[selection.profile];
   if (adapter.qualification.status !== 'qualified' || !profile || profile.transport !== selection.transport) {
@@ -527,7 +581,14 @@ export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
   if (![adapter.supportedVersions, profile.supportedVersions].every(range => validRange(range) && satisfies(selection.cliVersion, range))) {
     throw new Error('Worker CLI version is outside qualified profile');
   }
-  for (const name of selection.requiredControls ?? []) {
+  const requiredControls = requiredWorkerControls(selection);
+  if (requiresWorkerExternalBoundary(adapter, selection)
+    && (!selection.boundary || !['os', 'executor'].includes(selection.boundary.kind)
+      || !selection.boundary.identity || !/^sha256:[a-f0-9]{64}$/.test(selection.boundary.digest)
+      || !selection.boundary.controls?.includes('sandbox'))) {
+    throw new Error('Required worker control sandbox needs a qualified external enforcing boundary');
+  }
+  for (const name of requiredControls) {
     if ((name === 'children' && !adapter.capabilities.nestedAgentsControllable)
       || (name === 'fallback' && !adapter.capabilities.nativeFallbackControllable)) {
       throw new Error(`Required worker control is unqualified: ${name}`);
@@ -541,6 +602,17 @@ export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
     || Object.keys(profile.mcp).some(key => profile.mcp![key as keyof NonNullable<typeof profile.mcp>]
       !== selection.mcp![key as keyof NonNullable<typeof selection.mcp>]))) {
     throw new Error('MCP server/tool/schema/session qualification changed');
+  }
+  return profile;
+}
+
+/** Qualification is transport/version scoped; declaration or boundary claims
+ * alone cannot qualify an external sandbox. The invocation owner rechecks the
+ * installation scope, including this boundary, against the recorded digest. */
+export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): WorkerInvocationProfile {
+  const profile = inspectWorkerInvocationProfile(adapter, selection);
+  if (requiresWorkerExternalBoundary(adapter, selection) && !profile.installationQualification) {
+    throw new Error('Required worker control sandbox needs matching installation qualification for its external boundary');
   }
   return profile;
 }

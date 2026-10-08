@@ -9,6 +9,7 @@ import { Socket } from 'node:net';
 import { fixtureRevision, permissionChecks } from '../../fixtures/ralph-worker-protocol.mjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
+import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
 const exec = promisify(execFile);
@@ -62,7 +63,7 @@ async function setup(provider = 'codex') {
   for (const control of Object.values(profile.controls) as any[]) {
     control.support = 'external'; control.mapping = 'fixture runner'; control.evidence = 'fixture:only';
   }
-  const controls = ['model', 'sandbox', 'approval', 'children', 'fallback'];
+  const controls = requiredWorkerControls({});
   const request: any = { adapter, profile: 'fixture-shell', cliVersion: '1.0.0', requiredControls: controls,
     executable: process.execPath, platform: 'linux', cwd, workerWritableRoots: [cwd],
     modules: [{ reference: adapter.runtimeDriver, packageRoot, packageName: 'fixture-driver', packageVersion: '1.0.0',
@@ -91,7 +92,7 @@ async function preparedFixture(f: Awaited<ReturnType<typeof setup>>) {
   f.profile.installationQualification = { scopeDigest: record.scopeDigest, fixtureDigest: record.fixtureDigest, verifiedAt: record.verifiedAt, evidenceRef: record.evidenceRef };
   invocation.selected.qualificationDigest = record.scopeDigest;
   const qualification: any = { adapter: f.request.adapter, cliVersion: '1.0.0', requiredControls: f.request.requiredControls,
-    now, role: 'efficiency', policy: { roleGuidance: { efficiency: { allowNotApplicableEffort: true } } },
+    boundary: f.request.boundary, now, role: 'efficiency', policy: { roleGuidance: { efficiency: { allowNotApplicableEffort: true } } },
     modelObservation: { observedAt: new Date(now).toISOString(), lifecycle: 'active', effortSupport: 'not-applicable',
       dataUse: { processing: 'local', productImprovement: false, retentionDays: null } }, installation: f.request };
   vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', f.config);
@@ -99,6 +100,24 @@ async function preparedFixture(f: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
+  it.each(['claude', 'muse', 'hermes'])('#2956 rejects caller control waivers for %s', async provider => {
+    const f = await setup(provider);
+    f.request.requiredControls = ['model'];
+    f.request.policy = { guards: { denySelfDelegation: true } };
+    f.request.permissions = { sandbox: 'external', approval: 'never' };
+    f.request.boundary.kind = 'native';
+    await expect(driver.inspectWorkerInstallation(f.request)).rejects.toThrow(/sandbox.*external/);
+    expect(await driver.qualifyWorkerInstallation(f.request)).toMatchObject({ status: 'DISABLED' });
+  });
+
+  it('#2956 binds the strictest controls when policy authority is absent', async () => {
+    const f = await setup();
+    f.request.requiredControls = ['model'];
+    expect((await driver.inspectWorkerInstallation(f.request)).scopeDigest).toBe(f.request.evidence.scopeDigest);
+    f.profile.controls.stepCap.support = 'unqualified';
+    expect(await driver.qualifyWorkerInstallation(f.request)).toMatchObject({ status: 'DISABLED' });
+  });
+
   it.each(['codex', 'muse', 'claude', 'hermes'])('enables a synthetic %s profile with no managed services or credential inheritance', async provider => {
     const f = await setup(provider);
     vi.stubEnv('UNRELATED_SECRET', 'never-copy-this');
@@ -205,6 +224,20 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', f.config);
     f.profile.controls.sandbox.mapping = 'changed';
     await expect(driver.prepareWorkerInvocation(invocation, qualification)).rejects.toThrow('qualification changed');
+  });
+
+  it.each(['os', 'executor'])('binds the %s sandbox boundary to matching installation evidence before pure rendering', async kind => {
+    const f = await setup('claude');
+    f.request.boundary.kind = kind;
+    const { invocation, qualification } = await preparedFixture(f);
+    const { prepareWorkerInvocation } = await import('../../../src/serve/worker-invocation.js');
+    const prepare = () => prepareWorkerInvocation(invocation, { ...qualification, adapterId: 'fixture' });
+    await expect(prepare()).resolves.toHaveProperty('shellCommand');
+    qualification.boundary = { ...qualification.boundary, digest: digest('caller-replacement') };
+    await expect(prepare()).rejects.toThrow(/boundary.*(changed|evidence)|installation.*boundary/i);
+    qualification.boundary = f.request.boundary;
+    qualification.installation = { ...f.request, evidence: { ...f.request.evidence, scopeDigest: digest('another-installation') } };
+    await expect(prepare()).rejects.toThrow(/installation.*(changed|evidence)/i);
   });
 });
 

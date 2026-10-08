@@ -65,6 +65,8 @@ merged policy role guidance with `allowNotApplicableEffort: true`. Preparation
 does not support skipping observation checks.
 
 The method checks Linux/version/transport/control qualification and expiration.
+The frozen `stdin: 'closed'` field renders empty stdin (`< /dev/null`, immediate
+EOF); it does not promise an absent operating-system file descriptor.
 It quotes each shell token, structurally renders CWD/input/output redirections,
 forwards only profile-allowlisted environment names, and derives shell syntax
 rather than trusting a supplied `shellCommand`. MCP arguments are size-bounded
@@ -184,3 +186,42 @@ npx vitest run --config config/vitest.conformance.config.js test/conformance/orc
 Unit tests assert removal of their temporary roots. All manual pack/install
 projects, synthetic briefs, requests and probes were removed after collecting
 these sanitized results. No Mission-v1 files or schemas changed.
+
+## Recorded installations for direct resolution (#2887)
+
+The production `models resolve` loader reads the existing installation owner's
+host records from `$AIWG_CONFIG/worker-installations.json` (default
+`~/.config/aiwg/worker-installations.json`). Project model configuration may
+reference an installation ID; it cannot supply executable module paths.
+The shared owner now lives in `src/models/worker-installation.mjs`; Ralph's
+`ProviderAdapter` and factory exports remain compatibility facades for it.
+No supervisor or launch lifecycle was moved.
+
+A trusted host first calls `inspectWorkerInstallation` with the installed
+binary, approved modules and dependency closure, workspace/input/output roots,
+permissions, boundary, effective merged policy digest, account and environment.
+It obtains host-owned observations for the shipped negative fixture suite,
+bound to the inspected scope. `qualifyWorkerInstallation` performs the bounded
+version probe and verifies those observations. Then
+`recordWorkerInstallation({ cli, binding, installation })` repeats qualification
+and atomically records successful evidence; it never records a disabled result.
+Here `installation` is the same qualification request, including adapter metadata
+and its negative evidence. For the production loader, `effectiveConfigDigest`
+is `qualificationDigest(mergedModels.defaults.workerSelection)`.
+Environment values are reduced to names before persistence.
+
+The host must protect this configuration directory and installed dependency
+closure from workers. The loader refuses symlinked, hardlinked or untrusted
+writable record files, records inside worker-writable roots, duplicate IDs,
+expired or incomplete observations, and changed installation inputs. It checks
+negative evidence before importing an approved factory and rechecks the exact
+scope before returning a driver. Resolution reads existing evidence and checks
+binary bytes; it performs no version probe, model call, login, server start or
+qualification write. The shared preparation method checks paths, policy controls,
+argv and environment again before a plan can be returned. Missing qualification
+produces `OG_ADAPTER_UNQUALIFIED` with the owner methods needed to qualify it.
+
+The production-handler test installs the fake worker fixture and its trusted
+module into an isolated host directory, provides scoped synthetic host evidence,
+and resolves through the real loader without `createModelsHandler` injection.
+It proves plan rendering and mutation refusal; it does not qualify a vendor CLI.

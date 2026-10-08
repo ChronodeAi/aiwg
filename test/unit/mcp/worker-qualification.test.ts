@@ -22,12 +22,13 @@ function qualification(): McpWorkerQualificationInput {
     verifiedAt: evidence.verifiedAt, evidenceRef: evidence.evidenceRef };
   const profile = adapter.invocationProfiles['fixture-shell'];
   profile.transport = 'mcp';
+  for (const control of Object.values(profile.controls) as any[]) control.support = 'native';
   profile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
   profile.installationQualification = { ...evidence };
   profile.mcp = { serverRef: 'synthetic', tool: 'fixture-worker', inputSchemaDigest: digest(workerInputSchema),
     outputSchemaDigest: digest({ type: 'object' }), sessionIsolation: 'per-call', cancel: 'uncertain' };
   adapter.invocationProfiles = { 'fixture-mcp': profile };
-  return { authorizedServerDigest, requiredControls: ['model'], adapter, profile: 'fixture-mcp', cliVersion: '1.0.0', mcp: structuredClone(profile.mcp),
+  return { policy: {}, permissions: { sandbox: 'workspace-write', approval: 'never' }, authorizedServerDigest, requiredControls: ['model'], adapter, profile: 'fixture-mcp', cliVersion: '1.0.0', mcp: structuredClone(profile.mcp),
     installationQualification: { status: 'ENABLED', ...evidence, cliVersion: '1.0.0', platform: 'linux', serverDigest: authorizedServerDigest } };
 }
 beforeEach(async () => {
@@ -200,7 +201,7 @@ describe('round 1 MCP binding regressions', () => {
     const input = qualification();
     input.adapter.invocationProfiles![input.profile].controls.sandbox = { support: 'native', mapping: '--sandbox', evidence: 'fixture:only' };
     await registry.recordWorkerQualification('synthetic', input);
-    input.requiredControls = ['model', 'sandbox'];
+    input.requiredControls = ['model', 'stepCap'];
     await expect(registry.assertWorkerQualified('synthetic', input)).rejects.toThrow(/missing or changed/);
   });
 
