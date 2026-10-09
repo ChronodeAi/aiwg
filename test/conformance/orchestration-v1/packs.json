@@ -396,6 +396,22 @@
         "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-24": {
+      "name": "Managed health mapping",
+      "ownerIssue": "roctinam/aiwg#2916",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-54",
+        "B-OG-12",
+        "B-OG-16"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/mission-protocol/worker-health-mapping.test.ts",
+        "test/conformance/orchestration-v1/worker-health-lease-mapping.test.ts"
+      ],
+      "remaining": "S1 pure mapping only: direct health results with parent/lease absent, five/six-feature codec compatibility, quiet/stalled/uncertain trace projection with bounded/redacted summaries, and renewal/reconcile/release vectors against a mocked scheduler boundary. No managed imports or side effects. B-OG-12/16 must run these same vectors as mandatory S2 runtime gates against the actual scheduler/MC/Flow/Ralph crash/restart cases; managed activation, leases, required evidence and runtime integration remain S2+."
     }
   },
   "qualificationResults": [
