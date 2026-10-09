@@ -97,3 +97,37 @@ test('launcher does not hand back stdoutPath until the capture file is fully flu
     if (savedNoColor === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = savedNoColor;
   }
 });
+
+test('launcher rejects instead of crashing when a capture stream fails mid-run', async () => {
+  const originalWrite = WriteStream.prototype._write;
+  const originalWritev = WriteStream.prototype._writev;
+  const failure = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  WriteStream.prototype._write = function (_chunk, _encoding, callback) { callback(failure); };
+  WriteStream.prototype._writev = function (_chunks, callback) { callback(failure); };
+  const { dir, cleanup } = scratch('session-launcher-capture-error-');
+  const savedPiBin = process.env.AIWG_PI_BIN;
+  process.env.AIWG_PI_BIN = stub;
+  try {
+    const launcher = new SessionLauncher();
+    launcher.setProviderAdapter(new PiAdapter());
+    const errors = [];
+    launcher.on('error', (error) => errors.push(error));
+    await assert.rejects(
+      launcher.launch({
+        prompt: 'bounded fixture task',
+        sessionId: 'aiwg-fixture-session',
+        workingDir: dir,
+        stdoutPath: join(dir, 'stdout.log'),
+        stderrPath: join(dir, 'stderr.log'),
+      }),
+      { code: 'ENOSPC' },
+    );
+    assert.equal(errors.length, 1);
+    assert.equal(launcher.currentProcess, null);
+  } finally {
+    WriteStream.prototype._write = originalWrite;
+    WriteStream.prototype._writev = originalWritev;
+    cleanup();
+    if (savedPiBin === undefined) delete process.env.AIWG_PI_BIN; else process.env.AIWG_PI_BIN = savedPiBin;
+  }
+});

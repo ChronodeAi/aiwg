@@ -813,6 +813,12 @@ export class SessionLauncher extends EventEmitter {
       // Create write streams for output capture
       const stdoutStream = createWriteStream(options.stdoutPath);
       const stderrStream = createWriteStream(options.stderrPath);
+      // Listen for capture-stream errors from the start, so a disk error before
+      // the child closes cannot surface as an unhandled 'error' event.
+      let captureError = null;
+      for (const stream of [stdoutStream, stderrStream]) {
+        stream.on('error', (error) => { captureError ??= error; });
+      }
       // child.stdout/child.stderr are the child's pipes, distinct from these
       // disk-backed capture streams. The child 'close' event only proves the
       // child's own pipes drained into our 'data' handlers below; it says
@@ -927,6 +933,13 @@ export class SessionLauncher extends EventEmitter {
         // caller (see finalizeCaptureStream above for why 'close' alone is
         // not sufficient).
         Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
+          // A failed capture means stdoutPath/stderrPath are incomplete; report
+          // it rather than hand back a truncated transcript as a result.
+          if (captureError) {
+            this.emit('error', captureError);
+            reject(captureError);
+            return;
+          }
           const result = {
             exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
             stdoutPath: options.stdoutPath,
