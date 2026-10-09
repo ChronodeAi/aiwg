@@ -739,6 +739,20 @@ function fakeNeverClosingChild() {
   return child;
 }
 
+/** A fixed, generous `readLiveHostResources()`-shaped sample (see
+ * `tools/scripts/resource-preflight.mjs`), injected via the real
+ * `registerWorkerInvokeToolset({ gateInputs: { live } })` test-only seam
+ * (forwarded to `planDirectWorkerLaunch` → `checkWorkerDispatch`) so the
+ * REAL dispatch gate still runs — on fixed synthetic signals instead of
+ * this host's actual load/memory/PSI/disk — making these transport tests
+ * deterministic under load. Comfortably clears every default threshold
+ * (`DEFAULT_DISPATCH_HOST_THRESHOLDS`: 8GB avail mem, load ratio <= 1.0,
+ * mem PSI avg10 <= 30 / avg60 <= 10, 2GB free disk). */
+const HEALTHY_GATE_LIVE = Object.freeze({
+  supported: true, availMemGb: 64, load1: 0.1, cores: 8, loadRatio: 0.05,
+  memPsiAvg10: 0, memPsiAvg60: 0, memPsiAvg300: 0, workers: 0, freeDiskGb: 100,
+});
+
 /** Minimal #2887 fixture + driver wiring, closely modeled on the CLI's own
  * `models-direct-invocation.test.ts` fixture builder — reused shape, not a
  * parallel contract. */
@@ -904,10 +918,17 @@ function closingChild(exitCode: number) {
 // through the SAME gate-then-launch pipeline as shell (#2892 B2):
 // `allowDegraded: true` mirrors an operator who set
 // `AIWG_MCP_WORKER_ALLOW_DEGRADED=1`, needed on hosts with no reachable
-// systemd --user manager (CI runs as root with none); `worker_dispatch` is
-// forced off for these fixture servers so the tests exercise the transport/
-// schema/env-allowlist/cancellation behavior without depending on the real
-// host's live resource signals (that gate itself is unit-tested elsewhere).
+// systemd --user manager (CI runs as root with none). `worker_dispatch`
+// stays true (workerResolutionFixture's default), so the REAL launch-time
+// gate (`checkWorkerDispatch`) still runs on every `invoke()` call here —
+// but against the fixed, generous `HEALTHY_GATE_LIVE` sample injected via
+// `gateInputs`, not this host's actual load/memory/PSI/disk, so these
+// transport/schema/env-allowlist/cancellation tests are deterministic
+// regardless of host load (CI flake: a busy runner's real signals could
+// legitimately trip the gate and refuse the launch before transport was
+// ever exercised). A dedicated test below ('still refuses a launch when an
+// injected signal fails the gate') proves the gate is still consulted, not
+// bypassed, by injecting a deliberately failing sample.
 // ---------------------------------------------------------------------------
 describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
   function mcpFixture(root: string, config: string) {
@@ -916,19 +937,15 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     // models RESOLVER itself treats `worker_dispatch: false` as "disabled",
     // producing no plan at all (src/models/resolver.ts) — it is not merely
     // this bridge's own launch-time resource gate. The launch-time gate
-    // (`checkWorkerDispatch`) evaluates REAL host signals with no injected
-    // override here; default thresholds (8GB avail, load ratio <= 1.0, PSI
-    // <= 30/10) are generous enough not to flake on a healthy CI/dev host,
-    // and the gate's own blocking behavior is separately unit-tested with
-    // injected `live`/`thresholdOverlay` values in resource-preflight and
-    // worker-isolation test suites.
+    // (`checkWorkerDispatch`) therefore still runs on every call below; see
+    // `HEALTHY_GATE_LIVE` / `gateInputs` for how its live signals are pinned.
     f.drivers.codex.mcpRegistry = {
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: config } }),
     };
     return f;
   }
-  async function invoke(root: string, config: string, extra: Record<string, unknown> = {}) {
+  async function invoke(root: string, config: string, extra: Record<string, unknown> = {}, registerOverrides: Record<string, unknown> = {}) {
     const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
     const briefPath = path.join(root, 'brief.md');
     const finalOutput = path.join(work, 'final.json');
@@ -941,6 +958,10 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
       projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
       loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      // CI determinism (see describe-block comment above): the REAL gate
+      // still runs, on this fixed healthy sample, unless a test overrides it.
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+      ...registerOverrides,
     });
     const call = tools.get('worker-invoke').handler;
     return call({ operation: 'run', request_id: `mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
@@ -1083,6 +1104,25 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     expect(body.status, JSON.stringify(body)).toBe('blocked');
     expect(body.diagnostics.join(' ')).toMatch(/output schema/i);
     await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // tools/call was never reached
+  }, 20000);
+
+  // Proves `gateInputs` makes the gate deterministic, not absent: the REAL
+  // `checkWorkerDispatch` still runs on every call above (see the
+  // describe-block comment); this overrides `HEALTHY_GATE_LIVE` with one
+  // deliberately failing signal and confirms the launch is still refused,
+  // with a diagnostic naming the specific signal that failed, and that the
+  // worker process is never reached (no record of a tools/call).
+  it('still refuses a launch when an injected signal fails the gate', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'success' }));
+    const failingLive = { ...HEALTHY_GATE_LIVE, availMemGb: 0.1 }; // < default min_avail_mem_gb (8GB)
+    const result = await invoke(root, config, {}, { gateInputs: { live: failingLive } });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/avail-mem/);
+    await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // worker process was never launched
   }, 20000);
 });
 
@@ -1231,6 +1271,9 @@ describe('serialized per-server MCP queue — requalified before each launch, no
     await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
       projectRoot: root, allowDegraded: true, workerWorktreesRoot: root,
       loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      // CI determinism: see `HEALTHY_GATE_LIVE` — the REAL dispatch gate
+      // still runs for both concurrent launches below, on a fixed sample.
+      gateInputs: { live: HEALTHY_GATE_LIVE },
     });
     const call = tools.get('worker-invoke').handler;
     const buildInput = (brief: string, work: string, requestId: string) => ({
