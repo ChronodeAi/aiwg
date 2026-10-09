@@ -671,6 +671,8 @@ providers:
         sources:
           - "host-help: Muse Code 1.4.4 (1.4.4-R5419.1) on titan (--version/--help only)"
           - "tools/ralph-external/lib/muse-adapter.mjs"
+          - "test/fixtures/providers/muse/direct-manifest.json (synthetic only; strict finals/live controls remain unqualified)"
+          - "docs/providers/muse-ralph-exec.md (manual smoke run and S1 blockers)"
     status: stable
     # Meta's terminal/CI coding agent (Muse Spark-powered). Explicitly not a
     # model-API surface: Glimmer/Image/Voice are out of scope.

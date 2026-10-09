@@ -20,18 +20,23 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
     expect(report.result).toBe('wiring-valid');
     expect(report.releaseQualification).toBe('unqualified');
     expect(Object.values(report.packs).some((pack: any) => pack.status === 'implemented')).toBe(false);
-    // T-OG-04/05 carry Tier 0 fixture coverage (#2954); T-OG-06 still has no
-    // managed-runtime files, so the file-less rejection cases below use it.
+    // T-OG-04/05 carry Tier 0 fixtures (#2954); T-OG-06 now carries
+    // S1 Muse quota/partial fixtures. Negative cases explicitly remove files.
     expect(report.packs['T-OG-04'].status).toBe('partial');
     expect(report.packs['T-OG-04'].testFiles.length).toBeGreaterThan(0);
     expect(report.packs['T-OG-05'].status).toBe('partial');
     expect(report.packs['T-OG-05'].testFiles.length).toBeGreaterThan(0);
-    expect(report.packs['T-OG-06'].testFiles).toEqual([]);
+    expect(report.packs['T-OG-06'].status).toBe('partial');
+    expect(report.packs['T-OG-06'].testFiles).toEqual([
+      'test/conformance/orchestration-v1/muse-direct.test.ts',
+      'test/unit/ralph/muse-direct.test.mjs',
+    ]);
   });
 
   it.each(['partial', 'implemented'])('rejects %s without test files', status => {
     const value = registry();
     value.packs['T-OG-06'].status = status;
+    value.packs['T-OG-06'].testFiles = [];
     expect(inspectPackRegistry(value, root).errors).toContain(`T-OG-06: ${status} without test files`);
   });
 
@@ -86,7 +91,7 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
       }
     }
     if (scenario === 'missing-qualification-pass') value.qualificationResults = [{ id: 'fake', qualification: 'missing', result: 'passed' }];
-    if (scenario === 'implemented-without-files') value.packs['T-OG-06'].status = 'implemented';
+    if (scenario === 'implemented-without-files') Object.assign(value.packs['T-OG-06'], { status: 'implemented', testFiles: [] });
     mkdirSync(path.dirname(path.join(directory, registryPath)), { recursive: true });
     writeFileSync(path.join(directory, registryPath), JSON.stringify(value));
     const script = `import { runPackGate } from ${JSON.stringify(checker)}; runPackGate({ repositoryRoot: ${JSON.stringify(directory)} });`;
