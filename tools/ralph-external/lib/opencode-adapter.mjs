@@ -26,8 +26,82 @@
  * @implements Plan: Multi-Provider Support for External Ralph Loop
  */
 
+/**
+ * Version-bound direct-worker surface (roctinam/aiwg#2904, B-OG-39).
+ *
+ * Qualified against OpenCode CLI 2.0.18 `opencode --help` / `opencode run
+ * --help` (help/version syntax only, captured on host 'noodle'
+ * 2026-10-09; see .aiwg/working/s1-scratch/cli-help/opencode.txt; never
+ * live qualification):
+ *
+ *   opencode run --format json -m M[#E] -f F "Follow the instructions in
+ *     the attached file exactly."
+ *
+ * Stdin is confirmed unsupported, not merely undocumented: the conductor
+ * disassembled the installed v2.0.18 binary on host 'noodle' and the
+ * compiled chunk implementing `run` has no stdin/isTTY handling at all.
+ * `run [flags] [<message...>]` takes the message as a trailing positional
+ * argument, but `--file`/`-f` ("File to attach to the message") lets the
+ * brief ride as an attached file instead: this adapter writes the brief to
+ * `briefPath` and passes it via `-f`, so brief bytes never enter argv. The
+ * trailing positional is a fixed, content-free instruction
+ * (`OPENCODE_FIXED_MESSAGE`) that never carries brief text; `buildWorkerArgs`
+ * refuses anything else in that position. `-m/--model` takes
+ * `provider/model#variant`; binary disassembly resolves what `#variant`
+ * means: the installed CLI builds each model's variant list with a
+ * function (minified as `qU(model, manual)`) that maps
+ * `model.capabilities.supports.reasoning_effort` (a model-declared string
+ * list, e.g. low/medium/high) directly onto variant ids via
+ * `{ id: value, settings: { reasoningEffort: value, ... } }`, or — for
+ * extended-thinking models exposing `max_thinking_budget` instead — onto
+ * two fixed ids, `"max"` and `"high"`. So `#variant` IS a reasoning-effort
+ * selector, but the valid id set is per-model (drawn from that model's own
+ * catalog capability), not a fixed global enum; `buildWorkerArgs` appends
+ * an explicit effort as `#<effort>`. Whether the real CLI refuses an id a
+ * model does not expose, or silently falls back to default reasoning, is
+ * unverified, so the effort control stays unqualified. There is no `--dir`/`--cwd`
+ * flag on `run`: the shared renderer's `cd ${workspace}` sets the process
+ * working directory instead. The only permission-adjacent flag is `--auto`
+ * ("Auto-approve permissions that are not explicitly denied"), a blanket
+ * bypass this profile never emits. What happens to a permission request
+ * when `--auto` is absent in non-interactive `run` is not fully resolved:
+ * disassembly shows a shared `permission.asked` -> `permission.replied`
+ * protocol where an unanswered/unselected request resolves to a `"reject"`
+ * outcome (`_==="once"||_==="always"?_:"reject"`, with
+ * `requestPermission(...).catch(()=>{return})` on no responder) — this is
+ * evidence of reject-on-no-answer rather than an indefinite hang, but it is
+ * traced through the ACP/session-protocol layer, not independently
+ * reproduced against the plain `run` subcommand, so approval stays
+ * `unqualified`/unavailable rather than asserted. `opencode serve` is an
+ * HTTP API (not MCP) and `opencode mcp` manages MCP *clients* the agent can
+ * call out to, not a worker-serving endpoint, so the AIWG `worker-invoke`
+ * bridge remains the MCP route (native `mcp-server`-style hosting is not
+ * advertised).
+ *
+ * Installed-module shape: static `interfaceVersion` and `register` exports
+ * so the #2885 installed loader can approve this file by digest under
+ * `installed:opencode` (mirroring #2897 codex-adapter.mjs / #2911
+ * openhuman-adapter.mjs). The bottom self-registration targets the legacy
+ * Ralph-loop registry only; the direct worker profile loads through the
+ * installed loader.
+ */
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
-import { healthEventMatchesBinding } from './worker-health.mjs';
+import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
+
+export const OPENCODE_SUPPORTED_VERSIONS = Object.freeze(['2.0.18']);
+/** Stdin is confirmed unsupported by the compiled v2.0.18 `run` chunk (see
+ * module doc); the brief travels via `-f`/`--file` instead. */
+export const OPENCODE_DIRECT_STDIN = 'closed';
+/** Fixed, content-free positional message: never the brief, so brief bytes
+ * never reach argv even though `-f` carries the real content. */
+export const OPENCODE_FIXED_MESSAGE = 'Follow the instructions in the attached file exactly.';
+/** No scoped sandbox flag is evidenced; `--auto` is a blanket bypass and is
+ * never emitted, so the direct profile only accepts externally-enforced
+ * sandboxing. */
+export const OPENCODE_DIRECT_SANDBOX_MODES = Object.freeze(['external']);
+/** Generic Ralph-loop aliases resolve through MODEL_MAP below; the direct
+ * profile requires an exact observed catalog model instead. */
+const OPENCODE_GENERIC_ALIASES = Object.freeze(['opus', 'sonnet', 'haiku']);
 
 /**
  * Model mapping from generic names to OpenCode provider/model format.
@@ -44,14 +118,31 @@ const MODEL_MAP = {
 };
 
 export class OpenCodeAdapter extends ProviderAdapter {
+  /**
+   * Own JSONL grammar observed from `opencode run --format json`
+   * (test/fixtures/providers/opencode/health/stream.ndjson, #2896):
+   * `step_start` (a model step began), `text` (streamed answer text in
+   * `part.text`) and `step_finish` (the step ended, `part.reason` carries
+   * `"stop"` on a clean finish). Handshake stays `process-only`: these are
+   * step-scoped events inside one run, not an independently-evidenced
+   * session-establishment signal, so only identity correlation (`setup`)
+   * and the terminal/error outcome are reported; accepted-start and
+   * distinct-item progress remain unavailable pending qualification.
+   */
   observeHealthEvent(event, source, binding) {
     if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
     if (!healthEventMatchesBinding({ sessionId: event.sessionID }, binding)) return null;
+    if (event.type === 'step_start') return { kind: 'setup', sessionId: event.sessionID };
     // --format json is JSONL despite the legacy streamJson=false boolean.
-    // The evidenced text/part.text grammar proves activity; accepted-start,
-    // completed-step and terminal timing need independent qualification.
-    return event.type === 'text' && typeof event.part?.text === 'string'
-      ? { kind: 'activity', key: event.part.id } : null;
+    if (event.type === 'text' && typeof event.part?.text === 'string') {
+      return { kind: 'activity', key: event.part.id };
+    }
+    if (event.type === 'step_finish') {
+      if (event.part?.reason === 'stop') return { kind: 'terminal', success: true, key: event.part?.id ?? 'step_finish' };
+      return { ...classifyWorkerHealthFailure({ type: 'error', message: event.part?.reason }, { source, provider: 'opencode' }),
+        reasonCode: 'PROVIDER_ERROR', fatal: true };
+    }
+    return null;
   }
   /** @returns {string} */
   getBinary() {
@@ -78,6 +169,65 @@ export class OpenCodeAdapter extends ProviderAdapter {
       mcpConfig: false,
       maxTurns: false,
     };
+  }
+
+  /**
+   * Driver-owned argv after the binary for the version-bound direct-shell
+   * profile. Every control is explicit: exact observed model via `-m`
+   * (with an explicit effort appended as `#<variant>`, see module doc),
+   * `--format json` for the evidenced JSONL stream, and the brief as an
+   * attached file via `-f` (no stdin transport is evidenced; see the
+   * module doc comment) — the positional argument is always the fixed,
+   * content-free instruction, never brief text. A sandbox mode other than
+   * externally-enforced is refused rather than guessed, since it has no
+   * evidenced CLI mapping.
+   *
+   * @param {{ selected?: { model?: unknown, effort?: { value?: unknown } }, cwd?: unknown, briefPath?: unknown }} invocation
+   * @param {unknown} _profile
+   * @param {{ sandbox?: unknown }} [permissions]
+   * @returns {string[]}
+   */
+  buildWorkerArgs(invocation, _profile, permissions) {
+    const model = invocation?.selected?.model;
+    if (typeof model !== 'string' || !model || model.includes('\0')) {
+      throw new Error('OpenCode worker requires an explicit model');
+    }
+    if (OPENCODE_GENERIC_ALIASES.includes(model.toLowerCase())) {
+      throw new Error(`OpenCode worker requires an exact observed model, not the generic alias '${model}'`);
+    }
+    // #variant is a reasoning-effort selector (binary-evidenced; see module
+    // doc), but the valid id set is model-specific and not enumerated here,
+    // so a syntactically valid id is appended. Whether the real CLI refuses
+    // an undeclared id or silently falls back is unverified (effort stays
+    // unqualified).
+    const effort = invocation?.selected?.effort?.value ?? null;
+    let modelToken = model;
+    if (effort !== null) {
+      if (typeof effort !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(effort)) {
+        throw new Error('OpenCode worker effort must be a plain variant id (no "#", "/", whitespace or control characters)');
+      }
+      modelToken = `${model}#${effort}`;
+    }
+    const sandbox = permissions?.sandbox ?? 'external';
+    if (!OPENCODE_DIRECT_SANDBOX_MODES.includes(sandbox)) {
+      throw new Error(`OpenCode worker sandbox is not a qualified direct mode: ${String(sandbox)}`);
+    }
+    const cwd = invocation?.cwd;
+    if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0')) {
+      throw new Error('OpenCode worker requires an absolute workspace');
+    }
+    // Stdin is confirmed unsupported (binary disassembly; see module doc),
+    // so the brief rides on `-f`/`--file` as a path, never as argv content.
+    const briefPath = invocation?.briefPath;
+    if (typeof briefPath !== 'string' || !briefPath.startsWith('/') || briefPath.includes('\0')) {
+      throw new Error('OpenCode worker requires an absolute brief-file path');
+    }
+    return ['run', '--format', 'json', '-m', modelToken, '-f', briefPath, OPENCODE_FIXED_MESSAGE];
+  }
+
+  /** No evidenced stdin abort channel for `opencode run`. */
+  getAbortInput() {
+    return null;
   }
 
   /**
@@ -192,38 +342,48 @@ export class OpenCodeAdapter extends ProviderAdapter {
   }
 
   /**
-   * Parse OpenCode output — extracts text from newline-delimited JSON events.
-   *
-   * OpenCode --format json produces one JSON object per line. Text content
-   * lives in events with type="text" at part.text. This method collects all
-   * text parts and returns the concatenated result as a synthetic object so
-   * callers get a consistent { text } shape.
+   * Parse OpenCode output — extracts text from newline-delimited JSON events
+   * and STRICTLY requires a terminal `step_finish` whose `part.reason` is
+   * `"stop"`. A stream that ends after `step_start`/`text` with no
+   * `step_finish` (exit 0 or not), a `step_finish` with any other reason
+   * (e.g. `"error"`), a malformed JSON line, an unrecognized event type, or
+   * trailing content after the terminal event is rejected — a clean exit
+   * code alone never establishes a successful final.
    *
    * @param {string} stdout
    * @returns {{ text: string }|null}
    */
   parseOutput(stdout) {
-    try {
-      const lines = stdout.split('\n').filter(l => l.trim());
-      let text = '';
-      for (const line of lines) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'text' && event.part?.text) {
-            text += event.part.text;
-          }
-        } catch {
-          // skip malformed lines
-        }
-      }
-      return text ? { text } : null;
-    } catch {
-      return null;
+    if (typeof stdout !== 'string' || !stdout.trim()) return null;
+    let text = '';
+    let terminalReason = null;
+    for (const raw of stdout.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (terminalReason !== null) return null; // content after the terminal event
+      let event;
+      try { event = JSON.parse(line); } catch { return null; } // malformed frame: fail closed
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') return null;
+      if (event.type === 'step_start') continue;
+      else if (event.type === 'text' && typeof event.part?.text === 'string') text += event.part.text;
+      else if (event.type === 'step_finish') terminalReason = typeof event.part?.reason === 'string' ? event.part.reason : '';
+      else return null; // unrecognized event: never invented, never ignored
     }
+    if (terminalReason !== 'stop') return null;
+    return { text };
   }
 }
 
-// Self-register on import
+// Self-register on import for the legacy Ralph loop only. The direct worker
+// profile loads through the #2885 installed loader instead (see below).
 registerProvider('opencode', () => new OpenCodeAdapter());
+
+/** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
+export const interfaceVersion = 1;
+
+/** Installed-module registration: exactly the one approved adapter ID. */
+export function register(factory) {
+  factory('opencode', () => new OpenCodeAdapter());
+}
 
 export default OpenCodeAdapter;

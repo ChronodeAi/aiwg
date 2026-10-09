@@ -1142,8 +1142,8 @@
         "id": "opencode",
         "provider": "opencode",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "tools/ralph-external/lib/opencode-adapter.mjs",
+        "supportedVersions": "2.0.18",
+        "runtimeDriver": "installed:opencode",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -1154,7 +1154,13 @@
           "executable": "opencode",
           "argv": [
             "run",
-            "${brief}"
+            "--format",
+            "json",
+            "-m",
+            "${model}",
+            "-f",
+            "${briefFile}",
+            "Follow the instructions in the attached file exactly."
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
@@ -1165,7 +1171,7 @@
           "maxOutputBytes": 10485760
         },
         "capabilities": {
-          "output": "validated-file",
+          "output": "text",
           "modelPin": "unsupported",
           "effort": "unsupported",
           "cancel": "none",
@@ -1183,74 +1189,75 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "2.0.18",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "-m/--model (opencode run --help: '--model, -m string  Model to use in the format provider/model#variant')",
+                "evidence": "H: opencode 2.0.18 `opencode run --help` (captured 2026-10-09, .aiwg/working/s1-scratch/cli-help/opencode.txt)"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "explicit effort maps to a #<variant> suffix on --model (provider/model#variant); binary disassembly of the installed CLI (the variant-builder, minified as qU(model, manual)) shows variant ids are drawn directly from each model's own capabilities.supports.reasoning_effort list (e.g. low/medium/high), or fixed ids \"max\"/\"high\" for extended-thinking models exposing max_thinking_budget instead; the valid id set is model-specific and not enumerated here, so this adapter appends a syntactically valid id and the real CLI refuses one a given model does not expose",
+                "evidence": "R: conductor binary disassembly of the installed opencode 2.0.18 CLI (variant-builder function, host 'noodle', 2026-10-09), confirming H: opencode 2.0.18 `opencode run --help` ('--model, -m string  Model to use in the format provider/model#variant')"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no scoped sandbox flag on 'run'; the only permission-adjacent flag is --auto, a blanket approval bypass this profile never emits",
+                "evidence": "H: opencode 2.0.18 `opencode run --help` ('--auto  Auto-approve permissions that are not explicitly denied')"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--auto ('Auto-approve permissions that are not explicitly denied') is a blanket bypass and is refused by policy; what a permission request does without --auto in non-interactive `run` is not independently confirmed: binary disassembly shows a shared permission.asked/permission.replied protocol where an unanswered request resolves to a \"reject\" outcome (`_===\"once\"||_===\"always\"?_:\"reject\"`, with requestPermission(...).catch(()=>{return}) on no responder), but that path is traced through the ACP/session-protocol layer, not reproduced against plain `run`, so this stays unavailable rather than asserted",
+                "evidence": "R: conductor binary disassembly of the installed opencode 2.0.18 CLI (permission.asked/permission.replied reject-on-no-answer pattern, host 'noodle', 2026-10-09), confirming H: opencode 2.0.18 `opencode run --help`"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no --dir/--cwd flag on 'run' (the root 'opencode <subcommand> [flags] [<directory>]' positional is not evidenced on 'run --help'); the shared renderer's 'cd ${workspace}' sets the process working directory opencode executes in",
+                "evidence": "H: opencode 2.0.18 `opencode run --help` and `opencode --help`"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no --output/-o flag; the final answer is the captured stdout --format json JSONL stream, with text concatenated from its text-event payloads",
+                "evidence": "H: opencode 2.0.18 `opencode run --help` ('--format choice  Output format (choices: default, json)')"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "confirmed unsupported: disassembly of the installed opencode 2.0.18 binary found no stdin/isTTY handling in the compiled 'run' chunk; the brief rides on -f/--file as a path instead, and the positional argument carries only a fixed, content-free instruction",
+                "evidence": "R: conductor binary disassembly of the installed opencode 2.0.18 CLI (no stdin/isTTY handling in the compiled 'run' chunk, host 'noodle', 2026-10-09), confirming H: opencode 2.0.18 `opencode run --help`"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no --output-schema or equivalent flag is documented for 'run'",
+                "evidence": "H: opencode 2.0.18 `opencode run --help`"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no --max-steps/--max-turns flag is documented for 'run'",
+                "evidence": "H: opencode 2.0.18 `opencode run --help`"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no workspace-trust flag is documented; --auto would approve pending trust prompts and is never emitted by this profile",
+                "evidence": "H: opencode 2.0.18 `opencode run --help`"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no subagent/nested-delegation control is documented for 'run'",
+                "evidence": "H: opencode 2.0.18 `opencode run --help`"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no model-fallback flag is documented; fallback selection stays policy-owned outside the CLI",
+                "evidence": "H: opencode 2.0.18 `opencode run --help`"
               }
             },
             "envAllowlist": [],
             "pitfalls": [
-              "Documentation/help and synthetic observations are not authenticated live qualification.",
-              "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Stdin is confirmed unsupported (conductor disassembly of the installed opencode 2.0.18 binary: no stdin/isTTY handling in the compiled 'run' chunk, host 'noodle', 2026-10-09). The brief travels as an attached file via -f/--file; the positional argv message is a fixed, content-free instruction and never carries brief text.",
+              "--auto is a blanket permission/approval bypass ('Auto-approve permissions that are not explicitly denied') and is never part of the direct profile.",
+              "'opencode serve' is an HTTP API, not MCP, and 'opencode mcp' manages MCP *clients* the agent can call out to, not a worker-serving endpoint; the AIWG worker-invoke bridge remains the MCP route.",
+              "Documentation/help and synthetic observations are not authenticated live qualification."
             ],
             "health": {
               "version": 1,
@@ -1259,7 +1266,7 @@
               "signalParser": "provider-opencode-health-v1",
               "sessionLogLocator": null,
               "progressEvidence": [],
-              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "stopEvidence": "owned process identity and observed exit; a step_finish/text event alone is insufficient",
               "fixtureRef": "test/fixtures/providers/opencode/health/manifest.json",
               "qualifiedAt": null,
               "statusOperation": null,
@@ -1267,20 +1274,20 @@
               "coverage": "degraded",
               "qualificationTarget": "semantic",
               "evidenceGrades": [
-                "R",
-                "D"
+                "H",
+                "R"
               ],
               "provenance": [
                 {
-                  "kind": "repository",
-                  "ref": "tools/ralph-external/lib/opencode-adapter.mjs",
-                  "observedAt": "2026-10-07T00:00:00Z",
-                  "cliVersion": null
+                  "kind": "help",
+                  "ref": "opencode run --help / opencode --help (captured .aiwg/working/s1-scratch/cli-help/opencode.txt)",
+                  "observedAt": "2026-10-09T00:00:00Z",
+                  "cliVersion": "2.0.18"
                 },
                 {
-                  "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 opencode",
-                  "observedAt": "2026-10-07T00:00:00Z",
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/opencode-adapter.mjs",
+                  "observedAt": "2026-10-09T00:00:00Z",
                   "cliVersion": null
                 }
               ],

@@ -1,0 +1,90 @@
+# OpenCode direct-worker profile (B-OG-39, #2904)
+
+This is the lightweight CLI profile for dispatching `opencode` as a direct
+worker (not the Ralph-loop session driver documented in
+[`opencode-sessions.md`](./opencode-sessions.md), which covers deployment
+and transcript handling).
+
+The bundled `direct-shell` invocation profile in
+`agentic/code/providers/model-capabilities.v1.json` is version-bound to
+`opencode 2.0.18` and help-evidenced only (`H:` evidence grade, captured
+from `opencode --help` / `opencode run --help` on host `noodle`,
+2026-10-09). It stays `unqualified` for dispatch until a human qualifier
+reviews a live run. The adapter
+(`tools/ralph-external/lib/opencode-adapter.mjs`) renders:
+
+```
+opencode run --format json -m <model>[#<effort>] -f <briefPath> "Follow the instructions in the attached file exactly."
+```
+
+**Stdin is confirmed unsupported, not merely undocumented.** `opencode run
+--help` shows only a positional `[<message...>]` argument, and the
+conductor went further and disassembled the installed `opencode` 2.0.18
+binary on host `noodle`: the compiled chunk implementing `run` has no
+stdin/isTTY handling at all. The brief therefore travels as an attached
+file via `--file`/`-f` ("File to attach to the message"), and the
+positional argument carries only a fixed, content-free instruction —
+`buildWorkerArgs` never places brief text there. This is recorded verbatim
+in the profile's `pitfalls`. **An attachment only proves the file reached
+the process; it does not prove the model treats its contents as
+instructions the way stdin or a prompt would.** The manual smoke run below
+is the check for that, not the `-f` wiring alone.
+
+**`#variant` is a reasoning-effort selector, but the id set is
+model-specific.** Disassembly of the installed binary found the function
+that builds each model's variant list (minified as `qU(model, manual)`):
+it maps that model's own `capabilities.supports.reasoning_effort` list
+(e.g. low/medium/high) directly onto variant ids, or — for
+extended-thinking models exposing `max_thinking_budget` instead — onto two
+fixed ids, `"max"` and `"high"`. So an explicit effort is appended as
+`#<effort>` (`gpt-5#high`); which ids a given model actually accepts is
+not enumerated by this profile. **What the real CLI does with an id the
+model does not declare is unverified**: the conductor's binary search found
+no rejection path, so it may silently fall back to the model's default
+reasoning. Effort is therefore **unqualified** for this profile: use only a
+variant the target model declares, and confirm it with the smoke run.
+
+**Permission-request behavior without `--auto` is not fully resolved.**
+Disassembly shows a shared `permission.asked`/`permission.replied`
+protocol: an unanswered or unselected request resolves to a `"reject"`
+outcome (`requestPermission(...).catch(()=>{return})` on no responder,
+then `_==="once"||_==="always"?_:"reject"`) — evidence of reject-on-no-answer
+rather than an indefinite hang, but that code path is traced through the
+ACP/session-protocol layer and was not independently reproduced against
+plain, non-interactive `opencode run`. Approval therefore stays
+`unqualified`/unavailable rather than asserted either way. The only
+permission-adjacent flag, `--auto` ("Auto-approve permissions that are not
+explicitly denied"), is a blanket bypass and is never emitted; sandboxing
+is therefore external to the CLI (`capabilities.sandboxModes: ["external"]`).
+
+## Manual smoke run
+
+The conductor runs this once, by hand, after `opencode` is installed, to
+record a pass/fail and the observed CLI version on the tracking issue. It
+is not part of default CI and performs exactly one live, billable call.
+
+```sh
+MODEL="<provider>/<model>"   # fill in an exact observed model id
+d=$(mktemp -d) && cd "$d"
+echo 'Reply with exactly: opencode-smoke-ok' > brief.md
+opencode run --format json -m "$MODEL" -f brief.md \
+  'Follow the instructions in the attached file exactly.'
+echo "exit=$?"
+```
+
+### Reading the result
+
+- **Exit code**: `echo "exit=$?"` must print `exit=0`. Any non-zero exit is
+  a fail.
+- **`--format json` stream on stdout**: grep it for a clean finish:
+  `... | grep '"type":"step_finish"'` and confirm the matching line's
+  `part.reason` is `"stop"`. A `step_finish` with any other `reason` (or a
+  stream that ends without one) is a fail even at exit 0 — a clean exit
+  code alone is not sufficient.
+- **Reply text**: the `text` events' `part.text` should concatenate to the
+  literal string `opencode-smoke-ok`.
+
+Record the installed `opencode --version` output, the command above, and
+the pass/fail outcome (exit code + `step_finish` reason + reply text) on
+the tracking issue. This manual run is evidence only; it never marks the
+registry profile as qualified for automated dispatch.
