@@ -1,0 +1,18 @@
+{
+  "scenarioId": "T-OG-03-codex-own-grammar",
+  "provider": "codex",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "stream.ndjson",
+  "expectedKinds": [
+    "setup",
+    "accepted",
+    "activity",
+    "progress",
+    "terminal"
+  ],
+  "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
+  "sanitizedEvidence": "synthetic content and identifiers only",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"fixture-session"}
+{"type":"stream_event","session_id":"fixture-session","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"thinking"}}}
+{"type":"assistant","session_id":"fixture-session","message":{"id":"claude-message-1","role":"assistant","content":[{"type":"tool_use","id":"claude-tool-1","name":"Read","input":{"file_path":"fixture.txt"}}]}}
+{"type":"user","session_id":"fixture-session","message":{"content":[{"type":"tool_result","tool_use_id":"claude-tool-1","content":"synthetic file"}]}}
+{"type":"result","subtype":"success","session_id":"fixture-session","uuid":"claude-result-1","is_error":false,"result":"synthetic final"}

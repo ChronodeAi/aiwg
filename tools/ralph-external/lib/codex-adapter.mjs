@@ -20,6 +20,7 @@
  */
 
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
 
 /**
  * Model mapping from generic names to Codex-specific models.
@@ -36,6 +37,30 @@ const MODEL_MAP = {
 };
 
 export class CodexAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.thread_id }, binding)) return null;
+    if (event.type === 'thread.started' && typeof event.thread_id === 'string') return { kind: 'setup', sessionId: event.thread_id };
+    if (event.type === 'turn.started') return { kind: 'accepted', key: event.turn_id };
+    if (event.type === 'item.completed') {
+      const item = event.item;
+      if (!item || typeof item !== 'object') return null;
+      if (item.type === 'error' || item.status === 'failed' || (Number.isInteger(item.exit_code) && item.exit_code !== 0)) {
+        return classifyWorkerHealthFailure({ type: 'error', message: item.message }, { source, provider: 'codex' })
+          ?? { kind: 'error', reasonCode: 'tool-failed' };
+      }
+      if (typeof item.id === 'string' && ['agent_message', 'command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(item.type)) {
+        return { kind: 'progress', key: item.id };
+      }
+    }
+    if (event.type === 'item.started' || event.type === 'item.updated') return { kind: 'activity' };
+    if (event.type === 'turn.completed') return { kind: 'terminal', success: true, key: event.turn_id ?? 'turn.completed' };
+    if (event.type === 'error' || event.type === 'turn.failed') {
+      return { ...classifyWorkerHealthFailure({ type: 'error', message: event.message ?? event.error?.message }, { source, provider: 'codex' }),
+        fatal: event.type === 'turn.failed' };
+    }
+    return null;
+  }
   /** @returns {string} */
   getBinary() {
     return 'codex';

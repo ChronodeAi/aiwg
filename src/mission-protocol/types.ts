@@ -383,7 +383,8 @@ export interface WorkerResolvedInvocation {
   maxOutputBytes: number;
   effectiveCaps: Record<string, number>;
   controlEvidence: string[];
-  health: WorkerEffectiveHealth;
+  /** Legacy and preparatory payloads may omit health; runtime owners use defaults. */
+  health?: WorkerEffectiveHealth;
 }
 
 export interface WorkerDirectVerification {
@@ -444,6 +445,18 @@ export interface WorkerEffectiveHealth {
   scale: number;
   profileRef: string;
   runDir: string | null;
+}
+
+/** Observer-only bounded diagnostics; never accepted from workerClaims. */
+export interface WorkerHealthEvidence {
+  invocationId: string;
+  sequence: number;
+  observerGeneration: number;
+  lastWorkerHeartbeatAt: string | null;
+  cpuTimeMs: number | null;
+  steps: number | null;
+  gaps: Array<{ sequence: number; reasonCode: string; source: string }>;
+  events: Array<{ sequence: number; kind: string; source: string; generation: number; offset: number; keyDigest: string | null }>;
 }
 
 /** Producer ownership from 06 §6–7. Workers emit claims; trusted code assembles results. */

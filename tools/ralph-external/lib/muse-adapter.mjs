@@ -74,6 +74,7 @@
  */
 
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
 
 /**
  * Whether the muse exec Ralph adapter is registered. Enabled by default;
@@ -88,6 +89,30 @@ export function isMuseRalphEnabled() {
 }
 
 export class MuseAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind === 'stderr' || !event || typeof event !== 'object' || event.record_type !== 'event') return null;
+    if (event.stream?.kind !== 'session' || typeof event.stream.id !== 'string') return null;
+    const payload = event.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.stream.id, runId: payload.run_id }, binding)) return null;
+    // Native session records require an already bound session and run. Reading
+    // a log from the same provider does not authorize unrelated session traffic.
+    if (source.kind === 'session-log' && (!binding.sessionId || event.stream.id !== binding.sessionId
+      || !binding.runId || payload.run_id !== binding.runId)) return null;
+    if (event.payload_type === 'run.lifecycle.started' && payload.kind === 'run_started') {
+      return { kind: 'accepted', sessionId: event.stream.id, runId: payload.run_id, key: event.id };
+    }
+    if (event.payload_type === 'run.output.delta' && payload.kind === 'run_output_delta' && typeof payload.text === 'string') {
+      return { kind: 'activity', key: event.id };
+    }
+    if (event.payload_type === 'run.terminal.completed' && payload.kind === 'run_terminal' && payload.terminal === 'completed') {
+      return { kind: 'terminal', success: true, key: event.id };
+    }
+    if (event.payload_type === 'run.terminal.failed' && payload.kind === 'run_terminal' && payload.terminal === 'failed') {
+      return { ...classifyWorkerHealthFailure({ type: 'error', message: payload.reason }, { source, provider: 'muse' }), fatal: true };
+    }
+    return null;
+  }
   getBinary() {
     return process.env.AIWG_MUSE_BIN || 'muse';
   }

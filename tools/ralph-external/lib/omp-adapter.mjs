@@ -1,9 +1,55 @@
 import { spawnSync } from 'node:child_process';
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
-import { OmpFrameDecoder, summarizeOmpEvents, OmpRpcClient, MAX_MESSAGE } from '../../providers/omp-transport.mjs';
+import { OmpFrameDecoder, summarizeOmpEvents, OmpRpcClient, MAX_FRAME, MAX_MESSAGE } from '../../providers/omp-transport.mjs';
+import { createWorkerHealthObserver, healthEventMatchesBinding } from './worker-health.mjs';
 
 /** Oh My Pi's native flags/events intentionally differ from Pi. */
 export class OmpAdapter extends ProviderAdapter {
+  createHealthObserver(options = {}) {
+    // Reuse OMP's owned v2 chunk grammar. Neither another CLI's framing nor
+    // the strict worker-final parser is a substitute for native reassembly.
+    const messageLimit = Math.min(options.maxMessageBytes ?? 4 * MAX_FRAME, MAX_MESSAGE);
+    let decoder = new OmpFrameDecoder({ messageLimit });
+    let lastSource = null;
+    const observer = createWorkerHealthObserver({ ...options, provider: this.getName(),
+      maxFrameBytes: options.maxFrameBytes ?? MAX_FRAME,
+      normalizeEvent: (frame, source, binding) => {
+        if (source.kind !== 'stdout') return null;
+        const identity = `${source.id}:${source.generation}`;
+        if (lastSource !== null && lastSource !== identity) decoder = new OmpFrameDecoder({ messageLimit });
+        lastSource = identity;
+        try {
+          const event = decoder.decode(frame);
+          return event ? this.observeHealthEvent(event, source, binding) : null;
+        } catch (error) {
+          decoder = new OmpFrameDecoder({ messageLimit });
+          throw error;
+        }
+      },
+    });
+    const finish = observer.finish;
+    observer.finish = observation => {
+      try { decoder.end(); } catch { observer.gap('MALFORMED_FRAME'); }
+      return finish(observation);
+    };
+    return observer;
+  }
+  observeHealthEvent(event, source, binding) {
+    if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.sessionId }, binding)) return null;
+    if (event.type === 'agent_start') return { kind: 'accepted' };
+    if (event.type === 'tool_execution_end') {
+      if (event.isError === true) return { kind: 'error', reasonCode: 'tool-failed' };
+      if (typeof event.toolCallId === 'string') return { kind: 'progress', key: event.toolCallId };
+      return { kind: 'activity' };
+    }
+    if (event.type === 'agent_end') {
+      if (Array.isArray(event.messages) && event.messages.some(message => message.stopReason === 'error' || message.stopReason === 'aborted')) return { kind: 'error', reasonCode: 'provider-failed' };
+      return event.willContinue === true ? { kind: 'activity' } : { kind: 'terminal', success: true, key: 'agent_end' };
+    }
+    if (event.type === 'rpc_frame_error' || event.type === 'error') return { kind: 'error', reasonCode: 'provider-failed' };
+    return null;
+  }
   async getVersion() { const result = spawnSync(this.getBinary(), ['--version'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536 }); return result.status === 0 ? result.stdout.trim() : null; }
   async isAvailable() { return Boolean(await this.getVersion()); }
   getName() { return 'omp'; }

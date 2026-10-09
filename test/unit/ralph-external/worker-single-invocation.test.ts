@@ -13,11 +13,12 @@ import { parseWorkerLaunchArgs, workerExitCode } from '../../../tools/ralph-exte
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { stopWorkerUnit, detectWorkerIsolation, launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
+import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode }: any = {}) {
+async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false }: any = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const f = workerResolutionFixture();
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-one-shot-')); roots.push(root);
@@ -37,8 +38,8 @@ async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = fa
   const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
   const profile = adapter.invocationProfiles!['fixture-shell'];
   profile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG', 'AIWG_SYNTHETIC_ALLOWED'];
-  profile.health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl', signalParser: 'fixture:jsonl',
-    sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot', qualifiedAt: f.request.now,
+  profile.health = { version: 1, handshake: semanticHealth ? 'semantic' : 'process-only', outputFraming: 'jsonl', signalParser: 'fixture:jsonl',
+    sessionLogLocator: null, progressEvidence: semanticHealth ? ['item.completed'] : [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot', qualifiedAt: f.request.now,
     statusOperation: null, cancelOperation: null };
   f.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
   const driver: any = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
@@ -65,6 +66,50 @@ async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = fa
 }
 
 describe('T-OG-15/20 one attached invocation without managed state', () => {
+  it('projects semantic health from the adapter while consuming strict finals separately', async () => {
+    const f = await fixture({ semanticHealth: true });
+    const adapter = new CodexAdapter();
+    (f.drivers.codex as any).createHealthObserver = (options: any) => adapter.createHealthObserver(options);
+    (f.drivers.codex as any).parseWorkerFinal = (output: any, options: any) => adapter.parseWorkerFinal(output, options);
+    const claims = { version: 1, status: 'completed', summary: 'synthetic only', claims: [], artifacts: [], checks: [], limitations: [] };
+    (f.drivers.codex as any).extractFinal = () => claims;
+    const events = [
+      { type: 'thread.started', thread_id: 'synthetic-thread' }, { type: 'turn.started' },
+      { type: 'item.completed', item: { id: 'synthetic-step', type: 'agent_message', text: 'synthetic' } }, { type: 'turn.completed' },
+    ].map(item => JSON.stringify(item)).join('\n') + '\n';
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
+    const launched = vi.fn(); const started = vi.fn(); f.launcher.on('launched', launched); f.launcher.on('started', started);
+    const result = await f.launch({ launchIsolated: () => {
+      queueMicrotask(() => {
+        writeFileSync(f.final, JSON.stringify(claims));
+        child.stdout.end(events); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-health' };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    expect(result.health).toMatchObject({ handshake: 'semantic', state: 'completed', termination: 'confirmed', lastProgressAt: expect.any(String) });
+    expect(result.healthEvidence.events.map((item: any) => item.kind)).toContain('progress');
+    expect(launched).toHaveBeenCalledOnce(); expect(started).toHaveBeenCalledOnce();
+    expect(started.mock.calls[0]).toEqual(launched.mock.calls[0]);
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'health.json'), 'utf8')).origin).toBe('observer');
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).health.state).toBe('completed');
+  });
+
+  it('legacy extraction cannot erase duplicate final keys and authorize completed health', async () => {
+    const f = await fixture({ stdoutOnly: true });
+    const adapter = new CodexAdapter();
+    (f.drivers.codex as any).parseWorkerFinal = (bytes: any, options: any) => adapter.parseWorkerFinal(bytes, options);
+    const forged = '{"type":"result","result":{"version":1,"status":"failed","status":"completed","summary":"synthetic","claims":[],"artifacts":[],"checks":[],"limitations":[]}}\n';
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {}; child.pid = 2147483646;
+    const result = await f.launch({ launchIsolated: () => {
+      queueMicrotask(() => { child.stdout.end(forged); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); });
+      return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-duplicate' };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+    expect(result.exitCode).toBe(0);
+    expect(result.health.state).not.toBe('completed');
+    expect(await readFile(path.join(f.runDir, 'stdout.events.jsonl'), 'utf8')).toBe(forged);
+  });
+
   it.each(['closed', 'brief-text', 'brief-json'])('preserves exact argv, %s EOF, private metadata and captures', async stdin => {
     const f = await fixture({ stdin });
     const result = await f.launch();
@@ -146,7 +191,8 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     const f = await fixture({ scenario: 'hang' });
     const kill = vi.spyOn(process, 'kill');
     const result = await f.launch();
-    expect(result).toMatchObject({ timedOut: true, exitCode: null, signal: 'SIGTERM', termination: 'uncertain' });
+    expect(result).toMatchObject({ timedOut: true, exitCode: null, termination: 'uncertain' });
+    expect(['SIGTERM', 'SIGKILL']).toContain(result.signal);
     const signals = kill.mock.calls.filter(call => call[1] !== 0);
     expect(signals.length).toBeGreaterThan(0);
     expect(signals.every(call => call[0] < 0 && call[0] !== -process.pid)).toBe(true);

@@ -11,8 +11,35 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
 
 export class ClaudeAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind === 'stderr' || !event || typeof event !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.session_id }, binding)) return null;
+    if (source.kind === 'session-log' && (!binding.sessionId || event.session_id !== binding.sessionId)) return null;
+    if (event.type === 'system' && event.subtype === 'init') {
+      return { kind: 'setup', sessionId: event.session_id };
+    }
+    // A full assistant message demonstrates accepted model work. Setup and
+    // partial token frames alone do not. Completed tools advance progress.
+    if (event.type === 'assistant' && event.message?.role === 'assistant') {
+      return { kind: 'accepted', key: event.message.id };
+    }
+    if (event.type === 'user' && Array.isArray(event.message?.content)) {
+      const results = event.message.content.filter(part => part.type === 'tool_result' && typeof part.tool_use_id === 'string');
+      if (results.some(part => part.is_error === true)) return { kind: 'error', reasonCode: 'tool-failed' };
+      if (results.length) return { kind: 'progress', key: results.map(part => part.tool_use_id).sort().join(':') };
+    }
+    if (event.type === 'stream_event') return { kind: 'activity' };
+    if (event.type === 'result') {
+      if (event.is_error === true || (typeof event.subtype === 'string' && event.subtype !== 'success')) {
+        return { ...classifyWorkerHealthFailure({ type: 'error', message: event.errors?.join(' ') ?? event.result }, { source, provider: 'claude' }), fatal: true };
+      }
+      if (event.subtype === 'success') return { kind: 'terminal', success: true, key: event.uuid ?? 'result' };
+    }
+    return null;
+  }
   /** @returns {string} */
   getBinary() {
     return 'claude';

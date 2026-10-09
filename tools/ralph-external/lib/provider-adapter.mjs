@@ -11,6 +11,7 @@
 
 import { spawn } from 'child_process';
 import { importImpl } from '../../_resolve-impl.mjs';
+import { createWorkerHealthObserver, observeProviderHealthEvent } from './worker-health.mjs';
 
 /**
  * Thrown by {@link parseStrictWorkerJson} with a stable `code` so callers can
@@ -574,6 +575,22 @@ export class ProviderAdapter {
 
   /** JSONL written to stdin before bounded process termination, when supported. */
   getAbortInput() { return null; }
+
+  /**
+   * Observe execution through the selected profile's framing and grammar.
+   * This hook never parses or verifies worker claims: parseWorkerFinal remains
+   * the separate strict final contract, and the conductor owns verification.
+   */
+  createHealthObserver(options = {}) {
+    return createWorkerHealthObserver({
+      ...options,
+      provider: this.getName(),
+      normalizeEvent: (event, source, binding) => this.observeHealthEvent(event, source, binding),
+    });
+  }
+
+  /** Unknown provider grammar supplies no semantic execution evidence. */
+  observeHealthEvent(event, source, binding) { return observeProviderHealthEvent(this.getName(), event, source, binding); }
 
   /**
    * Get the path where the provider stores session transcripts.

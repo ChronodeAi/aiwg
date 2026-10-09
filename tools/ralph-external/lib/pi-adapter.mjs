@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { healthEventMatchesBinding } from './worker-health.mjs';
 
 /**
  * Pi CLI versions this adapter is qualified against. `isAvailable()` fails
@@ -22,6 +23,25 @@ export function isSupportedPiVersion(version) {
 }
 
 export class PiAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
+    if (!healthEventMatchesBinding({ sessionId: event.sessionId ?? (event.type === 'session' ? event.id : undefined) }, binding)) return null;
+    if (event.type === 'session') return { kind: 'setup', sessionId: event.id };
+    if (event.type === 'agent_start') return { kind: 'accepted' };
+    if (event.type === 'agent_end') {
+      if (event.willRetry === true || (Array.isArray(event.messages) && event.messages.some(message => message.stopReason === 'error' || message.stopReason === 'aborted'))) {
+        return { kind: 'error', reasonCode: 'provider-failed' };
+      }
+      // agent_end can precede retry/continuation: settlement requires Pi's
+      // own agent_settled event. Completed output can still be progress.
+      if (Array.isArray(event.messages) && event.messages.some(message => message.role === 'assistant')) {
+        return { kind: 'progress', key: JSON.stringify(event.messages) };
+      }
+      return { kind: 'activity' };
+    }
+    if (event.type === 'agent_settled') return { kind: 'terminal', success: true, key: 'agent_settled' };
+    return null;
+  }
   getBinary() { return process.env.AIWG_PI_BIN || 'pi'; }
   getName() { return 'pi'; }
   getCapabilities() {
@@ -36,7 +56,7 @@ export class PiAdapter extends ProviderAdapter {
       rpcAbort: false };
   }
   async isAvailable() {
-    const node = spawnSync(process.execPath, ['-p', 'process.versions.node'], { encoding: 'utf8' });
+    const node = spawnSync(process.execPath, ['-p', 'process.versions.node'], { encoding: 'utf8', timeout: 5000 });
     const [major, minor] = String(node.stdout).trim().split('.').map(Number);
     if (node.status !== 0 || major < 22 || (major === 22 && minor < 19)) return false;
     if (!await super.isAvailable()) return false;

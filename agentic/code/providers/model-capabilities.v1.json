@@ -19,7 +19,171 @@
       "artifactFormat": "YAML frontmatter plus Markdown; runtime --model and --effort flags",
       "verification": "Pinned offline contract; authenticated model selection was not executed",
       "sourceUrl": "https://antigravity.google/docs/cli/subagents/",
-      "verifiedAt": "2026-09-04"
+      "verifiedAt": "2026-09-04",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "antigravity",
+        "provider": "antigravity",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "agy",
+          "argv": [
+            "-p",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-antigravity-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct step_update DONE"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/antigravity/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R",
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "agentic/code/providers/antigravity/provider-contract.v1.json",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                },
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 antigravity",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-43",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "claude": {
       "agent": "native",
@@ -37,7 +201,171 @@
       "artifactFormat": "YAML frontmatter plus Markdown",
       "verification": "Inspect deployed frontmatter and bounded invocation metadata",
       "sourceUrl": "https://code.claude.com/docs/en/sub-agents",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "claude",
+        "provider": "claude",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/claude-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "claude",
+          "argv": [
+            "-p",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-claude-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct completed tool_result"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/claude/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "H",
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "help",
+                  "ref": "tools/ralph-external/lib/claude-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": "2.1.292"
+                },
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/claude-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-28",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "codex": {
       "agent": "native",
@@ -57,7 +385,171 @@
       "artifactFormat": "Standalone TOML custom-agent configuration",
       "verification": "Parse TOML and load in Codex custom-agent registry",
       "sourceUrl": "https://learn.chatgpt.com/docs/agent-configuration/subagents",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "codex",
+        "provider": "codex",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/codex-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "codex",
+          "argv": [
+            "exec",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-codex-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct item.completed"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/codex/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "H",
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "help",
+                  "ref": "tools/ralph-external/lib/codex-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": "0.160.1"
+                },
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/codex-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-07",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "copilot": {
       "agent": "native",
@@ -70,7 +562,162 @@
       "artifactFormat": "YAML frontmatter plus Markdown",
       "verification": "Schema fixture and entitled Copilot invocation",
       "sourceUrl": "https://docs.github.com/en/copilot/reference/custom-agents-configuration",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "copilot",
+        "provider": "copilot",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "copilot",
+          "argv": [
+            "-p",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "final-json",
+              "signalParser": "provider-copilot-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/copilot/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 copilot",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-36",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "cursor": {
       "agent": "native",
@@ -83,7 +730,162 @@
       "artifactFormat": "YAML frontmatter plus Markdown",
       "verification": "Schema fixture and entitled Cursor invocation",
       "sourceUrl": "https://cursor.com/docs/subagents",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "cursor",
+        "provider": "cursor",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "agent",
+          "argv": [
+            "-p",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "final-json",
+              "signalParser": "provider-cursor-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/cursor/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 cursor",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-38",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "factory": {
       "agent": "native",
@@ -101,7 +903,169 @@
       "artifactFormat": "YAML frontmatter plus Markdown",
       "verification": "Fixture validation and Factory CLI model report",
       "sourceUrl": "https://docs.factory.ai/cli/configuration/custom-droids",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "factory",
+        "provider": "factory",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/factory-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "droid",
+          "argv": [
+            "exec",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-factory-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/factory/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R",
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/factory-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                },
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 factory",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-37",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "opencode": {
       "agent": "native",
@@ -114,7 +1078,169 @@
       "artifactFormat": "YAML frontmatter plus Markdown",
       "verification": "Inspect artifact and OpenCode model registry",
       "sourceUrl": "https://opencode.ai/docs/agents",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "opencode",
+        "provider": "opencode",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/opencode-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "opencode",
+          "argv": [
+            "run",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-opencode-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/opencode/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R",
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/opencode-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                },
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 opencode",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-39",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "warp": {
       "agent": "global-only",
@@ -127,7 +1253,164 @@
       "artifactFormat": "Saved profile / run control plane",
       "verification": "Inspect active profile and run metadata",
       "sourceUrl": "https://docs.warp.dev/agent-platform/capabilities/agent-profiles-permissions",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "warp",
+        "provider": "warp",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "oz",
+          "argv": [
+            "agent",
+            "run",
+            "--prompt",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "text",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "plain",
+              "signalParser": "provider-warp-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/warp/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 warp",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-40",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "omp": {
       "agent": "native",
@@ -147,7 +1430,167 @@
       "artifactFormat": "model and thinkingLevel frontmatter; --model and --thinking runtime flags",
       "verification": "Pinned OMP 18.1.10 source and live OpenRouter smoke; individual role defaults remain operator configured",
       "sourceUrl": "https://github.com/can1357/oh-my-pi/tree/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent",
-      "verifiedAt": "2026-09-04"
+      "verifiedAt": "2026-09-04",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "omp",
+        "provider": "omp",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/omp-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "omp",
+          "argv": [
+            "--mode",
+            "json",
+            "--",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-omp-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct tool_execution_end",
+                "agent_end willContinue=false"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/omp/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/omp-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-45",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "pi": {
       "agent": "native",
@@ -167,7 +1610,166 @@
       "artifactFormat": "Runtime --model and --thinking flags",
       "verification": "Inspect strict JSONL state and the selected provider/model",
       "sourceUrl": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent#cli-reference",
-      "verifiedAt": "2026-09-04"
+      "verifiedAt": "2026-09-04",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "pi",
+        "provider": "pi",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/pi-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "pi",
+          "argv": [
+            "--mode",
+            "json",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-pi-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct agent_end",
+                "agent_settled"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/pi/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/pi-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-45",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "deepseek-harness": {
       "agent": "native",
@@ -187,7 +1789,163 @@
       "artifactFormat": "agent-default-model config; JSON-RPC initialize params",
       "verification": "Pinned source contract plus opt-in headless OpenRouter smoke",
       "sourceUrl": "https://github.com/deepseek-ai/deepseek-harness",
-      "verifiedAt": "2026-09-05"
+      "verifiedAt": "2026-09-05",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "deepseek-harness",
+        "provider": "deepseek-harness",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/deepseek-harness-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "dsh",
+          "argv": [
+            "--profile",
+            "headless",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "text",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "plain",
+              "signalParser": "provider-deepseek-harness-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/deepseek-harness/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/deepseek-harness-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-44",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "windsurf": {
       "agent": "unsupported",
@@ -200,7 +1958,20 @@
       "artifactFormat": "Informational policy only",
       "verification": "Assert unsupported fields are omitted",
       "sourceUrl": "https://docs.devin.ai/desktop/cascade/skills",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthCoverage": {
+        "scope": "out",
+        "coverage": "unobserved",
+        "handshake": "unobserved",
+        "evidenceGrades": [
+          "R"
+        ],
+        "qualificationOwner": "B-OG-47",
+        "provenance": [
+          "src/providers/provider-definitions.ts#windsurf"
+        ],
+        "reason": "Desktop/client capability does not establish a headless worker interface."
+      }
     },
     "openclaw": {
       "agent": "native",
@@ -213,7 +1984,163 @@
       "artifactFormat": "JSON/JSONC runtime configuration",
       "verification": "Inspect resolved subagent metadata",
       "sourceUrl": "https://docs.openclaw.ai/tools/subagents",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "openclaw",
+        "provider": "openclaw",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "openclaw",
+          "argv": [
+            "agent",
+            "exec",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "final-json",
+              "signalParser": "provider-openclaw-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/openclaw/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "documentation",
+                  "ref": "03-software-architecture.md \u00a710 openclaw",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-42",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "grokbot": {
       "agent": "unsupported",
@@ -226,7 +2153,20 @@
       "artifactFormat": "Informational only",
       "verification": "Confirm steward models --route --provider grokbot emits unsupported/informational",
       "sourceUrl": "https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-grokbot-provider-target.md",
-      "verifiedAt": "2026-09-15"
+      "verifiedAt": "2026-09-15",
+      "workerHealthCoverage": {
+        "scope": "out",
+        "coverage": "unobserved",
+        "handshake": "unobserved",
+        "evidenceGrades": [
+          "R"
+        ],
+        "qualificationOwner": "B-OG-47",
+        "provenance": [
+          "src/providers/provider-definitions.ts#grokbot"
+        ],
+        "reason": "CreateAgent/registered-machine capability does not establish a CLI worker contract."
+      }
     },
     "grok-build": {
       "agent": "inherited",
@@ -239,7 +2179,164 @@
       "artifactFormat": "Grok Build model alias",
       "verification": "grok inspect --json plus bounded parsing of model fields from reported config layers",
       "sourceUrl": "https://docs.x.ai/build/settings",
-      "verifiedAt": "2026-09-21"
+      "verifiedAt": "2026-09-21",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "grok-build",
+        "provider": "grok-build",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "grok",
+          "argv": [
+            "-p",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-grok-build-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [
+                "distinct completed message"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/grok-build/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "repository",
+                  "ref": "src/providers/grok-build-headless.ts",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-41",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "hermes": {
       "agent": "global-only",
@@ -252,7 +2349,164 @@
       "artifactFormat": "Global CLI/config setting",
       "verification": "Inspect Hermes delegation configuration",
       "sourceUrl": "https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "hermes",
+        "provider": "hermes",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "unavailable",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "hermes",
+          "argv": [
+            "-z",
+            "${brief}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "text",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "plain",
+              "signalParser": "provider-hermes-health-v1",
+              "sessionLogLocator": "hermes-session-correlated-v1",
+              "progressEvidence": [
+                "session/turn-correlated completed tool marker"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/hermes/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "H"
+              ],
+              "provenance": [
+                {
+                  "kind": "help",
+                  "ref": "src/providers/provider-definitions.ts#hermes",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": "0.20.6"
+                }
+              ],
+              "qualificationOwner": "B-OG-48",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
     },
     "openhuman": {
       "agent": "compiled",
@@ -265,7 +2519,22 @@
       "artifactFormat": "Standalone TOML agent definition",
       "verification": "Parse against OpenHuman definition schema",
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs",
-      "verifiedAt": "2026-07-20"
+      "verifiedAt": "2026-07-20",
+      "workerHealthCoverage": {
+        "scope": "out",
+        "coverage": "unobserved",
+        "handshake": "unobserved",
+        "evidenceGrades": [
+          "R",
+          "D"
+        ],
+        "qualificationOwner": "B-OG-47",
+        "provenance": [
+          "src/providers/provider-definitions.ts#openhuman",
+          "https://github.com/tinyhumansai/openhuman/blob/main/src/core/agent_cli.rs"
+        ],
+        "reason": "Prompt inspection and core/RPC deployment do not establish a one-shot worker interface."
+      }
     },
     "muse": {
       "agent": "unsupported",
@@ -286,7 +2555,318 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "muse",
+        "provider": "muse",
+        "adapterVersion": "1",
+        "supportedVersions": "*",
+        "runtimeDriver": "tools/ralph-external/lib/muse-adapter.mjs",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "muse",
+          "argv": [
+            "exec",
+            "--prompt-file",
+            "${briefFile}"
+          ],
+          "stdin": "closed",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--version"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "*",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unavailable pending installed profile qualification",
+                "evidence": "synthetic health fixtures do not qualify invocation controls"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "jsonl",
+              "signalParser": "provider-muse-health-v1",
+              "sessionLogLocator": "muse-run-correlated-v1",
+              "progressEvidence": [
+                "distinct completed run-bound step/tool record"
+              ],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/muse/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "semantic",
+              "evidenceGrades": [
+                "H",
+                "R"
+              ],
+              "provenance": [
+                {
+                  "kind": "help",
+                  "ref": "tools/ralph-external/lib/muse-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": "1.4.3-R5018.1"
+                },
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/muse-adapter.mjs",
+                  "observedAt": "2026-10-07T00:00:00Z",
+                  "cliVersion": null
+                }
+              ],
+              "qualificationOwner": "B-OG-08",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "workerHealthAdapters": {
+    "local-http": {
+      "version": 1,
+      "id": "local-http",
+      "provider": "ollama",
+      "adapterVersion": "1",
+      "supportedVersions": "*",
+      "runtimeDriver": "unavailable",
+      "catalogAdapter": {
+        "kind": "http",
+        "locator": "/api/tags",
+        "parser": "ollama-model-list-v1",
+        "timeoutSeconds": 10,
+        "maxBytes": 65536
+      },
+      "invocation": {
+        "kind": "http",
+        "protocol": "ollama",
+        "healthPath": "/api/version",
+        "modelsPath": "/api/tags",
+        "generatePath": "/api/generate",
+        "timeoutSeconds": 1800,
+        "maxOutputBytes": 10485760
+      },
+      "capabilities": {
+        "output": "validated-file",
+        "modelPin": "unsupported",
+        "effort": "not-applicable",
+        "cancel": "none",
+        "resume": false,
+        "sandboxModes": [
+            "external"
+          ],
+        "nestedAgentsControllable": false,
+        "nativeFallbackControllable": false,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "direct-http": {
+          "transport": "shell",
+          "supportedVersions": "*",
+          "controls": {
+            "model": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "effort": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "sandbox": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "approval": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "workdir": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "finalOutput": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "stdin": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "structuredOutput": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "stepCap": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "trust": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "children": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            },
+            "fallback": {
+              "support": "unqualified",
+              "mapping": "unavailable pending installed profile qualification",
+              "evidence": "synthetic health fixtures do not qualify invocation controls"
+            }
+          },
+          "envAllowlist": [],
+          "pitfalls": [
+            "Documentation/help and synthetic observations are not authenticated live qualification.",
+            "Unknown model, effort, permission or required step mappings block dispatch.",
+            "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+          ],
+          "health": {
+            "version": 1,
+            "handshake": "unobserved",
+            "outputFraming": "http-stream",
+            "signalParser": "provider-local-http-health-v1",
+            "sessionLogLocator": null,
+            "progressEvidence": [
+              "distinct request-bound response content"
+            ],
+            "stopEvidence": "request-bound completion; cancellation uncertain",
+            "fixtureRef": "test/fixtures/providers/local-http/health/manifest.json",
+            "qualifiedAt": null,
+            "statusOperation": null,
+            "cancelOperation": null,
+            "coverage": "degraded",
+            "qualificationTarget": "unobserved",
+            "evidenceGrades": [],
+            "provenance": [],
+            "qualificationOwner": "B-OG-09",
+            "qualification": {
+              "status": "unqualified",
+              "scopeDigest": null,
+              "cliVersion": null,
+              "accountScope": null,
+              "profileRef": null,
+              "modelKey": null,
+              "effort": null,
+              "authorizedLive": false
+            }
+          }
+        }
+      }
     }
   }
 }

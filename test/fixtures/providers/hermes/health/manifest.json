@@ -1,0 +1,19 @@
+{
+  "scenarioId": "T-OG-03-hermes-correlated-log",
+  "provider": "hermes",
+  "synthetic": true,
+  "qualification": "synthetic qualification target; version-scoped session locator unqualified",
+  "framing": "jsonl",
+  "source": "session-log",
+  "fixture": "session-log.ndjson",
+  "expectedKinds": [
+    null,
+    "accepted",
+    "progress",
+    null,
+    "terminal"
+  ],
+  "expectedOutcome": "only explicitly bound session traffic is execution evidence",
+  "sanitizedEvidence": "synthetic session and tool IDs only",
+  "cleanup": "pure fixture; no private session discovery"
+}

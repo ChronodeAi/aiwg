@@ -537,7 +537,10 @@
               "maxLength": 4096
             },
             "qualifiedAt": {
-              "type": "string",
+              "type": [
+                "string",
+                "null"
+              ],
               "format": "date-time"
             },
             "statusOperation": {
@@ -553,6 +556,199 @@
                 "null"
               ],
               "maxLength": 256
+            },
+            "coverage": {
+              "enum": [
+                "full",
+                "degraded",
+                "unobserved"
+              ]
+            },
+            "qualificationTarget": {
+              "enum": [
+                "semantic",
+                "process-only",
+                "unobserved"
+              ]
+            },
+            "evidenceGrades": {
+              "type": "array",
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "H",
+                  "R",
+                  "D"
+                ]
+              }
+            },
+            "provenance": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "help",
+                      "repository",
+                      "documentation",
+                      "synthetic"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "observedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "cliVersion": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref",
+                  "observedAt",
+                  "cliVersion"
+                ]
+              }
+            },
+            "qualificationOwner": {
+              "type": "string",
+              "pattern": "^B-OG-[0-9]{2}$"
+            },
+            "qualification": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "enum": [
+                    "unqualified",
+                    "synthetic",
+                    "live-qualified"
+                  ]
+                },
+                "scopeDigest": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "cliVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "accountScope": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "profileRef": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "modelKey": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "authorizedLive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "scopeDigest",
+                "cliVersion",
+                "accountScope",
+                "profileRef",
+                "modelKey",
+                "effort",
+                "authorizedLive"
+              ],
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "synthetic",
+                          "live-qualified"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "scopeDigest": {
+                        "type": "string"
+                      },
+                      "cliVersion": {
+                        "type": "string"
+                      },
+                      "accountScope": {
+                        "type": "string"
+                      },
+                      "profileRef": {
+                        "type": "string"
+                      },
+                      "modelKey": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "const": "live-qualified"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "authorizedLive": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              ]
             }
           },
           "required": [
@@ -567,6 +763,35 @@
             "qualifiedAt",
             "statusOperation",
             "cancelOperation"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "qualification"
+                ],
+                "properties": {
+                  "qualification": {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "synthetic",
+                          "live-qualified"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "qualifiedAt": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
           ]
         }
       },

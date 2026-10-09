@@ -31,6 +31,8 @@ import {
   type WorkerDirectBrief,
   type WorkerVerification,
   type WorkerDirectVerification,
+  type WorkerEffectiveHealth,
+  type WorkerResolvedInvocation,
 } from './types.js';
 
 type RecordValue = Record<string, unknown>;
@@ -364,7 +366,20 @@ export function validateWorkerPayload(definition: WorkerDefinitionName, value: u
   if (!validate) throw new WorkerContractError('OG_CONTRACT_INVALID', `Unknown worker definition '${definition}'.`);
   const valid = validate(value) as boolean;
   const errors = valid ? [] : (validate.errors ?? []).map(error => `${error.instancePath || '/'} ${error.message ?? error.keyword}`);
-  return { valid, errors };
+  if (valid) {
+    const checkHealth = (health: WorkerEffectiveHealth): void => {
+      if (health.checkSeconds > health.startupSeconds) errors.push('Health checkSeconds must not exceed startupSeconds');
+      if (health.quietSeconds >= health.stallSeconds) errors.push('Health quietSeconds must be less than stallSeconds');
+    };
+    if (definition === 'workerEffectiveHealth') checkHealth(value as WorkerEffectiveHealth);
+    if (definition === 'workerResolvedInvocation') {
+      // Legacy and preparatory descriptors may omit health. Preserve that
+      // omission in codecs; resolution and observers supply runtime defaults.
+      const health = (value as WorkerResolvedInvocation).health;
+      if (health !== undefined) checkHealth(health);
+    }
+  }
+  return { valid: valid && errors.length === 0, errors };
 }
 
 export function assertValidWorkerPayload(definition: WorkerDefinitionName, value: unknown): void {

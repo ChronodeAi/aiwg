@@ -51,6 +51,34 @@ extension round trips; other consumers advertise no worker support in
 
 ## Disposition and consumer ownership
 
+### #2896 S1 health qualification amendment
+
+The existing closed invocation-profile health record now preserves explicit
+coverage, qualification target, H/R/D source grades, provenance and B-OG owner.
+Scoped synthetic/live evidence binds the exact profile, runtime version, account,
+canonical inference model and effort through the shared qualification digest.
+Unqualified records use a null qualification date and never assert accepted
+model work. Authenticated live evidence requires separate live authorization;
+synthetic CI fixtures cannot establish it. The worker-adapter fragment and its
+manifest digest are amended together; exact equality assertions remain strict.
+The three excluded hosted entries use explicit unobserved coverage on their
+existing capability entries. Generic remains a nonexecutable deployment fallback
+in the provider-definition owner. All 15 IN provider profiles and local HTTP
+remain S1 qualification targets; unavailable controls continue to block dispatch.
+Managed admission, leases and reconciliation remain with their S2+ owners.
+
+Provider health descriptors live in the optional `workerHealthAdapter` and
+`workerHealthAdapters` metadata fields. They retain the closed adapter shapes
+without registering an executable module or enabling an adapter reference.
+The capability-root fragment and digest include this separate metadata map;
+the approved worker module set and its existing reference semantics remain
+unchanged. Legacy resolved and preparatory descriptors may omit effective
+health and must round-trip without synthesizing a field. Observer and resolution
+owners supply the documented defaults when execution requires them.
+The direct MCP invocation bridge is not part of this change; it is deferred to
+#2892. The frozen `missions` toolset and mission-dispatch descriptor remain
+unchanged.
+
 ### #2890 S1 structured-final realization
 
 The Mission definition fragment now encodes the normative terminal invariants:

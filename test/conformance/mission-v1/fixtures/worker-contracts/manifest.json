@@ -29,14 +29,14 @@
       "source": "05-configuration-spec.md ### 4.3 Existing",
       "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
       "target": "$defs.workerAdapter",
-      "sha256": "a052cabb9792cd9aa477cb112280a6c2d5f4f07d2aa939ac60125e19853cbe9b"
+      "sha256": "e00af474820934fcbdc13a3c0b705e39f08e2b75b164e8c8dd71432216eca8f5"
     },
     {
       "file": "capability-root.patch.json",
       "source": "05-configuration-spec.md ### 4.3a Closed-root",
       "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
       "target": "properties",
-      "sha256": "ef9ccfc012621fab42f5aca16d555fef5a3093bf506dce31cae8b2385947157b"
+      "sha256": "c9379b6f0100d740a16bd47d827ba24997ed441e9f83cb901f0cccfc9d324500"
     },
     {
       "file": "worker-observation.fragment.json",
