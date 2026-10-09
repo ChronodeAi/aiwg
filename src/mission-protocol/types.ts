@@ -445,6 +445,9 @@ export interface WorkerEffectiveHealth {
   scale: number;
   profileRef: string;
   runDir: string | null;
+  /** Frozen source pointers, including all tied limiting ceilings/factors. */
+  origins?: Record<string, string[]>;
+  truncatedWindows?: Array<'startup' | 'quiet' | 'stall'>;
 }
 
 /** Observer-only bounded diagnostics; never accepted from workerClaims. */

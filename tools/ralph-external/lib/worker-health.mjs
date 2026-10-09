@@ -90,7 +90,7 @@ export function createWorkerHealthObserver(options = {}) {
   const started = options.startedAt ?? now();
   const epoch = options.launchTime === undefined ? wallNow() : Date.parse(options.launchTime);
   const utc = value => value === null ? null : new Date(epoch + value - started).toISOString();
-  const hardDeadline = started + Math.min(1800, windows.hardTimeoutSeconds) * 1000;
+  const hardDeadline = started + windows.hardTimeoutSeconds * 1000;
   const startupDeadline = started + windows.startupSeconds * 1000;
   const binding = { invocationId: options.invocationId ?? 'unbound', requestId: options.requestId ?? options.invocationId,
     sessionId: options.sessionId ?? null, runId: options.runId ?? null };
@@ -181,6 +181,21 @@ export function createWorkerHealthObserver(options = {}) {
   // Adapter binding filters report conflicts even when they reject a raw
   // setup frame before normalization reaches observe(). No raw ID is exported.
   binding.onIdentityConflict = () => gap('IDENTITY_CHANGED');
+  // Read-only status resumes qualified clocks, never replays output as fresh
+  // progress. The caller validates the invocation, boot and timestamp bounds.
+  if (options.initialSnapshot) {
+    const initial = options.initialSnapshot;
+    const clock = value => value == null ? null : started + Date.parse(value) - epoch;
+    observed = clock(initial.lastObservedAt); activity = clock(initial.lastActivityAt);
+    progress = clock(initial.lastProgressAt); handshakeAt = clock(initial.handshakeAt);
+    stalledAt = clock(initial.stalledAt);
+    handshake = initial.handshake ?? 'unobserved';
+    state = initial.state ?? 'launching'; reasonCode = reason(initial.reasonCode);
+    generation = initial.observerGeneration ?? 0; transitionCount = initial.transitionCount ?? 0;
+    maxGap = initial.maxCheckGapSeconds ?? 0;
+    for (const signal of initial.unavailableSignals ?? []) unavailable.add(signal);
+    if (observed !== null) lastCheck = observed;
+  }
   const feed = (bytes, suppliedSource = {}) => {
     if (finalized) return;
     const source = sourceOf(suppliedSource);

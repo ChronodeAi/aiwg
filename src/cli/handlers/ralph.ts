@@ -369,6 +369,9 @@ export class RalphStatusHandler implements CommandHandler {
   aliases = ['agent-loop-status', 'ralph-status'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--workers')) {
+      return createScriptRunner(ctx.frameworkRoot).run('tools/ralph-external/index.mjs', ['--status', ...ctx.args]);
+    }
     const showAll = ctx.args.includes('--all') || ctx.args.includes('-a');
     const statuses = getLoopStatuses(process.cwd());
 

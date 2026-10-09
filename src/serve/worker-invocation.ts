@@ -5,7 +5,7 @@ import { constants } from 'node:fs';
 import { lstat, realpath, open } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
-import { workerConfigDigest } from '../config/aiwg-config.js';
+import { workerConfigDigest, validateWorkerHealthConfig } from '../config/aiwg-config.js';
 import type { McpServerRegistry, McpWorkerQualificationInput } from '../mcp/registry.js';
 import type { McpProfile } from '../mcp/profiles.js';
 import { assertValidWorkerPayload } from '../mission-protocol/codecs.js';
@@ -20,23 +20,54 @@ import { qualifyWorkerInvocationProfile, assertWorkerSelectionAllowed,
 export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health'], input: {
   role: string; effort: string | null; modelKey: string; profileRef: string; wallSeconds: number;
   transportSeconds?: number; remainingSteps?: number; stepEnforcement: WorkerEffectiveHealth['stepEnforcement'];
+  startupCeilingSeconds?: number; checkSeconds?: number; profileSteps?: number;
 }): WorkerEffectiveHealth {
   const roleDefaults: Record<string, number> = { efficiency: 1, coding: 1, reasoning: 2 };
   const effortDefaults: Record<string, number> = { xhigh: 2, max: 3 };
   if (!Object.hasOwn(roleDefaults, input.role) || !isCanonicalWorkerModelKey(input.modelKey)) throw new Error('Invalid worker health role/model identity');
+  const configErrors = validateWorkerHealthConfig(config);
+  if (configErrors.length) throw new Error(configErrors.join('; '));
+  if (config?.requireStepCap && !['native', 'external'].includes(input.stepEnforcement)) throw new Error('Required model-step cap is not qualified for enforcement');
+  for (const value of [input.wallSeconds, input.transportSeconds, input.remainingSteps, input.startupCeilingSeconds, input.checkSeconds, input.profileSteps]) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) throw new Error('Invalid remaining worker health ceiling');
+  }
   const factors = [config?.roleScale?.[input.role as 'efficiency' | 'coding' | 'reasoning'] ?? roleDefaults[input.role] ?? 1,
     input.effort === null ? 1 : config?.effortScale?.[input.effort] ?? effortDefaults[input.effort] ?? 1,
     config?.modelScale?.[input.modelKey] ?? 1];
-  if (factors.some(factor => !Number.isFinite(factor) || factor <= 0)) throw new Error('Invalid worker health scale');
+  if (factors.some(factor => !Number.isFinite(factor) || factor < 1)) throw new Error('Invalid worker health scale');
   const scale = Math.max(1, Math.min(6, Math.max(...factors)));
+  const pointer = (field: keyof NonNullable<ParallelismConfig['health']>): string => config?.[field] === undefined ? `defaults/parallelism.health.${field}` : `/parallelism/health/${field}`;
+  const origins: Record<string, string[]> = {};
+  for (const field of ['startupSeconds', 'checkSeconds', 'quietSeconds', 'stallSeconds', 'diagnosticGraceSeconds', 'terminateGraceSeconds', 'hardTimeoutSeconds', 'maxSteps'] as const) origins[field] = [pointer(field)];
+  const modelPointer = input.modelKey.replace(/~/g, '~0').replace(/\//g, '~1');
+  if (config?.modelStartupSeconds?.[input.modelKey] !== undefined) origins.startupSeconds = [`/parallelism/health/modelStartupSeconds/${modelPointer}`];
+  const factorOrigins = [config?.roleScale?.[input.role as 'efficiency' | 'coding' | 'reasoning'] === undefined ? `defaults/parallelism.health.roleScale.${input.role}` : `/parallelism/health/roleScale/${input.role}`,
+    input.effort === null || config?.effortScale?.[input.effort] === undefined ? `defaults/parallelism.health.effortScale.${input.effort ?? 'not-applicable'}` : `/parallelism/health/effortScale/${input.effort.replace(/~/g, '~0').replace(/\//g, '~1')}`,
+    config?.modelScale?.[input.modelKey] === undefined ? 'defaults/parallelism.health.modelScale' : `/parallelism/health/modelScale/${modelPointer}`];
+  origins.scale = factorOrigins.filter((_, index) => factors[index] === Math.max(...factors));
+  const limitingOrigins = (values: Array<[number | undefined, string]>): string[] => {
+    const minimum = Math.min(...values.map(([value]) => value ?? Infinity));
+    return values.filter(([value]) => value === minimum).map(([, origin]) => origin);
+  };
+  origins.hardTimeoutSeconds = limitingOrigins([[config?.hardTimeoutSeconds ?? 1800, pointer('hardTimeoutSeconds')], [input.wallSeconds, 'runtime/remainingWallSeconds'], [input.transportSeconds, 'profile/transportSeconds']]);
+  origins.maxSteps = limitingOrigins([[config?.maxSteps ?? 100, pointer('maxSteps')], [input.remainingSteps, 'runtime/remainingSteps'], [input.profileSteps, 'profile/maxSteps']]);
+  origins.stepEnforcement = ['profile/controls/stepCap'];
   const health: WorkerEffectiveHealth = { version: 1,
-    startupSeconds: config?.modelStartupSeconds?.[input.modelKey] ?? config?.startupSeconds ?? 60,
-    checkSeconds: config?.checkSeconds ?? 15, quietSeconds: (config?.quietSeconds ?? 90) * scale,
+    startupSeconds: Math.min(config?.modelStartupSeconds?.[input.modelKey] ?? config?.startupSeconds ?? 60, input.startupCeilingSeconds ?? Infinity),
+    checkSeconds: Math.min(config?.checkSeconds ?? 15, input.checkSeconds ?? Infinity), quietSeconds: (config?.quietSeconds ?? 90) * scale,
     stallSeconds: (config?.stallSeconds ?? 300) * scale, diagnosticGraceSeconds: config?.diagnosticGraceSeconds ?? 60,
     terminateGraceSeconds: config?.terminateGraceSeconds ?? 5,
-    hardTimeoutSeconds: Math.min(1800, config?.hardTimeoutSeconds ?? 1800, input.wallSeconds, input.transportSeconds ?? Infinity),
-    maxSteps: Math.min(config?.maxSteps ?? 100, input.remainingSteps ?? 10000),
-    stepEnforcement: input.stepEnforcement, scale, profileRef: input.profileRef, runDir: null };
+    hardTimeoutSeconds: Math.min(config?.hardTimeoutSeconds ?? 1800, input.wallSeconds, input.transportSeconds ?? Infinity),
+    maxSteps: Math.min(config?.maxSteps ?? 100, input.remainingSteps ?? Infinity, input.profileSteps ?? Infinity),
+    stepEnforcement: input.stepEnforcement, scale, profileRef: input.profileRef, runDir: null, origins };
+  if (input.startupCeilingSeconds !== undefined) origins.startupSeconds = limitingOrigins([[config?.modelStartupSeconds?.[input.modelKey] ?? config?.startupSeconds ?? 60, origins.startupSeconds[0]], [input.startupCeilingSeconds, 'runtime/startupCeilingSeconds']]);
+  if (input.checkSeconds !== undefined) origins.checkSeconds = limitingOrigins([[config?.checkSeconds ?? 15, pointer('checkSeconds')], [input.checkSeconds, 'task/checkSeconds']]);
+  health.truncatedWindows = (['startup', 'quiet', 'stall'] as const).filter(window => health[`${window}Seconds`] > health.hardTimeoutSeconds);
+  health.diagnosticGraceSeconds = Math.min(health.diagnosticGraceSeconds, health.hardTimeoutSeconds);
+  health.terminateGraceSeconds = Math.min(health.terminateGraceSeconds, health.hardTimeoutSeconds);
+  for (const field of ['diagnosticGraceSeconds', 'terminateGraceSeconds'] as const) {
+    if (health[field] === health.hardTimeoutSeconds) origins[field].push(...origins.hardTimeoutSeconds);
+  }
   assertValidWorkerPayload('workerEffectiveHealth', health);
   return health;
 }
@@ -193,7 +224,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
   assertValidWorkerPayload('workerResolvedInvocation', result);
   if (result.health !== undefined) {
     if (result.health.profileRef !== result.selected.profileRef
-      || result.health.hardTimeoutSeconds > Math.min(1800, result.limits.wallSeconds, result.mcp?.timeoutSeconds ?? Infinity)) {
+      || result.health.hardTimeoutSeconds > Math.min(result.limits.wallSeconds, result.mcp?.timeoutSeconds ?? Infinity)) {
       throw new Error('Worker health profile or wall ceiling mismatch');
     }
     if (['native', 'external'].includes(result.health.stepEnforcement)
@@ -437,14 +468,16 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
     pointer = `/parallelism/clis/${tuple.cli}/invocationProfile`;
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
-    const effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, { role: request.role, effort: tuple.effort,
+    const healthInput = { role: request.role, effort: tuple.effort,
       modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: limits.wallSeconds,
       transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
-      stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' });
+      stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' as const };
+    let effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, healthInput);
     const transport = await driver.buildInvocation({ selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
       health: structuredClone(effectiveHealth) });
-    effectiveHealth.hardTimeoutSeconds = Math.min(effectiveHealth.hardTimeoutSeconds, transport.mcp?.timeoutSeconds ?? Infinity);
+    if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
+      { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
     const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,

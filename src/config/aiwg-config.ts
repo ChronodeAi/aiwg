@@ -976,6 +976,7 @@ export interface WorkerParallelism {
     requireStepCap?: boolean; roleScale?: Partial<Record<'efficiency' | 'coding' | 'reasoning', number>>;
     effortScale?: Record<string, number>; modelScale?: Record<string, number>; modelStartupSeconds?: Record<string, number>;
     correlationWindowSeconds?: number; failureCount?: number; allFailedMinimum?: number; cooldownSeconds?: number;
+    maxCooldownSeconds?: number; probeSeconds?: number; probeMaxBytes?: number; halfOpenMaxProbes?: 1;
   };
   activation?: WorkerActivation;
 }
@@ -1026,6 +1027,28 @@ export function validateParallelismConfig(value: unknown): string[] {
       resolveDispatchHostThresholds(undefined, admission.hostResources);
     } catch (validation) {
       error('admission/hostResources', validation instanceof Error ? validation.message : String(validation));
+    }
+  }
+  errors.push(...validateWorkerHealthConfig(policy.health));
+  return errors;
+}
+
+/** Cross-field health preferences are validated offline; controls are qualified at dispatch. */
+export function validateWorkerHealthConfig(health: WorkerParallelism['health']): string[] {
+  if (health === undefined) return [];
+  const errors: string[] = [];
+  const error = (field: string, message: string): void => { errors.push(`OG_CONFIG_REFERENCE /parallelism/health/${field}: ${message}`); };
+  const checkSeconds = health.checkSeconds ?? 15;
+  if (checkSeconds > (health.startupSeconds ?? 60)) error('checkSeconds', 'Must not exceed startupSeconds');
+  if ((health.quietSeconds ?? 90) >= (health.stallSeconds ?? 300)) error('quietSeconds', 'Must be less than stallSeconds');
+  if ((health.cooldownSeconds ?? 120) > (health.maxCooldownSeconds ?? 900)) error('cooldownSeconds', 'Must not exceed maxCooldownSeconds');
+  for (const role of Object.keys(health.roleScale ?? {})) {
+    if (!['efficiency', 'coding', 'reasoning'].includes(role)) error('roleScale', `Unknown role ${role}`);
+  }
+  for (const field of ['modelScale', 'modelStartupSeconds'] as const) {
+    for (const [key, value] of Object.entries(health[field] ?? {})) {
+      if (!isCanonicalWorkerModelKey(key)) error(field, 'Noncanonical inference model key');
+      if (field === 'modelStartupSeconds' && checkSeconds > value) error(field, 'Model startup must cover checkSeconds');
     }
   }
   return errors;

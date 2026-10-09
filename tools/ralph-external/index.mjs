@@ -26,6 +26,35 @@ import { BestOutputTracker } from './best-output-tracker.mjs';
 import { IterationAnalytics } from './iteration-analytics.mjs';
 import { EarlyStopping } from './early-stopping.mjs';
 import { CrossTaskLearner } from './cross-task-learner.mjs';
+import { watchWorkerStatus } from './process-monitor.mjs';
+
+/** Strict status-only grammar, before provider probes and state constructors. */
+export function parseWorkerStatusArgs(args) {
+  const result = { watch: false, observe: false, json: false };
+  const seen = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (seen.has(flag)) throw new Error('DUPLICATE_STATUS_OPTION');
+    seen.add(flag);
+    if (['--status', '-s', '--workers'].includes(flag)) continue;
+    if (['--json', '--watch', '--observe'].includes(flag)) { result[flag.slice(2)] = true; continue; }
+    if (['--run-dir', '--runs-root', '--deadline-seconds'].includes(flag)) {
+      const value = args[++i];
+      if (!value || value.startsWith('-')) throw new Error('MISSING_STATUS_VALUE');
+      if (flag === '--deadline-seconds') {
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) || !Number.isFinite(Number(value)) || Number(value) <= 0 || Number(value) > 86400) throw new Error('INVALID_WATCH_DEADLINE');
+        result.deadlineSeconds = Number(value);
+      } else result[flag === '--run-dir' ? 'runDir' : 'runsRoot'] = value;
+      continue;
+    }
+    throw new Error('UNKNOWN_STATUS_OPTION');
+  }
+  if (!seen.has('--workers') || !seen.has('--status') && !seen.has('-s')) throw new Error('WORKER_STATUS_REQUIRED');
+  if (!!result.runDir === !!result.runsRoot) throw new Error('EXACTLY_ONE_RUN_SCOPE_REQUIRED');
+  if (result.watch && !result.deadlineSeconds || !result.watch && result.deadlineSeconds) throw new Error('FINITE_WATCH_DEADLINE_REQUIRED');
+  if (result.observe && !result.watch) throw new Error('OBSERVE_REQUIRES_WATCH');
+  return result;
+}
 
 /**
  * Parse command line arguments
@@ -241,6 +270,14 @@ function installConsoleTee(logFilePath) {
 function printHelp() {
   console.log(`
 External Ralph Loop - Crash-resilient iterative task execution
+
+Worker status (read-only; no model call or Mission state):
+  --status --workers --run-dir DIR [--json]
+  --status --workers --runs-root DIR [--json]
+  --status --workers --runs-root DIR --watch --deadline-seconds N [--observe]
+Exactly one private run directory/root is required. Watch timeout stops watching.
+--observe requires --watch and atomically writes owner scratch; concurrent or lost owners require
+reconciliation. Workers without run metadata are sampled in conductor context.
 
 ================================================================================
                            SECURITY WARNING
@@ -558,6 +595,17 @@ export function workerExitCode(result) {
  */
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--workers')) {
+    try { process.exitCode = await watchWorkerStatus(parseWorkerStatusArgs(args)); }
+    catch (error) {
+      const code = /^[A-Z_]{1,80}$/.test(error.message) ? error.message : 'STATUS_REQUEST_FAILED';
+      if (args.includes('--json')) console.log(JSON.stringify({ version: 1, sampledAt: new Date().toISOString(), scope: 'direct-conductor',
+        observerCoverage: 'unobserved', workers: [], breakers: [], nextCheckAt: null, complete: false, findings: [code], exitCode: 1 }));
+      else console.error(`Worker status: ${code}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   // Dispatch before legacy parsing, provider probing or stateful constructors.
   if (args.includes('--launch-worker')) {
     const { SessionLauncher } = await import('./session-launcher.mjs');
