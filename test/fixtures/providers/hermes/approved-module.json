@@ -1,0 +1,14 @@
+{
+  "note": "Host installation-authority allowlist entry for the one Hermes driver module (#2912). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/hermes-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/hermes-adapter.mjs",
+  "entry": {
+    "reference": "installed:hermes",
+    "packageName": "@aiwg/hermes-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/hermes-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:55f5d2663ee0fd10ba84b19fb46f03869ffcc907677c9c20263011575217436e",
+    "adapterIds": ["hermes"],
+    "platforms": ["linux"]
+  }
+}

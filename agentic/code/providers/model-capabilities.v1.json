@@ -2454,8 +2454,8 @@
         "id": "hermes",
         "provider": "hermes",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "unavailable",
+        "supportedVersions": "0.20.6",
+        "runtimeDriver": "installed:hermes",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -2465,10 +2465,21 @@
           "kind": "process",
           "executable": "hermes",
           "argv": [
-            "-z",
-            "${brief}"
+            "chat",
+            "--query-file",
+            "-",
+            "--oneshot",
+            "--quiet",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--source",
+            "tool",
+            "-m",
+            "${model}",
+            "--reasoning",
+            "${effort}"
           ],
-          "stdin": "closed",
+          "stdin": "brief-text",
           "cwd": "${workspace}",
           "envAllowlist": [],
           "versionArgv": [
@@ -2495,73 +2506,78 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "0.20.6",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-m/--model MODEL] declared directly on the chat subparser (_parser.py:400-405), same semantics as the top-level flag",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--reasoning LEVEL] declared on the chat subparser (_parser.py:411-420); LEVEL in [none, minimal, low, medium, high, xhigh, max]; ultra is denied by the shared resolver guard, never emitted",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no sandbox flag exists for chat; this control routes through the shared resolver's external-boundary requirement for hermes (requiresWorkerExternalBoundary), not a CLI flag",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--ignore-user-config always emitted: falls back to the safe built-in defaults (approvals.mode: \"smart\", approvals.single_query_mode: \"deny\"; config_defaults.py:2519,2559) regardless of the host's config.yaml, defeating single_query_mode: approve/off/allow/yes (approval.py:3552,3856) and approvals.mode: off (approval.py:4778,5475). HERMES_YOLO_MODE is a process env var frozen at import (approval.py:37); defeated structurally by the empty envAllowlist and env -i renderer, not by a flag, and proven by an explicit assertion (HD10).",
+                "evidence": "D: hermes 0.20.6 installed source (tools/approval.py:37,3547-3556,3833-3856,4778,5475; hermes_cli/config_defaults.py:2519,2559); never live-qualified"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "conductor process cwd only; chat also accepts --in DIR but this profile relies on the renderer's own `cd <workdir> &&` prefix instead",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "chat --quiet stdout is the final response text verbatim when the turn succeeds (print(response) only); on failure stdout is empty and the error/session_id go to stderr (cli.py:22178-22223). No usage-file/JSON-report equivalent exists for chat. Exit 0 is NOT completion evidence by itself: agent/conversation_loop.py:3902 can return completed:false/partial:true with non-empty free text and no \"failed\" key, which still exits 0 (cli.py:22209-22223). parseWorkerFinal therefore also requires the final text to parse as a strict workerClaims JSON document (#2890), which free text/warnings never do.",
+                "evidence": "D: hermes 0.20.6 installed source (hermes_cli/main.py:12729,12787,14784; agent/conversation_loop.py:3902; cli.py:22178-22223); never live-qualified"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--query-file -] reads the single query from stdin to EOF, nothing shell-interpreted (_parser.py:352-365); dispatched at main.py:3443-3454 (args.query = sys.stdin.read()); the brief never enters argv",
+                "evidence": "D: hermes 0.20.6 installed source (hermes_cli/main.py, hermes_cli/_parser.py, cli.py, tools/approval.py); never live-qualified"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: hermes chat --help documents no structured/JSON output flag",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: hermes chat --help documents --max-turns for the seeded-interactive path only, not for the --oneshot single-query exit; not relied on by this profile",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: hermes chat --help documents no workspace-trust flag distinct from the deny-by-default single_query_mode approval gate",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "-t/--toolsets restricts enabled toolsets for the call; no nested-agent-specific control is documented",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--provider PROVIDER pins the inference provider for this call; hermes fallback/moa subcommands configure persistent chains, not a per-call override",
+                "evidence": "H: hermes 0.20.6 `hermes chat --help` (installed, titan/noodle, 2026-10-09 observation); unqualified until live evidence"
               }
             },
             "envAllowlist": [],
             "pitfalls": [
-              "Documentation/help and synthetic observations are not authenticated live qualification.",
-              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Documentation/help and installed-source reading are not authenticated live qualification.",
+              "This profile deliberately does NOT use the top-level -z/--oneshot PROMPT path: that dest is argv-only (no stdin/file option) and oneshot.py unconditionally sets HERMES_YOLO_MODE=1/HERMES_ACCEPT_HOOKS with no override, and its exit code can be 0 even when its own usage-file failed flag is true.",
+              "Exit code 0 is never completion evidence by itself: agent/conversation_loop.py:3902 (reasoning-budget exhaustion) returns completed:false/partial:true with non-empty free text and no \"failed\" key, which still exits 0. parseWorkerFinal requires a strict workerClaims JSON parse in addition to the exit-derived status.",
+              "Approval policy is host config (approvals.mode, approvals.single_query_mode in config.yaml), not an argv flag; --ignore-user-config pins it to the safe built-in defaults, but this is read from source, not live-qualified, so the approval control stays unqualified.",
+              "HERMES_YOLO_MODE (and any HERMES_* override) must never reach the worker process; this relies on the empty envAllowlist and the renderer's env -i, not on a CLI flag.",
+              "chat --query-file - --oneshot --quiet has no --usage-file/JSON-report equivalent; final-output extraction is stdout-text-on-exit-0 PLUS a strict workerClaims parse, never exit code or stdout non-emptiness alone.",
+              "A partial response can still print to stdout before a failed turn; only the exit code (not stdout non-emptiness) distinguishes that case from success, and even exit 0 is not sufficient (see above).",
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
             ],
             "health": {
@@ -2586,8 +2602,8 @@
               "provenance": [
                 {
                   "kind": "help",
-                  "ref": "src/providers/provider-definitions.ts#hermes",
-                  "observedAt": "2026-10-07T00:00:00Z",
+                  "ref": "tools/ralph-external/lib/hermes-adapter.mjs",
+                  "observedAt": "2026-10-09T00:00:00Z",
                   "cliVersion": "0.20.6"
                 }
               ],
