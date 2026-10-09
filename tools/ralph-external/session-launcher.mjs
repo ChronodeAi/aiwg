@@ -813,6 +813,20 @@ export class SessionLauncher extends EventEmitter {
       // Create write streams for output capture
       const stdoutStream = createWriteStream(options.stdoutPath);
       const stderrStream = createWriteStream(options.stderrPath);
+      // child.stdout/child.stderr are the child's pipes, distinct from these
+      // disk-backed capture streams. The child 'close' event only proves the
+      // child's own pipes drained into our 'data' handlers below; it says
+      // nothing about whether createWriteStream's internal buffer has been
+      // flushed to disk. Resolving on 'close' without waiting for these
+      // streams' 'finish' event races the capture file write against callers
+      // (e.g. the launcher's own caller) reading stdoutPath/stderrPath
+      // immediately after launch() resolves, and can hand back a truncated
+      // file under I/O load (#2981).
+      const finalizeCaptureStream = stream => new Promise(res => {
+        if (stream.destroyed || stream.writableFinished) { res(); return; }
+        stream.once('error', res);
+        stream.end(res);
+      });
 
       // Buffer for last portion of stdout (for quick analysis)
       let stdoutBuffer = '';
@@ -908,21 +922,23 @@ export class SessionLauncher extends EventEmitter {
         const duration = Date.now() - this.startTime;
         this.currentProcess = null;
 
-        // Close streams
-        stdoutStream.end();
-        stderrStream.end();
+        // Close streams and wait for the capture files to actually finish
+        // writing to disk before handing stdoutPath/stderrPath back to the
+        // caller (see finalizeCaptureStream above for why 'close' alone is
+        // not sufficient).
+        Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
+          const result = {
+            exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
+            stdoutPath: options.stdoutPath,
+            stderrPath: options.stderrPath,
+            duration,
+            timedOut,
+            stdoutBuffer,
+          };
 
-        const result = {
-          exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
-          stdoutPath: options.stdoutPath,
-          stderrPath: options.stderrPath,
-          duration,
-          timedOut,
-          stdoutBuffer,
-        };
-
-        this.emit('complete', result);
-        resolve(result);
+          this.emit('complete', result);
+          resolve(result);
+        });
       });
 
       // Handle process errors
@@ -932,15 +948,15 @@ export class SessionLauncher extends EventEmitter {
         }
         clearEscalation();
 
-        const duration = Date.now() - this.startTime;
         this.currentProcess = null;
 
-        // Close streams
-        stdoutStream.end();
-        stderrStream.end();
-
-        this.emit('error', err);
-        reject(err);
+        // Close streams before surfacing the error; no result is returned on
+        // this path, so there is nothing to race against, but we still avoid
+        // leaving the capture streams dangling.
+        Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
+          this.emit('error', err);
+          reject(err);
+        });
       });
 
       this.emit('started', { pid: child.pid, args });
