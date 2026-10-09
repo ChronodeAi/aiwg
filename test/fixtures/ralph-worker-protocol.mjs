@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { Socket } from 'node:net';
 
 export const fixtureRevision = 2;
-export const scenarios = ['success', 'exit-zero-error', 'hang', 'missing-final', 'double-final', 'truncated-final'];
+export const scenarios = ['success', 'exit-zero-error', 'hang', 'missing-final', 'double-final', 'truncated-final', 'forge-exit'];
 export const workerInputSchema = {
   type: 'object', additionalProperties: false,
   required: ['invocationId', 'workspace', 'selection', 'brief'],

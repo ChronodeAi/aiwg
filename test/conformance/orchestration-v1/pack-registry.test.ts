@@ -13,7 +13,7 @@ const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('S0 T-OG registry wiring gate (partial coverage is not release acceptance)', () => {
-  it('maps all eighteen requested packs to an issue/slice and existing tests', () => {
+  it('maps all requested S0/S1 packs to an issue/slice and existing tests', () => {
     const report = inspectPackRegistry(registry(), root);
     expect(Object.keys(report.packs)).toEqual(requiredPacks);
     expect(report.errors).toEqual([]);

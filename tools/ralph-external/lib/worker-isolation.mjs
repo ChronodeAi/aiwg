@@ -31,10 +31,14 @@
  */
 
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
-import { openSync, closeSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { constants, openSync, closeSync, writeFileSync, fsyncSync, renameSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
+import { sampleWorkerIdentity } from '../process-monitor.mjs';
 import { checkWorkerDispatch } from '../../scripts/resource-preflight.mjs';
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
+const transportBootstrapVariables = ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG', 'LD_DEBUG_OUTPUT'];
 
 // Never unset these from a unit's environment even when the manager reports
 // them and they are not allowlisted; see buildWorkerIsolationArgs' doc
@@ -145,6 +149,7 @@ export function buildWorkerIsolationArgs({
   pipe = false,
   wait = false,
   memoryMax,
+  attached = false,
 } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
     throw new Error('Worker isolation requires a unit-safe unit name');
@@ -171,19 +176,27 @@ export function buildWorkerIsolationArgs({
   }
 
   const argv = ['systemd-run', '--user', '--expand-environment=no'];
+  if (attached) {
+    if (kind !== 'unit' || logFile !== undefined) throw new Error('Attached worker requires a unit with separate pipe captures');
+    argv.push('--wait', '--pipe', '--quiet');
+    argv.push('-p', 'KillMode=control-group', '-p', 'ExitType=cgroup', '-p', 'UMask=0077',
+      '-p', `UnsetEnvironment=${transportBootstrapVariables.join(' ')}`);
+  }
   if (kind === 'unit') argv.push(`--unit=${unit}`);
   else argv.push('--scope');
-  if (pipe) argv.push('--pipe');
-  if (wait) argv.push('--wait');
+  // Attached launches already pass --wait --pipe --quiet above.
+  if (pipe && !attached) argv.push('--pipe');
+  if (wait && !attached) argv.push('--wait');
   // --pipe connects the unit's stdio directly to systemd-run's own, but
   // systemd-run still writes its *own* "Running as unit:.../Finished with
   // result:..." status lines to that same stderr unless --quiet is given —
   // verified empirically on this host. A synchronous verification caller
   // needs the check's actual stderr, not systemd-run's narration mixed into
   // it, so --quiet is mandatory whenever both --pipe and --wait are used.
-  if (pipe && wait) argv.push('--quiet');
+  if (pipe && wait && !attached) argv.push('--quiet');
   const requestedNames = [];
   for (const name of envNames) {
+    if (attached && transportBootstrapVariables.includes(name)) throw new Error('Worker environment cannot alter trusted transport bootstrap');
     const value = env?.[name];
     if (value === undefined) continue;
     if (typeof value !== 'string' || value.includes('\0')) throw new Error(`Worker isolation environment value for ${name} is not a NUL-free string`);
@@ -194,10 +207,10 @@ export function buildWorkerIsolationArgs({
     const toUnset = managerEnvNames.filter(name => !requestedNames.includes(name) && !UNAVOIDABLE_UNIT_ENV_NAMES.includes(name));
     if (toUnset.length > 0) argv.push('-p', `UnsetEnvironment=${toUnset.join(' ')}`);
   }
-  // stdin defaults to /dev/null unless the caller pipes it (verification
-  // callers want systemd-run's own --pipe to carry stdout/stderr back
-  // synchronously; stdin is still /dev/null unless a brief file is given).
-  argv.push('-p', stdinPath !== undefined ? `StandardInputFile=${stdinPath}` : 'StandardInput=null');
+  // stdin is /dev/null unless a brief file is given; attached (supervised)
+  // launches rely on systemd-run --pipe to carry stdin, so leave it unset.
+  if (stdinPath !== undefined) argv.push('-p', `StandardInputFile=${stdinPath}`);
+  else if (!attached) argv.push('-p', 'StandardInput=null');
   if (hasMemoryMaxGb) argv.push('-p', `MemoryMax=${memoryMaxGb}G`);
   else if (memoryMax !== undefined) argv.push('-p', `MemoryMax=${memoryMax}`);
   argv.push('-p', 'MemorySwapMax=0');
@@ -267,6 +280,10 @@ export function launchIsolatedWorker({
   spawn = spawnSync,
   spawnAsync = nodeSpawn,
   proposeUnit = proposeWorkerUnitName,
+  attached = false,
+  stdin = 'closed',
+  ownedGroup = false,
+  runDir,
 } = {}) {
   const resolvedGate = gate === 'disabled' && !config?.parallelism?.worker_dispatch
     ? checkWorkerDispatch({ config })
@@ -301,31 +318,48 @@ export function launchIsolatedWorker({
     // with, the current process environment) — the functional equivalent of
     // `env -i NAME=value ...`. The conductor's own environment (secrets,
     // NODE_OPTIONS, etc.) is therefore never inherited, allowlisted or not.
+    // This applies equally to the plain direct launch below and to the
+    // attached transport wrapper, which receives this same allowedEnv as its
+    // own process environment rather than the caller's raw `env`.
     const allowedEnv = {};
     for (const key of envNames) {
       const value = env?.[key];
       if (value !== undefined) allowedEnv[key] = value;
     }
-    // Opening the brief/output files ourselves (rather than letting the
-    // worker inherit a stream) is what lets a degraded launch still honor a
-    // resolved #2887 invocation's stdin source and separate stdout/stderr
-    // destinations; `openSync` throws rather than silently falling back.
-    // 'w' truncates a pre-existing file at open time (matching the #2887
-    // shell renderer's `>`/`2>` contract); the previous 'a' silently kept
-    // appending onto a stale file across repeated degraded launches.
-    const stdin = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
-    const stdout = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
-    const stderr = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
-    const child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdin, stdout, stderr] });
-    // Node dup()s a numeric stdio fd into the child and never closes the
-    // parent's own copy; the child's duplicated fd keeps working after this
-    // call returns (verified empirically), so closing here is what the
-    // previous code was missing — every launch otherwise leaked up to three
-    // fds in the long-running conductor process.
-    for (const fd of [stdin, stdout, stderr]) if (typeof fd === 'number') closeSync(fd);
+    const supervised = attached && runDir;
+    if (supervised && envNames.some(variable => transportBootstrapVariables.includes(variable))) {
+      throw new Error('Worker environment cannot alter trusted transport bootstrap');
+    }
+    let child;
+    if (attached) {
+      const launchCommand = supervised ? process.execPath : command;
+      const launchArgs = supervised ? [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+        '--run-dir', runDir, '--invocation-id', name, '--', command, ...args] : args;
+      child = spawnAsync(launchCommand, launchArgs, { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) });
+    } else {
+      // Opening the brief/output files ourselves (rather than letting the
+      // worker inherit a stream) is what lets a degraded launch still honor a
+      // resolved #2887 invocation's stdin source and separate stdout/stderr
+      // destinations; `openSync` throws rather than silently falling back.
+      // 'w' truncates a pre-existing file at open time (matching the #2887
+      // shell renderer's `>`/`2>` contract); the previous 'a' silently kept
+      // appending onto a stale file across repeated degraded launches.
+      const stdinFd = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
+      const stdoutFd = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
+      const stderrFd = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
+      child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd] });
+      // Node dup()s a numeric stdio fd into the child and never closes the
+      // parent's own copy; the child's duplicated fd keeps working after this
+      // call returns (verified empirically), so closing here is what the
+      // previous code was missing — every launch otherwise leaked up to three
+      // fds in the long-running conductor process.
+      for (const fd of [stdinFd, stdoutFd, stderrFd]) if (typeof fd === 'number') closeSync(fd);
+    }
     const outcome = {
       launched: Number.isInteger(child.pid) && child.pid > 0,
       mode: 'degraded', child, pid: child.pid,
+      ...(supervised ? { transportSupervisor: true } : {}),
       diagnostic: `launched without resource confinement: ${detected.reason}`,
       gate: resolvedGate,
     };
@@ -352,7 +386,22 @@ export function launchIsolatedWorker({
     };
   }
   const unit = proposeUnit(name);
-  const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind });
+  // A private host-owned transport wrapper strips the manager's environment
+  // before spawning the real worker. Environment values never enter argv.
+  const isolatedCommand = attached ? process.execPath : command;
+  const isolatedArgs = attached ? [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+    ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args] : args;
+  const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command: isolatedCommand, args: isolatedArgs,
+    cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind, attached });
+  if (attached) {
+    const child = spawnAsync(argv[0], argv.slice(1), { cwd,
+      env: Object.fromEntries(Object.entries({ ...process.env, ...env })
+        .filter(([variable]) => !transportBootstrapVariables.includes(variable))),
+      stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: ownedGroup });
+    const outcome = { launched: Number.isInteger(child.pid) && child.pid > 0, mode: 'systemd-unit', unit, child, gate: resolvedGate };
+    child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
+    return outcome;
+  }
   const child = spawn(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 30000 });
   if (child.error || child.status !== 0) {
     const stderr = String(child.stderr ?? '').trim();
@@ -384,7 +433,7 @@ export function getWorkerIsolationStatus(unit, { spawn = spawnSync } = {}) {
     throw new Error('Worker isolation requires a unit-safe unit name');
   }
   const shown = spawn('systemctl', ['--user', 'show', unit, '-p', 'ActiveState',
-    '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'MemoryMax'], { encoding: 'utf8', timeout: 10000 });
+    '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'ExecMainCode', '-p', 'MainPID', '-p', 'MemoryMax'], { encoding: 'utf8', timeout: 10000 });
   if (shown.error || shown.status !== 0) {
     throw new Error(`worker status unavailable: ${shown.error?.message ?? String(shown.stderr ?? '').trim()}`);
   }
@@ -400,7 +449,119 @@ export function getWorkerIsolationStatus(unit, { spawn = spawnSync } = {}) {
     result: fields.Result,
     execMainStatus: Number(fields.ExecMainStatus),
     memoryMax: fields.MemoryMax === 'infinity' ? Infinity : Number(fields.MemoryMax),
+    ...(fields.MainPID ? { mainPid: Number(fields.MainPID) } : {}),
+    ...(fields.ExecMainCode ? { execMainCode: Number(fields.ExecMainCode) } : {}),
   };
 }
 
+/**
+ * Request the unit's cgroup be torn down (`KillMode=control-group` is already
+ * set at launch, so this kills the transport, the worker and any descendants
+ * together). This is the actual stop authority for `systemd-unit` mode: a
+ * PID/PGID signal may still be unresolved (identity races the unit's start),
+ * while `systemctl --user stop` targets the unit by the name the launcher
+ * already holds. It does not itself confirm anything — issuing the stop
+ * request and having it take effect are different claims. Callers must
+ * recheck `getWorkerIsolationStatus(unit)` afterward and treat an
+ * unconfirmed stop as uncertain, never as a confirmed termination.
+ */
+export function stopWorkerUnit(unit, { spawn = spawnSync } = {}) {
+  if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) {
+    throw new Error('Worker isolation requires a unit-safe unit name');
+  }
+  const result = spawn('systemctl', ['--user', 'stop', unit], { encoding: 'utf8', timeout: 10000 });
+  return { ok: !result.error && result.status === 0,
+    diagnostic: result.error ? result.error.message : String(result.stderr ?? '').trim() || null };
+}
+
+/**
+ * Read the kernel-reported `ControlGroup` systemd placed this unit's
+ * processes under. This is the containment authority for `systemd-unit`
+ * mode worker identity (#2895 round 2, MAJOR a): a candidate pid is only
+ * trustworthy if its own `/proc/<pid>/cgroup` matches this value, never
+ * because a worker-writable record merely names a pid that happens to
+ * resample successfully. Returns null (never a forged match) when the
+ * property is unavailable.
+ */
+export function readUnitControlGroup(unit, { spawn = spawnSync } = {}) {
+  if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) return null;
+  try {
+    const shown = spawn('systemctl', ['--user', 'show', unit, '-p', 'ControlGroup', '--value'], { encoding: 'utf8', timeout: 10000 });
+    if (shown.error || shown.status !== 0) return null;
+    const value = String(shown.stdout ?? '').trim();
+    return value || null;
+  } catch { return null; }
+}
+
 export { checkWorkerDispatch };
+
+// Private attached transport entry, never a public CLI or legacy Ralph route.
+// The systemd unit owns this supervisor and its worker; cgroup exit evidence
+// includes descendants. Only the actual worker receives the allowed values.
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--worker-environment') {
+  process.umask(0o077);
+  const names = JSON.parse(process.argv[3]);
+  if (!Array.isArray(names) || names.some(name => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) throw new Error('Invalid private worker environment');
+  let commandOffset = 5;
+  let runDir;
+  let invocationId;
+  if (process.argv[4] === '--run-dir' && process.argv[6] === '--invocation-id') {
+    runDir = process.argv[5]; invocationId = process.argv[7]; commandOffset = 9;
+    assertAbsolute('run directory', runDir);
+    const stat = lstatSync(runDir);
+    if (!/^[a-zA-Z0-9-]+$/.test(invocationId) || !stat.isDirectory() || stat.uid !== process.getuid()
+      || (stat.mode & 0o077) || realpathSync(runDir) !== runDir || runDir.split('/').includes('..')) throw new Error('Invalid private worker run');
+  }
+  if (process.argv[commandOffset - 1] !== '--') throw new Error('Invalid private worker command');
+  const [command, ...args] = process.argv.slice(commandOffset);
+  assertAbsolute('worker binary', command);
+  // A publish collision (a pre-existing target, planted or otherwise) is
+  // recorded as a diagnostic anomaly file; it is never allowed to propagate
+  // as a thrown error. The worker's real wait() status (propagated via
+  // `process.kill`/`process.exitCode` by the caller below) must never be
+  // replaced by an uncaught exception from this bookkeeping write.
+  const recordAnomaly = (filename, temporary, error) => {
+    try { unlinkSync(temporary); } catch { /* best effort cleanup only */ }
+    try {
+      const anomalyTarget = path.join(runDir, `${filename}.transport-anomaly.json`);
+      const anomalyTemp = path.join(runDir, `.${filename}.transport-anomaly-${process.pid}`);
+      const fd = openSync(anomalyTemp, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+      try { writeFileSync(fd, JSON.stringify({ invocationId, filename, error: error?.message ?? String(error), at: new Date().toISOString() })); fsyncSync(fd); }
+      finally { closeSync(fd); }
+      renameSync(anomalyTemp, anomalyTarget);
+    } catch { /* anomaly recording is diagnostics-only and must never throw */ }
+  };
+  const record = (filename, value) => {
+    if (!runDir) return;
+    const target = path.join(runDir, filename);
+    const temporary = path.join(runDir, `.${filename}-${process.pid}`);
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { writeFileSync(fd, JSON.stringify({ invocationId, ...value })); fsyncSync(fd); } finally { closeSync(fd); }
+    // Only this trusted transport writes these fresh records. A pre-existing
+    // target is a recorded anomaly, not a thrown error — callers must always
+    // reach their own post-record status propagation regardless.
+    try { lstatSync(target); recordAnomaly(filename, temporary, new Error('Worker transport record already exists')); return; }
+    catch (error) {
+      if (error.code !== 'ENOENT') { recordAnomaly(filename, temporary, error); return; }
+    }
+    try { renameSync(temporary, target); }
+    catch (error) { recordAnomaly(filename, temporary, error); }
+  };
+  const environment = Object.fromEntries(names.filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]]));
+  record('worker-start.json', { supervisor: sampleWorkerIdentity(process.pid), worker: null });
+  const worker = nodeSpawn(command, args, { env: environment, detached: true, stdio: 'inherit' });
+  // Start identity is recorded separately from the service's MainPID.
+  const identity = sampleWorkerIdentity(worker.pid);
+  record('worker-identity.json', { supervisor: sampleWorkerIdentity(process.pid), worker: identity });
+  worker.once('error', error => {
+    try { record('worker-exit.json', { worker: identity, exitCode: null, signal: null, errorCode: error.code ?? 'SPAWN_ERROR', endedAt: new Date().toISOString() }); }
+    finally { process.exitCode = 127; }
+  });
+  worker.once('exit', (code, signal) => {
+    // The true wait() status is propagated first/independently of the
+    // publish: a collision on worker-exit.json must never suppress or
+    // replace the real exit code/signal reported to the launcher's parent.
+    try { record('worker-exit.json', { worker: identity, exitCode: code, signal, errorCode: null, endedAt: new Date().toISOString() }); }
+    finally { if (signal) process.kill(process.pid, signal); else process.exitCode = code; }
+  });
+}

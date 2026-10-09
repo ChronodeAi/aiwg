@@ -267,6 +267,13 @@ USAGE:
   ralph-external --resume [options]
   ralph-external --status
   ralph-external --abort
+  ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker]
+                          Exit 0: confirmed success. Exit 1: confirmed failure
+                          (error, timeout, or a confirmed stop with a
+                          nonzero/signaled exit). Exit 2: uncertain
+                          termination — degraded (--allow-degraded-worker)
+                          runs cannot confirm descendant stop and never
+                          report exit 0, even when the run looked clean.
 
 ARGUMENTS:
   <objective>             Task objective (required for new loop)
@@ -522,10 +529,44 @@ function readExecutionMode(projectRoot) {
 }
 
 /**
+ * Map a `launchWorker()` result to a process exit code.
+ *
+ * Uncertainty must dominate: an uncertain termination is reported as exit 2
+ * no matter what other error signals (`errorCode`, `timedOut`) are also
+ * present on the result, because `errorCode`/`timedOut` describe *why* the
+ * run is uncertain, not an independent confirmed-failure claim. Only a
+ * `termination: 'confirmed'` result may resolve to 0 (clean) or 1
+ * (confirmed failure/error/timeout).
+ *
+ * 0: confirmed success. 1: confirmed failure (error, timeout, or a
+ * confirmed-stop with a nonzero/signaled exit). 2: uncertain termination —
+ * most commonly a clean-looking degraded (--allow-degraded-worker) run,
+ * where descendant escape via setsid cannot be ruled out and the apparent
+ * exitCode:0 is therefore never reported as code 0. Callers must not treat 2
+ * as either confirmed success or confirmed failure; see
+ * docs/providers/worker-invocation-packaging.md#attached-one-shot-capture.
+ * @param {{ termination?: string, errorCode?: string|null, timedOut?: boolean, exitCode?: number|null }} result
+ * @returns {0|1|2}
+ */
+export function workerExitCode(result) {
+  if (result?.termination !== 'confirmed') return 2;
+  return result.errorCode || result.timedOut || result.exitCode !== 0 ? 1 : 0;
+}
+
+/**
  * Main entry point
  */
 async function main() {
   const args = process.argv.slice(2);
+  // Dispatch before legacy parsing, provider probing or stateful constructors.
+  if (args.includes('--launch-worker')) {
+    const { SessionLauncher } = await import('./session-launcher.mjs');
+    const worker = parseWorkerLaunchArgs(args);
+    const result = await new SessionLauncher().launchWorker(worker);
+    console.log(JSON.stringify(result));
+    process.exitCode = workerExitCode(result);
+    return;
+  }
   const options = parseArgs(args);
   const projectRoot = process.cwd();
 
@@ -683,6 +724,27 @@ async function main() {
     if (cleanupLogTee) cleanupLogTee();
     process.exit(1);
   }
+}
+
+export function parseWorkerLaunchArgs(args) {
+  const result = {};
+  const seen = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (seen.has(flag)) throw new Error(`Duplicate worker launch option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--launch-worker') continue;
+    if (flag === '--allow-degraded-worker') { result.allowDegraded = true; continue; }
+    const key = { '--invocation': 'invocationPath', '--run-dir': 'runDir' }[flag];
+    if (!key) throw new Error(`Unsupported worker launch option: ${flag}`);
+    const value = args[++i];
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a path`);
+    result[key] = value;
+  }
+  if (!seen.has('--launch-worker') || !result.invocationPath || !result.runDir) {
+    throw new Error('Usage: ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker]');
+  }
+  return result;
 }
 
 // Run main() only when executed directly (node index.mjs …), NOT when imported

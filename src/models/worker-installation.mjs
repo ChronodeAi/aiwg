@@ -719,6 +719,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy })
         if (typeof instance.buildInvocation !== 'function' || !record.mcpProfile || !record.mcpSchemas) throw fail();
       }
       drivers[cli] = {
+        extractFinal: output => instance.parseOutput(output),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,
           platform: process.platform, installation, ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
         buildInvocation: async input => profile.transport === 'shell' ? {
