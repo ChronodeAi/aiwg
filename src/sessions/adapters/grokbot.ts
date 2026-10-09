@@ -311,6 +311,14 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
           + 'Do not reuse Cursor or other provider locators.',
       );
     }
+    // Enforce the filename allowlist before any read, not only in discover():
+    // a caller can hand inspect()/stream() any path with the native class.
+    if (!grokbotConversationIdFromLocator(source.locator)) {
+      throw new SessionContractError(
+        'SOURCE_NOT_AUTHORIZED',
+        'Grok Bot native locator does not decode to an authorized transcript-replica key',
+      );
+    }
   }
 
   private async readReplica(source: SelectedSource): Promise<GrokbotReplica> {

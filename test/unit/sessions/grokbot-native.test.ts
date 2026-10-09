@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS,
   GrokbotSessionAdapter,
@@ -8,7 +8,24 @@ import {
 } from '../../../src/sessions/index.js';
 import { discoverWorkspaceHistories } from '../../../src/sessions/workspace-discovery.js';
 import { createSessionAdapterRegistry } from '../../../src/sessions/adapter-registry.js';
-import { grokbotTranscriptReplicaFilename } from '../../../src/sessions/adapters/grokbot-locator.js';
+import {
+  classifyGrokbotBlobName,
+  grokbotTranscriptReplicaFilename,
+} from '../../../src/sessions/adapters/grokbot-locator.js';
+
+// Record every file the adapter reads, so the allowlist is checked against
+// what was actually opened rather than only what discovery yielded.
+const openedPaths = vi.hoisted(() => [] as string[]);
+vi.mock('../../../src/sessions/readers.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../../src/sessions/readers.js')>();
+  return {
+    ...original,
+    readBoundedJson: (authorization: { selectedPath: string }, ...rest: unknown[]) => {
+      openedPaths.push(authorization.selectedPath);
+      return (original.readBoundedJson as (...args: unknown[]) => unknown)(authorization, ...rest);
+    },
+  };
+});
 
 const fixturesRoot = resolve('test/fixtures/sessions/grokbot/native');
 const ids = JSON.parse(readFileSync(resolve(fixturesRoot, 'fixture-ids.json'), 'utf8')) as {
@@ -136,23 +153,37 @@ describe('Grok Bot native transcript-replica locator', () => {
     await expect(adapter.inspect(forged)).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
   });
 
-  it('never opens non-allowlisted files: decoy content would throw if ever parsed as JSON', async () => {
-    // Discovery already proved these are never yielded as sources (above).
-    // This additionally proves that even a hostile/garbage decoy file does
-    // not abort discovery or inspection of the real sources.
+  it('opens only allowlisted transcript replicas, never the roster or decoy files', async () => {
+    openedPaths.length = 0;
     const descriptors = await collect(adapter.discover({
       workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
     }));
-    expect(descriptors.length).toBeGreaterThan(0);
     for (const descriptor of descriptors) {
-      await adapter.inspect(selectedFor(descriptor.locator)).catch(() => undefined);
+      const source = selectedFor(descriptor.locator);
+      await adapter.inspect(source).catch(() => undefined);
+      await collect(adapter.stream(source)).catch(() => undefined);
     }
-    // If any decoy had been opened and parsed as JSON, readBoundedJson would
-    // have thrown SCHEMA_DRIFT/MALFORMED_SOURCE for *that* file specifically;
-    // since decoys are never selected as descriptors at all, there is nothing
-    // further to assert here beyond "discovery completed" — see the dedicated
-    // discover() test above for the authoritative allowlist assertion.
-    expect(true).toBe(true);
+
+    expect(openedPaths.length).toBeGreaterThan(0);
+    for (const opened of openedPaths) {
+      expect(classifyGrokbotBlobName(basename(opened))?.kind).toBe('transcript-replica');
+    }
+    const neverOpened = readdirSync(fixturesRoot)
+      .filter((name) => classifyGrokbotBlobName(name)?.kind !== 'transcript-replica');
+    expect(neverOpened).toEqual(expect.arrayContaining(['sand-secrets.json', 'box-secrets-main.blob']));
+    for (const name of neverOpened) {
+      expect(openedPaths.map((opened) => basename(opened))).not.toContain(name);
+    }
+  });
+
+  it('refuses to open a non-allowlisted file handed in with the native locator class', async () => {
+    openedPaths.length = 0;
+    for (const name of ['box-secrets-main.blob', 'sand-secrets.json']) {
+      const forged = selectedFor(resolve(fixturesRoot, name));
+      await expect(adapter.inspect(forged)).rejects.toMatchObject({ code: 'SOURCE_NOT_AUTHORIZED' });
+      await expect(collect(adapter.stream(forged))).rejects.toMatchObject({ code: 'SOURCE_NOT_AUTHORIZED' });
+    }
+    expect(openedPaths).toEqual([]);
   });
 
   it('assigns a conversation-id–derived sourceId (not content-digest) so re-discovery is stable', async () => {
