@@ -60,6 +60,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/providers/grok-build-headless.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
@@ -118,8 +120,12 @@
         "B-OG-11",
         "B-OG-12"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs"
+      ],
+      "remaining": "#2898 adds S1 synthetic Muse quota/partial mapping only; managed cooldown and recovery remain B-OG-11 in S2+. No live inference qualification."
     },
     "T-OG-07": {
       "name": "Guidance/lineage",
@@ -176,6 +182,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/models/worker-installation-metadata.test.ts",
         "test/unit/mcp/worker-qualification.test.ts",
@@ -243,6 +251,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",
         "test/unit/cli/handlers/models-production-invocation.test.ts",
@@ -287,6 +297,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",
         "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
@@ -334,6 +346,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/cli/handlers/models-direct-invocation.test.ts",
         "test/unit/cli/handlers/models-production-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-resolution.test.ts",
@@ -361,6 +375,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-health-signals.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
@@ -378,6 +394,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/conformance/orchestration-v1/worker-health-stall.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts"
       ],
@@ -393,6 +411,8 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/conformance/orchestration-v1/muse-direct.test.ts",
+        "test/unit/ralph/muse-direct.test.mjs",
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-health-security.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
