@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "value": {
+    "entries": [
+      {
+        "kind": "message",
+        "id": "evt-99",
+        "timestampMs": 1700700000000,
+        "requestId": "req-99",
+        "seq": 1,
+        "role": "not-a-real-role",
+        "content": "broken"
+      }
+    ],
+    "precedingTimestampMs": 0
+  }
+}

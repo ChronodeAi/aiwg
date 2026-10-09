@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "value": {
+    "entries": [
+      {
+        "kind": "message",
+        "id": "evt-90",
+        "timestampMs": 1700600000000,
+        "requestId": "req-90",
+        "seq": 1,
+        "role": "user",
+        "content": "future format"
+      }
+    ],
+    "precedingTimestampMs": 0
+  }
+}

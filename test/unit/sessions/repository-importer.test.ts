@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
 import {
-  appendFile, mkdtemp, rename, rm, stat, utimes, writeFile,
+  appendFile, mkdtemp, readFile, rename, rm, stat, utimes, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -848,6 +848,94 @@ describeWithSqlite('transactional session repository and importer', () => {
     await writeFile(replacement, initial + appended);
     await rename(replacement, path);
     await expect(importer.import(request)).rejects.toThrow(/replaced or rotated/);
+    repository.close();
+  });
+
+  it('resumes a snapshot-continuity (Grok Bot native) source across a rename-swap and a shrinking window without duplicating events', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-snapshot-continuity-'));
+    const path = join(root, 'replica.blob');
+    const sourceId = 'grokbot-snapshot-source';
+    const replica = (entries: Array<{ id: string; seq: number }>) => JSON.stringify({
+      schemaVersion: 1,
+      value: { entries: entries.map((entry) => ({
+        kind: 'message', id: entry.id, timestampMs: 1_700_000_000_000 + entry.seq, seq: entry.seq,
+        role: 'user', content: `turn ${entry.seq}`,
+      })), precedingTimestampMs: 0 },
+    });
+    const snapshotAdapter: SessionSourceAdapter = {
+      provider: 'grokbot',
+      adapterVersion: '1.0.0',
+      disposition: 'implemented',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl'],
+      sourceContinuity: 'snapshot',
+      async *discover() { /* not exercised */ },
+      async inspect() {
+        return { sourceSchemaVersion: '1.0.0', consistency: 'provisional', operationalState: 'available' };
+      },
+      async *stream(selected, cursor) {
+        const doc = JSON.parse(await readFile(selected.locator, 'utf8'));
+        const lastSeq = cursor?.value ? Number(cursor.value.replace(/^native:/, '')) : 0;
+        for (const entry of doc.value.entries as Array<{ id: string; seq: number }>) {
+          if (entry.seq <= lastSeq) continue;
+          yield {
+            nativeSessionId: 'conversation-snapshot', nativeEventId: entry.id, sequence: entry.seq,
+            kind: 'grokbot.message', role: 'user', text: `turn ${entry.seq}`,
+            sourceCursor: `native:${entry.seq}`,
+            rawReference: { locatorClass: 'grokbot-native-transcript-replica', sequence: entry.seq },
+          };
+        }
+      },
+    };
+    await writeFile(path, replica([{ id: 'e1', seq: 1 }, { id: 'e2', seq: 2 }, { id: 'e3', seq: 3 },
+      { id: 'e4', seq: 4 }, { id: 'e5', seq: 5 }]));
+    const snapshotSource: SessionSource = {
+      ...source, sourceId, provider: 'grokbot', providerProfile: 'grokbot-native-transcript-replica-v1',
+      locatorClass: 'grokbot-native-transcript-replica', redactedLocator: '<session-source>/replica.blob',
+      consistency: 'provisional', extensions: { 'native.grokbot': {} },
+    };
+    const selectedSource = {
+      provider: 'grokbot' as const, locator: path, locatorClass: 'grokbot-native-transcript-replica',
+      sourceId, authorizedScope: { workspaceId: 'workspace-snapshot', allowedRoots: [root] },
+    };
+    const repository = new SessionRepository();
+    const importer = new IncrementalSessionImporter(repository);
+    const request = {
+      source: snapshotSource, selectedSource, adapter: snapshotAdapter,
+      workspaceId: 'workspace-snapshot', policyVersion: '1.0.0',
+    };
+
+    const first = await importer.import(request);
+    expect(first.at(-1)?.checkpoint).toMatchObject({
+      positionKind: 'provider-native', // (d) native cursor round-trips with the provider-native position kind
+      cursor: 'native:5',
+      continuity: 'new-generation',
+    });
+    const sessionId = stableSessionId('grokbot', sourceId, 'conversation-snapshot');
+    expect(repository.listEvents(sessionId)).toHaveLength(5);
+
+    // Simulate the sliding window evicting the earliest entries AND Grok
+    // Bot persisting via write-temp-then-rename (a new inode) — both of
+    // which an append-only adapter would reject outright.
+    const replacement = join(root, 'replacement.blob');
+    await writeFile(replacement, replica([{ id: 'e4', seq: 4 }, { id: 'e5', seq: 5 }, { id: 'e6', seq: 6 }]));
+    await rename(replacement, path);
+
+    // (a) re-import after the rename-swap + shrink succeeds and inserts only
+    // the higher-seq entry, with no duplicates.
+    const resumed = await importer.import(request);
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0].checkpoint).toMatchObject({
+      positionKind: 'provider-native', cursor: 'native:6', continuity: 'validated-append',
+    });
+    expect(repository.listEvents(sessionId)).toHaveLength(6);
+    expect(repository.listEvents(sessionId).map((event) => event.nativeId).sort())
+      .toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
+
+    // (b) an identical re-import (same file, same cursor) is a no-op.
+    expect(await importer.import(request)).toEqual([]);
+    expect(repository.listEvents(sessionId)).toHaveLength(6);
+
     repository.close();
   });
 

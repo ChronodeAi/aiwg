@@ -358,6 +358,7 @@ function providerProfile(
   }
   if (provider === 'factory') return 'documented-project-jsonl';
   if (provider === 'muse') return 'muse-native-session-log-v1';
+  if (provider === 'grokbot') return 'grokbot-native-transcript-replica-v1';
   return 'manual-interchange';
 }
 

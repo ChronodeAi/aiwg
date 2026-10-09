@@ -405,6 +405,11 @@ export interface SourceProbe {
   sourceSchemaVersion: string;
   consistency: z.infer<typeof ConsistencyStateSchema>;
   operationalState: z.infer<typeof OperationalStateSchema>;
+  /**
+   * Workspace the source declares for itself, when its format carries one.
+   * Provenance only: import authorization always uses the caller's workspace.
+   */
+  declaredWorkspaceId?: string;
 }
 export interface ImportCursor { value: string }
 
@@ -415,6 +420,19 @@ export interface SessionSourceAdapter {
   readonly supportedOperations: readonly SessionSourceOperation[];
   readonly acquisitionModes: readonly SessionAcquisitionMode[];
   readonly sourceSchemaMajor?: number;
+  /**
+   * Declares whether the importer's generic checkpoint-continuity validator
+   * may assume the source only ever grows by appending bytes (the default,
+   * `'append-only'` when omitted) or whether it is rewritten wholesale on
+   * every save (`'snapshot'`). Declare `'snapshot'` only when the native
+   * source carries stable per-entry identities (a native event id and/or a
+   * monotonic sequence/cursor) AND the adapter's own `stream()` resumes from
+   * that identity rather than a byte position — the importer's generic
+   * size-shrink, file-identity, and prefix-rewrite checks are skipped for
+   * snapshot sources, so idempotency then rests entirely on the adapter's
+   * cursor plus the catalog's identity-keyed inserts.
+   */
+  readonly sourceContinuity?: 'append-only' | 'snapshot';
   /** Validated mutable preamble excluded from append-continuity checks. */
   mutablePrefixBytes?(source: SelectedSource): Promise<number>;
   discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor>;

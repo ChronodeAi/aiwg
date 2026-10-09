@@ -114,10 +114,10 @@ describe('sessions CLI contracts', () => {
       });
     expect(output.data.providers.find((item: any) => item.provider === 'grokbot'))
       .toMatchObject({
-        disposition: 'manual-only',
-        supportedOperations: ['inspect', 'stream'],
-        acquisitionModes: ['manual-export'],
-        reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+        disposition: 'implemented',
+        supportedOperations: ['discover', 'inspect', 'stream'],
+        acquisitionModes: ['manual-export', 'jsonl'],
+        reasonCode: null,
       });
     expect(output.data.providers.find((item: any) => item.provider === 'muse'))
       .toMatchObject({
@@ -472,6 +472,40 @@ describe('sessions CLI contracts', () => {
         wouldInspect: true,
         wouldPersist: false,
       },
+    });
+  });
+
+  it('reports the default workspace and warns when it differs from the declared one', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fixture = resolve('test/fixtures/sessions/grokbot/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'grokbot', '--source-id', 'grokbot-fixture-v1',
+      '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    const output = jsonOutput(log);
+    expect(output.data).toMatchObject({
+      workspaceId: 'default',
+      workspaceSource: 'default',
+      declaredWorkspaceId: 'workspace-fixture',
+    });
+    expect(output.data.warnings).toEqual([
+      expect.stringContaining('source declares workspace "workspace-fixture" but sessions are imported into "default" (no --workspace given)'),
+    ]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('reports an explicit workspace without a warning when it matches the declared one', async () => {
+    const fixture = resolve('test/fixtures/sessions/generic/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--source-id', 'generic-fixture-v1', '--workspace', 'workspace-fixture',
+      '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      workspaceSource: 'argument',
+      declaredWorkspaceId: 'workspace-fixture',
+      warnings: [],
     });
   });
 

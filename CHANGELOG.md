@@ -7,7 +7,25 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- `aiwg sessions discover --grokbot-root <dir>` reads Grok Bot desktop
+  transcripts directly from its `sand-client-persistence` cache (#2970). Only
+  transcript-replica files are opened; credential, cookie and other app-state
+  files are never read. A truncated cache window is imported as `provisional`,
+  and re-imports add only newer entries.
+
 ### Fixed
+
+- Session interchange imports now name the failing header field and its
+  allowed values, and a `--source-id` mismatch shows both identities, instead
+  of reporting a valid interchange file as undeclared input (#2966).
+- `aiwg sessions import` reports the catalog workspace it used and warns when
+  it differs from the workspace the source declares, rather than silently
+  filing sessions under `default` (#2967).
+- `aiwg sessions grok-list`, `grok-search` and `grok-export` find `grok` in
+  `$GROK_HOME/bin` when it is not on PATH, report a missing binary, timeout or
+  non-zero exit separately, and document `--grok-bin` (#2968).
 
 - `aiwg sessions discover --muse-root` dropped every matching Muse session log
   longer than 100 records, with no diagnostic (#2865). Discovery now streams each

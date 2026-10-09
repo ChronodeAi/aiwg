@@ -93,6 +93,7 @@ import {
   type MemoryPromotionDestination,
   type SessionSourceAdapter,
   type SelectedSource,
+  type SourceProbe,
 } from '../../sessions/index.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 
@@ -185,6 +186,9 @@ Options:
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
+  --grokbot-root <path>  Explicitly authorize a Grok Bot sand-client-persistence root
+  --grok-bin <path>  Absolute Grok Build CLI path for grok-list/grok-search/grok-export
+                   (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
@@ -945,6 +949,7 @@ async function importSource(
     authorizedScope: { workspaceId, allowedRoots: [dirname(input)] },
   };
   const probe = await adapter.inspect(selectedSource);
+  const workspaceReport = importWorkspaceReport(workspaceId, args.values.has('--workspace'), probe);
   const source = SessionSourceSchema.parse({
     contractVersion: SESSION_CONTRACT_VERSION, sourceId, provider,
     providerProfile: isDsh ? 'native-session-v2-jsonl' : isOmp ? 'native-title-slot-v3' : isClaude
@@ -1048,7 +1053,7 @@ async function importSource(
                           : { 'native.generic': {} },
   });
   if (isDryRun(ctx, args)) {
-    return preview('import', { source, wouldInspect: true, wouldPersist: false });
+    return preview('import', { source, ...workspaceReport, wouldInspect: true, wouldPersist: false });
   }
   const lease = await acquireImportLease(
     databasePath(ctx, args),
@@ -1070,8 +1075,10 @@ async function importSource(
         source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
+      for (const warning of workspaceReport.warnings) console.error(`WARNING ${warning}`);
       return ok('import', {
         sourceId,
+        ...workspaceReport,
         receipts,
         totals: {
           sessionsInserted: receipts.reduce((sum, item) => sum + item.sessionsInserted, 0),
@@ -1084,6 +1091,36 @@ async function importSource(
   } finally {
     await lease.release();
   }
+}
+
+/**
+ * Report which catalog workspace an import uses (#2967). A source-declared
+ * workspace is provenance only; it never selects the authorization scope.
+ */
+function importWorkspaceReport(
+  workspaceId: string,
+  fromArgument: boolean,
+  probe: SourceProbe,
+): {
+  workspaceId: string;
+  workspaceSource: 'argument' | 'default';
+  declaredWorkspaceId?: string;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const declared = probe.declaredWorkspaceId;
+  if (declared !== undefined && declared !== workspaceId) {
+    warnings.push(
+      `source declares workspace "${declared}" but sessions are imported into "${workspaceId}"`
+        + `${fromArgument ? '' : ' (no --workspace given)'}; pass --workspace to choose the catalog workspace`,
+    );
+  }
+  return {
+    workspaceId,
+    workspaceSource: fromArgument ? 'argument' : 'default',
+    ...(declared === undefined ? {} : { declaredWorkspaceId: declared }),
+    warnings,
+  };
 }
 
 /**
@@ -1400,6 +1437,8 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--muse-root')!) : undefined,
     dshRoot: args.values.has('--dsh-root')
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
+    grokbotRoot: args.values.has('--grokbot-root')
+      ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
     codexRoot: args.values.has('--codex-root')
       ? resolve(ctx.cwd, args.values.get('--codex-root')!)
       : undefined,
@@ -1668,14 +1707,16 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
   }
   if (provider === 'grokbot') {
     return {
-      provider, disposition: 'manual-only', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
-      reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
-      remediation: 'Select an authorized AIWG session interchange export; Grok Bot auto-discover is unsupported until a native locator exists.',
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Import an explicit AIWG session interchange export, or pass --grokbot-root with an '
+        + 'explicitly authorized $XDG_CONFIG_HOME/Grok Bot/sand-client-persistence root (Linux only) for '
+        + 'evidence-gated native discovery.',
       evidence: {
         adapterVersion: GROKBOT_ADAPTER_VERSION,
-        verifiedAt: '2026-09-15',
+        verifiedAt: '2026-10-09',
         documentation: 'docs/providers/grokbot-sessions.md',
       },
     };
@@ -1686,7 +1727,7 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
       supportedOperations: ['inspect', 'stream'],
       acquisitionModes: ['manual-export'],
       reasonCode: 'CLI_EXPORT_REQUIRED',
-      remediation: 'Run `grok sessions list`, then `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file.',
+      remediation: 'Run `grok sessions list`, then `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file. `aiwg sessions grok-list` finds `grok` on PATH or in $GROK_HOME/bin; pass --grok-bin <absolute path> otherwise.',
       evidence: {
         adapterVersion: GROK_BUILD_ADAPTER_VERSION,
         verifiedAt: '2026-09-21',
@@ -1821,7 +1862,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold', '--expected-providers',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
