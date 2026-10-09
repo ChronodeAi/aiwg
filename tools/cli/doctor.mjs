@@ -57,7 +57,7 @@ const { auditLegacyPermissions } = await importImpl(
   import.meta.url,
   'policy/authorization.js'
 );
-const { readAiwgConfig, getProviderParallelismDefaults } = await importImpl(
+const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfig } = await importImpl(
   import.meta.url,
   'config/aiwg-config.js'
 );
@@ -1956,6 +1956,53 @@ async function runDoctor() {
     }
   } catch {
     // Non-fatal — skip silently
+  }
+
+  // #2913 / T-OG-12: offline health readiness, without installing adapters,
+  // reading credentials, probing models, or requiring Mission/admission state.
+  try {
+    const config = await readAiwgConfig(process.cwd());
+    if (!config?.parallelism?.worker_dispatch) {
+      check('Worker Health', 'info', 'group dispatch is disabled; legacy worker status remains unchanged');
+    } else {
+      const healthErrors = validateParallelismConfig(config.parallelism);
+      if (healthErrors.length) {
+        for (const message of healthErrors.slice(0, 16)) check('Worker Health Configuration', 'error',
+          `${message}; review parallelism.health and group references before launch`);
+      } else {
+        const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
+        const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+        const { resolveDynamicModelCatalog } = await importImpl(import.meta.url, 'models/model-discovery.js');
+        const { diagnoseWorkerHealthReadiness } = await importImpl(import.meta.url, 'models/worker-health-readiness.js');
+        const loader = new ConfigLoader(process.cwd());
+        const models = await loader.load(config.parallelism);
+        const catalog = await resolveDynamicModelCatalog({ aiwgRoot: AIWG_ROOT,
+          inventory: { generatedAt: new Date().toISOString(), projectDir: process.cwd(),
+            providers: [], activeProvider: null, activeSource: 'doctor-offline' }, allowNetwork: false });
+        // Catalog observations do not attest a current installation. This offline
+        // projection deliberately withholds bindings; models resolve rechecks them.
+        const report = diagnoseWorkerHealthReadiness({ config, models,
+          modelDigests: loader.getInputDigests(), catalog,
+          registry: loadProviderModelCapabilities(), installations: {} }, {
+          now: new Date().toISOString(),
+          context: { estimator: 'doctor-offline-context-v1', briefTokens: 0,
+            inputTokens: 0, toolOutputAllowance: 0, reservedOutput: 0 },
+        });
+        if (report.contextDigest) check('Worker Health Context', 'info',
+          `offline context digest=${report.contextDigest}; actual task context must be resolved before launch`);
+        for (const finding of report.findings.slice(0, 32)) {
+          check(`Worker Health${finding.role ? ` (${finding.role})` : ''}`, finding.status,
+            `${finding.code}: ${finding.message} [next: ${finding.nextAction}]`);
+        }
+        if (report.findings.length > 32) check('Worker Health', 'warn',
+          `${report.findings.length - 32} additional findings; narrow role/group scope with aiwg models resolve`);
+        check('Worker Health Qualification', 'info',
+          'offline doctor cannot authorize onboarding or launch; qualify the installation/profile, then use aiwg models resolve for the actual task');
+      }
+    }
+  } catch {
+    check('Worker Health', 'warn',
+      'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
   }
 
   // 11d-bis. Live host resources and worker isolation mode (#2954).

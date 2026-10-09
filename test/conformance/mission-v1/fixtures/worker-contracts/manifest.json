@@ -50,7 +50,7 @@
       "source": "05-configuration-spec.md ### 5.1 Executable",
       "owner": "schemas/mission-v1.schema.json",
       "target": "$defs",
-      "sha256": "f3f237cf566f9ff6a6cca771197f45c80cdc31786aea9dee868b27775153871c"
+      "sha256": "000ee2dee5a75d229bfa7b64d4aae708b5b49cc430e509bf9483eab79ee024e4"
     }
   ]
 }

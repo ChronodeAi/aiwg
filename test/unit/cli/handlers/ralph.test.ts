@@ -326,6 +326,14 @@ describe('Ralph Command Handlers', () => {
   });
 
   describe('ralphStatusHandler', () => {
+    it('delegates --workers to read-only external status before reading legacy loops', async () => {
+      const { ralphStatusHandler } = await import('../../../../src/cli/handlers/ralph.js');
+      const { getLoopStatuses } = await import('../../../../src/cli/handlers/ralph-launcher.js');
+      mockContext.args = ['--workers', '--run-dir', '/private/run', '--json'];
+      await ralphStatusHandler.execute(mockContext);
+      expect(mockRunner.run).toHaveBeenCalledWith('tools/ralph-external/index.mjs', ['--status', ...mockContext.args]);
+      expect(getLoopStatuses).not.toHaveBeenCalled();
+    });
     it('should have correct metadata', async () => {
       const { ralphStatusHandler } = await import('../../../../src/cli/handlers/ralph.js');
 

@@ -259,7 +259,7 @@ async function launchOneWorker(owner, options) {
     argvDigest: qualificationDigest(invocation.argv), envNames: invocation.envNames, stdin: invocation.stdin,
     prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
     worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
-    health: invocation.health ?? null,
+    health: invocation.health ?? null, transport: invocation.transport,
     isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
     limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
   await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
@@ -522,7 +522,7 @@ async function captureOneWorker(owner, ctx) {
   // at their unset defaults (false/null/null) here, which is already correct
   // — there is no real exit to report.
   child.once('close', () => { sawClose = true; finish(); });
-  const hardRemaining = () => Math.max(0, Math.min(1800, invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+  const hardRemaining = () => Math.max(0, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
     invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
   // Grace is clipped at stop time; forceful cancellation is never scheduled
   // beyond this fixed ceiling, including tasks shorter than startup/grace.

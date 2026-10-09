@@ -446,3 +446,55 @@ The production-handler test installs the fake worker fixture and its trusted
 module into an isolated host directory, provides scoped synthetic host evidence,
 and resolves through the real loader without `createModelsHandler` injection.
 It proves plan rendering and mutation refusal; it does not qualify a vendor CLI.
+
+## Direct worker status (#2913, S1)
+
+Use the existing status command with exactly one explicit private selection:
+
+```sh
+aiwg ralph-status --workers --run-dir /private/runs/attempt --json
+aiwg ralph-external --status --workers --runs-root /private/runs
+aiwg ralph-external --status --workers --runs-root /private/runs --watch --deadline-seconds 1800 --json
+```
+
+Default queries read metadata and owned local process facts. They create no
+files, invoke no models, launch no subprocesses and change no worker processes.
+Legacy status retains its existing behavior. A fresh project needs no Mission,
+admission or activation files. Hand-created private directories may contain just
+`process.json` with an invocation ID and known identity; missing clocks, progress,
+exit status and enforced deadlines remain unknown. Workers with no directory
+cannot be discovered by this command: use the owning conductor's in-memory
+samples or `SessionLauncher.adoptWorker` and disclose the unavailable guarantees.
+
+JSON snapshots and human summaries use the same projection. Watch emits JSONL,
+keeps prior observations in memory, and stops on a finite watch deadline or when
+all selected workers terminate. A watch timeout never cancels workers. Optional
+`--observe` requires `--watch`, reserves exclusive observation ownership and atomically replaces
+`last-observed.json`; it writes only private owner scratch. A busy owner blocks
+another writer. A lost owner's reservation requires explicit reconciliation;
+the query never removes another owner's file or assumes termination.
+Scratch history is used only with a matching lock owner whose process identity
+is still live, including its start ticks and boot ID. It cannot improve a worse
+live classification or upgrade coverage. Untrusted scratch is ignored with a
+finding and degraded coverage. Observation write failures retain readable health
+rows and add findings. Watch intervals are at least one second and the resolved
+check cadence; total samples are capped at `ceil(deadlineSeconds) + 1`, including
+the initial snapshot and deadline snapshot.
+
+Snapshot exit codes are 0 for readable workers with no required action (including
+an explicit empty root), 2 for action-required or degraded required coverage, and
+1 for invalid requests/read failures. Failed rows retain readable siblings.
+Selection is capped at 256 entries, 32 files per run, 64 KiB per metadata record,
+10 MiB per capture and a five-second sampling budget. Excess selection reports
+`complete:false` and asks for a narrower root. Ancestors, records and captures
+reject symlinks; private ownership and single-link files are required.
+
+Effective thresholds include source pointers, max(role, effort, model) scaling,
+remaining parent/profile ceilings, step enforcement and truncated windows.
+CPU milliseconds remain null without a supplied qualified conversion, with
+`cpu` in `health.unavailableSignals` and `counters.available.cpu:false`. The status
+path does not spawn `getconf` to obtain a conversion. Byte
+growth and CPU activity never establish semantic progress. Recorded health or
+exit data never grants verification acceptance or signal authority. Tier 0 has
+no shared breaker authority (`breakers:[]`). Managed leases, shared breakers,
+remediation and durable transition settlement are deferred to S2+.

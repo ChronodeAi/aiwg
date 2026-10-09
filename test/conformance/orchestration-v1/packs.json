@@ -30,9 +30,10 @@
         "test/unit/config/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-policy.test.ts",
         "test/conformance/mission-v1/worker-contracts.test.ts",
-        "test/unit/cli/handlers/models-worker-contracts.test.ts"
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-health-resolution.test.ts"
       ],
-      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
     "T-OG-02": {
       "name": "Catalog/freshness",
@@ -205,8 +206,11 @@
       "mechanismOwners": [
         "B-OG-18"
       ],
-      "status": "planned",
-      "testFiles": []
+      "status": "partial",
+      "testFiles": [
+        "test/unit/models/worker-health-readiness.test.ts"
+      ],
+      "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
     "T-OG-14": {
       "name": "Package/platform/extension",
@@ -251,9 +255,10 @@
         "test/unit/ralph-external/worker-invocation.test.ts",
         "test/integration/worker-adapter-package.test.ts",
         "test/unit/ralph-external/worker-installation.test.ts",
-        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
-      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
     "T-OG-16": {
       "name": "Conductor direct lifecycle",
@@ -358,9 +363,10 @@
       "testFiles": [
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-health-signals.test.ts",
-        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
-      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
     "T-OG-21": {
       "name": "Stall/remediation",
@@ -389,9 +395,10 @@
       "testFiles": [
         "test/unit/ralph-external/worker-single-invocation.test.ts",
         "test/conformance/orchestration-v1/worker-health-security.test.ts",
-        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
-      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     }
   },
   "qualificationResults": [

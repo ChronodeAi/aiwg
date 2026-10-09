@@ -51,6 +51,18 @@ extension round trips; other consumers advertise no worker support in
 
 ## Disposition and consumer ownership
 
+### #2913 S1 health resolution amendment
+
+The existing effective-health definition permits bounded optional `origins` and
+`truncatedWindows`. Group resolution freezes source pointers and tied limiting
+ceilings with the effective windows; short parent deadlines disclose truncated
+startup/quiet/stall windows without extending the hard deadline. Historical
+descriptors retain their original shape. The Mission fragment and manifest digest
+are amended together, preserving strict exact-match assertions. Existing
+parallelism health fields now receive cross-field and canonical-key validation;
+required step caps reject observed/unavailable enforcement. Managed breaker
+execution, leases and remediation remain deferred to their S2+ owners.
+
 ### #2896 S1 health qualification amendment
 
 The existing closed invocation-profile health record now preserves explicit
