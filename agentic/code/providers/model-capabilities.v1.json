@@ -391,8 +391,8 @@
         "id": "codex",
         "provider": "codex",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "tools/ralph-external/lib/codex-adapter.mjs",
+        "supportedVersions": "0.161.0",
+        "runtimeDriver": "installed:codex",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -402,12 +402,28 @@
           "kind": "process",
           "executable": "codex",
           "argv": [
+            "--no-daemon",
             "exec",
-            "${brief}"
+            "--ignore-user-config",
+            "-m",
+            "${model}",
+            "-c",
+            "model_reasoning_effort=\"${effort}\"",
+            "-s",
+            "${sandbox}",
+            "-C",
+            "${workspace}",
+            "-c",
+            "approval_policy=\"${approval}\"",
+            "--skip-git-repo-check",
+            "-o",
+            "${final}",
+            "--json",
+            "-"
           ],
-          "stdin": "closed",
+          "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["CODEX_HOME", "HOME"],
           "versionArgv": [
             "--version"
           ],
@@ -432,74 +448,78 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "0.161.0",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-m/--model MODEL] global flag; exact observed API model, never an alias or CLI default",
+                "evidence": "H: codex-cli 0.161.0 exec --help documents -m/--model; unqualified until live model-pin evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-c model_reasoning_effort=\"E\"] config override with E in [minimal, low, medium, high, xhigh]; no --effort flag exists; one argv token, TOML \"E\" quoting, no shell layer",
+                "evidence": "H: codex-cli 0.161.0 exec --help has no effort flag; effort travels only as the model_reasoning_effort config override; unqualified until live evidence"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-s/--sandbox read-only|workspace-write]; danger-full-access and bypass flags are never emitted by the direct profile",
+                "evidence": "H: codex-cli 0.161.0 --help documents -s/--sandbox read-only|workspace-write|danger-full-access; unqualified until live evidence"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-c approval_policy=\"never\"]; on-request is refused: the direct profile never prompts, and -a/--ask-for-approval is root-only (absent from exec --help)",
+                "evidence": "H: codex-cli 0.161.0 exec --help carries no approval flag, so approval travels as the -c approval_policy override; unqualified until live evidence"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-C/--cd W] conductor working root, plus the conductor process cwd",
+                "evidence": "H: codex-cli 0.161.0 --help documents -C/--cd; unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-o/--output-last-message F] last-message file; --json carries the JSONL thread/turn/item/error event stream on stdout",
+                "evidence": "H: codex-cli 0.161.0 exec --help documents -o/--output-last-message and --json; unqualified until live evidence"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "brief-text: '-' is the prompt argument and the brief is piped on stdin (< briefPath); brief text never enters argv, rendered commands or serialized plans",
+                "evidence": "H: codex-cli 0.161.0 exec --help (instructions are read from stdin when '-' is used or no prompt argument is given); unqualified until live evidence"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "deferred: --output-schema exists on 0.161.0 exec --help, but WorkerCommandRequest/parseWorkerCommandArgs (src/serve/worker-invocation.ts) carries no schema path, so the shared renderer cannot supply one; no native schema output is claimed",
+                "evidence": "H: codex-cli 0.161.0 exec --help documents --output-schema; renderer input gap recorded, not implemented here; unqualified until live evidence"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no step or turn cap flag is evidenced on 0.161.0; deadline and output-byte bounds come from the invoking shell",
+                "evidence": "H: codex-cli 0.161.0 exec --help advertises no step-cap flag; unknown controls block tasks requiring them"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unknown: workspace trust behaviour is not evidenced on 0.161.0; --ignore-user-config skips only $CODEX_HOME/config.toml while auth still resolves via CODEX_HOME, so user config is scoped out but trust is not established",
+                "evidence": "H: codex-cli 0.161.0 --help (--ignore-user-config skips config.toml; auth still uses CODEX_HOME; --ignore-rules exists but neither evidences trust); live qualification required"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no per-call subagent disable is evidenced on 0.161.0",
+                "evidence": "H: codex-cli 0.161.0 exec --help shows no subagent control; tasks requiring child limits are blocked"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unknown: provider/model fallback behaviour is not evidenced",
+                "evidence": "H: codex-cli 0.161.0 --help; live qualification required"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["CODEX_HOME", "HOME"],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "Effort travels only as -c model_reasoning_effort; no --effort flag exists on 0.161.0 and none is invented.",
+              "--dangerously-bypass-approvals-and-sandbox is Ralph-loop legacy and never part of the direct profile.",
+              "Native `mcp-server` is not advertised by installed 0.160.1/0.161.0 help (`codex mcp-server --help` prints root help); native MCP stays version-blocked.",
+              "Auth resolves via CODEX_HOME (or HOME for its default location): the env allowlist carries exactly those two names and nothing else."
             ],
             "health": {
               "version": 1,
@@ -525,8 +545,8 @@
                 {
                   "kind": "help",
                   "ref": "tools/ralph-external/lib/codex-adapter.mjs",
-                  "observedAt": "2026-10-07T00:00:00Z",
-                  "cliVersion": "0.160.1"
+                  "observedAt": "2026-10-09T00:00:00Z",
+                  "cliVersion": "0.161.0"
                 },
                 {
                   "kind": "repository",

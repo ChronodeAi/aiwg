@@ -496,6 +496,16 @@ async function loadQualifiedModules({ registry, modules, workerWritableRoots, pl
   }
   const required = new Map();
   const adapters = [...Object.values(parsed.providers).flatMap(p => p.workerAdapter ? [p.workerAdapter] : []), ...Object.values(parsed.workerAdapters ?? {})];
+  // An id is "canonical" when the trusted registry itself pins a provider's
+  // own `workerAdapter` to that same id (e.g. `providers.codex.workerAdapter.id
+  // === 'codex'`). Such an id may already carry a legacy builtin
+  // self-registration (same file, loaded a second way); the registry-pinned,
+  // digest-authenticated install below is then the upgrade path, not a
+  // hijack, so a prior builtin registration alone must not block it. A
+  // non-canonical adapter (e.g. an ad-hoc `workerAdapters.*` entry) claiming
+  // an id that is already builtin-registered stays a hard conflict.
+  const canonicalIds = new Set(Object.entries(parsed.providers)
+    .filter(([name, p]) => p.workerAdapter && p.workerAdapter.id === name).map(([name]) => name));
   for (const adapter of adapters) {
     for (const reference of [adapter.runtimeDriver, ...(adapter.catalogAdapter.kind === 'module' ? [adapter.catalogAdapter.locator] : [])]) {
       const entry = allowlist.get(reference);
@@ -512,7 +522,8 @@ async function loadQualifiedModules({ registry, modules, workerWritableRoots, pl
   for (const entry of required.values()) {
     const inspectedModule = await inspectInstalledModule(entry, workerWritableRoots, platform);
     for (const id of entry.adapterIds) {
-      if (ids.has(id) || ((providerRegistry.has(id) || installedModules.has(inspectedModule.key))
+      const builtinConflict = canonicalIds.has(id) ? false : providerRegistry.has(id);
+      if (ids.has(id) || ((builtinConflict || installedModules.has(inspectedModule.key))
         && installedModules.get(id) !== inspectedModule.key)) throw new Error(`Duplicate worker adapter ID: ${id}`);
       ids.add(id);
     }
