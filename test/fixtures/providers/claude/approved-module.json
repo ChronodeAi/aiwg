@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic host installation allowlist. Loading does not qualify dispatch. Distinct direct factory coexists with legacy Claude registration.",
+  "source": "tools/ralph-external/lib/claude-adapter.mjs",
+  "entry": {
+    "reference": "installed:claude",
+    "packageName": "@aiwg/claude-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/claude-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:1f4cd9d21367fbbe0ef2e482a20a0cc653103aecf42474a74fbd8327e7ea130e",
+    "adapterIds": [
+      "claude-direct"
+    ],
+    "platforms": [
+      "linux"
+    ]
+  }
+}

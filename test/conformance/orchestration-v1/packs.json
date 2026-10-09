@@ -72,7 +72,8 @@
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/conformance/orchestration-v1/worker-health-adapters.test.ts",
-        "test/conformance/orchestration-v1/codex-direct.test.ts"
+        "test/conformance/orchestration-v1/codex-direct.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
     },
@@ -194,7 +195,8 @@
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/unit/ralph-external/trusted-verification.test.ts",
         "test/unit/ralph-external/worktree-preparation.test.ts",
-        "test/conformance/orchestration-v1/dispatch-evidence.test.ts"
+        "test/conformance/orchestration-v1/dispatch-evidence.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping, plus protected-check/package-script-escape, env-allowlist and worktree-escape negatives, only; no live provider qualification. A registered Tier 1 qualified isolated verifier executor, managed runtime, authority/ledger/admission-credential exclusion proofs and retention controls remain deferred to S2+."
     },
@@ -238,7 +240,8 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/models/worker-installation-metadata.test.ts",
         "test/unit/ralph-external/installed-worker-adapter.test.ts",
-        "test/unit/ralph-external/worker-single-invocation.test.ts"
+        "test/unit/ralph-external/worker-single-invocation.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
@@ -268,7 +271,8 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
         "test/conformance/orchestration-v1/codex-direct.test.ts",
-        "test/conformance/orchestration-v1/worker-status.test.ts"
+        "test/conformance/orchestration-v1/worker-status.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
@@ -360,7 +364,8 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/mcp/worker-qualification.test.ts",
         "test/conformance/orchestration-v1/worker-health-registry.test.ts",
-        "test/conformance/orchestration-v1/provider-coverage.test.ts"
+        "test/conformance/orchestration-v1/provider-coverage.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. B-OG-47 (#2911) normalized coverage rows and the source-only OpenHuman promotion are checked data, not live qualification; OpenHuman live qualification awaits an operator-authorized probe budget. Managed supervision, shared ownership and remediation remain S2+.",
       "laterSlices": [
@@ -383,7 +388,8 @@
         "test/conformance/orchestration-v1/worker-health-signals.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
         "test/conformance/orchestration-v1/codex-direct.test.ts",
-        "test/conformance/orchestration-v1/worker-status.test.ts"
+        "test/conformance/orchestration-v1/worker-status.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
@@ -421,7 +427,8 @@
         "test/conformance/orchestration-v1/worker-health-security.test.ts",
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
         "test/conformance/orchestration-v1/codex-direct.test.ts",
-        "test/conformance/orchestration-v1/worker-status.test.ts"
+        "test/conformance/orchestration-v1/worker-status.test.ts",
+        "test/conformance/orchestration-v1/claude-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     }

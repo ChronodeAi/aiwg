@@ -164,7 +164,7 @@
                 },
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 antigravity",
+                  "ref": "03-software-architecture.md §10 antigravity",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -204,11 +204,11 @@
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "claude",
+        "id": "claude-direct",
         "provider": "claude",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "tools/ralph-external/lib/claude-adapter.mjs",
+        "supportedVersions": "2.1.295",
+        "runtimeDriver": "installed:claude",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -218,12 +218,42 @@
           "kind": "process",
           "executable": "claude",
           "argv": [
-            "-p",
-            "${brief}"
+            "--print",
+            "--input-format",
+            "text",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            "${model}",
+            "--effort",
+            "${effort}",
+            "--permission-mode",
+            "dontAsk",
+            "--permission-prompts",
+            "none",
+            "--restricted",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{\"mcpServers\":{}}",
+            "--tools",
+            "Read,Glob,Grep,Edit,Write",
+            "--allowedTools",
+            "Read,Glob,Grep,Edit,Write",
+            "--disallowedTools",
+            "Agent,Task,Bash,PowerShell,REPL,WebFetch",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence"
           ],
-          "stdin": "closed",
+          "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "HOME",
+            "PATH",
+            "ANTHROPIC_API_KEY"
+          ],
           "versionArgv": [
             "--version"
           ],
@@ -231,15 +261,16 @@
         },
         "capabilities": {
           "output": "validated-file",
-          "modelPin": "unsupported",
-          "effort": "unsupported",
-          "cancel": "none",
+          "modelPin": "requested",
+          "effort": "explicit",
+          "cancel": "process-group",
           "resume": false,
           "sandboxModes": [
-            "external"
+            "read-only",
+            "workspace-write"
           ],
-          "nestedAgentsControllable": false,
-          "nativeFallbackControllable": false,
+          "nestedAgentsControllable": true,
+          "nativeFallbackControllable": true,
           "hardBudget": []
         },
         "qualification": {
@@ -248,74 +279,81 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "2.1.295",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--model ${model}; moving aliases denied",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --model <model>                       Model for the current session. Provide; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--effort ${effort}; explicit low/medium/high/xhigh/max",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --effort <level>                      Effort level for the current session (low, medium, high, xhigh, max); full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "partial: --restricted confines whitelisted file tools, scoped by --tools/--allowedTools (workspace-write: Read,Glob,Grep,Edit,Write; read-only: Read,Glob,Grep); OS sandbox unavailable in CLI, external boundary required",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --restricted                          Restricted mode: removes the built-in tools that run commands or code; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--permission-mode dontAsk --permission-prompts none; prompting and bypass modes denied",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --permission-prompts <target>         Who answers permission prompts with --print: \"host\" (the SDK host or --permission-prompt-tool) or \"none\" (nobody: anything that would prompt is denied automatically; the permission mode still decides everything else); full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "spawn cwd from conductor; no invented --cwd flag",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); Usage: claude [options] [command] [prompt]; no workspace switch is emitted; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "parse exactly one success result envelope from stdout; result JSON text or structured_output; exit-zero error fails",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --output-format <format>              Output format (only works with --print): \"text\" (default), \"json\" (single result), or \"stream-json\" (realtime streaming); full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--input-format text; brief-text on stdin through EOF; never prompt argv",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --input-format <format>               Input format (only works with --print): \"text\" (default), or \"stream-json\"; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable in current renderer: CLI --json-schema exists but schema input is not passed to this driver",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --json-schema <schema>                JSON Schema for structured output validation.; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: --max-turns is not listed by installed help; never emitted",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); No --max-turns line appears in claude 2.1.295 --help; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--print --safe-mode --restricted --setting-sources \"\" --strict-mcp-config --mcp-config {\"mcpServers\":{}}; inherited customization disabled",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --safe-mode                           Start with all customizations (CLAUDE.md, skills, installed plugins, hooks, MCP servers, custom commands and agents, output styles, workflows, custom themes, keybindings, and more) disabled; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--tools/--allowedTools Read,Glob,Grep,Edit,Write (workspace-write) or Read,Glob,Grep (read-only) --disallowedTools Agent,Task,Bash,PowerShell,REPL,WebFetch; no child/command tool or external MCP",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --tools <tools...>                    Specify the list of available tools from the built-in set.; full verbatim excerpts: docs/providers/claude-direct.md"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "exact model; --safe-mode; never emit --fallback-model; model substitutions do not qualify the profile",
+                "evidence": "H: claude 2.1.295 --help (2026-10-09); --fallback-model <model>              Enable automatic fallback to specified model(s) when the default model is overloaded or not available.; full verbatim excerpts: docs/providers/claude-direct.md"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "HOME",
+              "PATH",
+              "ANTHROPIC_API_KEY"
+            ],
             "pitfalls": [
-              "Documentation/help and synthetic observations are not authenticated live qualification.",
-              "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Help syntax and fake mechanics are not live qualification; this registry entry stays unqualified.",
+              "CLI file-tool restrictions do not supply an OS sandbox. The current shared Claude policy requires an external enforcing boundary.",
+              "Final output is the captured .stdout JSONL stream, not a CLI-created finalPath file. Normalize with ClaudeAdapter.parseWorkerFinal before verification.",
+              "Unavailable: renderer schema input, help-evidenced turn cap, native MCP reasoning worker. claude mcp serve exposes only debug/help/verbose and is a code-tools server.",
+              "Commands, Agent/Task, inherited MCP, hooks, plugins and skills are disabled in this restricted file-tools profile.",
+              "Bare mode is not used: installed help states it changes auth to API-key-only. No account or credential files were inspected."
             ],
             "health": {
               "version": 1,
@@ -340,14 +378,14 @@
               "provenance": [
                 {
                   "kind": "help",
-                  "ref": "tools/ralph-external/lib/claude-adapter.mjs",
-                  "observedAt": "2026-10-07T00:00:00Z",
-                  "cliVersion": "2.1.292"
+                  "ref": "docs/providers/claude-direct.md",
+                  "observedAt": "2026-10-09T00:00:00Z",
+                  "cliVersion": "2.1.295"
                 },
                 {
                   "kind": "repository",
-                  "ref": "tools/ralph-external/lib/claude-adapter.mjs",
-                  "observedAt": "2026-10-07T00:00:00Z",
+                  "ref": "test/fixtures/providers/claude/health/manifest.json",
+                  "observedAt": "2026-10-09T00:00:00Z",
                   "cliVersion": null
                 }
               ],
@@ -718,7 +756,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 copilot",
+                  "ref": "03-software-architecture.md §10 copilot",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -886,7 +924,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 cursor",
+                  "ref": "03-software-architecture.md §10 cursor",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -1066,7 +1104,7 @@
                 },
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 factory",
+                  "ref": "03-software-architecture.md §10 factory",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -1241,7 +1279,7 @@
                 },
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 opencode",
+                  "ref": "03-software-architecture.md §10 opencode",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -1411,7 +1449,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 warp",
+                  "ref": "03-software-architecture.md §10 warp",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -2143,7 +2181,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md \u00a710 openclaw",
+                  "ref": "03-software-architecture.md §10 openclaw",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }

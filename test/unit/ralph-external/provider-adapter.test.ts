@@ -209,7 +209,9 @@ describe('ClaudeAdapter', () => {
   describe('buildSessionArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildSessionArgs({ prompt: 'test task' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('stream-json');
@@ -251,7 +253,9 @@ describe('ClaudeAdapter', () => {
   describe('buildAnalysisArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildAnalysisArgs({ prompt: 'analyze this' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('json');
