@@ -1,0 +1,18 @@
+{
+  "note": "Host installation-authority allowlist entry for the one OMP driver module (#2910). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/omp-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/omp-adapter.mjs",
+  "entry": {
+    "reference": "installed:omp",
+    "packageName": "@aiwg/omp-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/omp-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:96d106648599695e04ed8c4e5498f336b6896cddb818102491d9e5ab947afd6b",
+    "adapterIds": [
+      "omp"
+    ],
+    "platforms": [
+      "linux"
+    ]
+  }
+}

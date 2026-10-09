@@ -154,7 +154,13 @@ describe('PiAdapter', () => {
   });
   it('rejects malformed JSONL and distinguishes agent settlement', () => {
     const adapter = new PiAdapter();
-    expect(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: true });
+    // Settlement alone (agent_settled with no error signal) is not a
+    // success: a non-empty assistant answer is also required (roctinam/aiwg#2910
+    // fix round 1 - settlement without an extracted answer was previously
+    // reported settled: true).
+    const answer = '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}';
+    expect(adapter.parseOutput(`${answer}\r\n{"type":"agent_settled"}\r\n`)).toMatchObject({ settled: true, text: 'ok' });
+    expect(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: false, text: null });
     expect(adapter.parseOutput('{bad}\n')).toBeNull();
   });
 });

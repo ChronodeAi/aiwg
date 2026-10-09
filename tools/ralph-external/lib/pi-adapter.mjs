@@ -6,6 +6,53 @@ import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
 import { healthEventMatchesBinding } from './worker-health.mjs';
 
 /**
+ * Version-bound direct-worker surface (roctinam/aiwg#2910, B-OG-45).
+ *
+ * Qualified against pi 0.87.1 `--help` (help/version syntax only,
+ * 2026-10-09; never live qualification):
+ *
+ *   pi --mode json --no-approve --no-context-files --no-extensions \
+ *     --no-skills --model M --thinking E < briefPath
+ *
+ * `--mode json` forces non-interactive JSONL output regardless of TTY or
+ * `--print` (installed pi 0.87.1 bundle, `resolveAppMode()`: `parsed.mode
+ * === "json"` short-circuits to `"json"` before any print/interactive
+ * check), so no separate `-p/--print` flag is needed. `--no-approve`
+ * ("Ignore project-local files for this run") alone is NOT a complete
+ * isolation boundary: it sets project trust to false but does not stop
+ * context loading. The installed pi 0.87.1 bundle
+ * (`chunk-OJP47DM6.js:1251`, static read) loads ancestor `AGENTS.md`/
+ * `CLAUDE.md` files independently of trust unless `noContextFiles` is set.
+ * The direct profile therefore also emits `--no-context-files`
+ * (`-nc`, "Disable AGENTS.md and CLAUDE.md discovery and loading"),
+ * `--no-extensions` (`-ne`) and `--no-skills` (`-ns`) — the same discovery
+ * surfaces OMP's profile disables — so no untrusted workspace file
+ * (context, extension or skill) is ever loaded into the worker. The direct
+ * profile never emits `--approve` ("Trust project-local files for this
+ * run"). There is no documented sandbox, approval-prompt, output-file,
+ * output-schema, step-cap or child-denial flag (`pi --help`, 2026-10-09):
+ * those controls stay unavailable rather than invented, and the final
+ * answer is extracted from the stdout JSONL stream (`parseOutput()`),
+ * never a `-o`-style file. There is no
+ * `--cwd`/`-C` flag either; the launcher's shell `cd` to the workspace is
+ * the only workdir binding. The brief travels on stdin, never argv:
+ * installed pi 0.87.1 bundle (`chunk-OJP47DM6.js`, `readPipedStdin()` /
+ * `buildInitialMessage()`, static read 2026-10-09) shows piped, non-TTY
+ * stdin is trimmed and becomes the sole initial-message part whenever no
+ * positional message/file argument is given, so omitting the positional
+ * message and piping the brief is sufficient — and an all-whitespace brief
+ * would trim to nothing and must never be sent.
+ */
+export const PI_DIRECT_VERSION = '0.87.1';
+/** Mirrors providers.pi.effortValues in model-capabilities.v1.json (hardcoded,
+ * not read via a repo-relative path: the installed-module loader copies this
+ * file to an arbitrary package root, so import.meta.url-relative reads to the
+ * repository are not safe here). */
+export const PI_DIRECT_EFFORT_VALUES = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh']);
+/** Brief transport for the direct profile: piped stdin, never argv. */
+export const PI_DIRECT_STDIN = 'brief-text';
+
+/**
  * Pi CLI versions this adapter is qualified against. `isAvailable()` fails
  * closed outside this list (#2550): Pi's `--mode json` contract (stdin
  * handling, JSONL framing, `agent_settled`) is verified per version by
@@ -76,6 +123,46 @@ export class PiAdapter extends ProviderAdapter {
     return args;
   }
   buildAnalysisArgs(options) { return this.buildSessionArgs(options); }
+
+  /**
+   * Driver-owned argv after the binary for the version-bound direct-shell
+   * profile. `--no-approve`, `--no-context-files`, `--no-extensions` and
+   * `--no-skills` are all fixed (never `--approve`, and never omitted —
+   * `--no-approve` alone does not stop ancestor AGENTS.md/CLAUDE.md
+   * loading); model and thinking level are always explicit (never a CLI
+   * default or alias); the brief is validated here but never placed in
+   * argv — it travels on stdin (`stdin: 'brief-text'`). There is no
+   * `-C/--cwd` flag to render: the launcher's own `cd` to the workspace is
+   * the only binding.
+   *
+   * @param {{ selected?: { model?: unknown, effort?: { value?: unknown } }, cwd?: unknown, brief?: unknown }} invocation
+   * @param {unknown} _profile
+   * @param {unknown} _permissions
+   * @returns {string[]}
+   */
+  buildWorkerArgs(invocation, _profile, _permissions) {
+    const model = invocation?.selected?.model;
+    if (typeof model !== 'string' || !model || model.includes('\0')) {
+      throw new Error('Pi worker requires an explicit model');
+    }
+    const effort = invocation?.selected?.effort?.value ?? null;
+    if (effort === null || !PI_DIRECT_EFFORT_VALUES.includes(effort)) {
+      throw new Error('Pi worker requires an explicit qualified thinking level (never a CLI default)');
+    }
+    const cwd = invocation?.cwd;
+    if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0')) {
+      throw new Error('Pi worker requires an absolute workspace');
+    }
+    const brief = invocation?.brief;
+    // Pi's own readPipedStdin() trims the stream; an all-whitespace brief
+    // would resolve to no initial message at all, so it is refused here.
+    if (typeof brief !== 'string' || !brief.trim() || brief.includes('\0')) {
+      throw new Error('Pi worker requires a non-empty brief');
+    }
+    return ['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills',
+      '--model', model, '--thinking', effort];
+  }
+
   mapModel(model) { return model; }
   getEnvOverrides() { return { CI: 'true', NO_COLOR: '1' }; }
   /** No stdin abort in `--mode json`; see getCapabilities() (#2550). */
@@ -86,6 +173,22 @@ export class PiAdapter extends ProviderAdapter {
     const root = process.env.PI_CODING_AGENT_SESSION_DIR;
     return root ? join(root, `${sessionId}.jsonl`) : join(homedir(), '.pi', 'agent', 'sessions', `${sessionId}.jsonl`);
   }
+  /**
+   * Parse `--mode json` output: Pi's own JSONL event stream. `settled`
+   * requires an `agent_settled` event, no error signal anywhere in the
+   * stream (a standalone `error` event, `agent_end` with `willRetry: true`,
+   * or an `agent_end` assistant message with `stopReason` `error`/
+   * `aborted`) and a non-empty extracted assistant answer — an exit-zero
+   * run that settles with no error but never produced an answer, or one
+   * that settles after a standalone error event, is not a success
+   * (`text` is non-null only when `settled` is true). `text` is the last
+   * assistant message's concatenated text content across all `agent_end`
+   * events (a later `agent_end` can supersede an earlier one before
+   * `agent_settled` arrives).
+   *
+   * @param {string} stdout
+   * @returns {{ events: object[], settled: boolean, text: string|null } | null}
+   */
   parseOutput(stdout) {
     const events = [];
     for (const raw of stdout.split('\n')) {
@@ -93,9 +196,42 @@ export class PiAdapter extends ProviderAdapter {
       if (!line) continue;
       try { events.push(JSON.parse(line)); } catch { return null; }
     }
-    return events.length ? { events, settled: events.some(event => event.type === 'agent_settled') } : null;
+    if (!events.length) return null;
+    let failed = false;
+    let settledEvent = false;
+    let text = null;
+    for (const event of events) {
+      if (event.type === 'error') failed = true;
+      if (event.type === 'agent_settled') settledEvent = true;
+      if (event.type !== 'agent_end' || !Array.isArray(event.messages)) continue;
+      if (event.willRetry === true || event.messages.some(message => message.stopReason === 'error' || message.stopReason === 'aborted')) {
+        failed = true;
+      }
+      // Pi accumulates messages chronologically: the final answer is the LAST
+      // assistant message of the LAST agent_end. An earlier non-empty message
+      // must never stand in for an empty final one.
+      const assistant = event.messages.filter(message => message.role === 'assistant').at(-1);
+      if (!assistant) { text = null; continue; }
+      const extracted = Array.isArray(assistant.content)
+        ? assistant.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
+        : (typeof assistant.text === 'string' ? assistant.text : null);
+      text = extracted && extracted.trim() ? extracted : null;
+    }
+    const settled = settledEvent && !failed && Boolean(text);
+    return { events, settled, text: settled ? text : null };
   }
 }
 
+// Self-register on import for the legacy Ralph loop only. The direct worker
+// profile loads through the #2885 installed loader instead (see below).
 registerProvider('pi', () => new PiAdapter());
+
+/** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
+export const interfaceVersion = 1;
+
+/** Installed-module registration: exactly the one approved adapter ID. */
+export function register(factory) {
+  factory('pi', () => new PiAdapter());
+}
+
 export default PiAdapter;
