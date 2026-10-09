@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adapters/muse.js';
 import { readOmpSessionHeader } from './adapters/omp.js';
+import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import {
   SESSION_PROVIDER_IDS,
@@ -81,16 +82,17 @@ export interface DiscoverWorkspaceOptions {
   ompRoot?: string;
   museRoot?: string;
   dshRoot?: string;
+  grokbotRoot?: string;
   createdAt?: string;
 }
 
 interface DiscoverableProvider {
-  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse';
+  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse' | 'grokbot';
   roots: string[];
 }
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
-  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grokbot', 'grok-build',
+  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grok-build',
   'warp', 'devin-desktop', 'generic',
 ]);
 
@@ -114,6 +116,15 @@ export async function discoverWorkspaceHistories(
         ? [resolveOmpPaths({ home: resolve(options.providerHome), cwd: workspacePath }).sessionsDir] : [] },
     { provider: 'muse', roots: options.museRoot
       ? [resolve(options.museRoot)] : [] },
+    // Grok Bot conversations carry no workspace/cwd field, so unlike
+    // claude/cursor/factory there is no per-workspace default path to derive
+    // from providerHome. Native discovery requires an explicit
+    // --grokbot-root (same shared-root authorization model as
+    // codex/omp/deepseek-harness/muse below), and every authorized
+    // conversation surfaces to whichever workspace runs discovery (same
+    // no-filtering behavior already used for `pi`/`deepseek-harness`).
+    { provider: 'grokbot', roots: options.grokbotRoot
+      ? [resolve(options.grokbotRoot)] : [] },
     {
       provider: 'claude',
       roots: providerHomes.map(
@@ -165,7 +176,8 @@ export async function discoverWorkspaceHistories(
     }
     if (availableRoots.length === 0) {
       const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp'
-        || entry.provider === 'deepseek-harness' || entry.provider === 'muse')
+        || entry.provider === 'deepseek-harness' || entry.provider === 'muse'
+        || entry.provider === 'grokbot')
         && entry.roots.length === 0;
       reports.set(entry.provider, providerReport(
         entry.provider,
@@ -226,6 +238,17 @@ export async function discoverWorkspaceHistories(
         fingerprint.digest,
       );
       if (ompHeader) source.sourceId = sha256(['omp-native-source-v1', workspaceId, ompHeader.id].join('\0'));
+      if (entry.provider === 'grokbot') {
+        // The replica is rewritten wholesale as its sliding window evicts
+        // old entries, so a content-digest sourceId (the default above)
+        // would churn every re-discovery and break checkpoint continuity.
+        // Key it on the conversation id instead, same rationale as the OMP
+        // override above.
+        const conversationId = grokbotConversationIdFromLocator(locator);
+        if (conversationId) {
+          source.sourceId = sha256(['grokbot-native-source-v1', workspaceId, conversationId].join('\0'));
+        }
+      }
       providerSources.push(source);
       candidates.push(source);
     }

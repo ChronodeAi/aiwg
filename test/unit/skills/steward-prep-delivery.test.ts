@@ -47,10 +47,12 @@ describe('steward-prep-delivery duplicate helper', () => {
   it('uses per-invocation discovery temp directories instead of the legacy shared file', async () => {
     const source = await fs.readFile(helperPath, 'utf8');
 
-    expect(source).toContain('mktemp -d');
+    expect(source).toContain('mkdir -m 700 -- "${DISCOVER_CANDIDATE}"');
     expect(source).toContain('DISCOVER_JSON');
     expect(source).not.toContain('/tmp/.steward-prep-discover.json');
-    expect(source.indexOf('trap cleanup_discover_tmp EXIT')).toBeLessThan(source.indexOf('mktemp -d'));
+    expect(source).not.toMatch(/\$\(mktemp/);
+    expect(source.indexOf('trap cleanup_discover_tmp EXIT'))
+      .toBeLessThan(source.indexOf('mkdir -m 700 -- "${DISCOVER_CANDIDATE}"'));
   });
 
   it('runs concurrent duplicate checks without parse errors or leaked discovery temp dirs', async () => {
@@ -144,6 +146,83 @@ describe('steward-prep-delivery duplicate helper', () => {
         exitPromise,
         delay(5_000).then(() => {
           throw new Error('helper did not exit within 5 seconds of SIGTERM');
+        }),
+      ]);
+
+      expect(exit.code === 143 || exit.signal === 'SIGTERM').toBe(true);
+
+      let leakedEntries: string[] = [];
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const tempEntries = await fs.readdir(tempRoot);
+        leakedEntries = tempEntries.filter((entry) => entry.startsWith('steward-prep-discover.'));
+        if (leakedEntries.length === 0) break;
+        await delay(20);
+      }
+      expect(leakedEntries).toEqual([]);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
+
+  /**
+   * Regression for the deferred-trap race (#2982): bash defers HUP/INT/TERM
+   * traps while a foreground child runs. Under CI load the child that creates
+   * the discovery temp dir could finish its work but take seconds to exit,
+   * stalling signal handling. The stub creates the real directory, then
+   * sleeps before exiting, which is what a scheduler-starved child looks like
+   * to the helper.
+   * @implements #2107
+   */
+  it('exits promptly on SIGTERM even when temp-dir creation is slow to exit', async () => {
+    const slowSeconds = 5;
+    // Stub both temp-dir creators so the test catches the bug whichever one
+    // the helper uses.
+    for (const command of ['mkdir', 'mktemp']) {
+      await fs.writeFile(
+        path.join(fakeBin, command),
+        [
+          '#!/usr/bin/env bash',
+          'set -euo pipefail',
+          `command -p ${command} "$@"`,
+          `sleep "\${AIWG_TEST_SLOW_TEMPDIR_SECONDS:-${slowSeconds}}"`,
+        ].join('\n'),
+        { encoding: 'utf8', mode: 0o755 },
+      );
+    }
+
+    const env = {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+      TMPDIR: tempRoot,
+      GITEA_OWNER: 'roctinam',
+      GITEA_REPO: 'aiwg',
+      GITEA_TOKEN_FILE: path.join(tempRoot, 'missing-token'),
+    };
+
+    const child = spawn('bash', [helperPath, 'slow-mkdir-query'], {
+      cwd: tempRoot,
+      env,
+      stdio: 'ignore',
+    });
+
+    try {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const tempEntries = await fs.readdir(tempRoot);
+        if (tempEntries.some((entry) => entry.startsWith('steward-prep-discover.'))) break;
+        await delay(20);
+      }
+
+      const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.once('close', (code, signal) => resolve({ code, signal }));
+      });
+      child.kill('SIGTERM');
+
+      // The helper must not wait out the child's slow exit. The budget is well
+      // under the stub's sleep so a reintroduced deferred-trap bug fails here.
+      const exit = await Promise.race([
+        exitPromise,
+        delay(2_000).then(() => {
+          throw new Error('helper did not exit within 2 seconds of SIGTERM (temp-dir stub sleeps 5s)');
         }),
       ]);
 

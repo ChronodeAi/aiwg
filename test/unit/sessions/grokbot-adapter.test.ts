@@ -29,7 +29,7 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 describe('Grok Bot session adapter', () => {
   const adapter = new GrokbotSessionAdapter();
 
-  it('is manual-only and rejects automatic discovery without probing paths', async () => {
+  it('is implemented, with native discovery evidence-gated and a no-op over a manual-export-only root', async () => {
     const registry = new SessionSourceAdapterRegistry();
     registry.register(adapter);
     expect(registry.report('grokbot', {
@@ -37,22 +37,29 @@ describe('Grok Bot session adapter', () => {
       evidence: {
         adapterVersion: GROKBOT_ADAPTER_VERSION,
         sourceSchemaVersion: GROKBOT_EXPORT_SCHEMA_VERSION,
-        verifiedAt: '2026-09-15',
+        verifiedAt: '2026-10-09',
         reference: 'docs/providers/grokbot-sessions.md',
       },
-      reason: 'native session locator unverified',
-      remediation: 'select an authorized manual-export interchange file',
+      reason: null,
+      remediation: 'select an authorized manual-export interchange file, or pass --grokbot-root',
     })).toMatchObject({
-      classification: 'manual-only',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
+      classification: 'implemented',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'jsonl'],
     });
-    expect(() => registry.assertOperation('grokbot', 'discover'))
-      .toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }));
+    // discover() does not throw; it requires an authorized root (#2970) and
+    // then only ever selects filenames that decode to a transcript-replica
+    // key. None of the manual-export jsonl fixtures in this directory match,
+    // so discovery over it is a well-defined no-op, not an error.
+    registry.assertOperation('grokbot', 'discover');
     await expect(collect(adapter.discover({
       workspaceId: 'workspace-fixture',
       allowedRoots: [fixturesRoot],
-    }))).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
+    }))).resolves.toEqual([]);
+    await expect(collect(adapter.discover({
+      workspaceId: 'workspace-fixture',
+      allowedRoots: [],
+    }))).rejects.toMatchObject({ code: 'SOURCE_NOT_AUTHORIZED' });
   });
 
   it('inspects and streams an authorized manual interchange export', async () => {
@@ -61,6 +68,7 @@ describe('Grok Bot session adapter', () => {
       sourceSchemaVersion: '1.0.0',
       consistency: 'complete',
       operationalState: 'available',
+      declaredWorkspaceId: 'workspace-fixture',
     });
     const events = await collect(adapter.stream(source));
     expect(events).toHaveLength(2);

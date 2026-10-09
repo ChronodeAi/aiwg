@@ -144,6 +144,7 @@ export class IncrementalSessionImporter {
       policyVersion: request.policyVersion,
       continuity: continuity
         ? (!previous || previous.positionKind === 'byte-offset'
+            || previous.positionKind === 'provider-native'
             ? continuity.outcome
             : 'unverified')
         : (previous ? 'unverified' : 'new-generation'),
@@ -243,6 +244,13 @@ export class IncrementalSessionImporter {
           checkpoint.positionKind = 'byte-offset';
           checkpoint.cursor = record.sourceCursor;
           checkpoint.bytesRead = Number(record.sourceCursor.slice(5));
+        } else if (record.sourceCursor?.startsWith('native:')) {
+          // An opaque provider-native resume token (e.g. a monotonic native
+          // sequence) — never a byte offset. Stored verbatim; `bytesRead`
+          // still accumulates so resource limits remain meaningful.
+          checkpoint.positionKind = 'provider-native';
+          checkpoint.cursor = record.sourceCursor;
+          checkpoint.bytesRead += bytes;
         } else {
           checkpoint.bytesRead += bytes;
           checkpoint.cursor = String(checkpoint.recordsRead);
@@ -575,9 +583,15 @@ async function sourceContinuity(
     selectedPath: request.selectedSource.locator,
     allowedRoots: request.selectedSource.authorizedScope.allowedRoots,
   };
+  // Snapshot sources are rewritten wholesale on every save (no stable
+  // append-only byte region, and the file identity may legitimately change
+  // via rename-swap): skip the shrink, file-identity, and prefix-rewrite
+  // throws below. Idempotency instead rests on the adapter's own monotonic
+  // native cursor plus the catalog's identity-keyed inserts.
+  const isSnapshot = request.adapter.sourceContinuity === 'snapshot';
   const skipPrefixBytes = await request.adapter.mutablePrefixBytes?.(request.selectedSource) ?? 0;
   const metadata = await fingerprintSourcePrefix(authorization, 0);
-  if (previous?.sourceSize !== undefined) {
+  if (!isSnapshot && previous?.sourceSize !== undefined) {
     if (metadata.size < previous.sourceSize) {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
@@ -600,17 +614,18 @@ async function sourceContinuity(
     }
   }
   const current = await fingerprintSourcePrefix(authorization, metadata.size, skipPrefixBytes);
-  const generation = previous?.sourceGeneration ?? sha256([
-    sourceGenerationDigest(request),
-    metadata.fileIdentity,
-  ].join('\0'));
+  const generation = previous?.sourceGeneration ?? (isSnapshot
+    ? sourceGenerationDigest(request)
+    : sha256([sourceGenerationDigest(request), metadata.fileIdentity].join('\0')));
   return {
     sourceGeneration: generation,
     outcome: !previous
       ? 'new-generation'
-      : metadata.size === previous.sourceSize
-        && current.digest === previous.prefixDigest
-        ? 'unchanged-replay' : 'validated-append',
+      : isSnapshot
+        ? (current.digest === previous.prefixDigest ? 'unchanged-replay' : 'validated-append')
+        : metadata.size === previous.sourceSize
+          && current.digest === previous.prefixDigest
+          ? 'unchanged-replay' : 'validated-append',
     size: metadata.size,
     mtimeMs: metadata.mtimeMs,
     fileIdentity: metadata.fileIdentity,

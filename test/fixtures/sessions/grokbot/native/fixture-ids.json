@@ -1,0 +1,13 @@
+{
+  "account": "synthtest01",
+  "conversations": {
+    "complete": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+    "truncated": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+    "unknownSchema": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+    "malformed": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4"
+  },
+  "decoys": {
+    "composerDraftsKey": "sand.client.slice.account.grok%7Cuser_synthtest01.composer-drafts",
+    "plainFiles": ["sand-secrets.json", "box-secrets-main.blob"]
+  }
+}

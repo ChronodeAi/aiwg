@@ -231,8 +231,9 @@
     {
       "provider": "grokbot",
       "issue": 215,
-      "status": "manual-only",
+      "status": "implemented",
       "operations": [
+        "discover",
         "inspect",
         "stream"
       ],
@@ -250,8 +251,9 @@
           "UNKNOWN_SCHEMA_MAJOR"
         ],
         "exceptions": {
-          "discovery": "manual-export only until verified Grok Bot session locator; no auto-discover of ~/.grokbot or Cursor paths"
-        }
+          "discovery": "native discovery is evidence-gated by explicit --grokbot-root only (Linux); conversations are account-scoped with no workspace/cwd field, so every authorized conversation surfaces to whichever workspace runs discovery; no default root and no invented ~/.grokbot path"
+        },
+        "nativeLocatorClass": "grokbot-native-transcript-replica"
       }
     },
     {
