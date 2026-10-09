@@ -24,6 +24,13 @@ providers:
       channel: "claude -p --output-format stream-json --verbose; terminal result extraction"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2900"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: claude 2.1.295 on titan (--version/--help only)"
+          - "tools/ralph-external/lib/claude-adapter.mjs"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -93,6 +100,13 @@ providers:
       channel: "codex debug models + exec --json -o F thread/turn/item/error event stream"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 50000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2897"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: codex-cli 0.161.0 on titan (--version/--help only); `codex mcp-server --help` still prints root help"
+          - "tools/ralph-external/lib/codex-adapter.mjs"
     aliases:
       - openai
     status: stable
@@ -171,6 +185,12 @@ providers:
       channel: "copilot -p --output-format json; scoped --allow-tool permissions"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2901"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -215,6 +235,12 @@ providers:
       channel: "droid exec --output-format stream-json; terminal parser to qualify"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2902"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/factory-adapter.mjs"
     status: stable
     # droid CLI runs headless via `droid exec`; AIWG daemon provides persistence layer
     daemon_tier: unsupported
@@ -258,6 +284,13 @@ providers:
       channel: "agent -p --output-format json; sandbox/permission profile to qualify"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2903"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://cursor.com/docs/cli/overview"
+          - "https://cursor.com/docs/cli/reference/output-format"
     status: stable
     # Cursor requires a display server (VS Code extension host) — daemon not supported
     daemon_tier: unsupported
@@ -301,6 +334,13 @@ providers:
       channel: "opencode run --format json; JSONL framing to qualify"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2904"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/opencode-adapter.mjs"
+          - "https://opencode.ai/docs/cli/"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -343,6 +383,12 @@ providers:
       channel: "oz agent run --prompt/--model/--cwd/--profile; stdout capture"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2905"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.warp.dev/agents/cli/oz-cli/"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -391,6 +437,16 @@ providers:
       channel: "none - no verified headless Desktop worker command; recheck B-OG-47"
       fanout: unknown
       probe_budget: { status: authorized, calls: 1, tokens: 0, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: null
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "src/providers/provider-definitions.ts#windsurf"
+          - "https://docs.devin.ai/cli/reference/commands.md"
+          - "https://docs.devin.ai/_llms/en/desktop.md"
+        exclusion_gap: "Devin Desktop documents no headless worker command and no worker-serving MCP tool; its MCP settings configure clients, IDE startup is not inference."
+        recheck: "Rechecked 2026-10-08: Desktop unchanged, still OUT. Devin CLI documents `devin -p/--print`, `--model`, `--prompt-file`, `--permission-mode` and `--sandbox` (no JSON output or effort flag found; `devin acp` is ACP, `devin mcp` manages client servers). Devin CLI stays a distinct future-provider surface, not a windsurf alias, until registry support exists."
     status: stable
     # Devin Desktop uses the Windsurf compatibility surface and requires a VS Code host — daemon not supported
     daemon_tier: unsupported
@@ -435,6 +491,18 @@ providers:
       channel: "none - desktop CreateAgent is not a headless subprocess contract; recheck B-OG-47"
       fanout: unknown
       probe_budget: { status: authorized, calls: 1, tokens: 0, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: null
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "src/providers/provider-definitions.ts#grokbot"
+          - "https://docs.x.ai/grok-bot/overview.md"
+          - "https://docs.x.ai/grok-bot/skills-routines-and-automations.md"
+          - "https://docs.x.ai/grok-bot/computer-and-apps.md"
+          - "https://docs.x.ai/grok-bot/faq.md"
+        exclusion_gap: "Grok Bot runs Bots on xAI-hosted computers driven from desktop/mobile chat, routines and connectors; no documented local CLI, headless subprocess or worker-serving MCP tool."
+        recheck: "Rechecked 2026-10-08 against the official Grok Bot docs: no change, still OUT. Third-party bridges are not official interfaces and were not evaluated; desktop CreateAgent names are never synthesized into a command."
     status: stable
     # Multi-agent desktop assistant runtime. Distinct from Cursor IDE and from
     # xAI Grok Build / API. Native skill root is operator-configured via
@@ -484,6 +552,12 @@ providers:
       channel: "grok -p --output-format streaming-json; bounded parser + model/effort pinning"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2906"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "src/providers/grok-build-headless.ts"
     status: experimental
     # xAI Grok Build CLI/TUI. Distinct from Grok Bot (`grokbot`).
     # #2577: fixture-backed native subagents and background tasks; see
@@ -536,6 +610,13 @@ providers:
       channel: "hermes -z plain final + --usage-file; session-filtered log binding"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2912"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "host-help: hermes 0.20.6 on titan (2026-10-07 observation; not rechecked in this pass)"
+          - "/usr/local/lib/hermes-agent/mcp_serve.py"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -583,6 +664,13 @@ providers:
       channel: "model-catalog JSON + exec --json invocation-bound session logs"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2898"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: Muse Code 1.4.4 (1.4.4-R5419.1) on titan (--version/--help only)"
+          - "tools/ralph-external/lib/muse-adapter.mjs"
     status: stable
     # Meta's terminal/CI coding agent (Muse Spark-powered). Explicitly not a
     # model-API surface: Glimmer/Image/Voice are out of scope.
@@ -636,6 +724,12 @@ providers:
       channel: "openclaw agent exec --json; workspace/settings mapping to qualify"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2907"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.openclaw.ai/cli/agent"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -672,12 +766,22 @@ providers:
     aliases:
       - tinyhumansai
     route_feasibility:
-      scope: out
-      identity: unavailable
-      evidence: R
-      channel: "none - agent list/dump-prompt inspect prompts, do not launch workers; recheck B-OG-47"
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "openhuman-core --model M call --method openhuman.agent_chat --params-stdin; conductor-framed params JSON on stdin to EOF, final JSON stdout, no event stream"
       fanout: unknown
-      probe_budget: { status: authorized, calls: 1, tokens: 0, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      probe_budget: { status: proposed, calls: 3, tokens: 30000 }
+      coverage:
+        profile_issue: "roctinam/aiwg#2911"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/core/cli.rs"
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/agent/schemas.rs"
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/mcp/server/tools/specs.rs"
+          - "https://github.com/tinyhumansai/openhuman/releases/tag/v0.64.14"
+        recheck: "Rechecked 2026-10-08 and promoted into S1 (doc/source-only, unqualified): `openhuman-core --model M call --method openhuman.agent_chat --params-stdin` reads the `message`, `model_override` and `cwd` params as JSON from stdin until EOF, runs one in-process agent turn and prints the JSON result on stdout; the conductor frames the params from the brief so prompt text never enters argv. Profile pinned to 0.64.14; live qualification is an open S1 blocker (not installed on an authorized host, budget proposed). Effort, step cap, approval/sandbox mapping and child fan-out are unknown. Native `openhuman-core mcp` `agent.run_subagent` takes only `agent_id`/`prompt` (no model, effort or workspace pin) and may nest subagents, so it is not a qualifying worker MCP tool."
     status: experimental
     # tinyhumansai/openhuman — OSS personal-AI runtime (Rust core + Tauri shell).
     # AIWG-convention-aware out of the box (.agents/, AGENTS.md, .claude/, .codex/).
@@ -723,6 +827,13 @@ providers:
       channel: "agy -p stream-json per provider-contract; fixture-qualified flags only"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2908"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "agentic/code/providers/antigravity/provider-contract.v1.json"
+          - "https://antigravity.google/docs/cli/headless/"
     aliases:
       - agy
     status: experimental
@@ -775,6 +886,12 @@ providers:
       channel: "dsh --profile headless + validated Cordis route patch; no guessed --model flag"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2909"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/deepseek-harness-adapter.mjs"
     aliases:
       - dsh
     status: experimental
@@ -824,6 +941,12 @@ providers:
       channel: "pi --mode json --model/--thinking/--tools; closed stdin, no RPC abort"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2910"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/pi-adapter.mjs"
     aliases:
       - pi-coding-agent
     status: experimental
@@ -872,6 +995,12 @@ providers:
       channel: "omp --mode json --model/--thinking/--profile; --no-tools for text-only"
       fanout: unknown
       probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2910"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/omp-adapter.mjs"
     aliases:
       - oh-my-pi
     status: experimental

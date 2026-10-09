@@ -202,7 +202,7 @@ describe('T-OG-03 other IN profiles remain honestly degraded', () => {
     });
   }
 
-  for (const provider of ['copilot', 'cursor', 'warp', 'openclaw', 'deepseek-harness']) {
+  for (const provider of ['copilot', 'cursor', 'warp', 'openclaw', 'deepseek-harness', 'openhuman']) {
     it(`${provider} final-only fixture leaves semantic startup/progress unavailable`, async () => {
       const { bytes } = await fixture(provider);
       const observer = createWorkerHealthObserver({ provider,

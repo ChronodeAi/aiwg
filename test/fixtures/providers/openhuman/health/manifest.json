@@ -1,0 +1,14 @@
+{
+  "scenarioId": "T-OG-03-openhuman-own-grammar",
+  "provider": "openhuman",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "json",
+  "fixture": "final.json",
+  "expectedKinds": [
+    null
+  ],
+  "expectedOutcome": "final-only JSON from `call --method openhuman.agent_chat`; execution candidate only, semantic startup/progress unavailable",
+  "sanitizedEvidence": "synthetic content and identifiers only; result shape is not a pinned upstream contract",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}

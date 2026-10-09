@@ -250,7 +250,8 @@
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
         "test/integration/worker-adapter-package.test.ts",
-        "test/unit/ralph-external/worker-installation.test.ts"
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },
@@ -295,7 +296,8 @@
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
         "test/unit/mcp/worker-invoke.test.ts",
-        "test/conformance/orchestration-v1/worker-health-mcp.test.ts"
+        "test/conformance/orchestration-v1/worker-health-mcp.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
       ],
       "remaining": "S1 MCP observer signal semantics only: initialize, ping, tools/list and cancel delivery are not execution start, progress or stop. The worker-invoke run/status/cancel bridge is delivered by #2892 (test/unit/mcp/worker-invoke.test.ts); wiring these observers into its documented health hook (native MCP health mapping) and registry operation pins remain open. No live version/account qualification; managed supervision and shared ownership remain S2+."
     },
@@ -310,7 +312,8 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/orchestration-v1/direct-security.test.ts"
+        "test/conformance/orchestration-v1/direct-security.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
       ],
       "remaining": "S1 synthetic coverage only: unrelated-env non-inheritance, the workerClaims contract's lack of an executable field, resolver-level model-pin and role-coverage denial, the delegationAllowance schema lock, and a synthetic no-external-control capability denial. Mutable shared-dependency isolation (worktree hardlink/reflink tooling) and live provider/account qualification remain open; managed-runtime security assertions stay with their owning S2+ checkpoint."
     },
@@ -335,9 +338,10 @@
         "test/conformance/orchestration-v1/pack-registry.test.ts",
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/mcp/worker-qualification.test.ts",
-        "test/conformance/orchestration-v1/worker-health-registry.test.ts"
+        "test/conformance/orchestration-v1/worker-health-registry.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
       ],
-      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+.",
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. B-OG-47 (#2911) normalized coverage rows and the source-only OpenHuman promotion are checked data, not live qualification; OpenHuman live qualification awaits an operator-authorized probe budget. Managed supervision, shared ownership and remediation remain S2+.",
       "laterSlices": [
         "S1"
       ]
@@ -353,7 +357,8 @@
       "status": "partial",
       "testFiles": [
         "test/unit/ralph-external/worker-single-invocation.test.ts",
-        "test/conformance/orchestration-v1/worker-health-signals.test.ts"
+        "test/conformance/orchestration-v1/worker-health-signals.test.ts",
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
     },
@@ -367,7 +372,8 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/orchestration-v1/worker-health-stall.test.ts"
+        "test/conformance/orchestration-v1/worker-health-stall.test.ts",
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
       ],
       "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only; automated retry/fallback and managed runtime remain S2+ with their existing owners."
     },
@@ -382,7 +388,8 @@
       "status": "partial",
       "testFiles": [
         "test/unit/ralph-external/worker-single-invocation.test.ts",
-        "test/conformance/orchestration-v1/worker-health-security.test.ts"
+        "test/conformance/orchestration-v1/worker-health-security.test.ts",
+        "test/conformance/orchestration-v1/openhuman-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
     }

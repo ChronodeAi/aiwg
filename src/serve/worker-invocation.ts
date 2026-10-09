@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, realpath, open } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
 import { workerConfigDigest } from '../config/aiwg-config.js';
 import type { McpServerRegistry, McpWorkerQualificationInput } from '../mcp/registry.js';
@@ -157,9 +158,19 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     // Only validated environment names appear as shell syntax; their values
     // remain in the conductor environment and are never printed in the plan.
     const environment = result.envNames.map(name => `${name}="\${${name}-}"`).join(' ');
-    // The frozen 'closed' value means empty stdin (immediate EOF).
-    const stdin = result.stdin === 'closed' ? '< /dev/null' : `< ${quote(result.briefPath)}`;
-    result.shellCommand = `cd ${quote(result.cwd)} && env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')} ${stdin} > ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
+    // The frozen 'closed' value means empty stdin (immediate EOF). 'brief-json'
+    // pipes a conductor-built params document framed from the brief file
+    // (worker-stdin-frame.mjs), so brief text never enters any argv.
+    const worker = `env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')}`;
+    const outputs = `> ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
+    if (result.stdin === 'brief-json') {
+      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
+      const frame = [process.execPath, framer, result.briefPath, result.selected.model, result.cwd].map(quote).join(' ');
+      result.shellCommand = `cd ${quote(result.cwd)} && env -i ${frame} | ${worker} ${outputs}`;
+    } else {
+      const stdin = result.stdin === 'closed' ? '< /dev/null' : `< ${quote(result.briefPath)}`;
+      result.shellCommand = `cd ${quote(result.cwd)} && ${worker} ${stdin} ${outputs}`;
+    }
   } else {
     const binding = result.mcp!;
     for (const key of ['serverRef', 'tool', 'inputSchemaDigest', 'outputSchemaDigest', 'sessionIsolation']) {
