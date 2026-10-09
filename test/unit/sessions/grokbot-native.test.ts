@@ -8,6 +8,7 @@ import {
 } from '../../../src/sessions/index.js';
 import { discoverWorkspaceHistories } from '../../../src/sessions/workspace-discovery.js';
 import { createSessionAdapterRegistry } from '../../../src/sessions/adapter-registry.js';
+import { grokbotTranscriptReplicaFilename } from '../../../src/sessions/adapters/grokbot-locator.js';
 
 const fixturesRoot = resolve('test/fixtures/sessions/grokbot/native');
 const ids = JSON.parse(readFileSync(resolve(fixturesRoot, 'fixture-ids.json'), 'utf8')) as {
@@ -20,6 +21,11 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
   const items: T[] = [];
   for await (const value of values) items.push(value);
   return items;
+}
+
+/** Select one fixture replica by conversation, independent of directory order. */
+function replica(name: keyof typeof ids.conversations): SelectedSource {
+  return selectedFor(resolve(fixturesRoot, grokbotTranscriptReplicaFilename(ids.account, ids.conversations[name])));
 }
 
 function selectedFor(locator: string): SelectedSource {
@@ -60,25 +66,7 @@ describe('Grok Bot native transcript-replica locator', () => {
   });
 
   it('inspects a complete replica as complete and streams every known-kind entry with mapped roles/text', async () => {
-    const descriptors = await collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
-    }));
-
-    // Select each discovered source and keep only the one whose stream
-    // contains the "release planning" complete-conversation marker text.
-    let completeSource: SelectedSource | undefined;
-    for (const descriptor of descriptors) {
-      const candidate = selectedFor(descriptor.locator);
-      const probe = await adapter.inspect(candidate);
-      if (probe.consistency === 'complete') {
-        const records = await collect(adapter.stream(candidate));
-        if (records.some((record) => record.text.includes('plan a release'))) {
-          completeSource = candidate;
-          break;
-        }
-      }
-    }
-    expect(completeSource).toBeDefined();
+    const completeSource = replica('complete');
 
     const probe = await adapter.inspect(completeSource!);
     expect(probe).toEqual({ sourceSchemaVersion: '1.0.0', consistency: 'complete', operationalState: 'available' });
@@ -109,15 +97,7 @@ describe('Grok Bot native transcript-replica locator', () => {
   });
 
   it('resumes from a prior seq cursor without re-emitting already-imported entries', async () => {
-    const descriptors = await collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
-    }));
-    let completeSource: SelectedSource | undefined;
-    for (const descriptor of descriptors) {
-      const candidate = selectedFor(descriptor.locator);
-      const records = await collect(adapter.stream(candidate));
-      if (records.some((record) => record.nativeEventId === 'evt-1')) { completeSource = candidate; break; }
-    }
+    const completeSource = replica('complete');
     const full = await collect(adapter.stream(completeSource!));
     const last = full.find((record) => record.nativeEventId === 'evt-6')!;
     expect(last.sourceCursor).toBe('native:6');
@@ -131,55 +111,21 @@ describe('Grok Bot native transcript-replica locator', () => {
   });
 
   it('reports a window-evicted (truncated) replica as provisional, never claiming complete history', async () => {
-    const descriptors = await collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
-    }));
-    let truncatedSource: SelectedSource | undefined;
-    for (const descriptor of descriptors) {
-      const candidate = selectedFor(descriptor.locator);
-      const probe = await adapter.inspect(candidate);
-      if (probe.consistency === 'provisional') { truncatedSource = candidate; break; }
-    }
-    expect(truncatedSource).toBeDefined();
+    const truncatedSource = replica('truncated');
+    await expect(adapter.inspect(truncatedSource)).resolves.toMatchObject({ consistency: 'provisional' });
     const records = await collect(adapter.stream(truncatedSource!));
     expect(records).toHaveLength(2);
     expect(records[0].sequence).toBe(41);
   });
 
   it('fails closed on an unknown schemaVersion major', async () => {
-    const descriptors = await collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
-    }));
-    let found = false;
-    for (const descriptor of descriptors) {
-      const candidate = selectedFor(descriptor.locator);
-      try {
-        await adapter.inspect(candidate);
-      } catch (error) {
-        expect(error).toMatchObject({ code: 'UNKNOWN_SCHEMA_MAJOR' });
-        found = true;
-      }
-    }
-    expect(found).toBe(true);
+    await expect(adapter.inspect(replica('unknownSchema')))
+      .rejects.toMatchObject({ code: 'UNKNOWN_SCHEMA_MAJOR' });
   });
 
   it('fails closed on a structurally malformed known-kind entry', async () => {
-    const descriptors = await collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot],
-    }));
-    let sawMalformed = false;
-    for (const descriptor of descriptors) {
-      const candidate = selectedFor(descriptor.locator);
-      const probe = await adapter.inspect(candidate).catch(() => null);
-      if (!probe) continue;
-      try {
-        await collect(adapter.stream(candidate));
-      } catch (error) {
-        expect(error).toMatchObject({ code: 'MALFORMED_SOURCE' });
-        sawMalformed = true;
-      }
-    }
-    expect(sawMalformed).toBe(true);
+    await expect(collect(adapter.stream(replica('malformed'))))
+      .rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
   });
 
   it('rejects any locatorClass other than manual-export or the native replica class', async () => {
