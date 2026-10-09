@@ -591,9 +591,29 @@ async function resolveDefaultMaxActive(servedRootReal) {
 // Launch — shell transport reuses #2954's gate-then-launch composition.
 // ===========================================================================
 
-async function defaultLaunchShellWorker(invocation, { allowDegraded, config, name }) {
+/** `planDirectWorkerLaunch` returns a blocked gate as `{ failures, gate }`
+ * only — it never sets `diagnostic` (that field is reserved for the
+ * degraded-isolation-unavailable case; see `worker-isolation.mjs`). Name
+ * the specific failing signal(s) here so a dispatch-gate refusal is
+ * distinguishable from every other blocked-launch reason in this bridge's
+ * own diagnostics, instead of collapsing to one generic string. */
+function describeGateFailures(failures) {
+  if (!Array.isArray(failures) || failures.length === 0) return undefined;
+  return `worker dispatch gate blocked: ${failures.map(f => `${f.signal} (${f.reason})`).join('; ')}`;
+}
+
+async function defaultLaunchShellWorker(invocation, { allowDegraded, config, name, live, readers, thresholdOverlay }) {
   const { planDirectWorkerLaunch } = await loadRalphExternal('session-launcher.mjs');
-  return planDirectWorkerLaunch({ invocation, config, allowDegraded, name });
+  // `live`/`readers`/`thresholdOverlay` are the dispatch gate's own
+  // test-only passthroughs (see `planDirectWorkerLaunch`'s doc comment);
+  // production registration never sets `options.gateInputs` (see
+  // `registerWorkerInvokeToolset`), so these are always undefined there and
+  // `checkWorkerDispatch` samples the real host.
+  const launch = await planDirectWorkerLaunch({ invocation, config, allowDegraded, name, live, readers, thresholdOverlay });
+  if (!launch.launched && launch.diagnostic === undefined) {
+    return { ...launch, diagnostic: describeGateFailures(launch.failures) };
+  }
+  return launch;
 }
 
 /** Poll an already-launched systemd-unit worker to termination, bounded by
@@ -796,15 +816,18 @@ class ChildProcessTransport {
  * registry-declared `server.cwd` (none of today's callers set one) still
  * wins when present, matching the pre-existing precedence for the actual
  * spawn directory. */
-async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, memoryMaxGb = DEFAULT_MCP_WORKER_MEMORY_MAX_GB }) {
+async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, memoryMaxGb = DEFAULT_MCP_WORKER_MEMORY_MAX_GB, live, readers, thresholdOverlay }) {
   if (server?.type !== 'stdio') {
     return { launched: false, blocked: true, diagnostic: 'Only stdio MCP worker servers are qualified for direct handoff' };
   }
   const { planDirectWorkerLaunch } = await loadRalphExternal('session-launcher.mjs');
   const envNames = Object.keys(server.env ?? {});
-  return planDirectWorkerLaunch({
+  const launch = await planDirectWorkerLaunch({
     name, memoryMaxGb, command: server.command ?? '', args: server.args ?? [], cwd: server.cwd ?? cwd,
     envNames, env: server.env ?? {}, config, allowDegraded, attached: true,
+    // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
+    // always undefined for production registrations.
+    live, readers, thresholdOverlay,
     // #2895's `attached` mode defaults `stdin: 'closed'` (stdio[0] 'ignore') —
     // correct for its own verification-runner callers, which only read a
     // worker's output. An MCP stdio server needs a live, writable stdin to
@@ -813,6 +836,10 @@ async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, na
     // change to #2895's own default behavior for other callers).
     stdin: 'open',
   });
+  if (!launch.launched && launch.diagnostic === undefined) {
+    return { ...launch, diagnostic: describeGateFailures(launch.failures) };
+  }
+  return launch;
 }
 
 const mcpServerQueues = new Map(); // serverRef -> { promise: Promise<void>, depth: number }
@@ -883,7 +910,13 @@ function canonicalSchemaDigest(schema) {
 }
 
 async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
-  const { sessionIsolation, mcpRegistry, allowDegraded = false, config, name = 'mcp-worker', registerControl, memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd } = options;
+  const {
+    sessionIsolation, mcpRegistry, allowDegraded = false, config, name = 'mcp-worker', registerControl,
+    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd,
+    // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
+    // always undefined for production registrations.
+    live, readers, thresholdOverlay,
+  } = options;
   const run = async () => {
     // D2/F5: recheck the server's own registry qualification immediately
     // before THIS launch — a serialized/per-instance queue may have held
@@ -904,7 +937,7 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     }
     // B2: gate + launch the MCP worker SERVER process through the same
     // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
-    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
+    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
     if (!launch.launched) {
       return { outcome: 'blocked', diagnostic: launch.diagnostic ?? 'worker MCP process launch was refused' };
     }
@@ -1075,6 +1108,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
   const callMcpWorkerImpl = options.callMcpWorker ?? defaultCallMcpWorker;
   const waitForUnitImpl = options.waitForUnitTermination ?? waitForUnitTermination;
   const mcpWorkerMemoryMaxGb = options.mcpWorkerMemoryMaxGb; // undefined -> defaultLaunchMcpWorkerProcess's own fallback
+  // Test-only: `planDirectWorkerLaunch`'s own dispatch-gate passthroughs
+  // (`checkWorkerDispatch({ live, readers, thresholdOverlay })`), forwarded
+  // through to the default shell/mcp launchers below so the REAL
+  // gate-then-launch pipeline still runs against fixed synthetic host
+  // signals instead of the current host's actual load/memory/PSI/disk.
+  // Production registrations never set `options.gateInputs` — omitted,
+  // every field here is `undefined` and the gate samples the real host.
+  const gateInputs = options.gateInputs ?? {};
   const healthHook = options.healthHook;
   const now = options.now ?? (() => new Date());
   const repoAccess = options.repoAccess; // injected lazily below when absent
@@ -1171,7 +1212,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       let observation;
       let rawOutput;
       if (invocation.transport === 'shell') {
-        const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config, name: `mcp-${entry.invocationId.slice(0, 8)}` });
+        const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config, name: `mcp-${entry.invocationId.slice(0, 8)}`, ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched) {
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
@@ -1218,6 +1259,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           cwd: invocation.cwd,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: mcpWorkerMemoryMaxGb, mcpSchemas: qualification?.mcpSchemas,
           qualifiedServerDigest, registerControl: control => registry.update(entry.invocationId, { control }),
+          ...gateInputs,
         });
         if (result.outcome === 'blocked') {
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
