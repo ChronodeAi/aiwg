@@ -332,9 +332,13 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
     }
     assertSupportedSchemaMajor(`${parsed.data.schemaVersion}.0.0`, GROKBOT_NATIVE_SCHEMA_MAJOR);
     const { entries, precedingTimestampMs } = parsed.data.value;
+    // The resume cursor is the last yielded seq, so stream in seq order even
+    // if the cache stores entries out of order.
+    entries.sort((left, right) => left.seq - right.seq);
+    // A window that no longer starts at seq 1 has evicted history, whether or
+    // not the optional precedingTimestampMs hint is present.
     const truncated = entries.length > 0
-      && entries[0].seq > 1
-      && (precedingTimestampMs ?? 0) > 0;
+      && (entries[0].seq > 1 || (precedingTimestampMs ?? 0) > 0);
     return { entries, truncated };
   }
 }

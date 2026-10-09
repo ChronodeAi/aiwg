@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS,
@@ -184,6 +185,30 @@ describe('Grok Bot native transcript-replica locator', () => {
       await expect(collect(adapter.stream(forged))).rejects.toMatchObject({ code: 'SOURCE_NOT_AUTHORIZED' });
     }
     expect(openedPaths).toEqual([]);
+  });
+
+  it('treats a window that starts after seq 1 as provisional even without the timestamp hint', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-grokbot-window-'));
+    try {
+      const conversation = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9';
+      const entry = (seq: number) => ({
+        kind: 'message', id: `evt-${seq}`, role: 'user', content: `entry ${seq}`,
+        timestampMs: 1_790_000_000_000 + seq, requestId: '11111111-2222-4333-8444-555555555555', seq,
+      });
+      const path = join(root, grokbotTranscriptReplicaFilename(ids.account, conversation));
+      // Out of order on disk, no precedingTimestampMs.
+      writeFileSync(path, JSON.stringify({ schemaVersion: 1, value: { entries: [entry(43), entry(41), entry(42)] } }));
+      const source = { ...selectedFor(path), authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [root] } };
+
+      await expect(adapter.inspect(source)).resolves.toMatchObject({ consistency: 'provisional' });
+      const records = await collect(adapter.stream(source));
+      expect(records.map((record) => record.sequence)).toEqual([41, 42, 43]);
+      // Resuming after 42 yields only 43, so an out-of-order entry is never skipped for good.
+      const resumed = await collect(adapter.stream(source, { value: 'native:42' }));
+      expect(resumed.map((record) => record.sequence)).toEqual([43]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('assigns a conversation-id–derived sourceId (not content-digest) so re-discovery is stable', async () => {
