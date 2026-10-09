@@ -13,6 +13,7 @@ import { parseWorkerLaunchArgs, workerExitCode } from '../../../tools/ralph-exte
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { stopWorkerUnit, detectWorkerIsolation, launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
+import { workerStdinDocument } from '../../../src/serve/worker-stdin-frame.mjs';
 import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
 
 const roots: string[] = [];
@@ -118,7 +119,9 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     const record = JSON.parse(await readFile(f.recordPath, 'utf8'));
     expect(record.argv).toEqual(f.plan.invocation!.argv!.slice(2));
     expect(record.cwd).toBe(f.cwd);
-    expect(record.stdin).toBe(stdin === 'closed' ? '' : f.prompt);
+    // brief-json delivers the conductor-framed params document, never the raw brief (#2911).
+    expect(record.stdin).toBe(stdin === 'closed' ? '' : stdin === 'brief-json'
+      ? workerStdinDocument({ brief: f.prompt, model: f.plan.invocation!.selected.model, cwd: f.cwd }) : f.prompt);
     expect(record.envNames).toContain('AIWG_SYNTHETIC_ALLOWED');
     expect(record.envNames).not.toContain('AIWG_UNRELATED_SECRET');
     expect(record.argv).not.toContain('--dangerously-skip-permissions');

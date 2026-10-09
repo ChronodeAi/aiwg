@@ -285,6 +285,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/ralph-external/lib/omp-adapter.mjs',
       'tools/ralph-external/lib/deepseek-harness-adapter.mjs',
       'tools/ralph-external/lib/muse-adapter.mjs',
+      'tools/ralph-external/lib/openhuman-adapter.mjs',
       'tools/providers/omp-transport.mjs',
       'tools/providers/deepseek-harness-transport.mjs',
       'tools/agents/deploy-agents.mjs',

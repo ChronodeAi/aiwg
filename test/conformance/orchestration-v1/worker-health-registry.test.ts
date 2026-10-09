@@ -11,9 +11,11 @@ import {
   PROVIDER_IDS, getProviderDefinition, normalizeProviderDefinitionId,
 } from '../../../src/providers/provider-definitions.js';
 
+// OpenHuman was promoted by the B-OG-47 recheck (#2911, 2026-10-08) on
+// source-only evidence; it stays unqualified like every other doc-only row.
 const hostedIn = ['claude', 'codex', 'copilot', 'factory', 'cursor', 'opencode', 'warp',
-  'grok-build', 'hermes', 'muse', 'openclaw', 'antigravity', 'deepseek-harness', 'pi', 'omp'];
-const hostedOut = ['windsurf', 'grokbot', 'openhuman'];
+  'grok-build', 'hermes', 'muse', 'openclaw', 'antigravity', 'deepseek-harness', 'pi', 'omp', 'openhuman'];
+const hostedOut = ['windsurf', 'grokbot'];
 // Health descriptions are inert in the bundled registry. Register copies only
 // in this synthetic diagnostic fixture to exercise their adapter contracts.
 const registry = structuredClone(loadProviderModelCapabilities());
@@ -91,7 +93,7 @@ describe('T-OG-19 S1 registry health coverage and qualification boundaries', () 
   });
 
   it('HR06 native/client protocol features cannot qualify a model worker', () => {
-    for (const provider of ['codex', 'muse', 'hermes', 'opencode', 'openclaw', 'pi', 'omp']) {
+    for (const provider of ['codex', 'muse', 'hermes', 'opencode', 'openclaw', 'pi', 'omp', 'openhuman']) {
       const adapter = resolveWorkerAdapter(registry, `providers:${provider}`);
       expect(Object.values(adapter.invocationProfiles!).every(profile => profile.transport === 'shell')).toBe(true);
       expect(Object.values(adapter.invocationProfiles!).every(profile => profile.mcp === undefined)).toBe(true);

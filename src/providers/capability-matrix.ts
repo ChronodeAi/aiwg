@@ -106,6 +106,24 @@ export type RouteProbeBudget = {
   }
 );
 
+/**
+ * S1 coverage reconciliation (B-OG-47). One normalized row per matrix
+ * provider: the profile-qualification issue for IN rows, the date its
+ * evidence/sources were last checked, and whether authenticated live
+ * qualification exists (doc/help/source evidence never sets it). OUT rows
+ * carry the concrete interface gap; OUT and promoted rows carry the
+ * upstream recheck result. No row stores a fabricated command.
+ */
+export interface RouteCoverage {
+  profile_issue: `roctinam/aiwg#${number}` | null;
+  /** ISO calendar date (YYYY-MM-DD) the cited evidence was last checked. */
+  source_date: `${number}-${number}-${number}`;
+  live_qualified: boolean;
+  sources: [string, ...string[]];
+  exclusion_gap?: string;
+  recheck?: string;
+}
+
 export interface RouteFeasibility {
   scope: RouteFeasibilityScope;
   identity: RouteIdentityClass;
@@ -113,6 +131,7 @@ export interface RouteFeasibility {
   channel: string;
   fanout: RouteFanout;
   probe_budget: RouteProbeBudget;
+  coverage?: RouteCoverage;
 }
 
 export interface ProviderCapabilities {

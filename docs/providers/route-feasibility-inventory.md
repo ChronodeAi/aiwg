@@ -52,10 +52,13 @@ of `windsurf`, not an alias. Gemini is not a provider and was not added.
 
 ## Per-target feasibility
 
-Scope IN/OUT follows 03 §10. Every `Budget` is **authorized by the operator
+Scope IN/OUT follows 03 §10, as amended by the B-OG-47 recheck below. Every
+`Budget` except the promoted `openhuman` row is **authorized by the operator
 on 2026-10-07 for titan and noodle**, exactly as proposed, as a synthetic probe
 ceiling (calls / tokens); OUT rechecks retain 1 call / 0 tokens (help/version
-only, no inference), and generic retains 0 / 0. No probes were run. Authorization
+only, no inference), and generic retains 0 / 0. The `openhuman` live budget is
+only **proposed** and needs operator authorization before any probe. No probes
+were run. Authorization
 does not establish live qualification, which stays with B-OG-07/08/09/28
 (plus B-OG-36–48 per §10). `Owner` is the final-qualification issue.
 
@@ -79,7 +82,7 @@ does not establish live qualification, which stays with B-OG-07/08/09/28
 | `local` (ollama / llama-server / OpenAI-compatible) | IN | unavailable | H: ollama 0.33.3 and llama-server installed but not running — stopped endpoint excluded without startup; bounded HTTP (`/api/generate` or equivalent), exact model in request body, effort null when unsupported; required profile: text-only roles and no cloud transfer (unproven) | Unknown fan-out and processing: endpoint ownership, upstream forwarding/redirects, cloud fallback, tools, telemetry and enforced egress controls unresolved; local-only whole path unproven; blocks strict use. Required: disable cloud inference/tools/telemetry and enforce egress; never start servers, download weights, or kill a shared server to cancel one request; health ≤60s old per 07 | authorized (operator, 2026-10-07; titan, noodle): 2 / 20000 | B-OG-09 |
 | `windsurf` | OUT | unavailable | R: no verified headless Desktop worker command; IDE startup is not inference; MCP client config is not worker serving | Unknown; recheck B-OG-47 before any scope change | authorized (operator, 2026-10-07; titan, noodle): 1 / 0 | B-OG-47 |
 | `grokbot` | OUT | unavailable | R: desktop CreateAgent/registered-machine capabilities establish no headless subprocess contract; connectors consume tools | Unknown; recheck B-OG-47 | authorized (operator, 2026-10-07; titan, noodle): 1 / 0 | B-OG-47 |
-| `openhuman` | OUT pending evidence | unavailable | R: `agent list/dump-prompt/dump-all` inspect prompts, do not launch workers; headless core/RPC deployment alone establishes no one-shot CLI/MCP call | Unknown; promote into S1 if qualifying evidence appears (B-OG-47) | authorized (operator, 2026-10-07; titan, noodle): 1 / 0 | B-OG-47 |
+| `openhuman` | IN (promoted by B-OG-47, 2026-10-08) | runtime-configured-only | D: `openhuman-core --model M call --method openhuman.agent_chat --params-stdin` (in-process one-shot agent turn; conductor-framed params `message`, `model_override`, `cwd` on stdin until EOF; final JSON on stdout, no event stream); native `openhuman-core mcp` `agent.run_subagent` has no model/effort/workspace pin and is not a worker tool | Unknown: the orchestrator may spawn subagents (depth-capped only); effort, step-cap and approval/sandbox mapping unknown; blocks strict use | proposed (operator authorization required): 3 / 30000 | B-OG-47 |
 | `generic` | OUT | unavailable | Registry-only fallback, no binary or flags; custom adapters remain extensible through the existing factory | N/A — not an executable route | authorized (operator, 2026-10-07; titan, noodle): 0 / 0 | — |
 
 Machine-readable scope/identity/channel/fan-out/budget rows for the 18
@@ -88,6 +91,66 @@ matrix providers live in `agentic/code/providers/capability-matrix.yaml`
 `src/providers/capability-matrix.ts`). `generic` and `local` are
 registry/docs-only rows by design: `generic` has no matrix entry and local
 endpoints are ordinary members, not registry providers.
+
+## S1 coverage reconciliation (B-OG-47)
+
+Issue roctinam/aiwg#2911. One normalized row per provider-registry entry
+(canonical ids only; aliases never add rows) plus the ordinary `local`
+member. `Profile issue` is the S1 qualification issue for IN rows. `Evidence
+date` is the date the row's cited sources were last checked; `Live` is
+authenticated, version/account/profile-scoped qualification, which no row has
+yet: help/version output, documentation and synthetic fixtures never set it.
+Doc-only (D) rows therefore stay unqualified. Machine-readable values live
+in `route_feasibility.coverage` of `agentic/code/providers/capability-matrix.yaml`
+and are checked by `test/conformance/orchestration-v1/provider-coverage.test.ts`.
+
+Upstream recheck performed 2026-10-08 with web access and local
+`--version`/`--help` only (no prompts or model calls): Claude 2.1.295, Codex
+0.161.0 (`codex mcp-server --help` still prints root help, so native MCP stays
+version-blocked) and Muse 1.4.4 on titan; the doc-only Copilot, Cursor,
+Warp/Oz and OpenClaw references still document the cited flags; the three
+excluded hosted rows were rechecked as recorded below.
+
+| Target | Scope | Profile issue | Evidence date | Live | Sources and recheck result |
+|---|---|---|---|---|---|
+| `claude` | IN | roctinam/aiwg#2900 | 2026-10-08 | no | H: installed help 2.1.295; `claude-adapter.mjs` |
+| `codex` | IN | roctinam/aiwg#2897 | 2026-10-08 | no | H: installed help 0.161.0; native `mcp-server` still not advertised |
+| `copilot` | IN | roctinam/aiwg#2901 | 2026-10-08 | no | D: [programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference) still documents `-p`, `--model`, `--no-ask-user`, `--output-format=json`, `--allow-tool` |
+| `factory` | IN | roctinam/aiwg#2902 | 2026-10-07 | no | R: `factory-adapter.mjs` |
+| `cursor` | IN | roctinam/aiwg#2903 | 2026-10-08 | no | D: [CLI overview](https://cursor.com/docs/cli/overview) and [output format](https://cursor.com/docs/cli/reference/output-format) document `-p`, `--model`, `--sandbox`, `json`/`stream-json` |
+| `opencode` | IN | roctinam/aiwg#2904 | 2026-10-07 | no | R/D: `opencode-adapter.mjs`; [OpenCode CLI](https://opencode.ai/docs/cli/) |
+| `warp` | IN | roctinam/aiwg#2905 | 2026-10-08 | no | D: [Oz CLI](https://docs.warp.dev/agents/cli/oz-cli/) documents `oz agent run --prompt`, `--model`, `-C/--cwd`, `--profile` |
+| `grok-build` | IN | roctinam/aiwg#2906 | 2026-10-07 | no | R: `grok-build-headless.ts` |
+| `hermes` | IN | roctinam/aiwg#2912 | 2026-10-07 | no | H: installed help 0.20.6 (not rechecked in this pass) |
+| `muse` | IN | roctinam/aiwg#2898 | 2026-10-08 | no | H: installed help 1.4.4 (1.4.4-R5419.1); `muse-adapter.mjs` |
+| `openclaw` | IN | roctinam/aiwg#2907 | 2026-10-08 | no | D: [agent reference](https://docs.openclaw.ai/cli/agent) documents `agent exec`, `--model`, `--cwd`, `--json`; explicit `--fallback` remains prohibited |
+| `antigravity` | IN | roctinam/aiwg#2908 | 2026-10-07 | no | R/D: `provider-contract.v1.json`; [headless reference](https://antigravity.google/docs/cli/headless/) |
+| `deepseek-harness` | IN | roctinam/aiwg#2909 | 2026-10-07 | no | R: `deepseek-harness-adapter.mjs` |
+| `pi` | IN | roctinam/aiwg#2910 | 2026-10-07 | no | R: `pi-adapter.mjs` |
+| `omp` | IN | roctinam/aiwg#2910 | 2026-10-07 | no | R: `omp-adapter.mjs` |
+| `openhuman` | IN | roctinam/aiwg#2911 | 2026-10-08 | no | D: promoted. Source at [216ea32](https://github.com/tinyhumansai/openhuman/tree/216ea322a3c1269dada70751ac5c08eac7dc7596) and [release v0.64.14](https://github.com/tinyhumansai/openhuman/releases/tag/v0.64.14) (standalone `openhuman-core` asset) evidence `--model` and `call --method openhuman.agent_chat --params`/`--params-stdin`; `agent` subcommands still only inspect prompts; native MCP `agent.run_subagent` has no model pin |
+| `local` | IN | roctinam/aiwg#2899 | 2026-10-07 | no | H: ollama/llama-server installed, endpoint not started |
+| `windsurf` | OUT | — | 2026-10-08 | no | Gap: Devin Desktop documents no headless worker command or worker-serving MCP tool. Recheck: unchanged; [Devin CLI](https://docs.devin.ai/cli/reference/commands.md) has `-p/--print`, `--model`, `--prompt-file` but stays a distinct future provider until registry support exists |
+| `grokbot` | OUT | — | 2026-10-08 | no | Gap: Bots run on xAI-hosted computers from desktop/mobile chat, routines and connectors; no local CLI, headless subprocess or worker MCP tool. Recheck: unchanged per [Grok Bot docs](https://docs.x.ai/grok-bot/overview.md) |
+| `generic` | OUT | — | 2026-10-07 | no | Registry-only deployment fallback with no binary, flags or upstream interface to recheck |
+
+Promotion consequence: OpenHuman joins S1 under this issue with an inert,
+unqualified `workerHealthAdapter` pinned to 0.64.14 (degraded, process-only,
+final-JSON; every control `unqualified` with its evidenced mapping), the
+driver `tools/ralph-external/lib/openhuman-adapter.mjs` (installed-module
+shape, approved as `installed:openhuman` by the pinned digest in
+`test/fixtures/providers/openhuman/approved-module.json`), and a synthetic
+`openhuman-core` under `test/fixtures/providers/openhuman/` that
+`test/conformance/orchestration-v1/openhuman-direct.test.ts` loads through the
+production installed-module loader, renders through the real resolver/renderer
+and runs through the attached launcher (T-OG-15/20/21/23, fixture-only). The
+profile uses `--params-stdin`, which reads stdin to EOF
+(`crates/openhuman-core/src/core/cli.rs:445-468` at 216ea32); `stdin:
+brief-json` makes the conductor frame the params document from the brief
+(`src/serve/worker-stdin-frame.mjs`), so brief text never enters argv, unit
+properties or run metadata. **Open S1 blocker:** authorized live
+qualification; `openhuman-core` is not installed on titan or noodle and the
+probe budget stays proposed. Until then it cannot dispatch.
 
 ## Source anchors used
 

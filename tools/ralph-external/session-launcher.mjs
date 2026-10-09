@@ -213,6 +213,10 @@ async function launchOneWorker(owner, options) {
   }
   const brief = await boundedPrivateRead(invocation.briefPath, 262144, inspect);
   if (bytesDigest(brief) !== invocation.briefDigest) throw new Error('Worker prompt digest changed');
+  // Frame stdin before any spawn: brief-json delivers a conductor-built params
+  // document on the stdin pipe, never brief text in argv (#2911).
+  const { workerStdinBytes } = await importImpl(import.meta.url, 'serve/worker-stdin-frame.mjs');
+  const stdinBytes = workerStdinBytes(invocation, brief);
   let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
   if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
   const isolation = options.isolation ?? detectWorkerIsolation();
@@ -284,7 +288,7 @@ async function launchOneWorker(owner, options) {
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
     return await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, runDir });
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir });
   } catch (error) {
     if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
       endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
@@ -397,7 +401,7 @@ async function captureOneWorker(owner, ctx) {
   });
   for (const stream of streams) stream.on('error', () => { errorCode = 'CAPTURE_WRITE'; stop(); });
   child.stdin?.on('error', error => { if (error.code !== 'EPIPE') { errorCode = 'STDIN_WRITE'; stop(); } });
-  child.stdin?.end(invocation.stdin === 'closed' ? undefined : ctx.brief);
+  child.stdin?.end(ctx.stdinBytes ?? undefined);
   const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
     transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
     nativeSupervisor,
@@ -1419,8 +1423,10 @@ export async function getClaudeVersion() {
  * @param {string} [options.logFile] - Absolute combined stdout/stderr log path,
  *   used only when `stdoutPath`/`stderrPath` are not given.
  * @param {string} [options.stdinPath] - Absolute path the worker reads its brief
- *   from (defaults to `invocation.briefPath` unless `invocation.stdin === 'closed'`,
+ *   from (defaults to `invocation.briefPath` for `brief-text`, none for `closed`,
  *   matching the frozen 'closed' meaning of empty stdin from #2887's shell renderer).
+ *   A `brief-json` invocation needs a conductor-framed params file passed
+ *   explicitly; the raw brief is never fed to such a worker.
  * @param {string} [options.stdoutPath] - Absolute stdout destination (defaults to
  *   `invocation.stdoutPath`).
  * @param {string} [options.stderrPath] - Absolute stderr destination, distinct from
@@ -1450,7 +1456,7 @@ export function planDirectWorkerLaunch({
   args = invocation?.argv?.slice(1) ?? [],
   cwd = invocation?.cwd,
   logFile,
-  stdinPath = invocation !== undefined && invocation.stdin !== 'closed' ? invocation.briefPath : undefined,
+  stdinPath = invocation?.stdin === 'brief-text' ? invocation.briefPath : undefined,
   stdoutPath = invocation?.stdoutPath,
   stderrPath = invocation?.stderrPath,
   envNames = invocation?.envNames,
@@ -1476,6 +1482,9 @@ export function planDirectWorkerLaunch({
   // get a live, writable stdin pipe for JSON-RPC requests.
   stdin,
 } = {}) {
+  if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
+    throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
+  }
   // Free disk is sampled on the worktree filesystem the worker will actually
   // write to — never the conductor's process cwd. Without live signals or
   // caller-supplied paths, an unknown worktree fails closed in the gate.

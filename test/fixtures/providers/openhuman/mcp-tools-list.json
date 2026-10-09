@@ -1,0 +1,25 @@
+{
+  "scenarioId": "T-OG-17-openhuman-native-mcp-tool",
+  "provider": "openhuman",
+  "synthetic": true,
+  "source": "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/mcp/server/tools/specs.rs",
+  "accessed": "2026-10-08",
+  "server": "openhuman-core mcp (stdio)",
+  "qualification": "documentation/source excerpt only; no server was started and no tools/list was fetched",
+  "tools": [
+    {
+      "name": "agent.run_subagent",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agent_id": { "type": "string" },
+          "prompt": { "type": "string" }
+        },
+        "required": ["agent_id", "prompt"],
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true }
+    }
+  ],
+  "expectedOutcome": "not a qualifying worker tool: no model, effort or workspace pin; nested subagents bounded only by the server's own depth cap"
+}

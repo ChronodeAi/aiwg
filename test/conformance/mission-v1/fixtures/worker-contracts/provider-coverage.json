@@ -1,6 +1,6 @@
 {
   "revision": 1,
-  "source": "03-software-architecture.md §10 (2026-10-07); evidence is contract-only",
+  "source": "03-software-architecture.md §10 (2026-10-07) plus the B-OG-47 recheck (2026-10-08, openhuman promoted); evidence is contract-only",
   "rows": [
     {
       "provider": "claude",
@@ -158,8 +158,8 @@
     {
       "provider": "openhuman",
       "owner": "B-OG-47",
-      "scope": "OUT",
-      "nativeMcp": "prompt-inspection-only",
+      "scope": "IN",
+      "nativeMcp": "no-model-pin-tool",
       "qualification": "unqualified",
       "kind": "deployment-provider",
       "consumer": "models resolve / worker-resolve / worker-invoke"

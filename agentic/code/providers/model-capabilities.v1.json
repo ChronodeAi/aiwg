@@ -1964,11 +1964,13 @@
         "coverage": "unobserved",
         "handshake": "unobserved",
         "evidenceGrades": [
-          "R"
+          "R",
+          "D"
         ],
         "qualificationOwner": "B-OG-47",
         "provenance": [
-          "src/providers/provider-definitions.ts#windsurf"
+          "src/providers/provider-definitions.ts#windsurf",
+          "https://docs.devin.ai/cli/reference/commands.md"
         ],
         "reason": "Desktop/client capability does not establish a headless worker interface."
       }
@@ -2159,11 +2161,13 @@
         "coverage": "unobserved",
         "handshake": "unobserved",
         "evidenceGrades": [
-          "R"
+          "R",
+          "D"
         ],
         "qualificationOwner": "B-OG-47",
         "provenance": [
-          "src/providers/provider-definitions.ts#grokbot"
+          "src/providers/provider-definitions.ts#grokbot",
+          "https://docs.x.ai/grok-bot/overview.md"
         ],
         "reason": "CreateAgent/registered-machine capability does not establish a CLI worker contract."
       }
@@ -2520,20 +2524,168 @@
       "verification": "Parse against OpenHuman definition schema",
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs",
       "verifiedAt": "2026-07-20",
-      "workerHealthCoverage": {
-        "scope": "out",
-        "coverage": "unobserved",
-        "handshake": "unobserved",
-        "evidenceGrades": [
-          "R",
-          "D"
-        ],
-        "qualificationOwner": "B-OG-47",
-        "provenance": [
-          "src/providers/provider-definitions.ts#openhuman",
-          "https://github.com/tinyhumansai/openhuman/blob/main/src/core/agent_cli.rs"
-        ],
-        "reason": "Prompt inspection and core/RPC deployment do not establish a one-shot worker interface."
+      "workerHealthAdapter": {
+        "version": 1,
+        "id": "openhuman",
+        "provider": "openhuman",
+        "adapterVersion": "1",
+        "supportedVersions": "0.64.14",
+        "runtimeDriver": "installed:openhuman",
+        "catalogAdapter": {
+          "kind": "file",
+          "locator": "agentic/code/providers/model-catalog.v1.json",
+          "parser": "existing-provider-catalog"
+        },
+        "invocation": {
+          "kind": "process",
+          "executable": "openhuman-core",
+          "argv": [
+            "--model",
+            "${model}",
+            "call",
+            "--method",
+            "openhuman.agent_chat",
+            "--params-stdin"
+          ],
+          "stdin": "brief-json",
+          "cwd": "${workspace}",
+          "envAllowlist": [],
+          "versionArgv": [
+            "--help"
+          ],
+          "maxOutputBytes": 10485760
+        },
+        "capabilities": {
+          "output": "validated-file",
+          "modelPin": "unsupported",
+          "effort": "unsupported",
+          "cancel": "none",
+          "resume": false,
+          "sandboxModes": [
+            "external"
+          ],
+          "nestedAgentsControllable": false,
+          "nativeFallbackControllable": false,
+          "hardBudget": []
+        },
+        "qualification": {
+          "status": "unqualified"
+        },
+        "invocationProfiles": {
+          "direct-shell": {
+            "transport": "shell",
+            "supportedVersions": "0.64.14",
+            "controls": {
+              "model": {
+                "support": "unqualified",
+                "mapping": "[\"--model\"] global flag before `call`, mirrored as params.model_override",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 core/cli.rs parse_launch_options and agent/schemas.rs agent.chat model_override; unqualified until live model-pin evidence"
+              },
+              "effort": {
+                "support": "unqualified",
+                "mapping": "unavailable: agent.chat exposes no effort or reasoning parameter",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 agent/schemas.rs; tasks requiring effort are blocked"
+              },
+              "sandbox": {
+                "support": "unqualified",
+                "mapping": "unavailable: no per-call sandbox flag; external boundary required",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32; SecurityPolicy autonomy is config-owned and unqualified"
+              },
+              "approval": {
+                "support": "unqualified",
+                "mapping": "unavailable: no per-call approval flag; external boundary required",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32; SecurityPolicy autonomy is config-owned and unqualified"
+              },
+              "workdir": {
+                "support": "unqualified",
+                "mapping": "conductor process cwd, mirrored as params.cwd (must be an existing directory)",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 agent/schemas.rs agent.chat cwd"
+              },
+              "finalOutput": {
+                "support": "unqualified",
+                "mapping": "pretty-printed JSON result on stdout after completion (final-json), captured to the stdout path",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 core/cli.rs:486 (to_string_pretty result on stdout)"
+              },
+              "stdin": {
+                "support": "unqualified",
+                "mapping": "brief-json: conductor-framed params JSON (message, model_override, cwd) piped on stdin and closed at EOF; brief text never enters argv",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 core/cli.rs:445-468 (--params-stdin reads stdin to EOF)"
+              },
+              "structuredOutput": {
+                "support": "unqualified",
+                "mapping": "unavailable: no output-schema parameter evidenced",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 agent/schemas.rs"
+              },
+              "stepCap": {
+                "support": "unqualified",
+                "mapping": "unavailable: no step or turn cap evidenced",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 agent/schemas.rs"
+              },
+              "trust": {
+                "support": "unqualified",
+                "mapping": "unknown: workspace trust behaviour not evidenced",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32; live qualification required"
+              },
+              "children": {
+                "support": "unqualified",
+                "mapping": "unknown: orchestrator may spawn subagents bounded only by MAX_SPAWN_DEPTH; no per-call disable evidenced",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32 mcp/server/subagent_depth.rs"
+              },
+              "fallback": {
+                "support": "unqualified",
+                "mapping": "unknown: provider/model fallback behaviour not evidenced",
+                "evidence": "D: openhuman-core 0.64.14 source @216ea32; live qualification required"
+              }
+            },
+            "envAllowlist": [],
+            "pitfalls": [
+              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Unknown model, effort, permission or required step mappings block dispatch.",
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "No version flag is evidenced in source; versionArgv runs the documented general help only, so installed-version identity stays unavailable until live qualification pins it.",
+              "The brief travels only on stdin, inside the conductor-framed --params-stdin JSON (message, model_override, cwd); effort, step-cap, approval/sandbox and child-agent controls are unknown and block tasks requiring them.",
+              "Native `openhuman-core mcp` agent.run_subagent accepts only agent_id and prompt and may nest subagents; it cannot stand in for a model-pinned worker call.",
+              "Live qualification is an open S1 blocker: openhuman-core is not installed on an authorized host and its probe budget is only proposed."
+            ],
+            "health": {
+              "version": 1,
+              "handshake": "process-only",
+              "outputFraming": "final-json",
+              "signalParser": "provider-openhuman-health-v1",
+              "sessionLogLocator": null,
+              "progressEvidence": [],
+              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
+              "fixtureRef": "test/fixtures/providers/openhuman/health/manifest.json",
+              "qualifiedAt": null,
+              "statusOperation": null,
+              "cancelOperation": null,
+              "coverage": "degraded",
+              "qualificationTarget": "process-only",
+              "evidenceGrades": [
+                "D"
+              ],
+              "provenance": [
+                {
+                  "kind": "documentation",
+                  "ref": "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/core/cli.rs",
+                  "observedAt": "2026-10-08T00:00:00Z",
+                  "cliVersion": "0.64.14"
+                }
+              ],
+              "qualificationOwner": "B-OG-47",
+              "qualification": {
+                "status": "unqualified",
+                "scopeDigest": null,
+                "cliVersion": null,
+                "accountScope": null,
+                "profileRef": null,
+                "modelKey": null,
+                "effort": null,
+                "authorizedLive": false
+              }
+            }
+          }
+        }
       }
     },
     "muse": {

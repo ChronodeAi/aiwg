@@ -38,7 +38,12 @@ const CHANNEL_ANCHORS: Record<string, string> = {
   'grok-build': 'grok -p --output-format streaming-json', openclaw: 'openclaw agent exec --json',
   antigravity: 'agy -p', 'deepseek-harness': 'dsh --profile headless',
   pi: 'pi --mode json --model/--thinking/--tools', omp: 'omp --mode json --model/--thinking/--profile',
+  openhuman: 'openhuman-core --model M call --method openhuman.agent_chat --params-stdin',
 };
+
+// B-OG-47 promotions carry a proposed live-qualification budget until the
+// operator authorizes one; a proposed budget never authorizes a probe.
+const PROMOTED_PENDING_AUTHORIZATION = new Set(['openhuman']);
 
 function feasibilityRows(document: string): string[][] {
   const section = document.split('## Per-target feasibility\n')[1]?.split('\n## ')[0];
@@ -46,6 +51,21 @@ function feasibilityRows(document: string): string[][] {
   return section!.split('\n')
     .filter((line) => line.startsWith('| `'))
     .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()));
+}
+
+function checkBudget(id: string, budget: RouteProbeBudget): void {
+  if (PROMOTED_PENDING_AUTHORIZATION.has(id)) {
+    expect(budget.status, id).toBe('proposed');
+    expect(Object.keys(budget).sort(), id).toEqual(['calls', 'status', 'tokens']);
+    return;
+  }
+  checkAuthorizedBudget(budget);
+}
+
+function budgetCell(budget: RouteProbeBudget): string {
+  return budget.status === 'authorized'
+    ? `authorized (${budget.authorized_by}, ${budget.authorized_at}; ${budget.hosts.join(', ')}): ${budget.calls} / ${budget.tokens}`
+    : `proposed (operator authorization required): ${budget.calls} / ${budget.tokens}`;
 }
 
 function checkAuthorizedBudget(
@@ -76,7 +96,7 @@ function checkInventory(
     expect(owner, id).toBe(QUALIFICATION_OWNERS[id]);
     expect(channel.length, id).toBeGreaterThan(0);
     expect(controls.length, id).toBeGreaterThan(0);
-    expect(budget, id).toMatch(/^authorized \(operator, 2026-10-07; titan, noodle\): \d+ \/ \d+$/);
+    expect(budget, id).toMatch(/^(authorized \(operator, 2026-10-07; titan, noodle\)|proposed \(operator authorization required\)): \d+ \/ \d+$/);
 
     const metadata = lookup(id);
     if (metadata) {
@@ -92,10 +112,8 @@ function checkInventory(
       if (metadata.scope === 'in' && metadata.fanout === 'unknown') {
         expect(controls, id).toContain('blocks strict use');
       }
-      checkAuthorizedBudget(metadata.probe_budget);
-      expect(budget, id).toBe(
-        `authorized (${metadata.probe_budget.authorized_by}, ${metadata.probe_budget.authorized_at}; ${metadata.probe_budget.hosts.join(', ')}): ${metadata.probe_budget.calls} / ${metadata.probe_budget.tokens}`,
-      );
+      checkBudget(id, metadata.probe_budget);
+      expect(budget, id).toBe(budgetCell(metadata.probe_budget));
     } else {
       expect(identity, id).toBe('unavailable');
       expect(scope, id).toBe(id === 'local' ? 'IN' : 'OUT');
@@ -136,7 +154,7 @@ describe('route-feasibility evidence inventory (B-OG-27)', () => {
       expect(row?.evidence).toMatch(/^(H|R|D)$/);
       expect(row?.channel.length).toBeGreaterThan(0);
       expect(row?.fanout).toMatch(/^(none|controlled|unknown)$/);
-      checkAuthorizedBudget(row!.probe_budget);
+      checkBudget(definition.id, row!.probe_budget);
       expect(Number.isInteger(row?.probe_budget.calls)).toBe(true);
       expect(Number.isInteger(row?.probe_budget.tokens)).toBe(true);
       expect(row!.probe_budget.calls).toBeGreaterThanOrEqual(0);
@@ -217,6 +235,18 @@ describe('route-feasibility evidence inventory (B-OG-27)', () => {
       ))).toThrow();
     },
   );
+
+  it('keeps the B-OG-47 promotion budget proposed and confined to promoted rows', () => {
+    const row = inventory.split('\n').find((line) => line.startsWith('| `openhuman` |'))!;
+    expect(row).toContain('proposed (operator authorization required): 3 / 30000');
+    const overclaim = inventory.replace(row, row.replace(
+      'proposed (operator authorization required)', 'authorized (operator, 2026-10-07; titan, noodle)'));
+    expect(() => checkInventory(overclaim)).toThrow();
+    const proposed = { status: 'proposed', calls: 3, tokens: 30000 } as RouteProbeBudget;
+    expect(() => checkInventory(inventory, (id) => (
+      id === 'claude' ? { ...getRouteFeasibility('claude')!, probe_budget: proposed } : getRouteFeasibility(id)
+    ))).toThrow();
+  });
 
   it('rejects an authorized matrix budget with an empty hosts list', () => {
     const metadata = structuredClone(getRouteFeasibility('claude')!);
