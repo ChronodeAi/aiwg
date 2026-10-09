@@ -26,6 +26,7 @@ import {
   OPENHUMAN_ADAPTER_VERSION,
   OpenHumanSessionAdapter,
   GROKBOT_ADAPTER_VERSION,
+  GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS,
   GrokbotSessionAdapter,
   GROK_BUILD_ADAPTER_VERSION,
   GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS,
@@ -95,6 +96,7 @@ import {
   type SelectedSource,
   type SourceProbe,
 } from '../../sessions/index.js';
+import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
@@ -875,6 +877,8 @@ async function importSource(
   const isOpenClaw = provider === 'openclaw';
   const isOpenHuman = provider === 'openhuman';
   const isGrokbot = provider === 'grokbot';
+  const isGrokbotNative = isGrokbot
+    && classifyGrokbotBlobName(basename(input))?.kind === 'transcript-replica';
   const isGrokBuild = provider === 'grok-build';
   const isMuse = provider === 'muse';
   const isPi = provider === 'pi';
@@ -932,7 +936,7 @@ async function importSource(
                   : isOpenHuman
                     ? 'openhuman-enriched-jsonl'
                   : isGrokbot
-                    ? 'manual-export'
+                    ? (isGrokbotNative ? GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS : 'manual-export')
                     : isGrokBuild
                       ? GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS
                     : isMuse
@@ -971,7 +975,7 @@ async function importSource(
                     : isOpenHuman
                       ? 'schema-1-session-raw-enriched'
                       : isGrokbot
-                        ? 'manual-interchange'
+                        ? (isGrokbotNative ? 'grokbot-native-transcript-replica-v1' : 'manual-interchange')
                         : isGrokBuild
                           ? 'documented-cli-markdown-export'
                         : isMuse
@@ -1012,10 +1016,10 @@ async function importSource(
                           ? DEVIN_DESKTOP_ADAPTER_VERSION
                           : GENERIC_ADAPTER_VERSION,
     sourceSchemaVersion: probe.sourceSchemaVersion,
-    disposition: isWarp || isGrokbot || isMuse
+    disposition: isWarp || (isGrokbot && !isGrokbotNative) || isMuse
       ? 'manual-only'
       : isClaude || isCodex || isCopilot || isCursor || isFactory || isHermes
-        || isOpenCode || isOpenClaw || isOpenHuman || isGrokBuild || isDevinDesktop || isOmp || isDsh || isPi
+        || isOpenCode || isOpenClaw || isOpenHuman || isGrokbotNative || isGrokBuild || isDevinDesktop || isOmp || isDsh || isPi
         ? 'implemented' : 'manual-only',
     operationalState: probe.operationalState,
     consistency: probe.consistency, authorizedAt: new Date().toISOString(),

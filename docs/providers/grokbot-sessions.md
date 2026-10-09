@@ -4,9 +4,9 @@ AIWG registers `grokbot` with two acquisition paths:
 
 - **Manual export** (`manual-export`): an authorized AIWG generic session
   interchange file, imported the same way for every provider that has one.
-- **Native discovery** (`grokbot-native-transcript-replica`, #2970): an
+- **Native replica** (`grokbot-native-transcript-replica`, #2970): an
   evidence-gated locator for the Grok Bot desktop app's local transcript
-  cache, Linux only.
+  cache, selected through Linux discovery or an explicit single-file import.
 
 ## Native store layout (verified: Grok Bot desktop 0.68.1, Linux, Electron app "sand")
 
@@ -25,8 +25,8 @@ AIWG registers `grokbot` with two acquisition paths:
     name, description, title, createdAt, updatedAt, lastMessageId, ...}]}}`).
     Never opened or imported by this adapter (no session content); kept out
     of `discover()` results entirely.
-- Every other key — composer-drafts, send-journal, experiments, ui-layout,
-  `sand-secrets.json`, `box-secrets-*`, `Cookies`, Local/Session Storage, and
+- During native discovery, every other key — composer-drafts, send-journal,
+  experiments, ui-layout, `sand-secrets.json`, `box-secrets-*`, `Cookies`, Local/Session Storage, and
   anything else — is **never decoded for content and never opened**.
   `~/.grokbot` (daemon credentials) is a separate directory and is never
   referenced.
@@ -126,13 +126,29 @@ re-import non-duplicating:
 3. `aiwg sessions import-discovered --workspace <path> --confirm` to import
    the exact authorized manifest.
 
+### Single native replica
+
+Pass an authorized transcript replica directly, keeping its original
+base32-encoded `.blob` filename:
+
+```bash
+aiwg sessions import /authorized/path/<key>.blob --provider grokbot --source-id <id> --workspace <path>
+```
+
+Use the same `--source-id` for later imports of that conversation. Add
+`--dry-run --json` to preview the source. The filename must decode to a
+transcript-replica key; other filenames retain the manual-export path and
+must contain valid AIWG generic interchange data.
+
 Fail-closed behavior, preserved from the manual-export-only era:
 
 - Any `locatorClass` other than `manual-export` or
   `grokbot-native-transcript-replica` is rejected.
 - Unknown `schemaVersion` majors fail with `UNKNOWN_SCHEMA_MAJOR`.
 - Malformed documents fail with `MALFORMED_SOURCE`.
-- Non-allowlisted files in the store root are never opened or read.
+- Native discovery never opens or reads non-allowlisted files in the store
+  root. Explicit single-file imports treat non-allowlisted filenames as
+  manual exports, never as native replicas.
 
 ## Tested contract
 
@@ -147,7 +163,8 @@ AIWG adapter contract: `1.0.0`. Synthetic fixtures cover:
   an unknown `schemaVersion` major, and decoy non-allowlisted files
   (composer-drafts-shaped key, and a non-base32 `sand-secrets.json`-style
   name) with content that would raise an error if ever opened — proving
-  discovery and import never touch them.
+  discovery never touches them. CLI tests cover native single-file preview,
+  catalog import, and decoy rejection through the manual-export path.
 - idempotent re-import: streaming with a prior `seq` cursor emits only the
   entries after it, and the evicted-prefix (truncated) case is distinguished
   from the complete case.
