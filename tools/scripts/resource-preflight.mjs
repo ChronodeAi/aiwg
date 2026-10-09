@@ -264,10 +264,61 @@ function defaultCountWorkers({
  * `{ supported: false }`; the gate turns that into an explicit diagnostic
  * (MVP qualifies Linux per NFR-OG-008) rather than an implicit pass.
  */
+/**
+ * Convert one statfs result to GiB. Non-finite or negative samples are
+ * rejected (fail closed): a NaN/Infinity/-1 reading must never become a
+ * passing number downstream.
+ */
+function toFreeDiskGb(disk) {
+  const gb = (Number(disk?.bavail) * Number(disk?.bsize)) / BYTES_PER_GB;
+  return Number.isFinite(gb) && gb >= 0 ? gb : undefined;
+}
+
+/**
+ * Sample free disk on the caller-supplied filesystem(s): `readers.paths`
+ * names the actual evidence root and worktree, and the gate takes the
+ * minimum across them. Any unreadable, non-finite or negative sample — or
+ * no supplied filesystem at all — yields undefined so the gate fails closed
+ * instead of admitting on the conductor's process-cwd filesystem.
+ * `readers.statfs` (zero-arg) and `readers.statfsPath` (per-path) stay as
+ * injectable test seams; there is no process.cwd() fallback.
+ */
+function sampleFreeDiskGb(readers) {
+  if (Array.isArray(readers.paths)) {
+    if (readers.paths.length === 0) return undefined;
+    const statOne = typeof readers.statfsPath === 'function' ? readers.statfsPath : (path) => statfsSync(path);
+    let minimum;
+    for (const path of readers.paths) {
+      let sample;
+      try {
+        sample = toFreeDiskGb(statOne(path));
+      } catch {
+        return undefined;
+      }
+      if (sample === undefined) return undefined;
+      minimum = minimum === undefined ? sample : Math.min(minimum, sample);
+    }
+    return minimum;
+  }
+  if (typeof readers.statfs === 'function') {
+    try {
+      return toFreeDiskGb(readers.statfs());
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function readLiveHostResources(readers = {}) {
   const readText = readers.readText ?? (path => readFileSync(path, 'utf8'));
   const coreCount = readers.coreCount ?? (() => os.cpus().length);
   const countWorkers = readers.countWorkers ?? (() => defaultCountWorkers());
+  // 08 disk-pressure admission: free disk sampled through the same injectable
+  // resolver path as every other live signal, so tests feed synthetic values.
+  // Callers supply the evidence/worktree filesystems via `readers.paths`
+  // (threaded through `checkWorkerDispatch({ paths })`); without them free
+  // disk is unknown and the gate fails closed.
   if (process.platform !== 'linux' && readers.readText === undefined) {
     return { supported: false, reason: `live dispatch signals require Linux /proc (this host: ${process.platform})` };
   }
@@ -297,6 +348,7 @@ function readLiveHostResources(readers = {}) {
     memPsiAvg60: psi?.avg60,
     memPsiAvg300: psi?.avg300,
     workers,
+    freeDiskGb: sampleFreeDiskGb(readers),
   };
 }
 
@@ -342,6 +394,18 @@ function evaluateDispatchGate(live, thresholds) {
       breach('workers', live.workers, thresholds.max_workers, `${live.workers} running workers >= ${thresholds.max_workers}`);
     }
   }
+  // 08 disk-pressure admission: unknown-but-required free disk fails closed,
+  // like every other required signal; under-threshold free disk blocks.
+  // Pre-sampled NaN/Infinity/negative readings are rejected here too, so a
+  // forged or broken sample can never satisfy the gate.
+  if (thresholds.min_free_disk_gb !== undefined && thresholds.min_free_disk_gb > 0) {
+    const disk = live.freeDiskGb;
+    if (disk === undefined || !Number.isFinite(disk) || disk < 0) {
+      breach('free-disk', undefined, thresholds.min_free_disk_gb, 'free disk not detectable on this host');
+    } else if (disk < thresholds.min_free_disk_gb) {
+      breach('free-disk', disk, thresholds.min_free_disk_gb, `free ${disk.toFixed(1)}GB < ${thresholds.min_free_disk_gb}GB`);
+    }
+  }
   return { ok: failures.length === 0, failures, thresholds };
 }
 
@@ -352,11 +416,14 @@ function evaluateDispatchGate(live, thresholds) {
  * never launch. When `parallelism.worker_dispatch` is off, legacy behaviour is
  * unchanged: `{ enabled: false, ok: true }` with no signal sampling.
  *
- * @param {object} options `{ config, live?, readers?, thresholdOverlay? }`.
+ * @param {object} options `{ config, live?, readers?, thresholdOverlay?, paths? }`.
  * `live` accepts a pre-sampled `readLiveHostResources()` value (tests and
  * SharedHostScheduler pass their own); otherwise signals are sampled now.
+ * `paths` names the filesystems to sample free disk on (evidence root and
+ * worktree); without caller-supplied paths free disk is unknown and the
+ * gate fails closed rather than sampling the conductor's process cwd.
  */
-function checkWorkerDispatch({ config, live, readers, thresholdOverlay } = {}) {
+function checkWorkerDispatch({ config, live, readers, thresholdOverlay, paths } = {}) {
   if (!config?.parallelism?.worker_dispatch) {
     return { enabled: false, ok: true, failures: [], reason: 'worker_dispatch is off; dispatch gate not consulted (legacy behaviour)' };
   }
@@ -370,7 +437,7 @@ function checkWorkerDispatch({ config, live, readers, thresholdOverlay } = {}) {
   } catch (error) {
     return { enabled: true, ok: false, failures: [{ signal: 'thresholds', reason: error.message }], thresholds: undefined };
   }
-  const sampled = live ?? readLiveHostResources(readers);
+  const sampled = live ?? readLiveHostResources(paths !== undefined ? { ...readers, paths } : (readers ?? {}));
   return { enabled: true, ...evaluateDispatchGate(sampled, thresholds), live: sampled };
 }
 
@@ -409,6 +476,7 @@ function printDispatchResult(result, { configPath }) {
     `memPSI10=${live.memPsiAvg10 ?? 'unknown'}`,
     `memPSI60=${live.memPsiAvg60 ?? 'unknown'}`,
     `workers=${live.workers ?? 'unknown'}`,
+    `freeDiskGB=${live.freeDiskGb === undefined ? 'unknown' : live.freeDiskGb.toFixed(1)}`,
   ].join(' ');
   if (!result.enabled) {
     console.log(`[dispatch-preflight] skipped: ${result.reason} (${configPath})`);
@@ -429,7 +497,9 @@ function main({ argv = process.argv.slice(2), env = process.env, readConfig = re
   const args = parseArgs(argv);
   if (args.profile === 'dispatch') {
     const { config, configPath } = readConfig(args.projectDir);
-    const result = checkWorkerDispatch({ config, live, readers });
+    // Sample the project filesystem — the evidence it will hold — never the
+    // caller's process cwd.
+    const result = checkWorkerDispatch({ config, live, readers, paths: live !== undefined ? undefined : [args.projectDir] });
     printDispatchResult(result, { configPath });
     if (!result.ok) process.exitCode = 1;
     return result;

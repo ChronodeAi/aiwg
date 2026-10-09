@@ -1322,6 +1322,8 @@ export async function getClaudeVersion() {
  * @param {Record<string, string>} [options.env] - Source of allowlisted values
  *   (defaults to the conductor's own `process.env`; never forwarded wholesale).
  * @param {import('../../src/config/aiwg-config.js').AiwgConfig} [options.config] - Current effective config.
+ * @param {string[]} [options.paths] - Filesystems to sample free disk on
+ *   (defaults to the worker `cwd`/worktree, never the conductor's cwd).
  * @param {boolean} [options.allowDegraded] - Explicit opt-in to an unconfined launch
  *   when no systemd user manager is reachable (recorded as degraded, never silent).
  * @returns {{ launched: boolean, blocked?: boolean, failures?: unknown[], mode?: string }}
@@ -1349,13 +1351,20 @@ export function planDirectWorkerLaunch({
   live,
   readers,
   thresholdOverlay,
+  paths,
   isolation,
   spawn,
   spawnAsync,
   proposeUnit,
   kind,
 } = {}) {
-  const gate = checkWorkerDispatch({ config, live, readers, thresholdOverlay });
+  // Free disk is sampled on the worktree filesystem the worker will actually
+  // write to — never the conductor's process cwd. Without live signals or
+  // caller-supplied paths, an unknown worktree fails closed in the gate.
+  const gate = checkWorkerDispatch({
+    config, live, readers, thresholdOverlay,
+    paths: paths ?? (typeof cwd === 'string' && cwd ? [cwd] : undefined),
+  });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
   return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
     gate, config, allowDegraded,

@@ -8,8 +8,8 @@ import { describe, it, expect } from 'vitest';
 import { planDirectWorkerLaunch } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const dispatchOnConfig = { parallelism: { worker_dispatch: true } };
-const okLive = { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0 };
-const hotLive = { supported: true, availMemGb: 1, loadRatio: 2.5, memPsiAvg10: 50, memPsiAvg60: 50, workers: 20 };
+const okLive = { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0, freeDiskGb: 64 };
+const hotLive = { supported: true, availMemGb: 1, loadRatio: 2.5, memPsiAvg10: 50, memPsiAvg60: 50, workers: 20, freeDiskGb: 0.5 };
 const okSpawn = (binary: string) => (binary === 'systemd-run'
   ? { status: 0, stdout: 'systemd 255\n', error: null }
   : { status: 0, stdout: '255\n', error: null });
@@ -83,5 +83,23 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
       config: dispatchOnConfig, live: hotLive, spawn: okSpawn as never,
     });
     expect(outcome).toMatchObject({ launched: false, blocked: true });
+  });
+
+  it('samples free disk on the worker worktree by default, failing closed without live signals', () => {
+    const seen: string[] = [];
+    const outcome = planDirectWorkerLaunch({
+      name: 'disk-demo', memoryMaxGb: 1, command: '/usr/bin/fixture-worker', cwd: '/tmp/work',
+      config: dispatchOnConfig,
+      readers: {
+        statfsPath: (sampled: string) => {
+          seen.push(sampled);
+          return { bavail: 0n, bsize: 4096n };
+        },
+      },
+      spawn: (() => { throw new Error('must not spawn: disk-pressured gate must refuse launch first'); }) as never,
+    });
+    expect(outcome).toMatchObject({ launched: false, blocked: true });
+    expect((outcome as any).failures).toContainEqual(expect.objectContaining({ signal: 'free-disk' }));
+    expect(seen).toEqual(['/tmp/work']);
   });
 });

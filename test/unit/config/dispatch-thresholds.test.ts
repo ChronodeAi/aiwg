@@ -38,6 +38,15 @@ describe('dispatch host thresholds config plane (FR-OG-107)', () => {
       admission: { hostResources: { min_avail_mem_gb: 12, max_workers: 4 } },
     };
     expect(validateParallelismConfig(ok)).toEqual([]);
+    // The configured free-disk floor validates through the shipped JSON schema.
+    expect(validateParallelismConfig({
+      worker_dispatch: true,
+      admission: { hostResources: { min_free_disk_gb: 4 } },
+    })).toEqual([]);
+    expect(validateParallelismConfig({
+      worker_dispatch: true,
+      admission: { hostResources: { min_free_disk_gb: -1 } },
+    }).length).toBeGreaterThan(0);
     // Schema lane: the shipped JSON schema also admits the new block.
     expect(validateParallelismConfig({
       worker_dispatch: true,
@@ -67,7 +76,7 @@ it('uses one resolver for all configured layers, including the conservative defa
   const admission = { min_avail_mem_gb: 6, max_load_ratio: 0.9, max_mem_psi_avg10: 25, max_mem_psi_avg60: 4, max_workers: 8 };
   const overlay = { min_avail_mem_gb: 10, max_load_ratio: 0.6, max_mem_psi_avg10: 10, max_workers: 7 };
   const resolved = resolveDispatchHostThresholds(build, admission, overlay);
-  expect(resolved).toEqual({ min_avail_mem_gb: 12, max_load_ratio: 0.6, max_mem_psi_avg10: 10, max_mem_psi_avg60: 4, max_workers: 5 });
+  expect(resolved).toEqual({ min_avail_mem_gb: 12, max_load_ratio: 0.6, max_mem_psi_avg10: 10, max_mem_psi_avg60: 4, min_free_disk_gb: 2, max_workers: 5 });
   expect(resolveDispatchThresholds({ buildDispatch: build, admissionHostResources: admission, overlay })).toEqual(resolved);
   expect(() => resolveDispatchHostThresholds({ max_load_ratio: NaN }, { max_load_ratio: 0.5 })).toThrow(/OG_CONFIG_REFERENCE/);
   expect(() => resolveDispatchHostThresholds({}, {}, { max_workers: 0 })).toThrow(/max_workers/);

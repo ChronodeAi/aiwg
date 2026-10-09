@@ -1974,7 +1974,7 @@ async function runDoctor() {
     }
     const { checkWorkerDispatch, readLiveHostResources } = await import('../scripts/resource-preflight.mjs');
     const { detectWorkerIsolation } = await import('../ralph-external/lib/worker-isolation.mjs');
-    const live = readLiveHostResources();
+    const live = readLiveHostResources({ paths: [projectDir] });
     const formatSignal = (value, digits = 1) => (value === undefined ? 'unknown' : Number(value).toFixed(digits));
     if (live.supported) {
       check(

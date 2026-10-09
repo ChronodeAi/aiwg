@@ -91,7 +91,7 @@ describe('T-OG-18 no secret in command/log/result: unrelated environment is neve
         cwd: root, stdinPath: brief, stdoutPath, stderrPath,
         envNames: ['AIWG_FAKE_WORKER_CONFIG'],
         config: { parallelism: { worker_dispatch: true } },
-        live: { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0 },
+        live: { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0, freeDiskGb: 64 },
         // Forced deterministically: the isolation *mode* is #2954's own
         // concern (tested separately); what this test proves is that the
         // environment contract holds in either mode, so degraded is
@@ -260,7 +260,7 @@ describe('T-OG-18 nested delegation: schema-locked to zero, not merely policy-ad
         command: process.execPath, args: [path.join(fixtureRoot, 'ralph-worker-cli.mjs')],
         cwd: root, envNames: ['AIWG_FAKE_WORKER_CONFIG', 'AIWG_WORKER_DELEGATION_ALLOWANCE'],
         config: { parallelism: { worker_dispatch: true } },
-        live: { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0 },
+        live: { supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0, freeDiskGb: 64 },
         isolation: { mode: 'degraded', reason: 'forced for a deterministic, environment-independent test' },
         allowDegraded: true,
       }) as { launched: boolean; mode: string; child: ChildProcess };
