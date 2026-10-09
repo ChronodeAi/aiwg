@@ -29,6 +29,12 @@ export interface ModelsWorkerServices {
   now?(): string;
 }
 
+/**
+ * #2892: exported so the MCP worker-invoke bridge can resolve a direct worker
+ * plan in-process (same snapshot/driver construction as `aiwg models resolve`),
+ * without shelling out to the CLI. No new loader is introduced; this is the
+ * CLI's own existing default `ModelsWorkerServices.load`.
+ */
 export async function loadWorkerInputs(ctx: HandlerContext) {
   const config = await readAiwgConfig(ctx.cwd) ?? emptyConfig();
   const loader = new ConfigLoader(ctx.cwd);

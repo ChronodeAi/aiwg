@@ -290,7 +290,8 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/unit/mcp/worker-qualification.test.ts",
         "test/unit/ralph-external/worker-finals.test.ts",
-        "test/unit/mission-protocol/worker-results.test.ts"
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/mcp/worker-invoke.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
     },

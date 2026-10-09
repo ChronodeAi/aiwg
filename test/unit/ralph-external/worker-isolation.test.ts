@@ -8,6 +8,7 @@ import {
   detectWorkerIsolation,
   launchIsolatedWorker,
   proposeWorkerUnitName,
+  stopWorkerUnit,
 } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 
 const ENV = { PATH: '/usr/bin:/bin', HOME: '/home/conductor' };
@@ -98,6 +99,44 @@ describe('worker isolation argument construction (FR-OG-108)', () => {
     expect(() => buildWorkerIsolationArgs({ ...base, command: 'relative/true' })).toThrow(/absolute/);
     expect(() => buildWorkerIsolationArgs({ ...base, args: ['ok', 'bad\0x'] })).toThrow(/NUL-free/);
     expect(() => buildWorkerIsolationArgs({ ...base, kind: 'cgroup' })).toThrow(/kind/);
+  });
+
+  // #2892 B2: an MCP worker server must be launchable through the SAME
+  // gate-then-launch pipeline as a shell worker, attached (`--wait --pipe
+  // --quiet`, #2895) instead of fire-and-forget, so the conductor gets a
+  // live stdio handle confined by the same resource ceiling and
+  // environment allowlist.
+  it('builds an attached launch: --wait --pipe --quiet, cgroup kill/exit hardening, no stdio-file bindings', () => {
+    const argv = buildWorkerIsolationArgs({
+      unit: 'aiwg-worker-mcp-9', memoryMaxGb: 1, command: '/usr/bin/node', args: ['server.js'],
+      env: ENV, attached: true,
+    });
+    expect(argv).toEqual([
+      'systemd-run', '--user', '--expand-environment=no',
+      '--wait', '--pipe', '--quiet',
+      '-p', 'KillMode=control-group', '-p', 'ExitType=cgroup', '-p', 'UMask=0077',
+      '-p', 'UnsetEnvironment=NODE_OPTIONS NODE_PATH LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT',
+      '--unit=aiwg-worker-mcp-9',
+      '--setenv=PATH', '--setenv=HOME',
+      '-p', 'MemoryMax=1G',
+      '-p', 'MemorySwapMax=0',
+      '--', '/usr/bin/node', 'server.js',
+    ]);
+    expect(argv.join(' ')).not.toMatch(/StandardInput|StandardOutput|StandardError/);
+  });
+
+  it('rejects attached mode combined with any stdio-file redirection', () => {
+    const base = { unit: 'aiwg-worker-pipe-1', memoryMaxGb: 1, command: '/bin/true', env: {}, attached: true as const };
+    expect(() => buildWorkerIsolationArgs({ ...base, stdinPath: '/tmp/in' })).toThrow(/attached/);
+    expect(() => buildWorkerIsolationArgs({ ...base, stdoutPath: '/tmp/out' })).toThrow(/attached/);
+    expect(() => buildWorkerIsolationArgs({ ...base, logFile: '/tmp/log' })).toThrow(/attached/);
+  });
+
+  it('rejects an allowlisted name that would alter the trusted transport bootstrap', () => {
+    expect(() => buildWorkerIsolationArgs({
+      unit: 'aiwg-worker-mcp-9', memoryMaxGb: 1, command: '/usr/bin/node', env: { NODE_OPTIONS: '--inspect' },
+      envNames: ['NODE_OPTIONS'], attached: true,
+    })).toThrow(/trusted transport bootstrap/);
   });
 
   it('derives unit-safe names', () => {
@@ -200,6 +239,20 @@ describe('launchIsolatedWorker gate-then-launch', () => {
     expect(calls).toBe(0);
   });
 
+  it('a blocked gate prevents the spawn even in attached mode (#2892 B2)', () => {
+    let syncCalls = 0;
+    let asyncCalls = 0;
+    const outcome = launchIsolatedWorker({
+      name: 'blocked-mcp', memoryMaxGb: 1, command: '/usr/bin/node', attached: true,
+      gate: { enabled: true, ok: false, failures: [{ signal: 'mem-psi-avg60', reason: 'hot' }] },
+      spawn: (() => { syncCalls += 1; throw new Error('must not spawn'); }) as never,
+      spawnAsync: (() => { asyncCalls += 1; throw new Error('must not spawn'); }) as never,
+    });
+    expect(outcome).toMatchObject({ launched: false, blocked: true });
+    expect(syncCalls).toBe(0);
+    expect(asyncCalls).toBe(0);
+  });
+
   it('refuses silent unconfined launch and requires explicit degraded opt-in', () => {
     const degraded = { mode: 'degraded', reason: 'no user manager here' } as const;
     const refused = launchIsolatedWorker({
@@ -270,6 +323,170 @@ describe('launchIsolatedWorker gate-then-launch', () => {
     });
     expect(outcome).toMatchObject({ launched: false, mode: 'systemd-unit' });
     expect(outcome.diagnostic).toContain('systemd-run launch failed');
+  });
+
+  // #2892 B2: MCP worker servers go through this SAME gate-then-launch
+  // pipeline, attached (`attached: true`), instead of the direct
+  // `new StdioClientTransport({ command, args, env })` spawn the #2892
+  // bridge used to perform (bypassing the gate AND the environment
+  // allowlist — the SDK always merges its own `getDefaultEnvironment()`).
+  it('rejects attached mode combined with any stdio-file option (confined path)', () => {
+    expect(() => launchIsolatedWorker({
+      command: '/bin/true', memoryMaxGb: 1, gate: passingGate, attached: true, stdinPath: '/tmp/in',
+      isolation: { mode: 'systemd-unit', reason: 'fake' },
+      spawn: (() => ({ status: 0, stdout: '', stderr: '', error: null })) as never,
+    })).toThrow(/attached/);
+  });
+
+  // CI fix for #2892/#2954: the MCP worker-invoke bridge always launches
+  // `attached: true` (its worker is a live stdio MCP server, never a
+  // fire-and-forget shell command). On a host with no reachable systemd
+  // user manager (e.g. a root CI container) AND no server-side
+  // `allowDegraded` opt-in, the attached path must refuse exactly like the
+  // non-attached path above — never silently fall through to an unconfined
+  // launch just because stdio happens to be piped rather than redirected
+  // to files.
+  it('attached launch without allowDegraded refuses when no systemd user manager is reachable (#2892 CI fix: fail-closed contract)', () => {
+    const refused = launchIsolatedWorker({
+      name: 'mcp-worker', memoryMaxGb: 1, command: '/bin/true', gate: passingGate, attached: true, stdin: 'open',
+      isolation: { mode: 'degraded', reason: 'no user manager here' },
+    });
+    expect(refused).toMatchObject({ launched: false, mode: 'degraded' });
+    expect(refused.diagnostic).toContain('allowDegraded');
+    expect(refused.child).toBeUndefined();
+  });
+
+  it("attached degraded launch pipes stdin when stdin is not 'closed'", () => {
+    let options: any;
+    const outcome = launchIsolatedWorker({
+      command: '/bin/true', gate: passingGate, attached: true, allowDegraded: true, stdin: 'open',
+      isolation: { mode: 'degraded', reason: 'fake' },
+      spawnAsync: ((_binary: string, _args: string[], opts: any) => { options = opts; return { pid: 99, once: () => {} }; }) as never,
+    });
+    expect(outcome).toMatchObject({ launched: true, mode: 'degraded' });
+    expect(options.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+  });
+
+  it("attached degraded launch defaults stdin to 'closed' (ignore) unless the caller opts in", () => {
+    let options: any;
+    launchIsolatedWorker({
+      command: '/bin/true', gate: passingGate, attached: true, allowDegraded: true,
+      isolation: { mode: 'degraded', reason: 'fake' },
+      spawnAsync: ((_binary: string, _args: string[], opts: any) => { options = opts; return { pid: 1, once: () => {} }; }) as never,
+    });
+    expect(options.stdio[0]).toBe('ignore');
+  });
+
+  // #2892 F6: without a `runDir` (the MCP bridge's own `attached` launch
+  // never supplies one — it has no need for the wrapper's identity/exit
+  // record files, only a live stdio pipe), an attached DEGRADED launch used
+  // to spawn the real worker command DIRECTLY, bypassing both the private
+  // transport wrapper AND its transport-bootstrap-variable refusal. Fixed:
+  // the wrapper routing and the refusal both apply to every attached
+  // launch, with or without `runDir`.
+  it('attached degraded launch with NO runDir still routes through the private transport wrapper, never the worker directly (#2892 F6)', () => {
+    let binary: string | undefined;
+    let argv: string[] = [];
+    const outcome = launchIsolatedWorker({
+      command: '/qualified/worker', args: ['--flag'], gate: passingGate, attached: true, allowDegraded: true,
+      isolation: { mode: 'degraded', reason: 'fake' },
+      env: {}, envNames: [],
+      spawnAsync: ((cmd: string, args: string[]) => { binary = cmd; argv = args; return { pid: 123, once: () => {} }; }) as never,
+    });
+    expect(outcome).toMatchObject({ launched: true, mode: 'degraded', transportSupervisor: true });
+    // The wrapper (this module, invoked with --worker-environment), never
+    // the real worker binary directly — the real command/args appear only
+    // after the wrapper's own `--` separator.
+    expect(binary).toBe(process.execPath);
+    expect(argv).toContain('--worker-environment');
+    expect(argv).not.toContain('--run-dir');
+    expect(argv.slice(-2)).toEqual(['/qualified/worker', '--flag']);
+  });
+
+  it.each(['NODE_OPTIONS', 'LD_PRELOAD'])('refuses %s on an attached DEGRADED launch even with NO runDir (#2892 F6)', name => {
+    const spawnAsync = vi.fn();
+    expect(() => launchIsolatedWorker({
+      command: '/qualified/worker', gate: passingGate, attached: true, allowDegraded: true,
+      isolation: { mode: 'degraded', reason: 'fake' }, env: { [name]: 'synthetic-unsafe-bootstrap' }, envNames: [name],
+      spawnAsync,
+    })).toThrow(/transport bootstrap/);
+    expect(spawnAsync).not.toHaveBeenCalled();
+  });
+
+  it("attached degraded launch (no runDir) env is exactly the allowlist — never the conductor's own process.env (#2892 F6)", () => {
+    let options: any;
+    const previous = process.env.AIWG_FIXTURE_SECRET;
+    process.env.AIWG_FIXTURE_SECRET = 'never-forwarded';
+    try {
+      launchIsolatedWorker({
+        command: '/bin/true', gate: passingGate, attached: true, allowDegraded: true,
+        isolation: { mode: 'degraded', reason: 'fake' },
+        env: { AIWG_FAKE_WORKER_CONFIG: 'fixture-config' }, envNames: ['AIWG_FAKE_WORKER_CONFIG'],
+        spawnAsync: ((_binary: string, _args: string[], opts: any) => { options = opts; return { pid: 1, once: () => {} }; }) as never,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.AIWG_FIXTURE_SECRET; else process.env.AIWG_FIXTURE_SECRET = previous;
+    }
+    expect(options.env).toEqual({ AIWG_FAKE_WORKER_CONFIG: 'fixture-config' });
+  });
+
+  it('attached confined launch spawns systemd-run asynchronously through the private transport wrapper, never spawnSync', () => {
+    const syncCalls: string[][] = [];
+    let asyncArgv: string[] | undefined;
+    let asyncOptions: any;
+    const outcome = launchIsolatedWorker({
+      name: 'mcp-demo', memoryMaxGb: 1, command: '/usr/bin/node', args: ['server.js'],
+      env: {}, gate: passingGate,
+      isolation: { mode: 'systemd-unit', reason: 'fake' },
+      attached: true,
+      proposeUnit: () => 'aiwg-worker-mcp-demo-9',
+      spawn: ((binary: string, argv: string[]) => {
+        syncCalls.push([binary, ...argv]);
+        if (binary === 'systemctl' && argv.includes('show-environment')) return { status: 0, stdout: '', stderr: '', error: null };
+        throw new Error('attached mode must never call the synchronous spawn for the launch itself');
+      }) as never,
+      spawnAsync: ((binary: string, argv: string[], opts: any) => {
+        asyncArgv = [binary, ...argv];
+        asyncOptions = opts;
+        return { pid: 777, once: () => {} };
+      }) as never,
+    });
+    expect(outcome).toMatchObject({ launched: true, mode: 'systemd-unit', unit: 'aiwg-worker-mcp-demo-9' });
+    expect(asyncArgv![0]).toBe('systemd-run');
+    expect(asyncArgv).toEqual(expect.arrayContaining(['--wait', '--pipe', '--quiet',
+      '-p', 'KillMode=control-group', '-p', 'ExitType=cgroup', '-p', 'UMask=0077',
+      '--unit=aiwg-worker-mcp-demo-9', '-p', 'MemoryMax=1G']));
+    // The private host-owned transport wrapper (this very module, invoked
+    // with --worker-environment) is the actual command run inside the
+    // unit — never the real worker binary/args directly in argv, which
+    // instead appear after the wrapper's OWN `--` separator.
+    expect(asyncArgv).toEqual(expect.arrayContaining(['--worker-environment', '--', '/usr/bin/node', 'server.js']));
+    expect(asyncOptions.stdio).toEqual(['ignore', 'pipe', 'pipe']); // stdin defaults to 'closed' here (not overridden)
+    // Only the manager-environment query used the synchronous spawn; the
+    // launch itself never did.
+    expect(syncCalls.every(call => call[0] === 'systemctl')).toBe(true);
+  });
+});
+
+describe('stopWorkerUnit (#2892 M2)', () => {
+  it('requests systemctl --user stop and reports success', () => {
+    const calls: string[][] = [];
+    const result = stopWorkerUnit('aiwg-worker-demo-9', {
+      spawn: ((binary: string, argv: string[]) => { calls.push([binary, ...argv]); return { status: 0, stdout: '', stderr: '', error: null }; }) as never,
+    });
+    expect(calls).toEqual([['systemctl', '--user', 'stop', 'aiwg-worker-demo-9']]);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('reports failure without throwing when the unit is already gone', () => {
+    const result = stopWorkerUnit('aiwg-worker-demo-9', {
+      spawn: (() => ({ status: 1, stdout: '', stderr: 'Unit not loaded.', error: null })) as never,
+    });
+    expect(result).toMatchObject({ ok: false, diagnostic: 'Unit not loaded.' });
+  });
+
+  it('rejects an unsafe unit name', () => {
+    expect(() => stopWorkerUnit('bad; rm -rf')).toThrow(/unit-safe/);
   });
 });
 

@@ -70,11 +70,19 @@ describe("MCP subsystems — toolset parsing", () => {
     expect(parseToolsets("core,").size).toBe(0);
   });
 
-  it("'all' enables every known toolset", () => {
+  it("'all' enables every known toolset except the explicit-opt-in 'workers' bridge (#2892 defect 4)", () => {
     const all = parseToolsets("all");
     for (const t of KNOWN_TOOLSETS) {
+      if (t === "workers") continue;
       expect(all.has(t)).toBe(true);
     }
+    expect(all.has("workers")).toBe(false);
+  });
+
+  it("'workers' requires an explicit name; 'all' alone never reaches it", () => {
+    expect(parseToolsets("all").has("workers")).toBe(false);
+    expect(parseToolsets("workers").has("workers")).toBe(true);
+    expect(parseToolsets("all,workers").has("workers")).toBe(true);
   });
 
   it("normalises case and whitespace", () => {

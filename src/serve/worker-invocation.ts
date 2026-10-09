@@ -15,6 +15,19 @@ import type { WorkerExecution } from '../config/aiwg-config.js';
 import { qualifyWorkerInvocationProfile, assertWorkerSelectionAllowed,
   requiredWorkerControls, requiresWorkerExternalBoundary, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
 
+/**
+ * The exact digest formula an MCP worker binding's `inputSchemaDigest`/
+ * `outputSchemaDigest` are pinned against (used below and reused verbatim by
+ * the #2892 MCP worker-invoke bridge's own live `tools/list` schema-drift
+ * check — see `src/mcp/tools/worker-invoke.mjs` M3). Deliberately the raw
+ * `JSON.stringify` of the schema object, NOT `workerConfigDigest`'s
+ * canonicalized (sorted-key) form — a schema's own declared key order is
+ * part of what gets pinned at qualification time.
+ */
+export function mcpToolSchemaDigest(schema: unknown): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(schema)).digest('hex')}`;
+}
+
 export interface WorkerInvocationQualification extends ParametersContext {
   installation?: WorkerInstallationRequest;
   adapter: WorkerAdapterMetadata;
@@ -128,7 +141,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     }
     for (const key of ['input', 'output'] as const) {
       const schema = qualification.mcpSchemas?.[key];
-      if (!schema || `sha256:${createHash('sha256').update(JSON.stringify(schema)).digest('hex')}` !== binding[`${key}SchemaDigest`]) {
+      if (!schema || mcpToolSchemaDigest(schema) !== binding[`${key}SchemaDigest`]) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', `MCP worker ${key} schema digest changed`);
       }
     }
