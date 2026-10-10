@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/pi-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:4c6f4d18ab9ecfca5a6f3d5ec8371cba650c483971f1b1c0078f09addb01bf5d",
+    "sha256": "sha256:3224dd8cc29e9424bf9443f8b3daeeea4fe8a78b4f9a95cc9986fd463159cba5",
     "adapterIds": [
       "pi"
     ],

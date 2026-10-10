@@ -8,42 +8,52 @@ import { healthEventMatchesBinding } from './worker-health.mjs';
 /**
  * Version-bound direct-worker surface (roctinam/aiwg#2910, B-OG-45).
  *
- * Qualified against pi 0.87.1 `--help` (help/version syntax only,
- * 2026-10-09; never live qualification):
+ * Qualified against pi 1.1.0 `--help` (help/version syntax only,
+ * 2026-10-09; never live qualification; upgraded from the originally
+ * qualified 0.87.1 -- the `--help` diff at
+ * `.aiwg/working/s1-scratch/cli-help/pi-diff.txt` shows every flag this
+ * profile emits is unchanged, plus a new `--no-mcp`):
  *
  *   pi --mode json --no-approve --no-context-files --no-extensions \
- *     --no-skills --model M --thinking E < briefPath
+ *     --no-skills --no-mcp --model M --thinking E < briefPath
  *
  * `--mode json` forces non-interactive JSONL output regardless of TTY or
- * `--print` (installed pi 0.87.1 bundle, `resolveAppMode()`: `parsed.mode
+ * `--print` (installed pi 1.1.0 bundle, `resolveAppMode()`: `parsed.mode
  * === "json"` short-circuits to `"json"` before any print/interactive
  * check), so no separate `-p/--print` flag is needed. `--no-approve`
  * ("Ignore project-local files for this run") alone is NOT a complete
  * isolation boundary: it sets project trust to false but does not stop
- * context loading. The installed pi 0.87.1 bundle
- * (`chunk-OJP47DM6.js:1251`, static read) loads ancestor `AGENTS.md`/
- * `CLAUDE.md` files independently of trust unless `noContextFiles` is set.
- * The direct profile therefore also emits `--no-context-files`
+ * context loading. The installed pi 1.1.0 bundle (`chunk-OIM2DMFI.js`,
+ * static read 2026-10-09: `agentsFiles = this.noContextFiles ? [] :
+ * loadProjectContextFiles(...)`) loads ancestor `AGENTS.md`/`CLAUDE.md`
+ * files independently of trust unless `noContextFiles` is set. The direct
+ * profile therefore also emits `--no-context-files`
  * (`-nc`, "Disable AGENTS.md and CLAUDE.md discovery and loading"),
- * `--no-extensions` (`-ne`) and `--no-skills` (`-ns`) — the same discovery
- * surfaces OMP's profile disables — so no untrusted workspace file
- * (context, extension or skill) is ever loaded into the worker. The direct
- * profile never emits `--approve` ("Trust project-local files for this
- * run"). There is no documented sandbox, approval-prompt, output-file,
- * output-schema, step-cap or child-denial flag (`pi --help`, 2026-10-09):
- * those controls stay unavailable rather than invented, and the final
- * answer is extracted from the stdout JSONL stream (`parseOutput()`),
- * never a `-o`-style file. There is no
+ * `--no-extensions` (`-ne`) and `--no-skills` (`-ns`) -- the same discovery
+ * surfaces OMP's profile disables -- so no untrusted workspace file
+ * (context, extension or skill) is ever loaded into the worker. 1.1.0
+ * adds built-in MCP support, on by default; the direct profile also emits
+ * `--no-mcp` ("Disable built-in MCP support: no servers connect and no
+ * MCP tools", `pi --help`) for the same reason -- an unvetted MCP server
+ * configuration is an untrusted-workspace surface like
+ * extensions/skills, and the AIWG `worker-invoke` bridge remains the one
+ * MCP route. The direct profile never emits `--approve` ("Trust
+ * project-local files for this run"). There is no documented sandbox,
+ * approval-prompt, output-file, output-schema, step-cap or child-denial
+ * flag (`pi --help`, 2026-10-09): those controls stay unavailable rather
+ * than invented, and the final answer is extracted from the stdout JSONL
+ * stream (`parseOutput()`), never a `-o`-style file. There is no
  * `--cwd`/`-C` flag either; the launcher's shell `cd` to the workspace is
  * the only workdir binding. The brief travels on stdin, never argv:
- * installed pi 0.87.1 bundle (`chunk-OJP47DM6.js`, `readPipedStdin()` /
- * `buildInitialMessage()`, static read 2026-10-09) shows piped, non-TTY
- * stdin is trimmed and becomes the sole initial-message part whenever no
- * positional message/file argument is given, so omitting the positional
- * message and piping the brief is sufficient — and an all-whitespace brief
- * would trim to nothing and must never be sent.
+ * installed pi 1.1.0 bundle (`chunk-OIM2DMFI.js`, `readPipedStdin()` /
+ * `buildInitialMessage()`, static read 2026-10-09, byte-identical to the
+ * 0.87.1 evidence) shows piped, non-TTY stdin is trimmed and becomes the
+ * sole initial-message part whenever no positional message/file argument
+ * is given, so omitting the positional message and piping the brief is
+ * sufficient -- and an all-whitespace brief would trim to nothing and
+ * must never be sent.
  */
-export const PI_DIRECT_VERSION = '0.87.1';
+export const PI_DIRECT_VERSION = '1.1.0';
 /** Mirrors providers.pi.effortValues in model-capabilities.v1.json (hardcoded,
  * not read via a repo-relative path: the installed-module loader copies this
  * file to an arbitrary package root, so import.meta.url-relative reads to the
@@ -126,11 +136,12 @@ export class PiAdapter extends ProviderAdapter {
 
   /**
    * Driver-owned argv after the binary for the version-bound direct-shell
-   * profile. `--no-approve`, `--no-context-files`, `--no-extensions` and
-   * `--no-skills` are all fixed (never `--approve`, and never omitted —
-   * `--no-approve` alone does not stop ancestor AGENTS.md/CLAUDE.md
-   * loading); model and thinking level are always explicit (never a CLI
-   * default or alias); the brief is validated here but never placed in
+   * profile. `--no-approve`, `--no-context-files`, `--no-extensions`,
+   * `--no-skills` and `--no-mcp` are all fixed (never `--approve`, and
+   * never omitted — `--no-approve` alone does not stop ancestor
+   * AGENTS.md/CLAUDE.md loading); model and thinking level are always
+   * explicit (never a CLI default or alias); the brief is validated here
+   * but never placed in
    * argv — it travels on stdin (`stdin: 'brief-text'`). There is no
    * `-C/--cwd` flag to render: the launcher's own `cd` to the workspace is
    * the only binding.
@@ -159,7 +170,7 @@ export class PiAdapter extends ProviderAdapter {
     if (typeof brief !== 'string' || !brief.trim() || brief.includes('\0')) {
       throw new Error('Pi worker requires a non-empty brief');
     }
-    return ['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills',
+    return ['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-mcp',
       '--model', model, '--thinking', effort];
   }
 
@@ -174,22 +185,45 @@ export class PiAdapter extends ProviderAdapter {
     return root ? join(root, `${sessionId}.jsonl`) : join(homedir(), '.pi', 'agent', 'sessions', `${sessionId}.jsonl`);
   }
   /**
-   * Parse `--mode json` output: Pi's own JSONL event stream. `settled`
-   * requires an `agent_settled` event, no error signal anywhere in the
-   * stream (a standalone `error` event, `agent_end` with `willRetry: true`,
-   * or an `agent_end` assistant message with `stopReason` `error`/
-   * `aborted`) and a non-empty extracted assistant answer — an exit-zero
-   * run that settles with no error but never produced an answer, or one
-   * that settles after a standalone error event, is not a success
-   * (`text` is non-null only when `settled` is true). `text` is the last
-   * assistant message's concatenated text content across all `agent_end`
-   * events (a later `agent_end` can supersede an earlier one before
-   * `agent_settled` arrives).
+   * Legacy Ralph-loop contract (#2550), unchanged: parse `--mode json`
+   * output into Pi's own JSONL events and report settlement only.
+   * `settled` is an `agent_settled` event with no `agent_end` signalling
+   * `willRetry: true`. This is the exact shape
+   * `test/unit/ralph/pi-adapter.test.mjs` and the launcher depend on — it
+   * does NOT extract or require a final answer; see `parseDirectFinal()`
+   * for the strict direct-worker-profile contract that does.
+   *
+   * @param {string} stdout
+   * @returns {{ events: object[], settled: boolean } | null}
+   */
+  parseOutput(stdout) {
+    const events = [];
+    for (const raw of stdout.split('\n')) {
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      if (!line) continue;
+      try { events.push(JSON.parse(line)); } catch { return null; }
+    }
+    return events.length ? { events, settled: events.some(event => event.type === 'agent_settled')
+      && !events.some(event => event.type === 'agent_end' && event.willRetry === true) } : null;
+  }
+
+  /**
+   * Strict direct-worker-profile final: reuses `parseOutput()`'s event
+   * parsing, then additionally requires a non-empty extracted assistant
+   * answer and fails on any error signal (a standalone `error` event, an
+   * `agent_end` with `willRetry: true`, or an `agent_end` assistant
+   * message with `stopReason` `error`/`aborted`) even at exit zero. `text`
+   * is the last assistant message's concatenated text content across all
+   * `agent_end` events (a later `agent_end` can supersede an earlier one
+   * before `agent_settled` arrives); `text` is non-null only when
+   * `settled` is true. Used only by the direct worker profile
+   * (roctinam/aiwg#2910) and the installed-module path — never the legacy
+   * Ralph loop, which calls `parseOutput()` directly.
    *
    * @param {string} stdout
    * @returns {{ events: object[], settled: boolean, text: string|null } | null}
    */
-  parseOutput(stdout) {
+  parseDirectFinal(stdout) {
     const events = [];
     for (const raw of stdout.split('\n')) {
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;

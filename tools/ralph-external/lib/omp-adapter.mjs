@@ -6,7 +6,7 @@ import { createWorkerHealthObserver, healthEventMatchesBinding } from './worker-
 /**
  * Version-bound direct-worker surface (roctinam/aiwg#2910, B-OG-45).
  *
- * Qualified against `omp/18.3.5` `--help` (help/version syntax only,
+ * Qualified against `omp/18.8.7` `--help` (help/version syntax only,
  * 2026-10-09, captured on noodle; never live qualification):
  *
  *   omp --mode json --print --no-extensions --no-skills --no-rules
@@ -19,8 +19,8 @@ import { createWorkerHealthObserver, healthEventMatchesBinding } from './worker-
  * unverified inheritance assumption for this one invariant.
  *
  * `--approval-mode` is ALWAYS rendered explicitly and is NEVER omitted: a
- * static read of the installed omp binary (`/opt/noodle-agentic/bin/omp`,
- * 18.3.5, noodle) shows the compiled-in default is `"yolo"`
+ * static read of the installed omp binary (`~/.local/bin/omp` on noodle,
+ * 18.8.7, noodle) shows the compiled-in default is `"yolo"`
  * (`approvalMode: Uxa(s) ? s : "yolo"`) — a full approval/sandbox bypass —
  * so an omitted flag would silently inherit the most dangerous mode, not a
  * safe one. The same binary defines the mode->tier gate explicitly:
@@ -58,7 +58,7 @@ import { createWorkerHealthObserver, healthEventMatchesBinding } from './worker-
  * (`parseOutput()`/`summarizeOmpEvents`), never a `-o`-style file.
  *
  * The brief travels on stdin, never argv — CONFIRMED by a static read of
- * the installed omp binary (18.3.5, noodle), not merely inherited from
+ * the installed omp binary (18.8.7, noodle), not merely inherited from
  * Pi's lineage: `async function wUt()` (OMP's own `readPipedInput`) returns
  * early when `process.stdin.isTTY === true`, otherwise awaits
  * `Bun.stdin.text()` to EOF and returns the text unless it is
@@ -74,7 +74,7 @@ import { createWorkerHealthObserver, healthEventMatchesBinding } from './worker-
  * from Pi, noted since the shared fixture briefs intentionally carry
  * leading/trailing whitespace).
  */
-export const OMP_DIRECT_VERSION = '18.3.5';
+export const OMP_DIRECT_VERSION = '18.8.7';
 /** Mirrors providers.omp.effortValues in model-capabilities.v1.json (hardcoded,
  * not read via a repo-relative path: the installed-module loader copies this
  * file to an arbitrary package root, so import.meta.url-relative reads to the

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Synthetic 0.87.1-shaped direct-shell fixture. No auth, inference or network.
+// Synthetic 1.1.0-shaped direct-shell fixture. No auth, inference or network.
 // Pi's own event names only: session, agent_start, agent_end, agent_settled.
 import { writeFileSync } from 'node:fs';
 import { claims, config } from '../../ralph-worker-protocol.mjs';
@@ -10,7 +10,7 @@ const value = flag => args[args.indexOf(flag) + 1];
 const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`);
 
 if (args.includes('--version')) {
-  process.stdout.write('0.87.1\n');
+  process.stdout.write('1.1.0\n');
 } else {
   // Pi's own readPipedStdin() trims piped stdin and uses it as the sole
   // initial message; the fake mirrors that by draining stdin to EOF.

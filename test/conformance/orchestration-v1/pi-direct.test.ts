@@ -168,7 +168,7 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     expect(adapter.supportedVersions).toBe(PI_DIRECT_VERSION);
     expect(adapter.qualification.status).toBe('unqualified');
     expect(adapter.invocation.stdin).toBe('brief-text');
-    expect(adapter.invocation.argv).toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--model', '${model}', '--thinking', '${effort}']);
+    expect(adapter.invocation.argv).toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-mcp', '--model', '${model}', '--thinking', '${effort}']);
     expect(adapter.invocation.argv.join(' ')).not.toMatch(/(?<!no-)--approve\b|bypass|dangerous|yolo/);
     const profile = adapter.invocationProfiles!['direct-shell'];
     for (const [name, control] of Object.entries(profile.controls) as any) {
@@ -190,7 +190,14 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     expect(installed.owner.constructor.name).toBe('PiAdapter');
     expect(installed.owner.buildWorkerArgs(
       { selected: { model: 'synthetic/a', effort: { value: 'medium' } }, cwd: '/w', brief: 'b' }, null, {}))
-      .toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--model', 'synthetic/a', '--thinking', 'medium']);
+      .toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-mcp', '--model', 'synthetic/a', '--thinking', 'medium']);
+    // Legacy Ralph-loop contract (test/unit/ralph/pi-adapter.test.mjs): the
+    // settlement-only shape is settlement-only -- no `text` key, no answer
+    // requirement. Only parseDirectFinal() adds that for the direct profile.
+    const noAnswer = [{ type: 'agent_start' }, { type: 'agent_end', willRetry: false }, { type: 'agent_settled' }]
+      .map(event => JSON.stringify(event)).join('\n');
+    expect(installed.owner.parseOutput(noAnswer)).toEqual({ events: JSON.parse(`[${noAnswer.split('\n').join(',')}]`), settled: true });
+    expect(Object.keys(installed.owner.parseOutput(noAnswer))).toEqual(['events', 'settled']);
   });
 
   it('PD02 renders and executes exact argv with the brief on stdin only; no argv flags carry it', async () => {
@@ -198,7 +205,7 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     expect(f.plan.invocation, JSON.stringify(f.plan)).toBeDefined();
     const invocation = f.plan.invocation!;
     expect(invocation.stdin).toBe('brief-text');
-    expect(invocation.argv.slice(2)).toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills',
+    expect(invocation.argv.slice(2)).toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-mcp',
       '--model', 'synthetic/pi-model', '--thinking', 'medium']);
     expect(JSON.stringify(invocation.argv)).not.toContain(f.payload);
     const result = await execute(f, 'success');
@@ -206,7 +213,7 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     expect(result.record).toMatchObject({ argv: invocation.argv.slice(2), cwd: f.cwd, brief: f.payload.trim() });
     const { existsSync } = await import('node:fs');
     expect(existsSync(path.join(f.root, 'injected'))).toBe(false);
-    const parsed = installed.owner.parseOutput(result.stdout);
+    const parsed = installed.owner.parseDirectFinal(result.stdout);
     expect(parsed?.settled).toBe(true);
     expect(parsed?.text).toBeTruthy();
   });
@@ -236,7 +243,7 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     const result = await execute(f, scenario);
     const observer = installed.owner.createHealthObserver({ profile: f.profile, invocationId: 'synthetic' });
     observer.feed(Buffer.from(result.stdout), { kind: 'stdout', id: 'stdout', generation: 0, offset: 0 });
-    const parsed = installed.owner.parseOutput(result.stdout);
+    const parsed = installed.owner.parseDirectFinal(result.stdout);
     // Settlement alone (an agent_settled event) is never sufficient: a
     // missing/empty assistant answer or any error signal (standalone
     // `error`, willRetry or a stopReason of error/aborted) must also fail,
@@ -258,10 +265,10 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
       ] },
       { type: 'agent_settled' },
     ].map(event => JSON.stringify(event)).join('\n');
-    const good = adapter.parseOutput(stream('FINAL ANSWER'));
+    const good = adapter.parseDirectFinal(stream('FINAL ANSWER'));
     expect(good?.settled).toBe(true);
     expect(good?.text).toBe('FINAL ANSWER');
-    const empty = adapter.parseOutput(stream('   '));
+    const empty = adapter.parseDirectFinal(stream('   '));
     expect(empty?.settled).toBe(false);
     expect(empty?.text).toBeNull();
   });

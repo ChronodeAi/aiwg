@@ -1494,7 +1494,7 @@
         "id": "omp",
         "provider": "omp",
         "adapterVersion": "1",
-        "supportedVersions": "18.3.5",
+        "supportedVersions": "18.8.7",
         "runtimeDriver": "installed:omp",
         "catalogAdapter": {
           "kind": "file",
@@ -1547,67 +1547,67 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "18.3.5",
+            "supportedVersions": "18.8.7",
             "controls": {
               "model": {
                 "support": "unqualified",
                 "mapping": "--model=<value>; exact observed API model, never an alias or CLI default",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--model=<value> Model to use (fuzzy match: ...)'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--model=<value> Model to use (fuzzy match: ...)'"
               },
               "effort": {
                 "support": "unqualified",
                 "mapping": "--thinking=<value>; one of minimal/low/medium/high/xhigh",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--thinking=<value> Set thinking level: off, minimal, low, medium, high, xhigh, max, auto'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--thinking=<value> Set thinking level: off, minimal, low, medium, high, xhigh, max, auto'"
               },
               "sandbox": {
                 "support": "unqualified",
                 "mapping": "unavailable: no process/filesystem sandbox flag is documented; the direct profile relies entirely on the host worker-isolation boundary",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09) documents no sandbox flag"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) documents no sandbox flag"
               },
               "approval": {
                 "support": "unqualified",
                 "mapping": "--approval-mode=write (never omitted: the installed binary's compiled-in default is yolo, a full bypass); write auto-approves read/write-tier tools only, the least-prompting non-bypass value, but an exec-tier tool (bash) still resolves to a required-approval decision with no confirmed headless resolution -- an open gap, not a qualified non-prompting guarantee; yolo is never used",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--approval-mode=<value> Override tools.approvalMode for this session (always-ask|write|yolo)'; R: /opt/noodle-agentic/bin/omp 18.3.5 (noodle, static read 2026-10-09): default `approvalMode: Uxa(s) ? s : \"yolo\"`; tier gate `Kxa={\"always-ask\":\"read\",write:\"write\",yolo:\"exec\"}`, `PS={read:0,write:1,exec:2}`, `Xxa(mode,tier)=PS[tier]<=PS[Kxa[mode]]`; no auto-deny found for an unresolved prompt in headless/print mode"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--approval-mode=<value> Override tools.approvalMode for this session (always-ask|write|yolo)'; R: ~/.local/bin/omp 18.8.7 (noodle, static read 2026-10-10): default `approvalMode: Uxa(s) ? s : \"yolo\"`; tier gate `Kxa={\"always-ask\":\"read\",write:\"write\",yolo:\"exec\"}`, `PS={read:0,write:1,exec:2}`, `Xxa(mode,tier)=PS[tier]<=PS[Kxa[mode]]`; no auto-deny found for an unresolved prompt in headless/print mode"
               },
               "workdir": {
                 "support": "unqualified",
                 "mapping": "--cwd=<value>",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--cwd=<value> Directory to start in (overrides the launch cwd)'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--cwd=<value> Directory to start in (overrides the launch cwd)'"
               },
               "finalOutput": {
                 "support": "unqualified",
                 "mapping": "bounded stdout event-stream capture; the final answer is extracted from agent_end (willContinue=false) via summarizeOmpEvents/parseOutput, never a -o/--output file",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09) documents no output-file flag; R: tools/ralph-external/lib/omp-adapter.mjs parseOutput()/summarizeOmpEvents()"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) documents no output-file flag; R: tools/ralph-external/lib/omp-adapter.mjs parseOutput()/summarizeOmpEvents()"
               },
               "stdin": {
                 "support": "unqualified",
                 "mapping": "brief-text; CONFIRMED by static read of the installed omp binary (not merely inherited from Pi's lineage): OMP's own readPipedInput reads non-TTY stdin to EOF whenever mode is not rpc/rpc-ui/acp (--mode json included) and passes it as stdinContent into OMP's own buildInitialMessage, which prefixes it onto the initial message; unlike Pi, OMP does not trim the returned text",
-                "evidence": "R: /opt/noodle-agentic/bin/omp 18.3.5 (noodle, static read 2026-10-09): `async function wUt(){ if(process.stdin.isTTY===true) return; ...const t=await Bun.stdin.text(); if(t.trim().length===0) return; return t; }`; call site `const p=r===\"rpc\"||r===\"rpc-ui\"||r===\"acp\"; const c=p?undefined:await readPipedInput();`; `function aso({parsed,fileText,stdinContent}){...}` (buildInitialMessage) consumes `stdinContent: c`"
+                "evidence": "R: ~/.local/bin/omp 18.8.7 (noodle, static read 2026-10-10): `async function wUt(){ if(process.stdin.isTTY===true) return; ...const t=await Bun.stdin.text(); if(t.trim().length===0) return; return t; }`; call site `const p=r===\"rpc\"||r===\"rpc-ui\"||r===\"acp\"; const c=p?undefined:await readPipedInput();`; `function aso({parsed,fileText,stdinContent}){...}` (buildInitialMessage) consumes `stdinContent: c`"
               },
               "structuredOutput": {
                 "support": "unqualified",
                 "mapping": "unavailable: no --output-schema or equivalent structured-output flag is documented",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09) documents no output-schema flag"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) documents no output-schema flag"
               },
               "stepCap": {
                 "support": "unqualified",
                 "mapping": "unavailable: --max-time bounds wall-clock duration only, not a step/turn count",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--max-time=<value> Stop the session after this duration'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--max-time=<value> Stop the session after this duration'"
               },
               "trust": {
                 "support": "unqualified",
                 "mapping": "[\"--no-extensions\",\"--no-skills\",\"--no-rules\"]; OMP has no --approve/--no-approve trust flag like Pi, so the direct profile always disables workspace-local extension/skill/rule discovery instead",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09): '--no-extensions ...', '--no-skills ...', '--no-rules Disable rules discovery and loading'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10): '--no-extensions ...', '--no-skills ...', '--no-rules Disable rules discovery and loading'"
               },
               "children": {
                 "support": "unqualified",
                 "mapping": "unavailable: no native child-denial flag; the built-in task tool enables sub-agent delegation and can only be excluded via a --tools allowlist, not applied by default",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09) built-in tool list includes 'task - Launch sub-agents for parallel tasks'"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) built-in tool list includes 'task - Launch sub-agents for parallel tasks'"
               },
               "fallback": {
                 "support": "unqualified",
                 "mapping": "unavailable: no implicit model-fallback flag is documented; an invalid/omitted --model is a resolution error, never a silent substitution",
-                "evidence": "H: omp/18.3.5 --help (noodle, 2026-10-09) documents a single --model flag with no fallback list"
+                "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) documents a single --model flag with no fallback list"
               }
             },
             "envAllowlist": [],
@@ -1645,13 +1645,13 @@
                   "kind": "help",
                   "ref": "tools/ralph-external/lib/omp-adapter.mjs",
                   "observedAt": "2026-10-09T00:00:00Z",
-                  "cliVersion": "18.3.5"
+                  "cliVersion": "18.8.7"
                 },
                 {
                   "kind": "repository",
-                  "ref": "tools/ralph-external/lib/omp-adapter.mjs; static read of /opt/noodle-agentic/bin/omp (approval tier gate Kxa/PS/Xxa; readPipedInput/buildInitialMessage)",
+                  "ref": "tools/ralph-external/lib/omp-adapter.mjs; static read of noodle ~/.local/bin/omp 18.8.7 (approval tier gate Kxa/PS/Xxa; readPipedInput/buildInitialMessage)",
                   "observedAt": "2026-10-09T00:00:00Z",
-                  "cliVersion": "18.3.5"
+                  "cliVersion": "18.8.7"
                 }
               ],
               "qualificationOwner": "B-OG-45",
@@ -1694,7 +1694,7 @@
         "id": "pi",
         "provider": "pi",
         "adapterVersion": "1",
-        "supportedVersions": "0.87.1",
+        "supportedVersions": "1.1.0",
         "runtimeDriver": "installed:pi",
         "catalogAdapter": {
           "kind": "file",
@@ -1711,6 +1711,7 @@
             "--no-context-files",
             "--no-extensions",
             "--no-skills",
+            "--no-mcp",
             "--model",
             "${model}",
             "--thinking",
@@ -1743,72 +1744,72 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "0.87.1",
+            "supportedVersions": "1.1.0",
             "controls": {
               "model": {
                 "support": "unqualified",
                 "mapping": "--model <pattern>; exact observed API model, never an alias or CLI default",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09): '--model <pattern> Model pattern or ID (supports provider/id and optional :<thinking>)'"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09): '--model <pattern> Model pattern or ID (supports provider/id and optional :<thinking>)'"
               },
               "effort": {
                 "support": "unqualified",
                 "mapping": "--thinking <level>; one of minimal/low/medium/high/xhigh",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09): '--thinking <level> Set thinking level: off, minimal, low, medium, high, xhigh, max'"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09): '--thinking <level> Set thinking level: off, minimal, low, medium, high, xhigh, max'"
               },
               "sandbox": {
                 "support": "unqualified",
                 "mapping": "unavailable: no process/filesystem sandbox flag is documented; the direct profile relies entirely on the host worker-isolation boundary",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents no sandbox flag"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents no sandbox flag"
               },
               "approval": {
                 "support": "unqualified",
                 "mapping": "unavailable: no tool-execution approval-prompt flag is documented; --mode json forces non-interactive execution so no prompt can occur",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) lists no approval flag; R: installed pi 0.87.1 bundle chunk-OJP47DM6.js resolveAppMode() (static read, 2026-10-09)"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) lists no approval flag; R: installed pi 1.1.0 bundle chunk-OIM2DMFI.js resolveAppMode() (static read, 2026-10-09)"
               },
               "workdir": {
                 "support": "unqualified",
                 "mapping": "unavailable: no -C/--cwd flag is documented; the launcher's shell cd to the workspace is the only binding",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents no working-directory flag"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents no working-directory flag"
               },
               "finalOutput": {
                 "support": "unqualified",
                 "mapping": "bounded stdout JSONL capture; the final answer is extracted from agent_end/agent_settled messages (parseOutput), never a -o/--output file",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents no output-file flag; R: tools/ralph-external/lib/pi-adapter.mjs parseOutput()"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents no output-file flag; R: tools/ralph-external/lib/pi-adapter.mjs parseDirectFinal() (the direct-profile strict contract; the legacy parseOutput() settlement-only shape is a separate contract used only by the Ralph loop)"
               },
               "stdin": {
                 "support": "unqualified",
                 "mapping": "brief-text (piped, non-TTY stdin is trimmed and becomes the sole initial-message part when no positional message/file argument is given)",
-                "evidence": "R: installed pi 0.87.1 bundle chunk-OJP47DM6.js readPipedStdin()/buildInitialMessage() (static read, 2026-10-09)"
+                "evidence": "R: installed pi 1.1.0 bundle chunk-OIM2DMFI.js readPipedStdin()/buildInitialMessage() (static read, 2026-10-09)"
               },
               "structuredOutput": {
                 "support": "unqualified",
                 "mapping": "unavailable: no --output-schema or equivalent structured-output flag is documented",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents no output-schema flag"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents no output-schema flag"
               },
               "stepCap": {
                 "support": "unqualified",
                 "mapping": "unavailable: no step/turn cap flag is documented",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents no step-cap flag"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents no step-cap flag"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "[\"--no-approve\",\"--no-context-files\",\"--no-extensions\",\"--no-skills\"]; --no-approve alone does not stop context loading (R: installed pi 0.87.1 bundle chunk-OJP47DM6.js:1251 loads ancestor AGENTS.md/CLAUDE.md independently of trust), so the direct profile also disables context-file, extension and skill discovery; it never emits --approve",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09): '--approve, -a Trust project-local files for this run' / '--no-approve, -na Ignore project-local files for this run' / '--no-context-files, -nc Disable AGENTS.md and CLAUDE.md discovery and loading' / '--no-extensions, -ne' / '--no-skills, -ns'; R: installed pi 0.87.1 bundle chunk-OJP47DM6.js:1251 (static read, 2026-10-09)"
+                "mapping": "[\"--no-approve\",\"--no-context-files\",\"--no-extensions\",\"--no-skills\",\"--no-mcp\"]; --no-approve alone does not stop context loading (R: installed pi 1.1.0 bundle chunk-OIM2DMFI.js loads ancestor AGENTS.md/CLAUDE.md -- `agentsFiles=this.noContextFiles?[]:loadProjectContextFiles(...)` -- independently of trust), so the direct profile also disables context-file, extension, skill and built-in-MCP discovery; it never emits --approve",
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09): '--approve, -a Trust project-local files for this run' / '--no-approve, -na Ignore project-local files for this run' / '--no-context-files, -nc Disable AGENTS.md and CLAUDE.md discovery and loading' / '--no-extensions, -ne' / '--no-skills, -ns' / '--no-mcp Disable built-in MCP support: no servers connect and no MCP tools'; R: installed pi 1.1.0 bundle chunk-OIM2DMFI.js (static read, 2026-10-09)"
               },
               "children": {
                 "support": "unqualified",
                 "mapping": "unavailable: no sub-agent/task tool or child-denial flag is documented for Pi (unlike OMP's task tool)",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) built-in tool list has no task/sub-agent tool"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) built-in tool list has no task/sub-agent tool"
               },
               "fallback": {
                 "support": "unqualified",
                 "mapping": "unavailable: no implicit model-fallback flag is documented; an invalid/omitted --model is a resolution error, never a silent substitution",
-                "evidence": "H: pi 0.87.1 --help (titan, 2026-10-09) documents a single --model flag with no fallback list"
+                "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents a single --model flag with no fallback list"
               }
             },
             "envAllowlist": [],
             "pitfalls": [
-              "--no-approve alone does not stop context loading: ancestor AGENTS.md/CLAUDE.md load independently of trust unless --no-context-files is also set (R: installed bundle chunk-OJP47DM6.js:1251). --no-context-files, --no-extensions and --no-skills are always rendered alongside it.",
+              "--no-approve alone does not stop context loading: ancestor AGENTS.md/CLAUDE.md load independently of trust unless --no-context-files is also set (R: installed bundle chunk-OIM2DMFI.js). --no-context-files, --no-extensions, --no-skills and --no-mcp (1.1.0 adds built-in MCP support, on by default) are always rendered alongside it.",
               "--approve is never rendered, which would trust arbitrary project-local extension/config files.",
               "Pi's own stdin reader trims the brief; an all-whitespace brief resolves to no initial message and must never be sent.",
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -1840,7 +1841,7 @@
                   "kind": "help",
                   "ref": "tools/ralph-external/lib/pi-adapter.mjs",
                   "observedAt": "2026-10-09T00:00:00Z",
-                  "cliVersion": "0.87.1"
+                  "cliVersion": "1.1.0"
                 },
                 {
                   "kind": "repository",

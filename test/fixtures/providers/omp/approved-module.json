@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/omp-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:96d106648599695e04ed8c4e5498f336b6896cddb818102491d9e5ab947afd6b",
+    "sha256": "sha256:b4398c8e900c3e09809b4f794b90277e4d0ba4b73a143bd3eeea80912bc16fef",
     "adapterIds": [
       "omp"
     ],

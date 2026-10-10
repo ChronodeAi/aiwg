@@ -8,7 +8,7 @@ pre-existing argument shape; also distinct from the RPC transport in
 
 The bundled `direct-shell` invocation profile in
 `agentic/code/providers/model-capabilities.v1.json` is version-bound to
-`omp/18.3.5` and documentation/help-evidenced only (`H:`/`R:` evidence
+`omp/18.8.7` and documentation/help-evidenced only (`H:`/`R:` evidence
 grades — see the adapter's header comment for the exact citations). It
 stays `unqualified` for dispatch until a human qualifier reviews a live
 run. The adapter (`tools/ralph-external/lib/omp-adapter.mjs`) renders:
@@ -22,7 +22,7 @@ omp --mode json --print --no-extensions --no-skills --no-rules \
 `--print` is kept explicit alongside `--mode json` because OMP's own
 `--help` lists it as a separate flag. `--approval-mode` is **always**
 rendered explicitly and never omitted: a static read of the installed omp
-binary (`/opt/noodle-agentic/bin/omp`, 18.3.5, noodle) shows the
+binary (`~/.local/bin/omp`, 18.8.7, noodle) shows the
 compiled-in default when no flag is given is `"yolo"` — a full
 sandbox/approval bypass — so omitting the flag would be the most dangerous
 outcome, not a safe one. The same binary defines the mode's tool-tier gate

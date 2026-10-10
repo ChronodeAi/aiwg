@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Synthetic 18.3.5-shaped direct-shell fixture. No auth, inference or network.
+// Synthetic 18.8.7-shaped direct-shell fixture. No auth, inference or network.
 // OMP's own event names only: agent_start, tool_execution_end, agent_end
 // (willContinue). Plain one-event-per-line JSON decodes through
 // OmpFrameDecoder without any rpc_chunk reassembly.
@@ -12,7 +12,7 @@ const value = flag => args[args.indexOf(flag) + 1];
 const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`);
 
 if (args.includes('--version')) {
-  process.stdout.write('omp v18.3.5\n');
+  process.stdout.write('omp v18.8.7\n');
 } else {
   // Unlike Pi's readPipedStdin, OMP's own readPipedInput (wUt) only trims
   // for the emptiness check; the returned/consumed text is untrimmed.
