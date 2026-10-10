@@ -33,7 +33,7 @@ import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { loadProviderModelCapabilities, qualifyWorkerInvocationProfile, resolveWorkerAdapter } from '../../../src/models/provider-policy.js';
 import { prepareWorkerInvocation, resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { classifyWorkerHealthFailure } from '../../../tools/ralph-external/lib/worker-health.mjs';
-import { HERMES_DIRECT_EFFORT_VALUES, HERMES_SUPPORTED_VERSIONS, HermesAdapter } from '../../../tools/ralph-external/lib/hermes-adapter.mjs';
+import { HERMES_DIRECT_EFFORT_VALUES, HERMES_SUPPORTED_VERSIONS, HermesAdapter, stripHermesStartupDiagnostics } from '../../../tools/ralph-external/lib/hermes-adapter.mjs';
 import { createProvider, loadInstalledWorkerAdapters } from '../../../src/models/worker-installation.mjs';
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
 import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
@@ -41,8 +41,12 @@ import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { fixtureJson } from '../mission-v1/worker-contract-fixtures.js';
 
 const FAKE = path.resolve('test/fixtures/providers/hermes/fake-hermes.mjs');
-const VERSION = '0.20.6';
+const VERSION = '0.21.6';
 const MODEL = 'synthetic-hermes/model';
+// Default `llmProvider` on the shared worker-resolution fixture (never
+// overridden by hermesPlan below); the resolved tuple carries it through
+// as `selected.inferenceProvider` (src/serve/worker-invocation.ts:419).
+const PROVIDER = 'vendor';
 const EFFORT = 'medium';
 const MARKER = 'HERMES-BRIEF-MARKER-9d2e71';
 const MODULE = 'tools/ralph-external/lib/hermes-adapter.mjs';
@@ -248,13 +252,14 @@ describe('Hermes version-observed profile (B-OG-48)', () => {
     expect(HERMES_SUPPORTED_VERSIONS).toEqual([VERSION]);
     expect(adapter).toMatchObject({ supportedVersions: VERSION, adapterVersion: '1', runtimeDriver: 'installed:hermes',
       invocation: { executable: 'hermes', stdin: 'brief-text',
-        argv: ['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool', '-m', '${model}', '--reasoning', '${effort}'] },
+        argv: ['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool',
+          '--provider', '${provider}', '-m', '${model}', '--reasoning', '${effort}'] },
       qualification: { status: 'unqualified' } });
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe(VERSION);
     for (const [name, control] of Object.entries(profile.controls)) {
       expect(control.support, name).toBe('unqualified');
-      expect(control.evidence, name).toMatch(/^[DH]: hermes 0\.20\.6/);
+      expect(control.evidence, name).toMatch(/^[DH]: hermes 0\.21\.6/);
     }
     expect(profile.controls.stdin.mapping).toMatch(/query-file -.*reads the single query from stdin/);
     expect(profile.controls.approval.mapping).toMatch(/ignore-user-config/);
@@ -262,7 +267,7 @@ describe('Hermes version-observed profile (B-OG-48)', () => {
     expect(profile.controls.approval.mapping).toMatch(/HERMES_YOLO_MODE/);
     expect(profile.pitfalls.some((line: string) => /does NOT use the top-level -z/.test(line))).toBe(true);
     expect(profile.pitfalls.some((line: string) => /no --usage-file\/JSON-report equivalent/.test(line))).toBe(true);
-    expect(profile.pitfalls.some((line: string) => /Exit code 0 is never completion evidence/.test(line))).toBe(true);
+    expect(profile.pitfalls.some((line: string) => /Exit code 0 alone is still not treated as completion evidence/.test(line))).toBe(true);
     expect(profile.pitfalls.some((line: string) => /HERMES_YOLO_MODE.*must never reach the worker/.test(line))).toBe(true);
   });
 
@@ -290,8 +295,9 @@ describe('T-OG-15 Hermes direct command contract', () => {
     const invocation = plan.invocation!;
     expect(invocation.readiness).toBe('launchable');
     expect(invocation.stdin).toBe('brief-text');
-    expect(invocation.argv.slice(2)).toEqual(['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool', '-m', MODEL,
-      '--reasoning', invocation.selected.effort.value]);
+    expect(invocation.selected.inferenceProvider).toBe(PROVIDER);
+    expect(invocation.argv.slice(2)).toEqual(['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool',
+      '--provider', invocation.selected.inferenceProvider, '-m', MODEL, '--reasoning', invocation.selected.effort.value]);
     expect(JSON.stringify(invocation.argv)).not.toContain(MARKER);
     const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
     expect(invocation.shellCommand).toBe(`cd ${quote(workdir)} && env -i AIWG_FAKE_WORKER_CONFIG="\${AIWG_FAKE_WORKER_CONFIG-}" ${invocation.argv.map(quote).join(' ')}`
@@ -301,7 +307,7 @@ describe('T-OG-15 Hermes direct command contract', () => {
       env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: file, HERMES_UNRELATED_SECRET: 'sk-synthetic-should-not-pass' } });
     expect(result.code, result.stderr).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
-    expect(record).toMatchObject({ query: payload, model: MODEL });
+    expect(record).toMatchObject({ query: payload, model: MODEL, provider: PROVIDER });
     expect(record.query).toContain(MARKER);
     expect(record.argv).toEqual(invocation.argv.slice(2));
     expect(JSON.stringify(record.argv)).not.toContain(MARKER);
@@ -312,6 +318,32 @@ describe('T-OG-15 Hermes direct command contract', () => {
     expect(final?.response).toContain('"status":"completed"');
     const claims = JSON.parse(stdoutText);
     expect(claims).toMatchObject({ version: 1, status: 'completed', summary: `synthetic reply (${payload.length} chars)` });
+  });
+
+  it('HD02b end to end through the real rendered command: a leading startup diagnostic on stdout still lets parseWorkerFinal accept the valid final beneath it; garbage preamble and diagnostic-only output still fail', async () => {
+    const { plan, root } = await hermesPlan();
+    const invocation = plan.invocation!;
+    const okRun = await fakeConfig(root, 'diagnostic-then-success');
+    const okResult = await run('/bin/sh', ['-c', invocation.shellCommand!], { cwd: root, env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: okRun.file } });
+    expect(okResult.code, okResult.stderr).toBe(0);
+    const okStdout = await readFile(invocation.stdoutPath, 'utf8');
+    expect(okStdout).toContain('tirith security scanner');
+    await expect(owner.parseWorkerFinal(okStdout, { observation: { status: 'completed', termination: 'confirmed', transport: 'shell', exitCode: 0 } }))
+      .resolves.toMatchObject({ status: 'completed' });
+
+    const garbageRun = await fakeConfig(root, 'diagnostic-garbage-preamble');
+    const garbageResult = await run('/bin/sh', ['-c', invocation.shellCommand!], { cwd: root, env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: garbageRun.file } });
+    expect(garbageResult.code, garbageResult.stderr).toBe(0);
+    const garbageStdout = await readFile(invocation.stdoutPath, 'utf8');
+    await expect(owner.parseWorkerFinal(garbageStdout, { observation: { status: 'completed', termination: 'confirmed', transport: 'shell', exitCode: 0 } }))
+      .rejects.toThrow();
+
+    const onlyRun = await fakeConfig(root, 'diagnostic-only');
+    const onlyResult = await run('/bin/sh', ['-c', invocation.shellCommand!], { cwd: root, env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: onlyRun.file } });
+    expect(onlyResult.code, onlyResult.stderr).toBe(0);
+    const onlyStdout = await readFile(invocation.stdoutPath, 'utf8');
+    await expect(owner.parseWorkerFinal(onlyStdout, { observation: { status: 'completed', termination: 'confirmed', transport: 'shell', exitCode: 0 } }))
+      .rejects.toThrow();
   });
 
   it('HD03 a failed turn that still printed partial text to stdout exits non-zero (unlike the rejected -z path)', async () => {
@@ -367,22 +399,51 @@ describe('T-OG-15 Hermes direct command contract', () => {
     expect(messages.join('\n')).toMatch(reason);
   });
 
-  it('HD05 the driver argv never guesses a sandbox/approval flag, never carries the brief, and refuses a missing model/effort/workspace', () => {
+  it('HD05 the driver argv never guesses a sandbox/approval flag, never carries the brief, and refuses a missing model/effort/provider/workspace', () => {
       const input = { brief: `"; rm -rf / #\n--model evil ${MARKER}`, cwd: '/w',
-      selected: { model: MODEL, effort: { value: EFFORT } } };
+      selected: { model: MODEL, inferenceProvider: PROVIDER, effort: { value: EFFORT } } };
     const argv = owner.buildWorkerArgs(input, null, { sandbox: 'workspace-write', approval: 'never' });
-    expect(argv).toEqual(['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool', '-m', MODEL, '--reasoning', EFFORT]);
+    expect(argv).toEqual(['chat', '--query-file', '-', '--oneshot', '--quiet', '--ignore-user-config', '--ignore-rules', '--source', 'tool',
+      '--provider', PROVIDER, '-m', MODEL, '--reasoning', EFFORT]);
     expect(argv.join(' ')).not.toContain(MARKER);
     expect(argv.join(' ')).not.toMatch(/--yolo|--accept-hooks|--safe-mode|sandbox|bypass/);
     expect(() => owner.buildWorkerArgs({ ...input, brief: '' }, null, {})).toThrow(/brief/);
-    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: '', effort: { value: EFFORT } } }, null, {})).toThrow(/model/);
-    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: MODEL, effort: { value: 'ultra' } } }, null, {})).toThrow(/effort/);
-    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: MODEL, effort: { value: null } } }, null, {})).toThrow(/effort/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { ...input.selected, model: '' } }, null, {})).toThrow(/model/);
+    // Provider: missing, empty, null-byte-laced, and the literal "auto" (the
+    // CLI's own silent default, hermes_cli/runtime_provider.py:647-663) must
+    // all be refused -- this is the smoke-run fix (module docstring Fix
+    // round 2 #1), never a guessed/default provider.
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: MODEL, effort: { value: EFFORT } } }, null, {})).toThrow(/provider/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { ...input.selected, inferenceProvider: '' } }, null, {})).toThrow(/provider/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { ...input.selected, inferenceProvider: 'auto' } }, null, {})).toThrow(/provider/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { ...input.selected, inferenceProvider: 'AUTO' } }, null, {})).toThrow(/provider/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { ...input.selected, inferenceProvider: `vendor\0${MARKER}` } }, null, {})).toThrow(/provider/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: MODEL, inferenceProvider: PROVIDER, effort: { value: 'ultra' } } }, null, {})).toThrow(/effort/);
+    expect(() => owner.buildWorkerArgs({ ...input, selected: { model: MODEL, inferenceProvider: PROVIDER, effort: { value: null } } }, null, {})).toThrow(/effort/);
     expect(() => owner.buildWorkerArgs({ ...input, cwd: 'relative' }, null, {})).toThrow(/absolute workspace/);
     expect(HERMES_DIRECT_EFFORT_VALUES).not.toContain('ultra');
     expect(() => owner.buildSessionArgs()).toThrow(/no qualified Ralph loop session/);
     expect(owner.observeHealthEvent()).toBeNull();
     expect(owner.getAbortInput()).toBeNull();
+  });
+
+  it('HD05a the fake CLI itself reproduces the live smoke-run failure: a missing or "auto" --provider fails with "No inference provider configured"; an explicit provider succeeds', async () => {
+    const { root } = await scratch();
+    const base = { PATH: process.env.PATH! };
+    const withoutProvider = await run(process.execPath, [FAKE, 'chat', '--query-file', '-', '--oneshot', '--quiet',
+      '--ignore-user-config', '--ignore-rules', '--source', 'tool', '-m', MODEL, '--reasoning', EFFORT], { cwd: root, env: base });
+    expect(withoutProvider.code).toBe(1);
+    expect(withoutProvider.stdout).toBe('');
+    expect(withoutProvider.stderr).toContain('No inference provider configured');
+    const withAuto = await run(process.execPath, [FAKE, 'chat', '--query-file', '-', '--oneshot', '--quiet',
+      '--ignore-user-config', '--ignore-rules', '--source', 'tool', '--provider', 'auto', '-m', MODEL, '--reasoning', EFFORT], { cwd: root, env: base });
+    expect(withAuto.code).toBe(1);
+    expect(withAuto.stdout).toBe('');
+    expect(withAuto.stderr).toContain('No inference provider configured');
+    const withProvider = await run(process.execPath, [FAKE, 'chat', '--query-file', '-', '--oneshot', '--quiet',
+      '--ignore-user-config', '--ignore-rules', '--source', 'tool', '--provider', PROVIDER, '-m', MODEL, '--reasoning', EFFORT], { cwd: root, env: base });
+    expect(withProvider.code, withProvider.stderr).toBe(0);
+    expect(JSON.parse(withProvider.stdout)).toMatchObject({ status: 'completed' });
   });
 
   it('HD05b parseWorkerFinal resolves a valid workerClaims document when BOTH the exit-derived status and the strict #2890 parse pass', async () => {
@@ -393,6 +454,31 @@ describe('T-OG-15 Hermes direct command contract', () => {
     // shape even though the exit-derived status says 'completed'.
     await expect(owner.parseWorkerFinal('⚠️ **Thinking Budget Exhausted**\n\nfree text, not a claims document', { observation }))
       .rejects.toThrow();
+  });
+
+  it('HD05c parseWorkerFinal strips a leading known startup diagnostic and accepts the valid final beneath it; rejects garbage preamble and diagnostic-only output', async () => {
+    const claims = { version: 1, status: 'completed', summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] };
+    const observation = { status: 'completed', termination: 'confirmed', transport: 'shell', exitCode: 0 };
+    const diagnostic = '  \x1b[2;3m⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\x1b[0m\n';
+    // Plain (no ANSI) and ANSI-wrapped diagnostic forms both strip.
+    await expect(owner.parseWorkerFinal(`${diagnostic}${JSON.stringify(claims)}`, { observation })).resolves.toEqual(claims);
+    await expect(owner.parseWorkerFinal(`  ⚠ tirith security scanner enabled but not available\n${JSON.stringify(claims)}`, { observation }))
+      .resolves.toEqual(claims);
+    // Two consecutive diagnostic lines both strip.
+    await expect(owner.parseWorkerFinal(`${diagnostic}${diagnostic}${JSON.stringify(claims)}`, { observation })).resolves.toEqual(claims);
+    // Unrecognized preamble (no leading "⚠") is left in place and fails.
+    await expect(owner.parseWorkerFinal(`unexpected preamble\n${JSON.stringify(claims)}`, { observation })).rejects.toThrow();
+    // Diagnostic-only output (no final at all) strips to nothing and fails.
+    await expect(owner.parseWorkerFinal(diagnostic, { observation })).rejects.toThrow();
+    // A diagnostic-shaped line AFTER the real final is never stripped (only
+    // leading lines are eligible), so trailing content fails the parse.
+    await expect(owner.parseWorkerFinal(`${JSON.stringify(claims)}\n${diagnostic}`, { observation })).rejects.toThrow();
+    // The emoji-presentation "⚠️" (U+FE0F) the budget-exhaustion message uses
+    // is a model-facing warning, not a CLI diagnostic, and must NOT strip.
+    expect(stripHermesStartupDiagnostics('⚠️ **Thinking Budget Exhausted**\n\nfree text'))
+      .toBe('⚠️ **Thinking Budget Exhausted**\n\nfree text');
+    expect(stripHermesStartupDiagnostics(diagnostic + diagnostic)).toBe('');
+    expect(stripHermesStartupDiagnostics(42)).toBe(42);
   });
 
   it('HD06 the bundled registry stays undispatchable: live qualification is a recorded S1 blocker', () => {
