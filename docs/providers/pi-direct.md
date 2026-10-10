@@ -49,7 +49,7 @@ pass/fail and the observed CLI version on the tracking issue. It is not part
 of default CI and performs exactly one live, billable call.
 
 ```sh
-mkdir -p /tmp/pi-smoke && cd /tmp/pi-smoke
+d=$(mktemp -d) && cd "$d"
 echo 'Reply with exactly: pi-smoke-ok' | pi --mode json --no-approve \
   --no-context-files --no-extensions --no-skills --no-mcp \
   --model <provider/model> --thinking low ; echo "exit=$?"

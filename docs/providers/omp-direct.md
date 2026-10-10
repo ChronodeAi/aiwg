@@ -58,7 +58,7 @@ a pass/fail and the observed CLI version on the tracking issue. It is not
 part of default CI and performs exactly one live, billable call.
 
 ```sh
-mkdir -p /tmp/omp-smoke && cd /tmp/omp-smoke
+d=$(mktemp -d) && cd "$d"
 echo 'Reply with exactly: omp-smoke-ok' | omp --mode json --print \
   --no-extensions --no-skills --no-rules --model <provider/model> \
   --thinking low --cwd "$PWD" --approval-mode write ; echo "exit=$?"
@@ -68,11 +68,12 @@ echo 'Reply with exactly: omp-smoke-ok' | omp --mode json --print \
 
 - **Exit code**: `echo "exit=$?"` must print `exit=0`. Any non-zero exit is
   a fail.
-- **`agent_end` with `willContinue:false` on stdout**: the `--mode json`
-  stream is JSONL on stdout, one event per line. Grep it for the terminal
-  event: `omp ... | grep '"type":"agent_end"'` and confirm the same line
-  reports `"willContinue":false`. A run that exits 0 without that terminal
-  event is a fail.
+- **Terminal `agent_end` on stdout**: the `--mode json` stream is JSONL on
+  stdout, one event per line. The terminal event is an `agent_end` that does
+  **not** carry `"willContinue":true`. OMP 18.8.7 omits `willContinue` on the
+  final `agent_end`; only a continuing turn sets it to `true`. A run that exits
+  0 without such a terminal event is a fail. Other event types (for example
+  `advisor_cost_changed` in 18.8.7) are informational and ignored.
 - **Reply text**: the terminal `agent_end` event should carry an assistant
   message whose text is `omp-smoke-ok`. A clean terminal with no assistant
   message, or a different reply, is a fail.
