@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Synthetic stand-in for `opencode` 2.0.18 `run` (roctinam/aiwg#2904).
+ * Synthetic stand-in for `opencode` 2.0.26 `run` (roctinam/aiwg#2904).
  * It implements only the help-evidenced surface used by the version-bound
  * direct-shell profile:
  *
@@ -9,7 +9,7 @@
  *   opencode --version | --help
  *
  * Stdin is confirmed unsupported (conductor disassembly of the installed
- * v2.0.18 binary found no stdin/isTTY handling in the `run` chunk), so the
+ * v2.0.26 binary found no stdin/isTTY handling in the `run` chunk), so the
  * brief rides on `-f`/`--file` as a path; this fixture requires `-f` and
  * rejects any positional message other than the fixed instruction above —
  * a regression that puts brief text back on argv must fail this fixture.
@@ -63,7 +63,7 @@ if (!args.length || args[0] === '--help' || args[0] === '-h') {
   process.exit(0);
 }
 if (args[0] === '--version' || args[0] === '-v') {
-  process.stdout.write('opencode 2.0.18 (synthetic fixture)\n');
+  process.stdout.write('opencode 2.0.26 (synthetic fixture)\n');
   process.exit(0);
 }
 // Native worker serving is not advertised on the evidenced CLI: `serve` is

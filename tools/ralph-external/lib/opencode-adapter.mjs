@@ -29,7 +29,7 @@
 /**
  * Version-bound direct-worker surface (roctinam/aiwg#2904, B-OG-39).
  *
- * Qualified against OpenCode CLI 2.0.18 `opencode --help` / `opencode run
+ * Qualified against OpenCode CLI 2.0.26 `opencode --help` / `opencode run
  * --help` (help/version syntax only, captured on host 'noodle'
  * 2026-10-09; see .aiwg/working/s1-scratch/cli-help/opencode.txt; never
  * live qualification):
@@ -38,7 +38,7 @@
  *     the attached file exactly."
  *
  * Stdin is confirmed unsupported, not merely undocumented: the conductor
- * disassembled the installed v2.0.18 binary on host 'noodle' and the
+ * disassembled the installed v2.0.26 binary on host 'noodle' and the
  * compiled chunk implementing `run` has no stdin/isTTY handling at all.
  * `run [flags] [<message...>]` takes the message as a trailing positional
  * argument, but `--file`/`-f` ("File to attach to the message") lets the
@@ -88,8 +88,8 @@
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
 import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
 
-export const OPENCODE_SUPPORTED_VERSIONS = Object.freeze(['2.0.18']);
-/** Stdin is confirmed unsupported by the compiled v2.0.18 `run` chunk (see
+export const OPENCODE_SUPPORTED_VERSIONS = Object.freeze(['2.0.26']);
+/** Stdin is confirmed unsupported by the compiled v2.0.26 `run` chunk (see
  * module doc); the brief travels via `-f`/`--file` instead. */
 export const OPENCODE_DIRECT_STDIN = 'closed';
 /** Fixed, content-free positional message: never the brief, so brief bytes

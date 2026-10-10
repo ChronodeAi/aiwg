@@ -7,7 +7,7 @@ and transcript handling).
 
 The bundled `direct-shell` invocation profile in
 `agentic/code/providers/model-capabilities.v1.json` is version-bound to
-`opencode 2.0.18` and help-evidenced only (`H:` evidence grade, captured
+`opencode 2.0.26` and help-evidenced only (`H:` evidence grade, captured
 from `opencode --help` / `opencode run --help` on host `noodle`,
 2026-10-09). It stays `unqualified` for dispatch until a human qualifier
 reviews a live run. The adapter
@@ -19,7 +19,7 @@ opencode run --format json -m <model>[#<effort>] -f <briefPath> "Follow the inst
 
 **Stdin is confirmed unsupported, not merely undocumented.** `opencode run
 --help` shows only a positional `[<message...>]` argument, and the
-conductor went further and disassembled the installed `opencode` 2.0.18
+conductor went further and disassembled the installed `opencode` 2.0.26
 binary on host `noodle`: the compiled chunk implementing `run` has no
 stdin/isTTY handling at all. The brief therefore travels as an attached
 file via `--file`/`-f` ("File to attach to the message"), and the

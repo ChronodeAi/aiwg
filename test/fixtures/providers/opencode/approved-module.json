@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/opencode-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:fe550cc83b7a520b03fde597203493c8f1b7e052d17321818da6c51481185e69",
+    "sha256": "sha256:11f62c713c79a301edb3013683946da9d42724dd3d24569e5ec87b2f8c28b796",
     "adapterIds": ["opencode"],
     "platforms": ["linux"]
   }

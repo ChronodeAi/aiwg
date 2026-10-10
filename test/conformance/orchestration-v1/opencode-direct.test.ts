@@ -5,7 +5,7 @@
  * the real resolver and #2887 renderer, then executes the rendered shell
  * command against a synthetic `opencode` that records argv, cwd, env names
  * and the attached brief file it received. Stdin is confirmed unsupported
- * by binary disassembly of the installed `opencode` 2.0.18 (the compiled
+ * by binary disassembly of the installed `opencode` 2.0.26 (the compiled
  * `run` chunk has no stdin/isTTY handling; see
  * tools/ralph-external/lib/opencode-adapter.mjs), so the brief travels as
  * an attached file via `-f`/`--file`; the argv positional carries only a
@@ -36,7 +36,7 @@ import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { fixtureJson } from '../mission-v1/worker-contract-fixtures.js';
 
 const FAKE = path.resolve('test/fixtures/providers/opencode/fake-opencode.mjs');
-const VERSION = '2.0.18';
+const VERSION = '2.0.26';
 const MODEL = 'synthetic/a%b';
 const MARKER = 'OPENCODE-BRIEF-MARKER-7f1c9a';
 const MODULE = 'tools/ralph-external/lib/opencode-adapter.mjs';
@@ -249,7 +249,7 @@ describe('OpenCode version-bound profile (B-OG-39)', () => {
     const binaryEvidenced = ['stdin', 'effort', 'approval'];
     for (const [name, control] of Object.entries(profile.controls)) {
       expect(control.support, name).toBe('unqualified');
-      expect(control.evidence, name).toMatch(binaryEvidenced.includes(name) ? /^R: conductor binary disassembly/ : /^H: opencode 2\.0\.18/);
+      expect(control.evidence, name).toMatch(binaryEvidenced.includes(name) ? /^R: conductor binary disassembly/ : /^H: opencode 2\.0\.26/);
     }
     expect(profile.controls.model.mapping).toContain('-m/--model');
     expect(profile.controls.effort.mapping).toContain('#<variant>');
