@@ -3,7 +3,7 @@ import test from 'node:test';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
 import semver from 'semver';
-import { inspectPackRegistry } from '../../../tools/testing/check-orchestration-packs.mjs';
+import { inspectPackRegistry, loadOrchestrationPackRegistry } from '../../../tools/testing/check-orchestration-packs.mjs';
 import path from 'node:path';
 import { MuseAdapter, museQuotaEvidence } from '../../../tools/ralph-external/lib/muse-adapter.mjs';
 
@@ -93,7 +93,7 @@ function directInput() {
 
 test('T-OG-06 exactly registers both partial Muse test files', () => {
   const root = path.resolve('.');
-  const registry = JSON.parse(readFileSync(path.join(root, 'test/conformance/orchestration-v1/packs.json')));
+  const registry = loadOrchestrationPackRegistry(root);
   const report = inspectPackRegistry(registry, root);
   assert.equal(report.packs['T-OG-06'].status, 'partial');
   assert.deepEqual(report.packs['T-OG-06'].testFiles, [
