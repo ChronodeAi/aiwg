@@ -43,7 +43,7 @@ the direct profile always disables workspace-local extension/skill/rule
 discovery instead (`--no-extensions --no-skills --no-rules`). `--cwd` is
 explicit (unlike Pi, which has no such flag). There is no `-o`/output-file,
 `--output-schema` or step-cap flag; the final answer comes from the stdout
-event stream (`agent_end` with `willContinue: false`), never a file. The
+event stream (the terminal `agent_end`, i.e. without `willContinue: true`), never a file. The
 brief always travels on stdin — there is no positional prompt argument —
 **confirmed** by a static read of the installed omp binary (not merely
 inherited from Pi's lineage): OMP's own `readPipedInput` drains non-TTY
