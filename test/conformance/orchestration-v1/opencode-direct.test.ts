@@ -454,7 +454,7 @@ describe('T-OG-20 OpenCode run identity and signals', () => {
     expect(owner.parseOutput(malformed.stdout)).toBeNull();
   });
 
-  it('OC10a step_start -> text -> exit 0 with NO step_finish at all is rejected (exit code alone never substitutes for a terminal)', async () => {
+  it('OC10a a text part with no recorded time.end and no step_finish is rejected (exit code alone never substitutes for a positive signal)', async () => {
     const { root, workdir } = await scratch();
     const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, BRIEF);
     const { file } = await fakeConfig(root, 'truncated-after-text');
@@ -462,6 +462,18 @@ describe('T-OG-20 OpenCode run identity and signals', () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('synthetic reply with no terminal');
     expect(owner.parseOutput(result.stdout)).toBeNull();
+  });
+
+  it('OC10b a single complete text event with NO step_start/step_finish IS a valid final (live opencode 2.0.26 shape)', async () => {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, BRIEF);
+    const { file } = await fakeConfig(root, 'success-v2');
+    const result = await run(process.execPath, argv(briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code).toBe(0);
+    const events = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('text');
+    expect(owner.parseOutput(result.stdout)).toEqual({ text: `synthetic reply (${BRIEF.length} chars)` });
   });
 
   it('OC11 secrets stay out of the recorded command', async () => {

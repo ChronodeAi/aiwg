@@ -164,7 +164,7 @@
                 },
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 antigravity",
+                  "ref": "03-software-architecture.md \u00a710 antigravity",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -756,7 +756,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 copilot",
+                  "ref": "03-software-architecture.md \u00a710 copilot",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -924,7 +924,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 cursor",
+                  "ref": "03-software-architecture.md \u00a710 cursor",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -1104,7 +1104,7 @@
                 },
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 factory",
+                  "ref": "03-software-architecture.md \u00a710 factory",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -1218,7 +1218,7 @@
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "no --output/-o flag; the final answer is the captured stdout --format json JSONL stream, with text concatenated from its text-event payloads",
+                "mapping": "no --output/-o flag and no positive whole-run terminal event (binary disassembly: the run loop returns silently on session.execution.succeeded, in any mode); the final answer is the captured stdout --format json JSONL stream, accepted only when every line parses, no error event occurs, any present step_finish says \"stop\", and at least one text part has a recorded part.time.end (or a stop step_finish substitutes for that) -- a live 2.0.26 run confirmed a clean single-text-event stream with no step_start/step_finish at all",
                 "evidence": "H: opencode 2.0.26 `opencode run --help` ('--format choice  Output format (choices: default, json)')"
               },
               "stdin": {
@@ -1255,6 +1255,7 @@
             "envAllowlist": [],
             "pitfalls": [
               "Stdin is confirmed unsupported (conductor disassembly of the installed opencode 2.0.26 binary: no stdin/isTTY handling in the compiled 'run' chunk, host 'noodle', 2026-10-09). The brief travels as an attached file via -f/--file; the positional argv message is a fixed, content-free instruction and never carries brief text.",
+              "There is no positive session-terminal JSON event in any compatibility mode: binary disassembly shows the run loop returns silently on session.execution.succeeded. A live 2.0.26 smoke run (one complete `text` event, nothing else) confirms this is a genuine success shape, not truncation; parseOutput accepts a complete text part OR a step_finish reason \"stop\" as the positive signal, never exit code alone.",
               "--auto is a blanket permission/approval bypass ('Auto-approve permissions that are not explicitly denied') and is never part of the direct profile.",
               "'opencode serve' is an HTTP API, not MCP, and 'opencode mcp' manages MCP *clients* the agent can call out to, not a worker-serving endpoint; the AIWG worker-invoke bridge remains the MCP route.",
               "Documentation/help and synthetic observations are not authenticated live qualification."
@@ -1266,7 +1267,7 @@
               "signalParser": "provider-opencode-health-v1",
               "sessionLogLocator": null,
               "progressEvidence": [],
-              "stopEvidence": "owned process identity and observed exit; a step_finish/text event alone is insufficient",
+              "stopEvidence": "owned process identity and observed exit, plus parseOutput's strict rule: a complete text part (part.time.end present) or a step_finish reason \"stop\"; there is no whole-run terminal event (binary: the run loop returns silently on session.execution.succeeded), so exit code alone is never sufficient",
               "fixtureRef": "test/fixtures/providers/opencode/health/manifest.json",
               "qualifiedAt": null,
               "statusOperation": null,
@@ -1280,15 +1281,15 @@
               "provenance": [
                 {
                   "kind": "help",
-                  "ref": "opencode run --help / opencode --help (captured .aiwg/working/s1-scratch/cli-help/opencode.txt)",
-                  "observedAt": "2026-10-09T00:00:00Z",
+                  "ref": "opencode run --help / opencode --help (captured .aiwg/working/s1-scratch/cli-help/opencode-2.0.26.txt)",
+                  "observedAt": "2026-10-10T00:00:00Z",
                   "cliVersion": "2.0.26"
                 },
                 {
                   "kind": "repository",
-                  "ref": "tools/ralph-external/lib/opencode-adapter.mjs",
-                  "observedAt": "2026-10-09T00:00:00Z",
-                  "cliVersion": null
+                  "ref": "tools/ralph-external/lib/opencode-adapter.mjs; conductor live smoke run + binary disassembly of installed opencode 2.0.26 (host 'noodle', 2026-10-10; .aiwg/working/s1-scratch/smoke-opencode.jsonl) redefining parseOutput final-output validity",
+                  "observedAt": "2026-10-10T00:00:00Z",
+                  "cliVersion": "2.0.26"
                 }
               ],
               "qualificationOwner": "B-OG-39",
@@ -1456,7 +1457,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 warp",
+                  "ref": "03-software-architecture.md \u00a710 warp",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }
@@ -2225,7 +2226,7 @@
               "provenance": [
                 {
                   "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 openclaw",
+                  "ref": "03-software-architecture.md \u00a710 openclaw",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
                 }

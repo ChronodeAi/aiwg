@@ -114,7 +114,10 @@ record({ model, format, file, message, brief, jsonStream: format === 'json' });
 
 const line = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 const handshake = () => line({ type: 'step_start', sessionID: SESSION, part: {} });
-const textEvent = (id, text) => line({ type: 'text', sessionID: SESSION, part: { id, type: 'text', text } });
+// `complete: false` omits part.time.end, simulating a part whose stream
+// never recorded a finish (e.g. a dropped connection mid-text).
+const textEvent = (id, text, { complete = true } = {}) => line({ type: 'text', sessionID: SESSION,
+  part: { id, sessionID: SESSION, type: 'text', text, time: complete ? { start: 1000, end: 2000 } : { start: 1000 } } });
 const finish = (reason = 'stop') => line({ type: 'step_finish', sessionID: SESSION, part: { reason } });
 
 switch (scenario) {
@@ -124,6 +127,15 @@ switch (scenario) {
       textEvent('opencode-fixture-part-1', `synthetic reply (${brief.length} chars)`);
       finish('stop');
     }
+    process.exit(0);
+    break;
+  }
+  case 'success-v2': {
+    // The real opencode 2.0.26 shape observed live (smoke-opencode.jsonl,
+    // #2904 follow-up): a single complete `text` event and NOTHING else —
+    // no step_start, no step_finish, no terminal event of any kind. This
+    // is the primary success shape this profile must accept.
+    if (format === 'json') textEvent('opencode-fixture-part-1', `synthetic reply (${brief.length} chars)`);
     process.exit(0);
     break;
   }
@@ -150,11 +162,13 @@ switch (scenario) {
     break;
   }
   case 'truncated-after-text': {
-    // step_start -> text -> exit 0, with NO step_finish at all: a clean
-    // exit code must never substitute for an observed terminal "stop".
+    // A text part with NO part.time.end: the stream never recorded a
+    // finish for it (e.g. a dropped connection mid-text) and there is no
+    // step_finish either. Exit 0 must never substitute for a positive
+    // completion signal here.
     if (format === 'json') {
       handshake();
-      textEvent('opencode-fixture-part-1', 'synthetic reply with no terminal');
+      textEvent('opencode-fixture-part-1', 'synthetic reply with no terminal', { complete: false });
     }
     process.exit(0);
     break;

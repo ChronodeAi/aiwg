@@ -30,9 +30,12 @@
  * Version-bound direct-worker surface (roctinam/aiwg#2904, B-OG-39).
  *
  * Qualified against OpenCode CLI 2.0.26 `opencode --help` / `opencode run
- * --help` (help/version syntax only, captured on host 'noodle'
- * 2026-10-09; see .aiwg/working/s1-scratch/cli-help/opencode.txt; never
- * live qualification):
+ * --help` (help/version syntax captured on host 'noodle' 2026-10-10; see
+ * .aiwg/working/s1-scratch/cli-help/opencode-2.0.26.txt) plus one live
+ * smoke run and binary disassembly (.aiwg/working/s1-scratch/
+ * smoke-opencode.jsonl, 2026-10-10) that redefine final-output validity
+ * below; that live evidence is scoped to `parseOutput`'s rule and never
+ * promotes the registry's `qualification.status` beyond `unqualified`:
  *
  *   opencode run --format json -m M[#E] -f F "Follow the instructions in
  *     the attached file exactly."
@@ -128,6 +131,15 @@ export class OpenCodeAdapter extends ProviderAdapter {
    * session-establishment signal, so only identity correlation (`setup`)
    * and the terminal/error outcome are reported; accepted-start and
    * distinct-item progress remain unavailable pending qualification.
+   *
+   * `step_start`/`step_finish` are BOTH OPTIONAL (roctinam/aiwg#2904
+   * follow-up, live 2.0.26 smoke run + binary disassembly, host 'noodle',
+   * 2026-10-10): the run command's event loop returns silently on
+   * `session.execution.succeeded` with no JSON event of any kind, and a
+   * live run that never produced a `session.step.*` pair emitted a single
+   * `text` event and nothing else — confirmed success, not a truncation.
+   * Their absence is therefore never treated as failure here; see
+   * `parseOutput` for the strict final-validity rule this implies.
    */
   observeHealthEvent(event, source, binding) {
     if (source.kind !== 'stdout' || !event || typeof event !== 'object') return null;
@@ -342,13 +354,42 @@ export class OpenCodeAdapter extends ProviderAdapter {
   }
 
   /**
-   * Parse OpenCode output — extracts text from newline-delimited JSON events
-   * and STRICTLY requires a terminal `step_finish` whose `part.reason` is
-   * `"stop"`. A stream that ends after `step_start`/`text` with no
-   * `step_finish` (exit 0 or not), a `step_finish` with any other reason
-   * (e.g. `"error"`), a malformed JSON line, an unrecognized event type, or
-   * trailing content after the terminal event is rejected — a clean exit
-   * code alone never establishes a successful final.
+   * Parse OpenCode output — extracts text from newline-delimited JSON
+   * events under a strict, binary-evidenced final-validity rule
+   * (roctinam/aiwg#2904 follow-up, 2026-10-10).
+   *
+   * There is NO positive session-terminal event in this stream in ANY
+   * mode: disassembly of the installed `opencode` 2.0.26 binary shows the
+   * `run` command's event loop returns silently on
+   * `session.execution.succeeded` ("...if(t.type==="session.execution.
+   * succeeded")return}") — no JSON line is ever written for it. A live
+   * 2.0.26 smoke run confirmed this empirically: a successful,
+   * single-turn reply produced exactly one `text` event and nothing
+   * else — no `step_start`, no `step_finish`
+   * (.aiwg/working/s1-scratch/smoke-opencode.jsonl). `step_start`/
+   * `step_finish` ARE still evidenced for streams that have them (older
+   * CLI, or a turn that does produce discrete `session.step.*` events):
+   * `step_finish`'s `part.reason` is unconditionally written from
+   * `t.data.finish` whenever a step actually ends, so when one IS present
+   * it stays authoritative and a non-`"stop"` reason (or an `error`
+   * event, emitted from `session.step.failed`/`session.execution.failed`/
+   * a non-user `session.execution.interrupted`) still fails the run even
+   * at exit 0.
+   *
+   * The resulting rule, since no positive whole-run terminal exists:
+   * reject a malformed/unparseable line, an unrecognized event type, any
+   * `error` event, a present `step_finish` whose reason is not `"stop"`,
+   * or trailing content after a `step_finish`. Otherwise accept only if
+   * at least one `text` part completed (`part.time.end` present and
+   * finite) OR a `step_finish` with reason `"stop"` was seen — a `text`
+   * event with no recorded `time.end` (e.g. a dropped mid-stream
+   * connection) does not count on its own.
+   *
+   * Residual risk, stated plainly: a provider that truncates the stream
+   * right after flushing one complete `text` part, before any further
+   * content or an error event, is indistinguishable from a genuine
+   * single-part success — there is no stronger signal available from
+   * this CLI's `run --format json` output to rule that out.
    *
    * @param {string} stdout
    * @returns {{ text: string }|null}
@@ -356,20 +397,27 @@ export class OpenCodeAdapter extends ProviderAdapter {
   parseOutput(stdout) {
     if (typeof stdout !== 'string' || !stdout.trim()) return null;
     let text = '';
-    let terminalReason = null;
+    let sawCompleteText = false;
+    let stepFinishStop = null; // null: none seen; otherwise true/false
+    let terminalSeen = false;
     for (const raw of stdout.split('\n')) {
       const line = raw.trim();
       if (!line) continue;
-      if (terminalReason !== null) return null; // content after the terminal event
+      if (terminalSeen) return null; // trailing content after step_finish
       let event;
       try { event = JSON.parse(line); } catch { return null; } // malformed frame: fail closed
       if (!event || typeof event !== 'object' || typeof event.type !== 'string') return null;
       if (event.type === 'step_start') continue;
-      else if (event.type === 'text' && typeof event.part?.text === 'string') text += event.part.text;
-      else if (event.type === 'step_finish') terminalReason = typeof event.part?.reason === 'string' ? event.part.reason : '';
-      else return null; // unrecognized event: never invented, never ignored
+      else if (event.type === 'text') {
+        if (typeof event.part?.text !== 'string') return null;
+        text += event.part.text;
+        if (Number.isFinite(event.part?.time?.end)) sawCompleteText = true;
+      } else if (event.type === 'step_finish') { stepFinishStop = event.part?.reason === 'stop'; terminalSeen = true; }
+      else if (event.type === 'error') return null; // binary-evidenced failure event (session.step/execution.failed)
+      else return null; // unrecognized event type: never invented, never ignored
     }
-    if (terminalReason !== 'stop') return null;
+    if (stepFinishStop === false) return null;
+    if (!sawCompleteText && stepFinishStop !== true) return null; // no positive signal at all
     return { text };
   }
 }

@@ -9,7 +9,7 @@ The bundled `direct-shell` invocation profile in
 `agentic/code/providers/model-capabilities.v1.json` is version-bound to
 `opencode 2.0.26` and help-evidenced only (`H:` evidence grade, captured
 from `opencode --help` / `opencode run --help` on host `noodle`,
-2026-10-09). It stays `unqualified` for dispatch until a human qualifier
+2026-10-10). It stays `unqualified` for dispatch until a human qualifier
 reviews a live run. The adapter
 (`tools/ralph-external/lib/opencode-adapter.mjs`) renders:
 
@@ -68,23 +68,54 @@ MODEL="<provider>/<model>"   # fill in an exact observed model id
 d=$(mktemp -d) && cd "$d"
 echo 'Reply with exactly: opencode-smoke-ok' > brief.md
 opencode run --format json -m "$MODEL" -f brief.md \
-  'Follow the instructions in the attached file exactly.'
+  'Follow the instructions in the attached file exactly.' </dev/null
 echo "exit=$?"
 ```
 
+`</dev/null` is deliberate: stdin is confirmed unsupported (see above), so
+closing it removes any chance of the process waiting on a terminal that
+will never answer.
+
 ### Reading the result
+
+A live 2.0.26 smoke run on this exact command (host `noodle`, 2026-10-10,
+saved at `.aiwg/working/s1-scratch/smoke-opencode.jsonl`) succeeded with
+exit 0 and the correct reply, but the stdout stream was exactly **one**
+`text` event — no `step_start`, no `step_finish`. Binary disassembly
+explains why there can never be a stronger signal: the `run` command's
+event loop returns silently on `session.execution.succeeded` in every
+mode, so there is no positive whole-run terminal event in this CLI's JSON
+output at all. `parseOutput` (`tools/ralph-external/lib/
+opencode-adapter.mjs`) encodes the rule below; apply it by hand when
+reading a smoke run:
 
 - **Exit code**: `echo "exit=$?"` must print `exit=0`. Any non-zero exit is
   a fail.
-- **`--format json` stream on stdout**: grep it for a clean finish:
-  `... | grep '"type":"step_finish"'` and confirm the matching line's
-  `part.reason` is `"stop"`. A `step_finish` with any other `reason` (or a
-  stream that ends without one) is a fail even at exit 0 — a clean exit
-  code alone is not sufficient.
+- **No `error` event**: `... | grep '"type":"error"'` must find nothing.
+  `error` is emitted for `session.step.failed`/`session.execution.failed`
+  and a non-user `session.execution.interrupted`; its presence is a fail
+  even at exit 0.
+- **If a `step_finish` line is present**, grep for it and confirm its
+  `part.reason` is `"stop"`; any other reason is a fail even at exit 0.
+  `step_finish` is optional — its absence is not a fail by itself (the
+  2.0.26 smoke run above had none).
+- **At least one complete `text` part**: every `text` event's `part.text`
+  must be a string, and at least one must carry a `part.time.end` value —
+  a `text` event with no recorded end (e.g. a dropped mid-stream
+  connection) does not count. If no `step_finish` was present, this is the
+  only positive signal available, so it is required.
 - **Reply text**: the `text` events' `part.text` should concatenate to the
   literal string `opencode-smoke-ok`.
+- **No malformed or trailing lines**: every stdout line must parse as
+  JSON, and nothing may follow a `step_finish` line.
+
+**Residual risk, stated plainly**: a provider that truncates the stream
+right after flushing one complete `text` part, before any further content
+or an `error` event, is indistinguishable from a genuine single-part
+success with this CLI's `run --format json` output — there is no stronger
+signal available to rule that out.
 
 Record the installed `opencode --version` output, the command above, and
-the pass/fail outcome (exit code + `step_finish` reason + reply text) on
-the tracking issue. This manual run is evidence only; it never marks the
+the pass/fail outcome (exit code + event shape + reply text) on the
+tracking issue. This manual run is evidence only; it never marks the
 registry profile as qualified for automated dispatch.
