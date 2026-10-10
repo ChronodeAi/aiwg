@@ -75,7 +75,8 @@
         "test/conformance/orchestration-v1/codex-direct.test.ts",
         "test/conformance/orchestration-v1/claude-direct.test.ts",
         "test/conformance/orchestration-v1/pi-direct.test.ts",
-        "test/conformance/orchestration-v1/omp-direct.test.ts"
+        "test/conformance/orchestration-v1/omp-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
     },
@@ -276,7 +277,8 @@
         "test/conformance/orchestration-v1/worker-status.test.ts",
         "test/conformance/orchestration-v1/claude-direct.test.ts",
         "test/conformance/orchestration-v1/pi-direct.test.ts",
-        "test/conformance/orchestration-v1/omp-direct.test.ts"
+        "test/conformance/orchestration-v1/omp-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
@@ -369,7 +371,8 @@
         "test/unit/mcp/worker-qualification.test.ts",
         "test/conformance/orchestration-v1/worker-health-registry.test.ts",
         "test/conformance/orchestration-v1/provider-coverage.test.ts",
-        "test/conformance/orchestration-v1/claude-direct.test.ts"
+        "test/conformance/orchestration-v1/claude-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. B-OG-47 (#2911) normalized coverage rows and the source-only OpenHuman promotion are checked data, not live qualification; OpenHuman live qualification awaits an operator-authorized probe budget. Managed supervision, shared ownership and remediation remain S2+.",
       "laterSlices": [
@@ -395,7 +398,8 @@
         "test/conformance/orchestration-v1/worker-status.test.ts",
         "test/conformance/orchestration-v1/claude-direct.test.ts",
         "test/conformance/orchestration-v1/pi-direct.test.ts",
-        "test/conformance/orchestration-v1/omp-direct.test.ts"
+        "test/conformance/orchestration-v1/omp-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     },
@@ -415,7 +419,8 @@
         "test/conformance/orchestration-v1/openhuman-direct.test.ts",
         "test/conformance/orchestration-v1/codex-direct.test.ts",
         "test/conformance/orchestration-v1/pi-direct.test.ts",
-        "test/conformance/orchestration-v1/omp-direct.test.ts"
+        "test/conformance/orchestration-v1/omp-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only; automated retry/fallback and managed runtime remain S2+ with their existing owners."
     },
@@ -438,7 +443,8 @@
         "test/conformance/orchestration-v1/worker-status.test.ts",
         "test/conformance/orchestration-v1/claude-direct.test.ts",
         "test/conformance/orchestration-v1/pi-direct.test.ts",
-        "test/conformance/orchestration-v1/omp-direct.test.ts"
+        "test/conformance/orchestration-v1/omp-direct.test.ts",
+        "test/conformance/orchestration-v1/hermes-direct.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
     }
