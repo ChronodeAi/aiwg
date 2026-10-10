@@ -97,9 +97,14 @@ describe('T-OG-03 own event grammar and unavailable provider signals', () => {
   it('OpenCode framing follows profile JSONL despite legacy capability boolean', async () => {
     const { records } = await fixture('opencode');
     expect(adapters.opencode.getCapabilities().streamJson).toBe(false);
+    // #2904: step_start/step_finish complete the own-grammar mapping
+    // (identity correlation + a clean "stop" terminal); only an
+    // independently-evidenced semantic handshake would use 'setup' as a
+    // start signal, which this profile does not claim (handshake stays
+    // 'process-only').
+    expect(adapters.opencode.observeHealthEvent(records[0], stdout, binding)?.kind).toBe('setup');
     expect(adapters.opencode.observeHealthEvent(records[1], stdout, binding)?.kind).toBe('activity');
-    expect(adapters.opencode.observeHealthEvent(records[0], stdout, binding)).toBeNull();
-    expect(adapters.opencode.observeHealthEvent(records[2], stdout, binding)).toBeNull();
+    expect(adapters.opencode.observeHealthEvent(records[2], stdout, binding)?.kind).toBe('terminal');
   });
 });
 
