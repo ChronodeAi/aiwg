@@ -88,6 +88,18 @@ export function renderCredentialMaps(server, provider) {
   };
 }
 
+// A CLI flag whose name itself names a credential kind; the value, in the next
+// argv element or after `=`, is almost always the literal secret. This is a
+// name-shape heuristic, not a value scan: it cannot see an arbitrary flag's
+// value, only flags that advertise what they carry.
+const CREDENTIAL_ARG_FLAG = /^--?(api[-_]?key|access[-_]?key|access[-_]?token|auth[-_]?token|client[-_]?secret|secret|password|passwd|token)(=.*)?$/i;
+
+/** List the `args` entries that look like a credential-bearing CLI flag. */
+export function credentialLikeArgs(args) {
+  if (!Array.isArray(args)) return [];
+  return args.filter(arg => typeof arg === 'string' && CREDENTIAL_ARG_FLAG.test(arg));
+}
+
 export function urlCarriesUserinfo(url) {
   if (typeof url !== 'string') return false;
   try {

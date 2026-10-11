@@ -601,6 +601,31 @@ describe("injectServers", () => {
     expect(data.mcpServers.local.env).toEqual({ API_TOKEN: "canary-env-123" });
   });
 
+  it.each([
+    ["--token=canary-arg-123"],
+    ["--password", "canary-arg-123"],
+    ["--api-key=canary-arg-123"],
+    ["--secret", "canary-arg-123"],
+  ])("refuses credential-looking args (%s) for a shareable project-scope target", async (...args) => {
+    await registry.add({ name: "local", type: "stdio", command: "synthetic-command", args });
+    const configPath = join(projectDir, ".mcp.json");
+    let message = "";
+    try { await inject(registry, "claude", { projectDir }); }
+    catch (error) { message = (error as Error).message; }
+    expect(message).toContain("local has credential-like args");
+    expect(message).not.toContain("canary-arg-123");
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  it("allows credential-looking args at the private home-scope windsurf target, by design (PR #279: 'Credential heuristics for args' not changed)", async () => {
+    vi.stubEnv("HOME", join(tempDir, "provider-home"));
+    await registry.add({ name: "local", type: "stdio", command: "synthetic-command", args: ["--token=canary-arg-123"] });
+    const result = await inject(registry, "windsurf", { projectDir });
+    expect(result.error).toBeUndefined();
+    const data = JSON.parse(await readFile(result.configPath, "utf-8"));
+    expect(data.mcpServers.local.args).toEqual(["--token=canary-arg-123"]);
+  });
+
   it("leaves the original bytes, mode and registry unchanged if atomic replacement fails", async () => {
     const configPath = join(projectDir, ".mcp.json");
     const original = '{ "mcpServers": {}, "preference": "keep" }\n';
