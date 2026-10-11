@@ -1986,11 +1986,11 @@
       "verifiedAt": "2026-09-05",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "deepseek-harness",
+        "id": "deepseek-harness-direct",
         "provider": "deepseek-harness",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "tools/ralph-external/lib/deepseek-harness-adapter.mjs",
+        "supportedVersions": "0.2.0-rc.2",
+        "runtimeDriver": "installed:deepseek-harness-direct",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -2002,11 +2002,16 @@
           "argv": [
             "--profile",
             "headless",
-            "${brief}"
+            "--patch",
+            "${patchPath}",
+            "--json",
+            "-"
           ],
-          "stdin": "closed",
+          "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "DEEPSEEK_API_KEY"
+          ],
           "versionArgv": [
             "--version"
           ],
@@ -2031,84 +2036,97 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "0.2.0-rc.2",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--patch YAML overlay would set the agent-default-model plugin entry {provider: \"deepseek-official\", model}; no --model flag exists on `--profile headless --help`. Nothing writes this patch file in production yet (see adapter KNOWN GAP); the override is unverified for enforcement, only for parse-before-model-call.",
+                "evidence": "R: dsh 0.2.0-rc.2 --profile headless --dump-config-schema/--dump-default-config (agent-default-model config9, required provider+model); no-model probe on noodle 2026-10-11 confirmed a --patch file is read and parsed before any model call (MISSING_CREDENTIAL still names provider route deepseek-official), never that the override is enforced; unqualified until live model-pin evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "Same --patch agent-default-model entry would set reasoningEffort (off|low|high|max); unverified for the same reason as model",
+                "evidence": "R: dsh 0.2.0-rc.2 --profile headless --dump-config-schema (deepseek-official provider reasoningEffort enum off|low|high|max); unqualified until live evidence"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--patch YAML overlay would set the sandbox-policy plugin entry {mode: read-only|workspace-write}; danger-full-access (full bypass) is never emitted. Reaching MISSING_CREDENTIAL proves the patch parses, not that sandbox-policy.mode actually confines file/exec access -- no probe without a real model call can exercise a tool call to prove confinement.",
+                "evidence": "R: dsh 0.2.0-rc.2 --dump-default-config sandbox-policy config.mode; no-model probe on noodle 2026-10-11 confirmed the run proceeds past plugin mount to MISSING_CREDENTIAL, which is evidence of parsing only; confinement itself is unverified"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--patch YAML overlay would set the approval plugin entry {policy: never}; ask is refused (no prompt channel in headless). What \"never\" actually permits is unverified: no analogy to another CLI's approval semantics is drawn.",
+                "evidence": "R: dsh 0.2.0-rc.2 --dump-default-config approval config.policy (APPROVAL_POLICIES ask|never, dsh-permission-presets/lib/index.js); no-model probe on noodle 2026-10-11 confirmed the stock permission-presets plugin fails to mount for workspace-write+never (\"did not activate\" diagnostic) -- this means that stock preset-switch plugin is not mounted for this combination, not that sandbox-policy/approval themselves enforce anything; unqualified"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "Spawn cwd option; `dsh --profile headless --help` has no --cwd flag and the headless runner uses process.cwd()",
+                "evidence": "H: dsh 0.2.0-rc.2 --profile headless --help (.aiwg/working/s1-scratch/cli-help/dsh-0.2.0-rc.2.txt); R: installed @deepseek-ai/dsh-headless package lib/index.js `run()`, read on noodle 2026-10-11; unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "stdout --json event stream; the last {\"type\":\"final\",\"text\"} line is the answer, required to be the last event with the prior turn_end's reason.kind==\"completed\"",
+                "evidence": "R: installed @deepseek-ai/dsh-headless package lib/json-stream-*.js + lib/index.js, read on noodle 2026-10-11; confirmed live via the no-model probe's exact session/status/final lines; unqualified until live evidence"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "brief-text: the \"-\" task argument reads stdin to EOF",
+                "evidence": "H+R: dsh 0.2.0-rc.2 --profile headless --help (\"`-` reads stdin\"); no-model probe on noodle 2026-10-11 confirmed stdin arity (empty stdin -> \"a task is required\"; piped text -> reaches MISSING_CREDENTIAL, never a model call); unqualified until live evidence"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no --output-schema or structured-final flag documented on `--profile headless --help`",
+                "evidence": "H: dsh 0.2.0-rc.2 --profile headless --help (.aiwg/working/s1-scratch/cli-help/dsh-0.2.0-rc.2.txt); unqualified until live evidence"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no per-invocation step-cap flag documented on `--profile headless --help`",
+                "evidence": "H: dsh 0.2.0-rc.2 --profile headless --help (.aiwg/working/s1-scratch/cli-help/dsh-0.2.0-rc.2.txt); unknown controls block tasks requiring them"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no trust-workspace flag documented on `--profile headless --help`",
+                "evidence": "H: dsh 0.2.0-rc.2 --profile headless --help (.aiwg/working/s1-scratch/cli-help/dsh-0.2.0-rc.2.txt); unqualified until live evidence"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "subagent/fork tools (tool-subagent, tool-subagent-fork, subagent-spawn-in-process, subagent-fork-in-process) are bundled by default; a disabling patch is not live-verified",
+                "evidence": "R: installed @deepseek-ai/dsh package default profile config, read on noodle 2026-10-11; needs a verified disabling --patch before this control can be native"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no CLI-level fallback-model control documented; agent-default-model is the only model source",
+                "evidence": "H: dsh 0.2.0-rc.2 --profile headless --help (.aiwg/working/s1-scratch/cli-help/dsh-0.2.0-rc.2.txt); this profile never emits a fallback"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "DEEPSEEK_API_KEY"
+            ],
             "pitfalls": [
-              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "BLOCKER: no shared execution-time artifact hook exists (owned private directory, exclusive/no-follow create, cleanup); buildWorkerArgs is pure and never writes the --patch file, so this profile cannot actually dispatch until that hook lands.",
+              "Documentation/help, schema-dump and synthetic observations are not authenticated live qualification.",
+              "Reaching MISSING_CREDENTIAL on a no-model probe proves the --patch file is parsed before any model call; it proves neither sandbox confinement nor approval semantics, since no probe without a real model call can exercise a tool call.",
+              "danger-full-access (the only shipped preset pairing approval:never) is a full bypass and is never emitted; this profile would patch sandbox-policy/approval directly instead, with unverified effect.",
+              "The stock dsh-permission-presets plugin fails to mount (\"did not activate\" diagnostic) for the workspace-write+never combination; this means only that the stock preset-switch plugin itself is unmounted, not that sandbox-policy/approval enforce anything.",
+              "With DSH_HOME unset (KNOWN GAP: getEnvOverrides() has no invocation context to synthesize a per-run isolated home without a shared-code change), the operator's own profiles/plugins load and could alter behavior.",
+              "The agent-default-model/sandbox-policy/approval overlay shape comes only from --dump-config-schema/--dump-default-config, never from a live run; treat it as unverified, not confirmed.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
             ],
             "health": {
               "version": 1,
               "handshake": "process-only",
-              "outputFraming": "plain",
+              "outputFraming": "jsonl",
               "signalParser": "provider-deepseek-harness-health-v1",
               "sessionLogLocator": null,
-              "progressEvidence": [],
+              "progressEvidence": [
+                "text",
+                "thinking",
+                "tool_call",
+                "tool_result"
+              ],
               "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
-              "fixtureRef": "test/fixtures/providers/deepseek-harness/health/manifest.json",
+              "fixtureRef": "test/fixtures/providers/deepseek-harness/health/manifest-direct.json",
               "qualifiedAt": null,
               "statusOperation": null,
               "cancelOperation": null,
@@ -2121,7 +2139,7 @@
                 {
                   "kind": "repository",
                   "ref": "tools/ralph-external/lib/deepseek-harness-adapter.mjs",
-                  "observedAt": "2026-10-07T00:00:00Z",
+                  "observedAt": "2026-10-11T00:00:00Z",
                   "cliVersion": null
                 }
               ],
