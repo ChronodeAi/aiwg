@@ -33,10 +33,576 @@
 
 import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
-import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, constants } from 'fs';
+import { open, mkdir, rename, unlink, lstat, readdir, realpath } from 'node:fs/promises';
+import { randomUUID, createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
-import { homedir } from 'os';
+import { homedir, constants as osConstants } from 'os';
+import { importImpl } from '../_resolve-impl.mjs';
+import { sampleWorkerIdentity, sameWorkerIdentity, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
+  qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
+import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
+import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
+
+/**
+ * Kernel-verified containment gate for any candidate worker identity,
+ * whether it came from a worker-writable disk record (`worker-identity.json`)
+ * or a `/proc` children scan. A record that merely matches a REAL process
+ * (resampled fresh by pid) is not sufficient on its own: that real process
+ * can be any same-UID process on the host, including one entirely unrelated
+ * to this invocation -- a same-UID worker can read another process's own
+ * `/proc` entry and forge a record that matches it exactly (#2895 round 2,
+ * MAJOR a). Trust requires containment derived from kernel facts the worker
+ * cannot forge:
+ *   - `systemd-unit` mode: the candidate pid's own cgroup
+ *     (`/proc/<pid>/cgroup`) must equal the unit's own `ControlGroup`
+ *     (`KillMode=control-group` places the transport, the worker and any
+ *     descendants in that single cgroup).
+ *   - degraded/attached mode: the candidate pid's real `/proc` ancestry
+ *     chain (walked via ppid, never a worker-reported parentPid) must
+ *     actually lead back to the launcher's own trusted transport child
+ *     (`nativeSupervisor`), matching both pid, bootId and startTicks so a
+ *     reused pid cannot stand in for it.
+ */
+function verifyWorkerContainment(pid, { mode, unit, nativeSupervisor,
+  readControlGroup = readUnitControlGroup, readCgroup = sampleProcessCgroup, readAncestry = sampleProcessAncestry } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (mode === 'systemd-unit') {
+    const unitGroup = unit ? readControlGroup(unit) : null;
+    const pidGroup = readCgroup(pid);
+    return !!unitGroup && !!pidGroup && pidGroup === unitGroup;
+  }
+  if (!nativeSupervisor || !Number.isSafeInteger(nativeSupervisor.pid)) return false;
+  const chain = readAncestry(pid);
+  if (!chain) return false;
+  return chain.some(ancestor => ancestor.pid === nativeSupervisor.pid
+    && ancestor.bootId === nativeSupervisor.bootId && ancestor.startTicks === nativeSupervisor.startTicks);
+}
+
+const bytesDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+export const beneath = (root, filename) => { const r = relative(root, filename); return r === '' || !r.startsWith('..') && !isAbsolute(r); };
+const signalNumberToName = Object.fromEntries(Object.entries(osConstants.signals ?? {}).map(([name, number]) => [number, name]));
+
+/** Resolve the deepest existing ancestor's realpath, then reattach any
+ * not-yet-created remainder. A lexical prefix match is not sufficient: a
+ * symlinked ancestor of either path can make `beneath()` wrong in either
+ * direction, so both sides are resolved before the lexical comparison. */
+async function resolveRealish(target) {
+  const parts = target.split('/').filter(Boolean);
+  for (let i = parts.length; i >= 0; i--) {
+    const candidate = i === 0 ? '/' : `/${parts.slice(0, i).join('/')}`;
+    try {
+      const real = await realpath(candidate);
+      const remainder = parts.slice(i).join('/');
+      return remainder ? join(real, remainder) : real;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return target;
+}
+export async function realBeneath(root, filename) {
+  const [realRoot, realFilename] = await Promise.all([resolveRealish(root), resolveRealish(filename)]);
+  return beneath(realRoot, realFilename);
+}
+
+// Linux directory handles pin each ancestor. O_NOFOLLOW on a pathname alone
+// cannot protect an ancestor that the worker replaces after inspection.
+async function withWorkerPath(filename, operation) {
+  if (!isAbsolute(filename) || filename.includes('\0') || filename.split('/').includes('..')) throw new Error('Invalid worker path');
+  const components = filename.split('/').filter(Boolean);
+  const leaf = components.pop();
+  let directory = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    for (const component of components) {
+      const next = await open(`/proc/self/fd/${directory.fd}/${component}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      await directory.close(); directory = next;
+    }
+    return await operation(`/proc/self/fd/${directory.fd}/${leaf ?? '.'}`);
+  } finally { await directory.close(); }
+}
+
+async function boundedPrivateRead(filename, limit, inspect, privateOutput = false) {
+  if (!await inspect(filename, 'file')) throw new Error('Required worker input is missing');
+  const handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('Worker input must be a bounded unaliased regular file');
+    if (privateOutput) {
+      if (stat.uid !== process.getuid()) throw new Error('Worker final must be conductor-owned');
+      await handle.chmod(0o600);
+    }
+    const buffer = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error('Worker input exceeds bound');
+    return buffer.subarray(0, length);
+  } finally { await handle.close(); }
+}
+
+export async function publishWorkerRecord(runDir, name, value, inspect) {
+  await inspect(runDir, 'directory');
+  const target = join(runDir, name);
+  await inspect(target, 'output');
+  await withWorkerPath(target, async anchoredTarget => {
+    const temporary = join(dirname(anchoredTarget), `.${name}.${randomUUID()}`);
+    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+      await handle.chmod(0o600);
+      await handle.sync();
+    } finally { await handle.close(); }
+    try { await inspect(target, 'output'); await rename(temporary, anchoredTarget); }
+    finally { await unlink(temporary).catch(() => {}); }
+  });
+}
+
+/** Never trust a PID/PGID from disk. The attached owner supplies this identity. */
+export function signalOwnedWorker(identity, signal, { sample = sampleWorkerIdentity, group = sampleWorkerGroup,
+  kill = process.kill, supervisor = sampleWorkerIdentity(process.pid) } = {}) {
+  if (!identity || identity.pgid !== identity.pid || identity.uid !== process.getuid?.()
+    || identity.pgid === supervisor?.pgid || !sameWorkerIdentity(identity, sample(identity.pid))) return false;
+  const members = group(identity.pgid);
+  if (!members || !members.length || members.some(member => member.uid !== identity.uid
+    || member.bootId !== identity.bootId || member.sessionId !== identity.sessionId)) return false;
+  try { kill(-identity.pgid, signal); return true; } catch { return false; }
+}
+
+async function launchOneWorker(owner, options) {
+  const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+  const planBytes = await boundedPrivateRead(options.invocationPath, 1048576, inspect);
+  const saved = JSON.parse(planBytes.toString('utf8'));
+  const loadInputs = options.loadInputs ?? (options.inputs ? async () => options.inputs : async () =>
+    (await importImpl(import.meta.url, 'cli/handlers/models.js')).loadWorkerInputs({
+      cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: fileURLToPath(new URL('../../', import.meta.url)) }));
+  let inputs = await loadInputs();
+  const clock = () => typeof options.now === 'function' ? options.now() : options.now ?? new Date().toISOString();
+  const now = clock();
+  const invocation = await validate(saved, inputs.snapshot, inputs.drivers, now);
+  if (invocation.transport !== 'shell') throw new Error('One-shot capture requires shell transport; use the qualified MCP descriptor directly');
+  if (process.platform !== 'linux') throw new Error('One-shot worker capture requires qualified Linux process identity');
+  const runDir = options.runDir;
+  const runExists = await inspect(runDir, 'directory');
+  if (runExists) {
+    const stat = await lstat(runDir);
+    if (stat.uid !== process.getuid() || (stat.mode & 0o077) || (await readdir(runDir)).length) {
+      throw new Error('Worker run directory must be fresh, empty, private and owned');
+    }
+  }
+  const writableRoots = inputs.drivers[invocation.selected.cli].qualification.installation?.workerWritableRoots ?? [invocation.cwd];
+  let writableRootsContainRunDir = await realBeneath(invocation.cwd, runDir);
+  for (const root of writableRoots) writableRootsContainRunDir ||= await realBeneath(root, runDir);
+  if (writableRootsContainRunDir) {
+    throw new Error('Run metadata must be outside worker-writable roots');
+  }
+  const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
+  if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
+    filename === options.invocationPath || filename === invocation.briefPath
+    || ['invocation.json', 'process.json', 'exit.json', 'health.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
+      'stdout.log', 'stdout.events.jsonl', 'stderr.log', '.launch-owner'].some(name => filename === join(runDir, name)))) {
+    throw new Error('Worker output paths must be distinct from trusted metadata and capture files');
+  }
+  for (const filename of Object.values(paths)) {
+    if (await inspect(filename, 'output')) throw new Error('Fresh worker output paths are required');
+    if (!await inspect(dirname(filename), 'directory')) throw new Error('Worker output parent is missing');
+  }
+  const brief = await boundedPrivateRead(invocation.briefPath, 262144, inspect);
+  if (bytesDigest(brief) !== invocation.briefDigest) throw new Error('Worker prompt digest changed');
+  // Frame stdin before any spawn: brief-json delivers a conductor-built params
+  // document on the stdin pipe, never brief text in argv (#2911).
+  const { workerStdinBytes } = await importImpl(import.meta.url, 'serve/worker-stdin-frame.mjs');
+  const stdinBytes = workerStdinBytes(invocation, brief);
+  let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
+  if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
+  const isolation = options.isolation ?? detectWorkerIsolation();
+  if (isolation.mode === 'degraded' && !options.allowDegraded) {
+    throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
+  }
+  if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
+  const runStat = await lstat(runDir);
+  if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
+  await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { await handle.chmod(0o700); } finally { await handle.close(); } });
+  const invocationId = randomUUID();
+  const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+  try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
+  const supervisor = sampleWorkerIdentity(process.pid);
+  const launchTime = new Date().toISOString();
+  const monotonicStart = process.hrtime.bigint().toString();
+  const profile = inputs.drivers[invocation.selected.cli].qualification.adapter.invocationProfiles[invocation.selected.profileRef];
+  const captures = { stdout: join(runDir, profile.health?.outputFraming === 'jsonl' ? 'stdout.events.jsonl' : 'stdout.log'),
+    stderr: join(runDir, 'stderr.log') };
+  const displayArgv = invocation.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
+  const writeRecord = options.publishRecord ?? publishWorkerRecord;
+  const publishFailures = [];
+  let publishing = Promise.resolve();
+  // Each write must stay independent: one rejected publish must never block
+  // every later one (including the final exit.json). The chain only orders
+  // writes; `.catch(() => {})` keeps a prior failure from poisoning it, and
+  // the per-call promise returned to the caller still reflects this write's
+  // own outcome.
+  const publish = (name, value) => {
+    const write = publishing.catch(() => {}).then(() => writeRecord(runDir, name, value, inspect));
+    publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
+    return write;
+  };
+  await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
+    previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+    selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
+    policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
+    expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
+    argvDigest: qualificationDigest(invocation.argv), envNames: invocation.envNames, stdin: invocation.stdin,
+    prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
+    worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
+    health: invocation.health ?? null, transport: invocation.transport,
+    isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+    limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
+  await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+    launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
+  const handles = [];
+  let outcome;
+  try {
+    // All captures (including the reserved final) open successfully BEFORE spawn.
+    for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
+      const handle = await withWorkerPath(filename, target => (options.openCapture ?? open)(target, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      handles.push(handle);
+    }
+    // Recheck policy, prompt, installation and exact bindings after file preparation.
+    inputs = await loadInputs();
+    await validate(saved, inputs.snapshot, inputs.drivers, clock());
+    gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
+    if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
+    if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
+    const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
+      .map(name => [name, process.env[name]]));
+    const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
+    outcome = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
+      command: invocation.argv[0], args: invocation.argv.slice(1), cwd: invocation.cwd,
+      memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
+      allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
+      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
+    if (!outcome.child) throw new Error('Worker launch did not return an attached child');
+    return await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir });
+  } catch (error) {
+    if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
+      endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    throw error;
+  } finally {
+    // Never chmod a worker-replaced pathname; only the inodes we opened.
+    for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
+    await inspect(runDir, 'directory');
+    await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await handle.chmod(0o700); } finally { await handle.close(); } });
+  }
+}
+
+async function captureOneWorker(owner, ctx) {
+  const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
+  const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
+  const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
+  let identity = !hasTransport ? sampleWorkerIdentity(child.pid) : null;
+  let output = Buffer.alloc(0);
+  let total = 0;
+  let timedOut = false;
+  let stopRequested = false;
+  let stopReason = null;
+  let errorCode = null;
+  let settled = false;
+  let waitCode = null;
+  let waitSignal = null;
+  let sawExit = false;
+  let sawClose = false;
+  let nativeSupervisor = null;
+  const driver = ctx.inputs.drivers[invocation.selected.cli];
+  const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
+    effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
+    launchTime, contentDigest: ctx.baselineContent, sessionId: options.healthSessionLog?.sessionId ?? null,
+    runId: options.healthSessionLog?.runId ?? null, maxOutputBytes: invocation.maxOutputBytes };
+  const observer = driver.createHealthObserver?.(observationOptions) ?? createWorkerHealthObserver(observationOptions);
+  const tickRate = qualifyWorkerCpuTickRate();
+  let previousCpu = null;
+  let stdoutOffset = 0;
+  let stderrOffset = 0;
+  let logCursor = { inode: null, offset: 0, generation: 0 };
+  const reportHealth = async () => {
+    const health = observer.snapshot();
+    owner.emit('health', health);
+    try { await publish('health.json', { origin: 'observer', invocationId, health, evidence: observer.evidence() }); }
+    catch { observer.gap('CAPTURE_WRITE'); }
+    return health;
+  };
+  const timers = new Set();
+  const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
+  const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
+  const signal = value => !settled && signalOwnedWorker(identity, value, { supervisor });
+  const readNative = () => { try { return (options.isolationStatus ?? getWorkerIsolationStatus)(outcome.unit); } catch { return null; } };
+  const transportRecord = async filename => {
+    const target = join(ctx.runDir, filename);
+    try {
+      const stat = await lstat(target);
+      if (stat.uid !== process.getuid() || (stat.mode & 0o077)) return null;
+      const record = JSON.parse((await boundedPrivateRead(target, 65536, ctx.inspect)).toString('utf8'));
+      if (filename === 'worker-exit.json' && (!(record.exitCode === null || Number.isInteger(record.exitCode) && record.exitCode >= 0 && record.exitCode <= 255)
+        || !(record.signal === null || typeof record.signal === 'string' && /^SIG[A-Z0-9]+$/.test(record.signal))
+        || record.errorCode != null && (typeof record.errorCode !== 'string' || !/^[A-Z0-9_]{1,64}$/.test(record.errorCode)))) return null;
+      return record.invocationId === invocationId ? record : null;
+    } catch { return null; }
+  };
+  // A systemd unit has no owned-PGID signal lever worth relying on: identity
+  // may still be null (observeIdentity races the unit's own start), and a
+  // signal against a since-reused PID must never be sent. `systemctl --user
+  // stop` plus KillMode=control-group is the actual stop authority here; the
+  // unit's own retained state (checked in finish() via readNative()) is what
+  // confirms or fails to confirm that the stop took effect.
+  const stopUnit = () => { try { return (options.stopUnit ?? stopWorkerUnit)(outcome.unit); } catch { return { ok: false }; } };
+  const stop = (cause = errorCode ? 'PROVIDER_ERROR' : 'CANCELLED') => {
+    if (settled || stopRequested) return;
+    stopRequested = true; stopReason = cause;
+    timedOut = ['HARD_DEADLINE', 'STARTUP_DEADLINE', 'NO_PROGRESS'].includes(cause);
+    if (outcome.mode === 'systemd-unit' && outcome.unit) {
+      stopUnit();
+      // Backstop: if the unit's own exit does not reach us promptly, force
+      // resolution so the caller is never left hanging. finish() still
+      // derives confirmed/uncertain from the unit's retained state, not from
+      // the fact that a stop was requested.
+      later(() => { if (!settled) finish(); }, Math.min(graceMs, hardRemaining()));
+      return;
+    }
+    signal('SIGTERM');
+    const remainingGrace = Math.min(graceMs, hardRemaining());
+    if (remainingGrace === 0) { signal('SIGKILL'); later(() => finish(), 100); }
+    else later(() => { signal('SIGKILL'); later(() => finish(), 100); }, remainingGrace);
+  };
+  owner.currentProcess = child;
+  owner.workerStop = stop;
+  const onSignal = () => stop();
+  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+  child.stdout.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stdout', id: 'stdout', generation: 0, offset: stdoutOffset }); stdoutOffset += chunk.length;
+    total += chunk.length;
+    const remaining = Math.max(0, Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) - output.length);
+    if (remaining) { const bounded = chunk.subarray(0, remaining); output = Buffer.concat([output, bounded]); streams[0].write(bounded); streams[2].write(bounded); }
+    if (remaining < chunk.length) { errorCode = 'OUTPUT_LIMIT'; stop(); }
+    owner.emit('stdout', chunk);
+  });
+  let stderrBytes = 0;
+  child.stderr.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
+    const remaining = Math.max(0, 10485760 - stderrBytes);
+    streams[1].write(chunk.subarray(0, remaining)); streams[3].write(chunk.subarray(0, remaining)); stderrBytes += chunk.length;
+    if (stderrBytes > 10485760) { errorCode = 'OUTPUT_LIMIT'; stop(); }
+    owner.emit('stderr', chunk);
+  });
+  for (const stream of streams) stream.on('error', () => { errorCode = 'CAPTURE_WRITE'; stop(); });
+  child.stdin?.on('error', error => { if (error.code !== 'EPIPE') { errorCode = 'STDIN_WRITE'; stop(); } });
+  child.stdin?.end(ctx.stdinBytes ?? undefined);
+  const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
+    transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
+    nativeSupervisor,
+    worker: identity, launchTime, monotonicStart, ownership: identity && identity.pgid === identity.pid ? 'owned-group' : 'unknown',
+    isolation: outcome.mode, unit: outcome.unit ?? null });
+  let resolveDone;
+  const done = new Promise(resolve => { resolveDone = resolve; });
+  const finish = async () => {
+    if (settled) return;
+    settled = true;
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
+    owner.currentProcess = null; owner.workerStop = null;
+    child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
+    for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
+    const native = outcome.mode === 'systemd-unit' ? readNative() : null;
+    const members = identity ? sampleWorkerGroup(identity.pgid) : null;
+    // An unconfined group can escape via setsid. Empty PGID alone never proves
+    // descendant termination; keep the explicit degraded stop uncertain.
+    const confirmed = outcome.mode === 'systemd-unit' ? native?.active === false && [1, 2, 3].includes(native.execMainCode)
+      : child.pid === undefined;
+    // `worker-exit.json`/`worker-identity.json` are written into a directory
+    // the worker itself can reach (same UID, no filesystem confinement), so a
+    // worker can plant either file before the trusted transport ever writes
+    // it. Treat both as unauthenticated, worker-reported hints only: they may
+    // inform diagnostics (`workerTermination`, `nativeSupervisor` fallback)
+    // but MUST NOT set exitCode/signal/termination/confirmed. Those come only
+    // from the kernel-observed wait() status of the launcher's own direct
+    // child (never the worker — `child` here is the trusted transport or the
+    // systemd-run wrapper that mirrors the unit's real exit) or, for
+    // systemd-unit mode, from `getWorkerIsolationStatus` queried against the
+    // unit by name, also not a worker-writable path.
+    const workerExit = hasTransport ? await transportRecord('worker-exit.json') : null;
+    const workerStart = hasTransport ? await transportRecord('worker-identity.json') : null;
+    if (workerStart && !identity) { identity = workerStart.worker; nativeSupervisor = workerStart.supervisor; }
+    const exitCode = outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
+    const resultSignal = outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
+      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal;
+    const result = { invocationId, exitCode, signal: resultSignal,
+      endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
+      descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
+      cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
+      // Unauthenticated: reported by the worker-writable transport record, not
+      // kernel-observed. Never used above for exitCode/signal/termination.
+      workerTermination: hasTransport ? workerExit && !workerExit.errorCode ? 'confirmed' : 'uncertain' : sawExit ? 'confirmed' : 'uncertain',
+      workerReportedExit: workerExit ? { exitCode: workerExit.exitCode, signal: workerExit.signal, errorCode: workerExit.errorCode ?? null } : null,
+      groupMembersRemaining: members?.length ?? null,
+      nativeExitCode: native?.execMainCode === 1 ? native.execMainStatus : null,
+      captureCoverage: sawClose ? 'complete' : 'gap', isolation: outcome.mode, nativeResult: native?.result ?? null,
+      publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
+    let healthFinalValid = false;
+    try {
+      const finalStat = await lstat(paths.final);
+      if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
+      await ctx.inspect(paths.final, 'file');
+      let extracted = false;
+      if (finalStat.size === 0 && driver.extractFinal) {
+        const final = driver.extractFinal(output.toString('utf8'));
+        if (final === null || final === undefined || final.success === false) throw new Error('Missing or unsuccessful final extraction');
+        const bytes = JSON.stringify({ invocationId, source: 'adapter-extraction', candidate: true, verified: false, result: final });
+        if (Buffer.byteLength(bytes) > 262144) throw new Error('Final exceeds bound');
+        await handles[2].writeFile(bytes); extracted = true;
+      }
+      const finalBytes = await boundedPrivateRead(paths.final, 262144, ctx.inspect, true);
+      if (!finalBytes.length) throw new Error('Missing final output');
+      if (!extracted && driver.extractFinal) {
+        const parsed = driver.extractFinal(finalBytes.toString('utf8'));
+        if (parsed === null || parsed === undefined || parsed.success === false) throw new Error('Invalid final output');
+      }
+      await publish('final-evidence.json', { invocationId, path: paths.final, digest: bytesDigest(finalBytes),
+        source: extracted ? 'adapter-extraction' : 'worker-output', candidate: true, verified: false,
+        terminalSuccess: result.exitCode === 0 && !result.timedOut && !result.errorCode });
+      // Consume #2890's strict final contract when supplied by the installed
+      // driver. Legacy extraction remains a candidate, never health authority.
+      if (driver.parseWorkerFinal) {
+        try {
+          // Strict validation consumes original bytes. A legacy extracted
+          // object may already have lost duplicate keys and cannot authorize
+          // completion through reserialization.
+          await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+            format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
+            status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
+            termination: result.termination, exitCode: result.exitCode } });
+          healthFinalValid = true;
+        } catch { /* failed strict claims remain unverified candidate evidence */ }
+      }
+    } catch { result.errorCode ??= 'FINAL_OUTPUT_INVALID'; }
+    // The final exit.json publish must always be attempted, independent of
+    // whether the preceding recordProcess() write succeeded: a failing
+    // process.json must never suppress the exit.json publication attempt
+    // (previously, chaining both in one try block meant a thrown
+    // recordProcess() skipped publish('exit.json', ...) entirely, leaving no
+    // exit record at all). The finally block runs regardless of the try
+    // outcome; either failure marks the result uncertain and tags the error.
+    try { await recordProcess(); }
+    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
+    finally {
+      try { await publish('exit.json', result); }
+      catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
+    }
+    result.health = observer.finish({ ...result, finalValid: healthFinalValid });
+    result.healthEvidence = observer.evidence();
+    try { await publish('exit.json', result); }
+    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
+    await reportHealth();
+    owner.emit('complete', result);
+    resolveDone(result);
+  };
+  child.once('error', error => {
+    errorCode = error.code ?? 'SPAWN_ERROR';
+    observer.observe(classifyWorkerHealthFailure({ code: errorCode }, { source: { kind: 'stderr' } }));
+    later(() => finish(), 0);
+  });
+  child.once('exit', (code, sig) => { sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs); });
+  // sawExit/waitCode/waitSignal come solely from the 'exit' handler above; a
+  // failed spawn (e.g. ENOENT) never emits 'exit' in this Node, so they stay
+  // at their unset defaults (false/null/null) here, which is already correct
+  // — there is no real exit to report.
+  child.once('close', () => { sawClose = true; finish(); });
+  const hardRemaining = () => Math.max(0, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+    invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
+  // Grace is clipped at stop time; forceful cancellation is never scheduled
+  // beyond this fixed ceiling, including tasks shorter than startup/grace.
+  later(() => {
+    observer.check();
+    // Snapshot/IPC diagnostics precede stop. A slow disk cannot postpone the
+    // monotonic hard cancellation target.
+    reportHealth(); stop('HARD_DEADLINE');
+  }, hardRemaining());
+  const observeIdentity = async () => {
+    if (settled) return;
+    if (!identity && hasTransport) {
+      const native = outcome.mode === 'systemd-unit' ? readNative() : { mainPid: child.pid };
+      const recorded = await transportRecord('worker-identity.json');
+      if (settled) return;
+      nativeSupervisor = sampleWorkerIdentity(native?.mainPid);
+      const contained = candidatePid => verifyWorkerContainment(candidatePid, { mode: outcome.mode, unit: outcome.unit, nativeSupervisor });
+      // A disk record that merely matches a REAL process on resample is not
+      // enough: that real process can be any same-UID process on the host.
+      // Containment (cgroup for systemd-unit, kernel ppid ancestry for
+      // degraded) must also hold before the record is trusted.
+      if (recorded && sameWorkerIdentity(recorded.supervisor, nativeSupervisor)
+        && sameWorkerIdentity(recorded.worker, sampleWorkerIdentity(recorded.worker?.pid))
+        && contained(recorded.worker?.pid)) identity = recorded.worker;
+      else {
+        const children = sampleWorkerChildren(nativeSupervisor?.pid);
+        if (children?.length === 1 && children[0].uid === process.getuid() && children[0].parentPid === nativeSupervisor.pid
+          && contained(children[0].pid)) identity = children[0];
+      }
+    }
+    if (identity) observer.processStarted(identity);
+    recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
+    if (!identity && hasTransport) later(observeIdentity, 50);
+  };
+  observeIdentity();
+  const sampleLog = async () => {
+    const locator = options.healthSessionLog;
+    if (!locator || !ctx.profile.health?.sessionLogLocator || !locator.sessionId) return;
+    const filename = locator.path;
+    let handle;
+    try {
+      // Explicit trusted locator only; never search global/private transcripts.
+      await ctx.inspect(filename, 'file');
+      handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1) throw new Error('Unavailable session source');
+      if (logCursor.inode !== null && (logCursor.inode !== stat.ino || stat.size < logCursor.offset)) {
+        observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' });
+        logCursor = { inode: stat.ino, offset: 0, generation: logCursor.generation + 1 };
+      }
+      logCursor.inode = stat.ino;
+      const bytes = Buffer.alloc(Math.min(65536, Math.max(0, stat.size - logCursor.offset)));
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, logCursor.offset);
+      observer.feed(bytes.subarray(0, bytesRead), { kind: 'session-log', id: 'session-log', generation: logCursor.generation, offset: logCursor.offset });
+      logCursor.offset += bytesRead;
+    } catch { observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' }); }
+    finally { await handle?.close(); }
+  };
+  const sampleHealth = async () => {
+    if (settled) return;
+    const current = identity ? sampleWorkerIdentity(identity.pid) : null;
+    const cpu = identity ? sampleWorkerCpuTime(identity, current, tickRate, previousCpu) : { cpuTimeMs: null };
+    previousCpu = current;
+    const content = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
+    await sampleLog();
+    if (settled) return;
+    observer.sampleActivity({ running: current && sameWorkerIdentity(identity, current) ? true : null, cpu: cpu.cpuTimeMs, content });
+    const health = observer.check();
+    await reportHealth(); // diagnostics are captured before requesting stop
+    if (settled) return;
+    if (observer.shouldStop?.() || ['hung', 'failed-to-start'].includes(health.state) || ['HARD_DEADLINE', 'STEP_LIMIT'].includes(health.reasonCode)) stop(health.reasonCode);
+    else later(sampleHealth, Math.min(observer.nextDelayMs(), hardRemaining()));
+  };
+  sampleHealth().catch(() => { observer.gap(); later(sampleHealth, (invocation.health?.checkSeconds ?? 15) * 1000); });
+  // Notification of OS launch stays separate from semantic/task acceptance.
+  const launchEvent = { invocationId, pid: identity?.pid ?? null, supervisorPid: process.pid, isolation: outcome.mode };
+  owner.emit('started', launchEvent); // Preserve the public OS-launch event API.
+  owner.emit('launched', launchEvent);
+  return done;
+}
 
 /**
  * @typedef {Object} LaunchOptions
@@ -95,6 +661,48 @@ export class SessionLauncher extends EventEmitter {
    */
   setProviderAdapter(adapter) {
     this.providerAdapter = adapter;
+  }
+
+  /** Attached direct attempt; no Ralph state, monitor constructor, retry or legacy args. */
+  async launchWorker(options) {
+    if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
+    this.workerLaunchPending = true;
+    try { return await launchOneWorker(this, options); }
+    finally { this.workerLaunchPending = false; }
+  }
+
+  /** Explicit manual observation grants no signal authority, with or without scratch. */
+  async adoptWorker({ runDir, invocationId = null, worker, paths = null, request } = {}) {
+    const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+    let record = {};
+    if (runDir) {
+      if (!await inspect(runDir, 'directory')) throw new Error('Manual run directory is missing');
+      const stat = await lstat(runDir);
+      if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Manual run directory must be private and owned');
+      const filename = join(runDir, 'process.json');
+      if (await inspect(filename, 'file')) {
+        const fileStat = await lstat(filename);
+        if (fileStat.uid !== process.getuid() || (fileStat.mode & 0o077)) throw new Error('Manual metadata must be private and owned');
+        record = JSON.parse((await boundedPrivateRead(filename, 65536, inspect)).toString('utf8'));
+      }
+    }
+    const known = worker ?? record.worker ?? {};
+    const fields = ['pid', 'pgid', 'uid', 'host', 'bootId', 'startTicks', 'executable', 'parentPid', 'sessionId'];
+    const identity = Object.fromEntries(fields.map(key => [key, known[key] ?? null]));
+    const binding = request ?? record.request ?? {};
+    const requestFields = ['serverRef', 'requestId', 'sessionId', 'taskTokenRef', 'endpointIdentity'];
+    const requestIdentity = Object.fromEntries(requestFields.map(key => [key, binding[key] ?? null]));
+    const observedWorker = Number.isSafeInteger(identity.pid) ? sampleWorkerIdentity(identity.pid) : null;
+    const health = createWorkerHealthObserver({ invocationId: invocationId ?? record.invocationId ?? 'manual',
+      health: { handshake: 'unobserved', outputFraming: 'opaque', coverage: 'unobserved' } }).snapshot();
+    health.startupDeadlineAt = null; health.hardDeadlineAt = null;
+    health.termination = 'uncertain'; health.unavailableSignals.push('enforced-deadline', 'confirmed-stop');
+    return { origin: 'manual', invocationId: invocationId ?? record.invocationId ?? null, worker: identity,
+      request: requestIdentity,
+      supervisor: null, paths, runDir: runDir ?? null, coverage: runDir ? 'known-files-only' : 'conductor-context-only',
+      termination: 'uncertain', exitCode: null, signal: null, ownership: 'unknown',
+      unavailable: [...fields.filter(key => identity[key] === null), ...requestFields.filter(key => requestIdentity[key] === null), 'enforced-deadline', 'confirmed-stop'],
+      observedWorker, health };
   }
 
   /**
@@ -205,6 +813,26 @@ export class SessionLauncher extends EventEmitter {
       // Create write streams for output capture
       const stdoutStream = createWriteStream(options.stdoutPath);
       const stderrStream = createWriteStream(options.stderrPath);
+      // Listen for capture-stream errors from the start, so a disk error before
+      // the child closes cannot surface as an unhandled 'error' event.
+      let captureError = null;
+      for (const stream of [stdoutStream, stderrStream]) {
+        stream.on('error', (error) => { captureError ??= error; });
+      }
+      // child.stdout/child.stderr are the child's pipes, distinct from these
+      // disk-backed capture streams. The child 'close' event only proves the
+      // child's own pipes drained into our 'data' handlers below; it says
+      // nothing about whether createWriteStream's internal buffer has been
+      // flushed to disk. Resolving on 'close' without waiting for these
+      // streams' 'finish' event races the capture file write against callers
+      // (e.g. the launcher's own caller) reading stdoutPath/stderrPath
+      // immediately after launch() resolves, and can hand back a truncated
+      // file under I/O load (#2981).
+      const finalizeCaptureStream = stream => new Promise(res => {
+        if (stream.destroyed || stream.writableFinished) { res(); return; }
+        stream.once('error', res);
+        stream.end(res);
+      });
 
       // Buffer for last portion of stdout (for quick analysis)
       let stdoutBuffer = '';
@@ -300,21 +928,30 @@ export class SessionLauncher extends EventEmitter {
         const duration = Date.now() - this.startTime;
         this.currentProcess = null;
 
-        // Close streams
-        stdoutStream.end();
-        stderrStream.end();
+        // Close streams and wait for the capture files to actually finish
+        // writing to disk before handing stdoutPath/stderrPath back to the
+        // caller (see finalizeCaptureStream above for why 'close' alone is
+        // not sufficient).
+        Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
+          // A failed capture means stdoutPath/stderrPath are incomplete; report
+          // it rather than hand back a truncated transcript as a result.
+          if (captureError) {
+            this.emit('error', captureError);
+            reject(captureError);
+            return;
+          }
+          const result = {
+            exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
+            stdoutPath: options.stdoutPath,
+            stderrPath: options.stderrPath,
+            duration,
+            timedOut,
+            stdoutBuffer,
+          };
 
-        const result = {
-          exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
-          stdoutPath: options.stdoutPath,
-          stderrPath: options.stderrPath,
-          duration,
-          timedOut,
-          stdoutBuffer,
-        };
-
-        this.emit('complete', result);
-        resolve(result);
+          this.emit('complete', result);
+          resolve(result);
+        });
       });
 
       // Handle process errors
@@ -324,15 +961,15 @@ export class SessionLauncher extends EventEmitter {
         }
         clearEscalation();
 
-        const duration = Date.now() - this.startTime;
         this.currentProcess = null;
 
-        // Close streams
-        stdoutStream.end();
-        stderrStream.end();
-
-        this.emit('error', err);
-        reject(err);
+        // Close streams before surfacing the error; no result is returned on
+        // this path, so there is nothing to race against, but we still avoid
+        // leaving the capture streams dangling.
+        Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
+          this.emit('error', err);
+          reject(err);
+        });
       });
 
       this.emit('started', { pid: child.pid, args });
@@ -608,6 +1245,7 @@ export class SessionLauncher extends EventEmitter {
    * @param {string} [signal='SIGTERM']
    */
   kill(signal = 'SIGTERM') {
+    if (this.workerStop) { this.workerStop(); return; }
     if (this.currentProcess && !this.currentProcess.killed) {
       if (this.providerAdapter?.getName() === 'omp' && process.platform !== 'win32') {
         const child = this.currentProcess;
@@ -766,6 +1404,130 @@ export async function getClaudeVersion() {
       resolve(null);
     });
   });
+}
+
+/**
+ * Tier 0 direct-dispatch gate-then-launch helper (FR-OG-107/108, #2954, #2888).
+ *
+ * `SessionLauncher` above is the Claude-headless-loop launcher and is
+ * untouched by this addition. A conductor following the subagent-scoping
+ * Tier 0 procedure that wants to launch a *non-Claude* resolved worker
+ * command (step 6: "Launch within caps") through this module's existing
+ * primitives composes the already-qualified host-resource gate
+ * (`checkWorkerDispatch`, #2954) with the isolated-launch builder
+ * (`launchIsolatedWorker`, #2954) in the fixed order the rule documents:
+ * gate first, launch only on a passing gate, never the reverse. This is a
+ * pure composition — it adds no new subsystem, store, or mandatory command;
+ * callers that already gate and launch themselves may keep doing so.
+ *
+ * A blocked gate never spawns. A gate that is off (`parallelism.worker_dispatch`
+ * disabled) is legacy behavior and launches unconditionally, matching
+ * `checkWorkerDispatch`'s own `{ enabled: false, ok: true }` contract.
+ *
+ * Accepts the complete resolved #2887 invocation (`src/serve/worker-invocation.ts`
+ * `prepareWorkerInvocation()` / `aiwg models resolve --format json`) via the
+ * `invocation` option and preserves its contract end to end — argv, cwd, stdin
+ * source (the brief), the `envNames` allowlist and the separate stdout/stderr
+ * destinations — through both `launchIsolatedWorker`'s confined (systemd-unit)
+ * path and its degraded path. Flat options (`command`/`args`/`cwd`/`stdinPath`/
+ * `envNames`/`stdoutPath`/`stderrPath`) remain accepted directly and win over
+ * `invocation` when both are given, for callers that assemble their own plan.
+ * `allowDegraded` only ever permits an *unconfined* launch when the caller
+ * explicitly opts in, and even then the worker's environment is still built
+ * from the `envNames` allowlist alone (never `process.env`) — the functional
+ * equivalent of `env -i NAME=value ...`; there is no code path in this helper
+ * that inherits the conductor's full environment.
+ *
+ * @param {object} options
+ * @param {string} [options.name] - Human-readable worker label for the unit name.
+ * @param {number} options.memoryMaxGb - Resource ceiling for the isolated worker.
+ * @param {import('../../src/mission-protocol/types.js').WorkerResolvedInvocation} [options.invocation] -
+ *   The resolved #2887 invocation to launch; supplies defaults for the flat
+ *   options below when they are not given directly.
+ * @param {string} [options.command] - Absolute path to the resolved worker binary
+ *   (defaults to `invocation.argv[0]`).
+ * @param {string[]} [options.args] - Resolved worker argv, never shell-assembled
+ *   (defaults to `invocation.argv.slice(1)`).
+ * @param {string} [options.cwd] - Absolute worktree path (defaults to `invocation.cwd`).
+ * @param {string} [options.logFile] - Absolute combined stdout/stderr log path,
+ *   used only when `stdoutPath`/`stderrPath` are not given.
+ * @param {string} [options.stdinPath] - Absolute path the worker reads its brief
+ *   from (defaults to `invocation.briefPath` for `brief-text`, none for `closed`,
+ *   matching the frozen 'closed' meaning of empty stdin from #2887's shell renderer).
+ *   A `brief-json` invocation needs a conductor-framed params file passed
+ *   explicitly; the raw brief is never fed to such a worker.
+ * @param {string} [options.stdoutPath] - Absolute stdout destination (defaults to
+ *   `invocation.stdoutPath`).
+ * @param {string} [options.stderrPath] - Absolute stderr destination, distinct from
+ *   `stdoutPath` (defaults to `invocation.stderrPath`).
+ * @param {string[]} [options.envNames] - Environment-variable allowlist; only these
+ *   names are ever forwarded to the worker, confined or degraded (defaults to
+ *   `invocation.envNames`, then `['PATH', 'HOME']`).
+ * @param {Record<string, string>} [options.env] - Source of allowlisted values
+ *   (defaults to the conductor's own `process.env`; never forwarded wholesale).
+ * @param {import('../../src/config/aiwg-config.js').AiwgConfig} [options.config] - Current effective config.
+ * @param {string[]} [options.paths] - Filesystems to sample free disk on
+ *   (defaults to the worker `cwd`/worktree, never the conductor's cwd).
+ * @param {boolean} [options.allowDegraded] - Explicit opt-in to an unconfined launch
+ *   when no systemd user manager is reachable (recorded as degraded, never silent).
+ * @param {boolean} [options.attached] - Launch with live stdio pipes instead of
+ *   file redirection (#2892 B2), for an in-process client (e.g. an MCP stdio
+ *   client) that needs to read/write the worker's stdin/stdout directly.
+ * @returns {{ launched: boolean, blocked?: boolean, failures?: unknown[], mode?: string }}
+ *   Same result shape as `launchIsolatedWorker`; a blocked result carries the
+ *   dispatch gate's typed failures and never reaches a spawn call.
+ */
+export function planDirectWorkerLaunch({
+  name = 'worker',
+  memoryMaxGb,
+  invocation,
+  command = invocation?.argv?.[0],
+  args = invocation?.argv?.slice(1) ?? [],
+  cwd = invocation?.cwd,
+  logFile,
+  stdinPath = invocation?.stdin === 'brief-text' ? invocation.briefPath : undefined,
+  stdoutPath = invocation?.stdoutPath,
+  stderrPath = invocation?.stderrPath,
+  envNames = invocation?.envNames,
+  env,
+  config,
+  allowDegraded = false,
+  // Test-only passthroughs mirroring checkWorkerDispatch's own injectable
+  // signals/isolation detector; production callers omit these and sample
+  // the real host / systemd user manager.
+  live,
+  readers,
+  thresholdOverlay,
+  paths,
+  isolation,
+  spawn,
+  spawnAsync,
+  proposeUnit,
+  kind,
+  attached = false,
+  // #2892: forwarded only when explicitly given, so every existing caller
+  // (which omits it) keeps #2895's own `attached` default (`stdin: 'closed'`
+  // -> stdio[0] 'ignore') unchanged. An MCP stdio worker passes `'open'` to
+  // get a live, writable stdin pipe for JSON-RPC requests.
+  stdin,
+} = {}) {
+  if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
+    throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
+  }
+  // Free disk is sampled on the worktree filesystem the worker will actually
+  // write to — never the conductor's process cwd. Without live signals or
+  // caller-supplied paths, an unknown worktree fails closed in the gate.
+  const gate = checkWorkerDispatch({
+    config, live, readers, thresholdOverlay,
+    paths: paths ?? (typeof cwd === 'string' && cwd ? [cwd] : undefined),
+  });
+  if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
+  return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
+    gate, config, allowDegraded, attached,
+    ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
+    ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
+    ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
+    ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}) });
 }
 
 export default SessionLauncher;

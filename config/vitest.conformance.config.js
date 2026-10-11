@@ -1,7 +1,7 @@
 /**
  * Vitest config for the executor-v1 conformance test suite.
  *
- * Scoped to test/conformance/executor-v1/ only.
+ * Includes offline executor, workload, activity and orchestration contracts.
  * Runs in one non-isolated fork to prevent socket conflicts
  * with the registry tests.
  *
@@ -15,6 +15,7 @@
 
 import { defineConfig } from 'vitest/config';
 import path from 'path';
+import { orchestrationConformanceFiles } from './test-lanes.mjs';
 
 export default defineConfig({
   root: path.resolve(import.meta.dirname, '..'),
@@ -24,6 +25,7 @@ export default defineConfig({
       'test/conformance/fleet-workload-v1/**/*.test.mjs',
       'test/conformance/activity-v1/**/*.test.mjs',
       'test/conformance/network-analysis-v1/**/*.test.ts',
+      ...orchestrationConformanceFiles,
     ],
     exclude: [
       'node_modules/**',
@@ -49,7 +51,8 @@ export default defineConfig({
     mockReset: true,
     restoreMocks: true,
 
-    reporters: ['verbose'],
+    reporters: ['verbose', 'json'],
+    outputFile: { json: './test-results/conformance-fixtures.json' },
   },
 
   resolve: {

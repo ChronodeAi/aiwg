@@ -1,0 +1,14 @@
+{
+  "scenarioId": "T-OG-03-deepseek-harness-plain-final",
+  "provider": "deepseek-harness",
+  "synthetic": true,
+  "qualification": "unqualified semantic grammar",
+  "framing": "plain",
+  "fixture": "final.txt",
+  "expectedKinds": [
+    null
+  ],
+  "expectedOutcome": "process-only; semantic start/progress unavailable",
+  "sanitizedEvidence": "synthetic final only",
+  "cleanup": "pure fixture; no process"
+}

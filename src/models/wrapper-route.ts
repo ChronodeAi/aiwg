@@ -7,6 +7,7 @@ import { MODEL_WRAPPERS, type ModelRole } from './provider-models.js';
 import { routeModelTier } from './router.js';
 import type { ModelRouteRequest, ModelRouteDecision, ModelTier } from './types.js';
 import type { ResolvedRoutableCapability } from '../artifacts/capability-resolver.js';
+import { resolveWorkerPlan, type WorkerPlanRequest, type WorkerPlanSnapshot, type WorkerResolutionPlan } from './resolver.js';
 
 export type RoutedCapabilityType = ResolvedRoutableCapability['type'];
 export type WrapperLaunchMechanism = 'native-subagent' | 'aiwg-mc' | 'manual';
@@ -17,6 +18,7 @@ export interface WrapperRouteRequest extends ModelRouteRequest {
   assignment: string;
   launchMechanism: WrapperLaunchMechanism;
   catalog?: ProviderModelCatalog;
+  worker?: { snapshot: WorkerPlanSnapshot; request: WorkerPlanRequest };
 }
 
 export interface WrapperRouteEnvelope {
@@ -29,6 +31,7 @@ export interface WrapperRouteEnvelope {
   capability: ResolvedRoutableCapability;
   assignment: string;
   model: CompiledModelPolicy | null;
+  worker?: WorkerResolutionPlan;
   launch: {
     mechanism: WrapperLaunchMechanism;
     target: string | null;
@@ -47,6 +50,23 @@ export function buildWrapperRouteEnvelope(request: WrapperRouteRequest): Wrapper
   if (!request.assignment.trim()) throw new Error('Wrapper routing requires a bounded assignment.');
 
   const decision = routeModelTier(request);
+  if (request.worker?.snapshot.config.parallelism?.worker_dispatch && !request.deterministic) {
+    const worker = resolveWorkerPlan(request.worker.snapshot, {
+      ...request.worker.request,
+      authority: request,
+    });
+    const role = worker.role as ModelRole | null;
+    const wrapper = role ? MODEL_WRAPPERS[role] : null;
+    return {
+      version: 1, provider: request.provider, decision, role,
+      tier: role ? worker.policy?.roleGuidance?.[role]?.tier ?? null : null,
+      wrapper, capability: request.capability, assignment: request.assignment.trim(), model: null, worker,
+      launch: { mechanism: request.launchMechanism, target: worker.selected ? wrapper : null,
+        prompt: worker.selected
+          ? `Run this bounded assignment through ${wrapper}.\nSelected worker: ${worker.selected.group}/${worker.selected.member}; model ${worker.selected.model}; effort ${worker.selected.effort ?? 'not-applicable'}.\nAssignment: ${request.assignment.trim()}\nRevalidate current input digests before invocation; return claims for conductor verification.`
+          : 'Worker resolution is blocked; inspect the plan diagnostics and exclusions.' },
+    };
+  }
   const tier = decision.modelTier;
   const role = roleForTier(tier);
   const wrapper = role ? MODEL_WRAPPERS[role] : null;

@@ -11,6 +11,43 @@ export const SESSION_PROVIDER_IDS = [
 
 export const SessionProviderIdSchema = z.enum(SESSION_PROVIDER_IDS);
 export type SessionProviderId = z.infer<typeof SessionProviderIdSchema>;
+// Expected scope must also represent providers unknown to this runtime.
+export const ExpectedSessionProviderSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
+export const SessionRuntimeIdentitySchema = z.object({
+  packageName: z.string(),
+  version: z.string(),
+  packageRoot: z.string(),
+  executable: z.string(),
+  nodeVersion: z.string(),
+  installationMethod: z.string(),
+  installationState: z.enum(['aligned', 'mismatch', 'stale', 'unrecorded', 'unknown']),
+  canonicalRoot: z.string().nullable(),
+  diagnostics: z.array(z.string()),
+});
+export type SessionRuntimeIdentity = z.infer<typeof SessionRuntimeIdentitySchema>;
+export const SessionCoveragePreflightSchema = z.object({
+  expectedProviders: z.array(ExpectedSessionProviderSchema).min(1),
+  expectedProviderBasis: z.enum(['explicit', 'declared-default', 'legacy']),
+  supportedProviders: z.array(ExpectedSessionProviderSchema),
+  runtime: SessionRuntimeIdentitySchema,
+  status: z.enum(['partial', 'complete']),
+  unresolvedProviders: z.array(ExpectedSessionProviderSchema),
+  ledger: z.array(z.object({
+    provider: ExpectedSessionProviderSchema,
+    disposition: z.enum([
+      'missing-adapter', 'unsupported', 'authorization-required', 'export-required',
+      'unavailable', 'no-sources', 'not-checked', 'pending-import', 'import-incomplete',
+      'scope-incomplete', 'acquired',
+    ]),
+    adapterVersion: z.string().nullable(),
+    supportedOperations: z.array(z.string()),
+    acquisitionModes: z.array(z.string()),
+    sourceCount: z.number().int().nonnegative(),
+    boundaries: z.array(z.string()),
+    remediation: z.string().nullable(),
+  })),
+});
+export type SessionCoveragePreflight = z.infer<typeof SessionCoveragePreflightSchema>;
 export const SESSION_PROVIDER_ALIASES = Object.freeze({
   windsurf: 'devin-desktop',
   dsh: 'deepseek-harness',
@@ -368,6 +405,11 @@ export interface SourceProbe {
   sourceSchemaVersion: string;
   consistency: z.infer<typeof ConsistencyStateSchema>;
   operationalState: z.infer<typeof OperationalStateSchema>;
+  /**
+   * Workspace the source declares for itself, when its format carries one.
+   * Provenance only: import authorization always uses the caller's workspace.
+   */
+  declaredWorkspaceId?: string;
 }
 export interface ImportCursor { value: string }
 
@@ -378,6 +420,19 @@ export interface SessionSourceAdapter {
   readonly supportedOperations: readonly SessionSourceOperation[];
   readonly acquisitionModes: readonly SessionAcquisitionMode[];
   readonly sourceSchemaMajor?: number;
+  /**
+   * Declares whether the importer's generic checkpoint-continuity validator
+   * may assume the source only ever grows by appending bytes (the default,
+   * `'append-only'` when omitted) or whether it is rewritten wholesale on
+   * every save (`'snapshot'`). Declare `'snapshot'` only when the native
+   * source carries stable per-entry identities (a native event id and/or a
+   * monotonic sequence/cursor) AND the adapter's own `stream()` resumes from
+   * that identity rather than a byte position — the importer's generic
+   * size-shrink, file-identity, and prefix-rewrite checks are skipped for
+   * snapshot sources, so idempotency then rests entirely on the adapter's
+   * cursor plus the catalog's identity-keyed inserts.
+   */
+  readonly sourceContinuity?: 'append-only' | 'snapshot';
   /** Validated mutable preamble excluded from append-continuity checks. */
   mutablePrefixBytes?(source: SelectedSource): Promise<number>;
   discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor>;

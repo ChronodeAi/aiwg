@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, realpath, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { access, lstat, open, realpath, stat, writeFile } from 'node:fs/promises';
+import { delimiter, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { resolveGrokHomeResult } from '../providers/grok-build-paths.js';
 import { SessionContractError } from './contracts.js';
@@ -132,10 +132,10 @@ async function runGrok(options: GrokBuildCliOptions, args: string[]): Promise<st
   const home = resolveGrokHomeResult(env);
   if (!home.ok) throw new SessionContractError('SOURCE_NOT_AUTHORIZED', home.message);
   await rejectSymlinkComponents(home.path);
-  const binary = options.binary ?? 'grok';
-  if (binary !== 'grok' && !isAbsolute(binary)) {
+  if (options.binary !== undefined && !isAbsolute(options.binary)) {
     throw new SessionContractError('SOURCE_NOT_AUTHORIZED', 'Grok Build binary override must be absolute');
   }
+  const binary = options.binary ?? await defaultGrokBinary(env, home.path);
   const runner = options.runner ?? execFile;
   try {
     const result = await runner(binary, ['--no-auto-update', ...args], {
@@ -151,10 +151,86 @@ async function runGrok(options: GrokBuildCliOptions, args: string[]): Promise<st
     if ((error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
       throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Grok Build CLI output exceeds 2 MB');
     }
-    throw new SessionContractError(
+    throw grokFailure(error as GrokProcessError, binary);
+  }
+}
+
+interface GrokProcessError {
+  code?: string | number;
+  killed?: boolean;
+  signal?: NodeJS.Signals | null;
+}
+
+/**
+ * Map a failed `grok` launch to an actionable error (#2968). stderr is never
+ * echoed: Grok Build diagnostics can carry session content.
+ */
+function grokFailure(error: GrokProcessError, binary: string): SessionContractError {
+  const name = binary === 'grok' ? '`grok`' : `\`${binary}\``;
+  if (error.code === 'ENOENT') {
+    return new SessionContractError(
       'UNSUPPORTED_OPERATION',
-      'Grok Build CLI failed or timed out; check the local `grok` installation, authentication, and selected workspace.',
+      `Grok Build CLI not found: ${name} is not on PATH and no $GROK_HOME/bin/grok was found; `
+        + 'pass --grok-bin <absolute path> or add the Grok Build bin directory to PATH.',
     );
+  }
+  if (error.code === 'EACCES') {
+    return new SessionContractError(
+      'UNSUPPORTED_OPERATION',
+      `Grok Build CLI ${name} is not executable; check its permissions or pass --grok-bin <absolute path>.`,
+    );
+  }
+  if (error.killed || error.signal) {
+    return new SessionContractError(
+      'UNSUPPORTED_OPERATION',
+      `Grok Build CLI ${name} timed out after ${TIMEOUT_MS / 1000}s; check that it is authenticated `
+        + 'and does not prompt for input.',
+    );
+  }
+  if (typeof error.code === 'number') {
+    return new SessionContractError(
+      'UNSUPPORTED_OPERATION',
+      `Grok Build CLI ${name} exited with code ${error.code}; run \`grok sessions list\` in the selected `
+        + 'workspace to check authentication and installation.',
+    );
+  }
+  return new SessionContractError(
+    'UNSUPPORTED_OPERATION',
+    'Grok Build CLI failed; check the local `grok` installation, authentication, and selected workspace.',
+  );
+}
+
+/**
+ * Resolve `grok` from PATH, else the installer's `$GROK_HOME/bin/grok` (#2968).
+ * The installer links `bin/grok` to a versioned binary beside it, so that one
+ * link is followed only when it resolves to a regular file inside `bin`.
+ */
+async function defaultGrokBinary(env: NodeJS.ProcessEnv, grokHome: string): Promise<string> {
+  for (const directory of (env.PATH ?? '').split(delimiter)) {
+    if (!directory || !isAbsolute(directory)) continue;
+    if (await isExecutableFile(join(directory, 'grok'))) return 'grok';
+  }
+  const binDirectory = join(grokHome, 'bin');
+  try {
+    await rejectSymlinkComponents(binDirectory);
+    const canonicalBin = await realpath(binDirectory);
+    const target = await realpath(join(binDirectory, 'grok'));
+    if (dirname(target) !== canonicalBin || !(await isExecutableFile(target))) return 'grok';
+    return target;
+  } catch (error) {
+    if (error instanceof SessionContractError) throw error;
+    return 'grok';
+  }
+}
+
+async function isExecutableFile(path: string): Promise<boolean> {
+  try {
+    const item = await stat(path);
+    if (!item.isFile()) return false;
+    await access(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

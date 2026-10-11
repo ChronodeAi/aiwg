@@ -369,7 +369,7 @@
     },
     "parallelism": {
       "type": "object",
-      "description": "Provider-scoped parallelism caps — limits concurrent subagents, Ralph loops, and MC missions to keep AIWG within the rate-limit envelope of the underlying model provider (#1359). Composes (effective limit = MIN) with context-budget caps and rlm-context-management Rule 8.",
+      "description": "Provider-scoped parallelism caps \u2014 limits concurrent subagents, Ralph loops, and MC missions to keep AIWG within the rate-limit envelope of the underlying model provider (#1359). Composes (effective limit = MIN) with context-budget caps and rlm-context-management Rule 8.",
       "additionalProperties": false,
       "properties": {
         "max_parallel_subagents": {
@@ -393,6 +393,425 @@
         "rationale": {
           "type": "string",
           "description": "Free-form note explaining why this cap was chosen (e.g., 'Claude Team plan API quota')."
+        },
+        "worker_dispatch": {
+          "type": "boolean",
+          "default": false
+        },
+        "clis": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/cli"
+          },
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          }
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/group"
+          },
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          }
+        },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "groupCaps": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "cliCaps": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "modelCaps": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "quotaCaps": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "queueTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 300
+            },
+            "leaseSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 60
+            },
+            "memberCaps": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "maxQueued": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 128
+            },
+            "authorityRef": {
+              "type": "string",
+              "pattern": "^(project|host:[a-z][a-z0-9-]{0,62})$",
+              "default": "project",
+              "description": "Project MC admission store by default; host reference requires S4 trusted executor binding."
+            },
+            "hostResources": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Live host-resource admission thresholds for worker dispatch (FR-OG-107, #2954). Each present signal blocks dispatch over threshold; absent signals are reported but not enforced. Overrides build.resource_preflight.dispatch field-by-field.",
+              "properties": {
+                "min_avail_mem_gb": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 8
+                },
+                "max_load_ratio": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 1.0
+                },
+                "max_mem_psi_avg10": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 30
+                },
+                "max_mem_psi_avg60": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 10
+                },
+                "min_free_disk_gb": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 2
+                },
+                "max_workers": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "perRun": {
+              "$ref": "#/definitions/budget"
+            },
+            "perTask": {
+              "$ref": "#/definitions/budget"
+            },
+            "enforcement": {
+              "enum": [
+                "hard",
+                "observed"
+              ],
+              "default": "observed"
+            },
+            "unknownCost": {
+              "enum": [
+                "deny",
+                "reserve"
+              ],
+              "default": "deny"
+            },
+            "reservationUsd": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "unknownCost"
+                ],
+                "properties": {
+                  "unknownCost": {
+                    "const": "reserve"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "reservationUsd": {}
+                },
+                "required": [
+                  "reservationUsd"
+                ]
+              }
+            }
+          ]
+        },
+        "retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            },
+            "on": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "rate-limit",
+                  "unavailable",
+                  "timeout"
+                ]
+              },
+              "minItems": 0,
+              "uniqueItems": true,
+              "default": [
+                "rate-limit",
+                "unavailable",
+                "timeout"
+              ]
+            },
+            "baseDelaySeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "maxDelaySeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 60
+            }
+          }
+        },
+        "activation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "configDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "projectModelsDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "userModelsDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "builtinModelsDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "previousRef": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "snapshotRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "revision",
+            "configDigest",
+            "projectModelsDigest",
+            "userModelsDigest",
+            "builtinModelsDigest",
+            "snapshotRef"
+          ]
+        },
+        "worker_mode": {
+          "enum": [
+            "direct",
+            "managed"
+          ],
+          "default": "direct"
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "startupSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600,
+              "default": 60
+            },
+            "checkSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "default": 15
+            },
+            "quietSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "default": 90
+            },
+            "stallSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 7200,
+              "default": 300
+            },
+            "diagnosticGraceSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600,
+              "default": 60
+            },
+            "terminateGraceSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "default": 5
+            },
+            "hardTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 1800
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 100
+            },
+            "requireStepCap": {
+              "type": "boolean",
+              "default": false
+            },
+            "roleScale": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "efficiency": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 6,
+                  "default": 1
+                },
+                "coding": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 6,
+                  "default": 1
+                },
+                "reasoning": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 6,
+                  "default": 2
+                }
+              }
+            },
+            "effortScale": {
+              "type": "object",
+              "maxProperties": 32,
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 6
+              },
+              "default": {
+                "xhigh": 2,
+                "max": 3
+              }
+            },
+            "modelScale": {
+              "type": "object",
+              "maxProperties": 500,
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 6
+              }
+            },
+            "modelStartupSeconds": {
+              "type": "object",
+              "maxProperties": 500,
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600
+              }
+            },
+            "correlationWindowSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "default": 120
+            },
+            "failureCount": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100,
+              "default": 3
+            },
+            "allFailedMinimum": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100,
+              "default": 2
+            },
+            "cooldownSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "default": 120
+            },
+            "maxCooldownSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 900
+            },
+            "probeSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "default": 10
+            },
+            "probeMaxBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 1048576,
+              "default": 65536
+            },
+            "halfOpenMaxProbes": {
+              "const": 1,
+              "default": 1
+            }
+          }
         }
       }
     },
@@ -547,6 +966,241 @@
     }
   },
   "definitions": {
+    "cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(providers|workerAdapters):[a-z][a-z0-9-]{0,62}$"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "format": "uri"
+        },
+        "accountScope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quotaScope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credentialRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invocationProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mcpServerRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "adapter",
+        "accountScope",
+        "quotaScope"
+      ],
+      "not": {
+        "properties": {
+          "executable": {},
+          "endpoint": {}
+        },
+        "required": [
+          "executable",
+          "endpoint"
+        ]
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "cli": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "efficiency",
+              "coding",
+              "reasoning"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "required": [
+        "id",
+        "cli",
+        "model",
+        "roles"
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/member"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "execution": {
+          "$ref": "#/definitions/execution"
+        },
+        "requiredRoles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "efficiency",
+              "coding",
+              "reasoning"
+            ]
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "members"
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isolation": {
+          "enum": [
+            "worktree",
+            "snapshot",
+            "isolated-copy"
+          ],
+          "default": "worktree"
+        },
+        "sandbox": {
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "external"
+          ],
+          "default": "workspace-write"
+        },
+        "approval": {
+          "enum": [
+            "never",
+            "on-request"
+          ],
+          "default": "never"
+        },
+        "network": {
+          "enum": [
+            "deny",
+            "allowlisted"
+          ],
+          "default": "deny"
+        },
+        "runnerRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifierRunnerRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "transport": {
+          "enum": [
+            "shell",
+            "mcp"
+          ],
+          "default": "shell"
+        },
+        "receipts": {
+          "enum": [
+            "off",
+            "optional",
+            "required"
+          ],
+          "default": "optional"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wallSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "GatesConfig": {
       "type": "object",
       "description": "Project gate floors for decision studies (#2832). Floors are project policy: every binding must include and tighten each floor gate. Absent means unconfigured; callers that load floors get the operator default integrity-ceiling floor.",

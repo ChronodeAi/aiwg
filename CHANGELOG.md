@@ -37,6 +37,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Credential policy: `--strict-credentials` refuses literal `env`/`headers` values, `--no-credentials`
   refuses any credential-bearing field. Also settable with `AIWG_MCP_CREDENTIAL_POLICY` or
   `aiwg mcp credential-policy`.
+- `aiwg sessions discover --grokbot-root <dir>` reads Grok Bot desktop
+  transcripts directly from its `sand-client-persistence` cache (#2970). Only
+  transcript-replica files are opened; credential, cookie and other app-state
+  files are never read. A truncated cache window is imported as `provisional`,
+  and re-imports add only newer entries.
 
 ### Fixed
 
@@ -93,6 +98,37 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   User-scope Claude paths fall back to the OS home directory when `HOME` and `USERPROFILE` are unset.
 - Ephemeral and Codex runtime-home MCP configs use 0600 permissions; default ephemeral files use a private temp
   directory, and `aiwg mcp list` redacts URL userinfo.
+- Session interchange imports now name the failing header field and its
+  allowed values, and a `--source-id` mismatch shows both identities, instead
+  of reporting a valid interchange file as undeclared input (#2966).
+- `aiwg sessions import` reports the catalog workspace it used and warns when
+  it differs from the workspace the source declares, rather than silently
+  filing sessions under `default` (#2967).
+- `aiwg sessions grok-list`, `grok-search` and `grok-export` find `grok` in
+  `$GROK_HOME/bin` when it is not on PATH, report a missing binary, timeout or
+  non-zero exit separately, and document `--grok-bin` (#2968).
+
+- `aiwg sessions discover --muse-root` dropped every matching Muse session log
+  longer than 100 records, with no diagnostic (#2865). Discovery now streams each
+  log under bounded limits and stops at the first matching workspace evidence.
+  Each Muse source gets a content-free inspection receipt (`matched`, `mismatch`,
+  or `inconclusive` with a reason code), and an inconclusive inspection keeps Muse
+  coverage partial instead of counting as a mismatch. Import also accepts Muse
+  Code 1.4.3 `runtime.session` mode records, which carry an event without a kind;
+  before, one such record made the whole session fail with `MALFORMED_SOURCE`.
+
+- Session collection could report complete coverage while silently omitting a
+  provider that the running runtime has no adapter for (#2864). `aiwg sessions
+  sources` and `discover` now return a coverage preflight: the expected provider
+  set (`--expected-providers`, independent of the runtime's own inventory), the
+  supported set, the runtime's package version, root, and installation state, and
+  a per-provider ledger disposition (`missing-adapter`, `export-required`,
+  `authorization-required`, `no-sources`, `scope-incomplete`, `acquired`, and
+  others). Coverage is `complete` only with an explicit expected scope, an aligned
+  runtime, and every expected provider acquired. Muse parent-only discovery stays
+  `scope-incomplete`. A stale runtime gets a remediation and never triggers an
+  automatic upgrade or installation switch. The session-explore acquisition
+  recipe now requires this preflight before a completion claim.
 
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 

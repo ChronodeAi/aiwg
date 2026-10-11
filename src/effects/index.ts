@@ -97,6 +97,16 @@ export {
   type LockRecoveryOptions,
   type LockRecoveryResult,
 } from './lock-recovery.js';
+export {
+  DISPATCH_KIND,
+  DISPATCH_VERIFIER_VERSION,
+  INVOCATION_PATTERN,
+  createDispatchVerifierIfSupervised,
+  dispatchEffectTarget,
+  hasSupervisorEvidence,
+  loadSupervisorEvidence,
+  type DispatchSupervisorEvidence,
+} from './dispatch-verifier.js';
 export { assertDigestOnly, containsRestrictedMaterial } from './redaction.js';
 export { EFFECT_SCHEMA_IDS, effectSchemaErrors, isEffectSchemaValid, type EffectSchemaName } from './schema.js';
 export {

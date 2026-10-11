@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"fixture-session"}
+{"type":"agent_start"}
+{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","content":[{"type":"text","text":"synthetic answer"}],"stopReason":"stop"}]}
+{"type":"agent_settled"}

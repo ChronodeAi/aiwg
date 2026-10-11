@@ -1,0 +1,372 @@
+{
+  "revision": 1,
+  "cli": {
+    "command": [
+      "models",
+      "resolve"
+    ],
+    "state": "frozen-planned",
+    "owner": "B-OG-33",
+    "flags": {
+      "--role": "role",
+      "--task": "task",
+      "--group": "group",
+      "--brief": "brief",
+      "--workdir": "workdir",
+      "--final-output": "final_output",
+      "--transport": "transport",
+      "--format": "format"
+    },
+    "aliases": {
+      "--json": {
+        "format": "json"
+      }
+    },
+    "formats": [
+      "shell",
+      "json"
+    ],
+    "transports": [
+      "shell",
+      "mcp"
+    ],
+    "shellRenderer": "POSIX sh/bash",
+    "cases": [
+      {
+        "id": "direct-shell-request",
+        "argv": [
+          "models",
+          "resolve",
+          "--role",
+          "coding",
+          "--task",
+          "implementation",
+          "--group",
+          "fixture",
+          "--brief",
+          "/fixture/brief 雪.md",
+          "--workdir",
+          "/fixture/tree with spaces",
+          "--final-output",
+          "/fixture/final.json",
+          "--transport",
+          "shell",
+          "--format",
+          "shell"
+        ],
+        "request": {
+          "role": "coding",
+          "task": "implementation",
+          "group": "fixture",
+          "brief": "/fixture/brief 雪.md",
+          "workdir": "/fixture/tree with spaces",
+          "final_output": "/fixture/final.json",
+          "transport": "shell",
+          "format": "shell"
+        }
+      },
+      {
+        "id": "direct-mcp-request",
+        "argv": [
+          "models",
+          "resolve",
+          "--role",
+          "coding",
+          "--task",
+          "implementation",
+          "--group",
+          "fixture",
+          "--brief",
+          "/fixture/brief 雪.md",
+          "--workdir",
+          "/fixture/tree with spaces",
+          "--final-output",
+          "/fixture/final.json",
+          "--transport",
+          "mcp",
+          "--format",
+          "json"
+        ],
+        "request": {
+          "role": "coding",
+          "task": "implementation",
+          "group": "fixture",
+          "brief": "/fixture/brief 雪.md",
+          "workdir": "/fixture/tree with spaces",
+          "final_output": "/fixture/final.json",
+          "transport": "mcp",
+          "format": "json"
+        }
+      },
+      {
+        "id": "direct-json-alias",
+        "argv": [
+          "models",
+          "resolve",
+          "--role",
+          "coding",
+          "--task",
+          "implementation",
+          "--group",
+          "fixture",
+          "--brief",
+          "/fixture/brief 雪.md",
+          "--workdir",
+          "/fixture/tree with spaces",
+          "--final-output",
+          "/fixture/final.json",
+          "--transport",
+          "shell",
+          "--json"
+        ],
+        "request": {
+          "role": "coding",
+          "task": "implementation",
+          "group": "fixture",
+          "brief": "/fixture/brief 雪.md",
+          "workdir": "/fixture/tree with spaces",
+          "final_output": "/fixture/final.json",
+          "transport": "shell",
+          "format": "json"
+        }
+      }
+    ],
+    "invalidSyntax": [
+      "--format=fish",
+      "--transport=acp",
+      "--unknown=value",
+      "--group fixture; touch injected"
+    ],
+    "otherSurfaces": [
+      {
+        "command": [
+          "config",
+          "get"
+        ],
+        "flags": [
+          "--project"
+        ],
+        "paths": [
+          "parallelism",
+          "parallelism.groups",
+          "parallelism.clis"
+        ],
+        "owner": "B-OG-29/02"
+      },
+      {
+        "command": [
+          "config",
+          "set"
+        ],
+        "flags": [
+          "--project",
+          "--dry-run"
+        ],
+        "paths": [
+          "parallelism.groups",
+          "parallelism.clis"
+        ],
+        "owner": "B-OG-29/02"
+      },
+      {
+        "command": [
+          "doctor"
+        ],
+        "flags": [
+          "--groups",
+          "--probe",
+          "--json"
+        ],
+        "owner": "B-OG-18"
+      },
+      {
+        "command": [
+          "steward",
+          "models"
+        ],
+        "flags": [
+          "--group"
+        ],
+        "owner": "B-OG-18"
+      },
+      {
+        "command": [
+          "mc",
+          "dispatch"
+        ],
+        "flags": [
+          "--brief",
+          "--group",
+          "--decision",
+          "--request-id"
+        ],
+        "owner": "B-OG-16",
+        "state": "deferred-S2",
+        "semantics": "queues; mc run executes"
+      },
+      {
+        "command": [
+          "ralph-external"
+        ],
+        "flags": [
+          "--brief",
+          "--group",
+          "--decision"
+        ],
+        "owner": "B-OG-23",
+        "state": "deferred-managed-binding"
+      }
+    ],
+    "forbiddenNamespaces": [
+      [
+        "mc",
+        "groups"
+      ]
+    ]
+  },
+  "mcp": [
+    {
+      "name": "worker-resolve",
+      "state": "frozen-planned",
+      "owner": "B-OG-35",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "efficiency",
+              "coding",
+              "reasoning"
+            ]
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1
+          },
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workdir": {
+            "type": "string",
+            "minLength": 1
+          },
+          "final_output": {
+            "type": "string",
+            "minLength": 1
+          },
+          "transport": {
+            "enum": [
+              "shell",
+              "mcp"
+            ],
+            "default": "shell"
+          },
+          "format": {
+            "enum": [
+              "shell",
+              "json"
+            ]
+          },
+          "project_dir": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "role",
+          "task",
+          "group",
+          "brief",
+          "workdir",
+          "final_output"
+        ]
+      },
+      "outputDefinition": "workerResolvedInvocation",
+      "semantics": "nonlaunching; resolves qualified registered transport; no Mission/MC prerequisite"
+    },
+    {
+      "name": "worker-invoke",
+      "state": "frozen-planned",
+      "owner": "B-OG-35",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "invocation": {
+            "$ref": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerResolvedInvocation"
+          },
+          "brief": {
+            "$ref": "https://aiwg.io/schemas/mission.aiwg.io/v1#/$defs/workerDirectBrief"
+          }
+        },
+        "required": [
+          "invocation",
+          "brief"
+        ],
+        "allOf": [
+          {
+            "properties": {
+              "invocation": {
+                "properties": {
+                  "readiness": {
+                    "const": "launchable"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "workerOutputDefinition": "workerClaims",
+      "observedOutputDefinition": "workerExecution",
+      "semantics": "one attached authorized bounded call; no arbitrary command/server, queue, retry, checkpoint or conductor verification"
+    },
+    {
+      "name": "mission-dispatch",
+      "state": "existing",
+      "owner": "B-OG-16",
+      "required": [
+        "session_id",
+        "objective",
+        "completion"
+      ],
+      "properties": [
+        "session_id",
+        "objective",
+        "completion",
+        "max_iterations",
+        "max_total_tokens",
+        "max_output_tokens",
+        "max_tool_calls",
+        "max_total_cost",
+        "max_wall_clock_minutes",
+        "exploration_quota",
+        "budget_stop_policy",
+        "project_dir",
+        "confirmed"
+      ],
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    }
+  ]
+}

@@ -7,9 +7,22 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter } from '../../../../src/sessions/index.js';
+import {
+  encodeGrokbotKey, grokbotTranscriptReplicaFilename,
+} from '../../../../src/sessions/adapters/grokbot-locator.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 import { describeWithSqlite } from '../../../helpers/sqlite.js';
+
+const grokbotNativeRoot = resolve('test/fixtures/sessions/grokbot/native');
+const grokbotFixtureIds = JSON.parse(readFileSync(resolve(grokbotNativeRoot, 'fixture-ids.json'), 'utf8')) as {
+  account: string;
+  conversations: { complete: string };
+  decoys: { composerDraftsKey: string };
+};
+const grokbotCompleteReplica = resolve(grokbotNativeRoot, grokbotTranscriptReplicaFilename(
+  grokbotFixtureIds.account, grokbotFixtureIds.conversations.complete,
+));
 
 function context(args: string[], cwd = process.cwd()): HandlerContext {
   return { args, rawArgs: ['sessions', ...args], cwd, frameworkRoot: process.cwd() };
@@ -114,10 +127,10 @@ describe('sessions CLI contracts', () => {
       });
     expect(output.data.providers.find((item: any) => item.provider === 'grokbot'))
       .toMatchObject({
-        disposition: 'manual-only',
-        supportedOperations: ['inspect', 'stream'],
-        acquisitionModes: ['manual-export'],
-        reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+        disposition: 'implemented',
+        supportedOperations: ['discover', 'inspect', 'stream'],
+        acquisitionModes: ['manual-export', 'jsonl'],
+        reasonCode: null,
       });
     expect(output.data.providers.find((item: any) => item.provider === 'muse'))
       .toMatchObject({
@@ -475,6 +488,77 @@ describe('sessions CLI contracts', () => {
     });
   });
 
+  it('previews a Grok Bot native transcript replica import', async () => {
+    const result = await sessionsHandler.execute(context([
+      'import', grokbotCompleteReplica, '--provider', 'grokbot', '--source-id', 'x',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        source: {
+          provider: 'grokbot',
+          providerProfile: 'grokbot-native-transcript-replica-v1',
+          locatorClass: 'grokbot-native-transcript-replica',
+          disposition: 'implemented',
+          consistency: 'complete',
+        },
+        wouldInspect: true,
+        wouldPersist: false,
+      },
+    });
+  });
+
+  it('keeps a Grok Bot decoy blob on the manual-export path and rejects it', async () => {
+    const inspect = vi.spyOn(GrokbotSessionAdapter.prototype, 'inspect');
+    const fixture = resolve(grokbotNativeRoot, `${encodeGrokbotKey(grokbotFixtureIds.decoys.composerDraftsKey)}.blob`);
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'grokbot', '--source-id', 'decoy',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).not.toBe(0);
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ locatorClass: 'manual-export' }));
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'error',
+      error: { code: 'MALFORMED_SOURCE' },
+    });
+  });
+
+  it('reports the default workspace and warns when it differs from the declared one', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fixture = resolve('test/fixtures/sessions/grokbot/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'grokbot', '--source-id', 'grokbot-fixture-v1',
+      '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    const output = jsonOutput(log);
+    expect(output.data).toMatchObject({
+      workspaceId: 'default',
+      workspaceSource: 'default',
+      declaredWorkspaceId: 'workspace-fixture',
+    });
+    expect(output.data.warnings).toEqual([
+      expect.stringContaining('source declares workspace "workspace-fixture" but sessions are imported into "default" (no --workspace given)'),
+    ]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('reports an explicit workspace without a warning when it matches the declared one', async () => {
+    const fixture = resolve('test/fixtures/sessions/generic/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--source-id', 'generic-fixture-v1', '--workspace', 'workspace-fixture',
+      '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      workspaceSource: 'argument',
+      declaredWorkspaceId: 'workspace-fixture',
+      warnings: [],
+    });
+  });
+
   it('previews a Muse Code export trajectory import without UNSUPPORTED_OPERATION', async () => {
     const fixture = resolve('test/fixtures/sessions/muse/valid-v1.json');
     const result = await sessionsHandler.execute(context([
@@ -514,6 +598,28 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports a Grok Bot native transcript replica into the catalog', async () => {
+    const dbArgs = [
+      '--db', resolve(root, 'grokbot.sqlite'),
+      '--workspace', 'workspace-fixture', '--json',
+    ];
+    const result = await sessionsHandler.execute(context([
+      'import', grokbotCompleteReplica, '--provider', 'grokbot', '--source-id', 'x', ...dbArgs,
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'ok',
+      data: { totals: { sessionsInserted: 1, eventsInserted: 13 } },
+    });
+
+    expect((await sessionsHandler.execute(context(['list', ...dbArgs]))).exitCode).toBe(0);
+    const listed = jsonOutput(log);
+    expect(listed.data.page.total).toBe(1);
+    expect(listed.data.items[0]).toMatchObject({ provider: 'grokbot', workspaceId: 'workspace-fixture' });
+    expect((await sessionsHandler.execute(context(['show', listed.data.items[0].sessionId, ...dbArgs]))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.events).toHaveLength(13);
   });
 
   it('infers the canonical current workspace for catalog reads', async () => {

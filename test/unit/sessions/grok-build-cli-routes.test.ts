@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -61,6 +61,48 @@ describe('documented Grok Build CLI routes', () => {
     await symlink('/tmp', escape);
     await expect(grokBuildList({ cwd: root, env: { GROK_HOME: escape }, runner }))
       .rejects.toMatchObject({ code: 'SOURCE_SYMLINK' });
+  });
+
+  it('maps launch failures to distinct actionable errors without echoing stderr', async () => {
+    const root = await workspace();
+    const env = { PATH: '/nonexistent', GROK_HOME: join(root, '.grok') };
+    const failing = (error: Record<string, unknown>) => vi.fn(async () => {
+      throw Object.assign(new Error('launch failed'), { stderr: 'private session text', ...error });
+    });
+    await expect(grokBuildList({ cwd: root, env, runner: failing({ code: 'ENOENT' }) }))
+      .rejects.toMatchObject({
+        code: 'UNSUPPORTED_OPERATION',
+        message: expect.stringMatching(/not on PATH.*--grok-bin/),
+      });
+    await expect(grokBuildList({ cwd: root, env, runner: failing({ killed: true, signal: 'SIGTERM' }) }))
+      .rejects.toMatchObject({ message: expect.stringContaining('timed out after 15s') });
+    await expect(grokBuildList({ cwd: root, env, runner: failing({ code: 2 }) }))
+      .rejects.toMatchObject({ message: expect.stringContaining('exited with code 2') });
+    await expect(grokBuildList({ cwd: root, env, runner: failing({ code: 2 }) }))
+      .rejects.not.toMatchObject({ message: expect.stringContaining('private') });
+  });
+
+  it('falls back to the installer link in $GROK_HOME/bin when grok is not on PATH', async () => {
+    const root = await workspace();
+    const bin = join(root, '.grok', 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'grok-1.0.38'), '#!/bin/sh\n', { mode: 0o755 });
+    await symlink('grok-1.0.38', join(bin, 'grok'));
+    const runner = vi.fn(async () => ({ stdout: 'No sessions found.\n', stderr: '' }));
+    const env = { PATH: '/nonexistent', GROK_HOME: join(root, '.grok') };
+    expect(await grokBuildList({ cwd: root, env, runner })).toEqual([]);
+    expect(runner.mock.calls[0]?.[0]).toBe(join(await realpath(bin), 'grok-1.0.38'));
+  });
+
+  it('ignores a $GROK_HOME/bin/grok link that escapes the bin directory', async () => {
+    const root = await workspace();
+    const bin = join(root, '.grok', 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(root, 'elsewhere'), '#!/bin/sh\n', { mode: 0o755 });
+    await symlink(join(root, 'elsewhere'), join(bin, 'grok'));
+    const runner = vi.fn(async () => ({ stdout: 'No sessions found.\n', stderr: '' }));
+    await grokBuildList({ cwd: root, env: { PATH: '/nonexistent', GROK_HOME: join(root, '.grok') }, runner });
+    expect(runner.mock.calls[0]?.[0]).toBe('grok');
   });
 
   it('exports a bounded transcript to an exclusive UUID file', async () => {

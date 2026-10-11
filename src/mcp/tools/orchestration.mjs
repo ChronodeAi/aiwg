@@ -215,6 +215,7 @@ export function registerFlowToolset(server) {
 }
 
 export function registerMissionToolset(server) {
+  registerWorkerResolveTool(server);
   server.registerTool('mission-guide', {
     title: 'Show AIWG Mission Primitive',
     description: 'Fetch the aiwg-mission kernel skill. This is the AIWG-owned Mission primitive; it is distinct from the lower-level mc-* Mission Control toolset.',
@@ -316,5 +317,42 @@ export function registerMissionToolset(server) {
     } catch (err) {
       return mcpError(`mission-status: ${err.message}`);
     }
+  });
+}
+
+/** Frozen B-OG-33/35 read-only surface; the CLI and MCP share the typed renderer. */
+export function registerWorkerResolveTool(server) {
+  server.registerTool('worker-resolve', {
+    title: 'Resolve Worker Invocation',
+    description: 'Resolve a nonlaunching qualified worker plan without Mission or MC state.',
+    inputSchema: z.object({
+      role: z.enum(['efficiency', 'coding', 'reasoning']),
+      task: z.string().min(1),
+      group: z.string().min(1).regex(/^[a-z][a-z0-9-]{0,62}$/),
+      brief: z.string().min(1),
+      workdir: z.string().min(1),
+      final_output: z.string().min(1),
+      transport: z.enum(['shell', 'mcp']).default('shell'),
+      format: z.enum(['shell', 'json']).optional(),
+      project_dir: z.string().min(1).optional(),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  }, async input => {
+    try {
+      const args = ['models', 'resolve'];
+      for (const [key, value] of Object.entries(input)) {
+        if (key === 'project_dir' || key === 'format') continue;
+        args.push(`--${key === 'final_output' ? 'final-output' : key}=${value}`);
+      }
+      const format = input.format ?? 'json';
+      args.push(`--format=${format}`);
+      const { stdout, stderr, code } = await runAiwgCli(args, { cwd: input.project_dir, timeoutMs: 30000 });
+      if (format === 'shell') {
+        return { ...mcpJson(stdout || stderr), ...(code === 0 ? {} : { isError: true }) };
+      }
+      let plan;
+      try { plan = JSON.parse(stdout); } catch { return mcpError(`worker-resolve failed (exit ${code}): ${stderr}`); }
+      return { ...mcpJson(plan), ...(code === 0 ? {} : { isError: true }) };
+    } catch (error) { return mcpError(`worker-resolve: ${error.message}`); }
   });
 }

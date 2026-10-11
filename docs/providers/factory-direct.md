@@ -1,0 +1,64 @@
+# Factory (Droid) direct-worker profile (B-OG-37, #2902)
+
+This is the lightweight CLI profile for dispatching `droid` as a direct
+worker. It is unrelated to the `droid-bridge` MCP addon, which delegates
+batch work to a separately-configured Droid account.
+
+The bundled `direct-shell` invocation profile in
+`agentic/code/providers/model-capabilities.v1.json` is version-bound to
+`droid-cli 0.238.0` and documentation/help-evidenced only (`H`/`D` evidence
+grades — the `stream-json`/`json` event vocabulary is doc-sourced from
+docs.factory.com, not help-verified, because the installed CLI was never run
+with a prompt). It stays `unqualified` for dispatch until a human qualifier
+reviews a live run. The adapter
+(`tools/ralph-external/lib/factory-adapter.mjs`) renders:
+
+```
+droid exec [--auto low] -m <model> -r <effort> --cwd <workspace> \
+  --output-format stream-json < <brief>
+```
+
+The brief always travels on stdin (no `prompt` argument is ever emitted);
+`exec --help`'s own Examples document reading the prompt from stdin when no
+`prompt` argument is given. `--auto low` is emitted only for the
+`workspace-write` sandbox contract; the `read-only` contract omits `--auto`
+entirely, since the CLI's own no-flags default already is read-only.
+`--skip-permissions-unsafe` is never emitted by this profile.
+
+## Manual smoke run
+
+The conductor runs this once, by hand, after `droid` is installed and
+`FACTORY_API_KEY` is exported in the environment, to record a pass/fail and
+the observed CLI version on the tracking issue. It is not part of default CI
+and performs exactly one live, billable call.
+
+```sh
+d=$(mktemp -d) && cd "$d" || exit 1
+MODEL="gpt-6-luna"
+echo 'Reply with exactly: factory-smoke-ok' \
+  | droid exec --auto low -m "$MODEL" -r low --cwd "$d" \
+    --output-format stream-json ; echo "exit=$?"
+```
+
+### Reading the result
+
+- **Exit code**: `echo "exit=$?"` must print `exit=0`. Any non-zero exit is a
+  fail.
+- **A terminal `result` line on stdout, with the same affirmative rule the
+  adapter's `observeHealthEvent` enforces**: `--output-format stream-json`
+  writes newline-delimited JSON objects to stdout. Grep the captured output
+  for the terminal line: `... | grep '"type":"result"'`. Success requires
+  ALL of: the line parses as JSON with `"type":"result"`; `"subtype"` is
+  exactly `"success"` (an `"interrupted"`, `"error_during_execution"`, or
+  missing/unknown subtype is a fail even if other fields look clean);
+  `"is_error"` is exactly `false` (not merely absent or non-`true`); and
+  `"result"` is present and non-empty. A standalone `"type":"error"` line
+  anywhere in the stream is also a fail, even alongside an otherwise-clean
+  terminal line. A clean exit code alone is never sufficient.
+- **`"result"` text**: the terminal line's `result` field should contain
+  `factory-smoke-ok`.
+
+Record the installed `droid --version` output, the command above, and the
+pass/fail outcome (exit code + terminal `result` line contents) on the
+tracking issue. This manual run is evidence only; it never marks the
+registry profile as qualified for automated dispatch.

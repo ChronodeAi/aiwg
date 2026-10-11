@@ -41,6 +41,22 @@ describe('Grok Build model discovery', () => {
     expect(resolveGrokBuildRoleModel(catalog, 'coding').source).toBe('unresolved');
   });
 
+  it.each([
+    { models: ['first'], modelCatalog: ['second'] },
+    { modelCatalog: ['first'], model_catalog: ['second'] },
+    { models: [], modelCatalog: ['second'] },
+    { models: ['first', null], modelCatalog: ['second'] },
+  ])('uses the first model array in a two-key inspect report: %j', async report => {
+    const catalog = await discoverGrokBuildModels({ inspectReport: {
+      configSources: { layers: [] }, ...report,
+    } });
+    expect(catalog.models.map(model => model.id)).toEqual('models' in report && report.models?.length === 0 ? [] : ['first']);
+    if ('models' in report && report.models?.includes(null)) {
+      expect(catalog.errorKind).toBe('invalid-output');
+      expect(catalog.error).toContain('/models/1');
+    }
+  });
+
   it('honors GROK_HOME, scope restrictions, managed defaults, requirements pins and safe aliases', async () => {
     const f = await fixture();
     await writeFile(f.managed, '[models]\ndefault = "managed"\n[model.managed]\nmodel = "api-managed"\n');
@@ -121,4 +137,19 @@ describe('Grok Build model discovery', () => {
     expect(parsed.defaultModel).toBeUndefined();
     expect(parsed.projectModelFields).toBe(true);
   });
+});
+
+it.each(['missing-file', 'truncated-setting', 'invalid-array', 'invalid-layer'])('marks Grok Build valid rows plus %s partial with source diagnostics', async shape => {
+  const f = await fixture();
+  if (shape !== 'missing-file') await writeFile(f.user, shape === 'invalid-array'
+    ? '[models]\nallowed_models = ["current", 42]\n'
+    : '[model.current]\nmodel = "truncated\n');
+  const catalog = await discoverGrokBuildModels({ env: { HOME: f.root }, inspectReport: {
+    models: ['current'], configSources: { layers: shape === 'invalid-layer' ? [null]
+      : [{ role: 'user', path: f.user }] },
+  } });
+  expect(catalog.models.some(model => model.id === 'current')).toBe(true);
+  expect(catalog.errorKind).toBe('invalid-output');
+  expect(catalog.error).toContain(shape === 'invalid-layer' ? '/configSources/layers/0' : f.user);
+  if (shape === 'truncated-setting' || shape === 'invalid-array') expect(catalog.error).toContain('line 2');
 });

@@ -28,7 +28,29 @@
           "verifiedAt": { "type": "string", "format": "date" }
         }
       }
-    }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "fetchedAt", "providers"],
+      "properties": {
+        "source": { "enum": ["native", "cache", "remote", "static"] },
+        "upstreamSource": { "enum": ["native", "remote", "static"] },
+        "fetchedAt": { "type": "string", "format": "date-time" },
+        "remoteUrl": { "type": "string", "format": "uri" },
+        "remoteError": { "type": "string" },
+        "inventorySignature": { "type": "string" },
+        "providers": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/providerDiscovery" }
+        },
+        "instances": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/providerDiscovery" }
+        }
+      }
+    },
+    "$schema": { "const": "../../../schemas/models/model-catalog.v1.schema.json" }
   },
   "$defs": {
     "model": {
@@ -40,6 +62,239 @@
         "status": { "enum": ["active", "deprecated", "unverified"] },
         "fallback": { "type": "string", "minLength": 1 },
         "observed": { "type": "boolean" }
+      }
+    },
+    "workerObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 1 },
+        "recordId": { "type": "string", "minLength": 1 },
+        "cliId": { "type": "string", "minLength": 1 },
+        "family": { "type": "string", "minLength": 1 },
+        "runtimeVersion": { "type": "string", "minLength": 1 },
+        "accountScope": { "type": "string", "minLength": 1 },
+        "endpointFingerprint": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+        "verifiedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+        "releaseDate": { "type": ["string", "null"], "format": "date" },
+        "releaseDateKind": { "enum": ["official", "reported", "unknown"] },
+        "visibility": { "enum": ["listed", "hidden", "unknown"] },
+        "availability": { "enum": ["accessible", "unavailable", "unknown"] },
+        "lifecycle": { "enum": ["active", "deprecated", "retired", "unverified"] },
+        "sunsetAt": { "type": ["string", "null"], "format": "date-time" },
+        "replacementModelId": { "type": "string", "minLength": 1 },
+        "contextTokens": { "type": ["integer", "null"], "minimum": 1 },
+        "maxOutputTokens": { "type": ["integer", "null"], "minimum": 1 },
+        "modalities": {
+          "type": "array",
+          "items": { "enum": ["text", "image", "audio", "video"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "selfDelegates": { "type": ["boolean", "null"] }
+            },
+            "required": ["id", "selfDelegates"]
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "pricing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "costClass": { "enum": ["economy", "standard", "premium", "unknown"] },
+            "billing": { "enum": ["metered", "subscription", "local", "unknown"] },
+            "currency": { "const": "USD" },
+            "inputPerMillion": { "type": ["number", "null"], "minimum": 0 },
+            "outputPerMillion": { "type": ["number", "null"], "minimum": 0 }
+          },
+          "required": ["costClass", "billing", "currency", "inputPerMillion", "outputPerMillion"]
+        },
+        "dataUse": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "processing": { "enum": ["local", "remote", "unknown"] },
+            "productImprovement": { "type": ["boolean", "null"] },
+            "retentionDays": { "type": ["integer", "null"], "minimum": 0 }
+          },
+          "required": ["processing", "productImprovement", "retentionDays"]
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": { "enum": ["qualified", "unqualified"] },
+            "roles": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 0,
+              "uniqueItems": true
+            },
+            "fixtureDigest": { "type": "string", "minLength": 1, "pattern": "^sha256:[a-f0-9]{64}$" },
+            "verifiedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+            "evidenceRef": { "type": "string", "minLength": 1 }
+          },
+          "required": ["status", "roles"],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": { "const": "qualified" }
+                }
+              },
+              "then": {
+                "required": ["fixtureDigest", "verifiedAt", "evidenceRef"],
+                "properties": {
+                  "fixtureDigest": {},
+                  "verifiedAt": {},
+                  "evidenceRef": {}
+                }
+              }
+            }
+          ]
+        },
+        "evidenceDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "conflicts": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["field", "evidence"],
+            "properties": {
+              "field": { "type": "string", "pattern": "^/" },
+              "evidence": {
+                "type": "array", "minItems": 2,
+                "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["value", "source", "pointer", "observedAt", "digest"],
+                  "properties": {
+                    "value": {},
+                    "source": { "type": "string", "minLength": 1 },
+                    "pointer": { "type": "string", "pattern": "^/" },
+                    "observedAt": { "type": "string", "format": "date-time" },
+                    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "pattern": "^/" },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "source": { "type": "string", "minLength": 1 },
+              "kind": { "enum": ["native", "official", "operator", "derived"] },
+              "observedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+              "digest": { "type": "string", "minLength": 1, "pattern": "^sha256:[a-f0-9]{64}$" },
+              "confidence": { "enum": ["verified", "reported", "derived", "unknown"] }
+            },
+            "required": ["fields", "source", "kind", "observedAt", "digest", "confidence"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "firstObservedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+        "fetchedAt": { "type": "string", "minLength": 1, "format": "date-time" },
+        "retiredAt": { "type": ["string", "null"], "format": "date-time" },
+        "supersededBy": { "type": "string", "minLength": 1 },
+        "effortSupport": { "enum": ["explicit", "not-applicable", "unknown"] }
+      },
+      "required": ["version", "recordId", "cliId", "family", "runtimeVersion", "accountScope", "endpointFingerprint", "observedAt", "verifiedAt", "releaseDate", "releaseDateKind", "visibility", "availability", "lifecycle", "contextTokens", "maxOutputTokens", "modalities", "efforts", "pricing", "dataUse", "qualification", "provenance", "firstObservedAt", "fetchedAt", "retiredAt", "effortSupport"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "releaseDate": { "type": "null" }
+            }
+          },
+          "then": {
+            "properties": {
+              "releaseDateKind": { "const": "unknown" }
+            }
+          },
+          "else": {
+            "properties": {
+              "releaseDateKind": { "enum": ["official", "reported"] }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "effortSupport": { "const": "explicit" }
+            }
+          },
+          "then": {
+            "properties": {
+              "efforts": { "minItems": 1, "type": "array" }
+            }
+          },
+          "else": {
+            "properties": {
+              "efforts": { "maxItems": 0, "type": "array" }
+            }
+          }
+        }
+      ]
+    },
+    "discoveredModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "alias": { "type": "string" },
+        "apiModelId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "llmProvider": { "type": "string" },
+        "hidden": { "type": "boolean" },
+        "isDefault": { "type": "boolean" },
+        "reasoningEfforts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "credentialState": { "enum": ["available", "unavailable", "session", "unknown"] },
+        "worker": { "$ref": "#/$defs/workerObservation" }
+      }
+    },
+    "providerDiscovery": {
+      "type": "object",
+      "required": ["provider", "source", "observedAt", "accountScope", "models"],
+      "properties": {
+        "provider": { "type": "string" },
+        "source": { "enum": ["native", "cache", "remote", "static"] },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "runtimeVersion": { "type": "string" },
+        "accountScope": { "enum": ["local-account", "local-runtime", "public-feed", "static"] },
+        "accountBinding": { "type": "string", "minLength": 1 },
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/discoveredModel" }
+        },
+        "errorKind": { "enum": ["authentication", "rate-limit", "timeout", "unsupported", "invalid-output", "command"] },
+        "error": { "type": "string" },
+        "policy": { "type": "object" }
       }
     }
   }

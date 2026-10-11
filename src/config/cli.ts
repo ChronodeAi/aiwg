@@ -102,7 +102,7 @@ export async function main(args: string[]): Promise<void> {
 
 async function handleGet(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project' && a !== '--user');
+  const positional = configPositionals(args);
   const key = positional[0];
   if (!key) {
     throw new AiwgError({
@@ -130,7 +130,7 @@ async function handleGet(config: UserConfig, args: string[]): Promise<void> {
 
 async function handleSet(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project' && a !== '--user');
+  const positional = configPositionals(args);
   const key = positional[0];
   const value = positional[1];
 
@@ -222,6 +222,7 @@ const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
 };
 
 async function projectConfigGet(key: string, args: string[]): Promise<void> {
+  assertSafeConfigPath(key);
   const { readAiwgConfig, getProjectDir } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
@@ -234,6 +235,21 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
     });
   }
 
+  // Model preferences keep their existing file owner. Inspection uses the same
+  // merged policy and pre-merge origins as worker resolution, never aiwg.config.
+  if (key === 'defaults.workerSelection' || key.startsWith('defaults.workerSelection.')) {
+    const { ConfigLoader } = await import('../models/config-loader.js');
+    const loader = new ConfigLoader(projectDir);
+    const models = await loader.load(cfg.parallelism);
+    const value = getDottedPath(models as unknown as Record<string, unknown>, key);
+    const pointer = `/${key.split('.').join('/')}`;
+    const origins = Object.fromEntries(Object.entries(models.workerPolicyOrigins ?? {})
+      .filter(([field]) => field === pointer || field.startsWith(`${pointer}/`)));
+    console.log(args.includes('--origins')
+      ? JSON.stringify({ value: value ?? null, origins, digests: loader.getInputDigests() }, null, 2)
+      : value === undefined ? '(not set)' : JSON.stringify(value, null, 2));
+    return;
+  }
   const value = getDottedPath(cfg as unknown as Record<string, unknown>, key);
   if (value === undefined) {
     console.log('(not set)');
@@ -245,6 +261,15 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
 }
 
 async function projectConfigSet(key: string, raw: string, args: string[]): Promise<void> {
+  assertSafeConfigPath(key);
+  if (key === 'defaults' || key.startsWith('defaults.')) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_KEY',
+      message: `Project model preferences '${key}' belong in models.json, not aiwg.config.`,
+      hint: 'Edit project-root models.json to change defaults, including defaults.workerSelection.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
   const {
     readAiwgConfig,
     writeAiwgConfig,
@@ -276,6 +301,9 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
+  if (key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+    try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
+  }
   if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
     try {
       value = JSON.parse(raw);
@@ -376,6 +404,7 @@ function getDottedPath(obj: Record<string, unknown>, key: string): unknown {
 
 /** Write a dotted path into a nested record, creating intermediate objects. */
 function setDottedPath(obj: Record<string, unknown>, key: string, value: unknown): void {
+  assertSafeConfigPath(key);
   const parts = key.split('.');
   const last = parts.pop()!;
   let cur: Record<string, unknown> = obj;
@@ -387,6 +416,23 @@ function setDottedPath(obj: Record<string, unknown>, key: string, value: unknown
     cur = cur[p] as Record<string, unknown>;
   }
   cur[last] = value;
+}
+
+function assertSafeConfigPath(key: string): void {
+  if (key.split('.').some(part => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new AiwgError({ code: 'ERR_INVALID_KEY', message: 'Unsafe configuration path', exitCode: EXIT_CODES.USAGE });
+  }
+}
+
+/** Scope/inspection flags are not dotted keys, irrespective of flag order. */
+function configPositionals(args: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (['--target', '--prefix'].includes(args[i])) { i++; continue; }
+    if (['--project', '--user', '--origins'].includes(args[i])) continue;
+    result.push(args[i]);
+  }
+  return result;
 }
 
 async function handleList(config: UserConfig): Promise<void> {
@@ -449,6 +495,7 @@ async function handleProjectValidate(args: string[]): Promise<void> {
     validateExternalLinks,
     validateIndexConfig,
     validateIssueLabels,
+    validateWorkerConfigCandidate,
   } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
@@ -460,6 +507,7 @@ async function handleProjectValidate(args: string[]): Promise<void> {
       exitCode: EXIT_CODES.CONFIG,
     });
   }
+  await validateWorkerConfigCandidate(projectDir, cfg);
 
   const providerIndex = args.indexOf('--provider');
   const providerArg = providerIndex >= 0 ? args[providerIndex + 1] : undefined;
@@ -523,7 +571,7 @@ async function handleProjectValidate(args: string[]): Promise<void> {
 
 async function handleReset(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project');
+  const positional = configPositionals(args);
   const key = positional[0];
 
   if (isProject) {
@@ -564,6 +612,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       exitCode: EXIT_CODES.USAGE,
     });
   }
+  assertSafeConfigPath(key);
 
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
@@ -592,6 +641,18 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
   }
 
   if (key.startsWith('parallelism.')) {
+    const workerField = key.split('.')[1];
+    if (['worker_dispatch', 'worker_mode', 'clis', 'groups', 'admission', 'budgets', 'retry', 'health', 'activation'].includes(workerField)) {
+      const parts = key.split('.').slice(1);
+      const last = parts.pop()!;
+      let current = cfg.parallelism as Record<string, any> | undefined;
+      for (const part of parts) current = current?.[part];
+      if (current) delete current[last];
+      await writeAiwgConfig(projectDir, cfg);
+      console.log(`Reset --project ${key}`);
+      return;
+    }
+
     const field = key.slice('parallelism.'.length) as keyof typeof defaults;
     if (field in defaults) {
       cfg.parallelism = cfg.parallelism ?? {};
@@ -791,8 +852,8 @@ function printUsage(): void {
 
 Subcommands:
   get <key>                       Read a user config value
-  get --project <key>             Read a project config value (default .aiwg/aiwg.config;
-                                  AIWG_ARTIFACTS_PATH may override the artifact root)
+  get --project <key>             Read a project config value or merged defaults.workerSelection
+    [--origins]                  Include model policy sources, pointers and input digests
   set <key> <value>               Write a user config value
   set --project <key> <value>     Write a project config value (validates enums)
   list                Show all user config
@@ -819,6 +880,7 @@ Examples:
   aiwg config set --project delivery.mode pr-required
   aiwg config set --project delivery.merge_style squash
   aiwg config get --project parallelism
+  aiwg config get --project defaults.workerSelection --origins
   aiwg config set --project parallelism.max_parallel_subagents 6
   aiwg config reset --project parallelism
   aiwg config validate

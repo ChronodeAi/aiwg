@@ -1,0 +1,14 @@
+{
+  "note": "Host installation-authority allowlist entry for the one Copilot driver module (#2901). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/copilot-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/copilot-adapter.mjs",
+  "entry": {
+    "reference": "installed:copilot",
+    "packageName": "@aiwg/copilot-worker",
+    "packageVersion": "1",
+    "modulePath": "copilot-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:5e68b51c29d4153a45824d2c08acea4b12f61aaaeadf3581aed11bc4331c3954",
+    "adapterIds": ["copilot"],
+    "platforms": ["linux"]
+  }
+}

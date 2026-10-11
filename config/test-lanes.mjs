@@ -4,9 +4,13 @@ export const packagingFiles = [
   'test/smoke/cockpit-base-footprint.test.js',
   'test/integration/network-analysis-addon.test.ts',
   'test/integration/cli-package-webmode.test.ts',
+  'test/integration/worker-adapter-package.test.ts',
   'test/integration/global-install-native-policy.test.ts',
   'test/integration/tarball-allowlist-packaging.test.ts',
   'test/integration/dataset-contract-packaging.test.ts',
+  'test/integration/mission-contract-packaging.test.ts',
+  'test/integration/sessions-muse-package.test.ts',
+  'test/integration/sessions-coverage-package.test.ts',
   'test/integration/decision-engine-clean-install.test.ts',
 ];
 export const artifactIndexFiles = [
@@ -15,6 +19,12 @@ export const artifactIndexFiles = [
   'test/integration/artifacts/multi-graph.test.ts',
 ];
 export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corpus.test.ts'];
+// Shared S0 infrastructure and frozen contracts run in the existing offline
+// conformance lane. Mechanism suites retain their source owner's unit lane.
+export const orchestrationConformanceFiles = [
+  'test/conformance/orchestration-v1/**/*.test.ts',
+  'test/conformance/mission-v1/worker-contracts.test.ts',
+];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
   'tools/experiments/conformal/prototype.test.mjs',

@@ -27,6 +27,7 @@ type ParsedLayer = {
   disabledModels?: string[];
   models: Map<string, ParsedModel>;
   projectModelFields: boolean;
+  diagnostics: string[];
 };
 type ParsedModel = {
   alias: string;
@@ -74,6 +75,7 @@ function stringArray(value: string): string[] | undefined {
   const text = value.trim();
   if (!text.startsWith('[') || !text.endsWith(']')) return undefined;
   const matches = [...text.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)];
+  if (!/^\[\s*(?:s\s*(?:,\s*s\s*)*,?\s*)?\]$/.test(text.replace(/"((?:\\.|[^"\\])*)"|'([^']*)'/g, 's'))) return undefined;
   return matches.map(match => match[1] !== undefined
     ? JSON.parse(`"${match[1]}"`) as string
     : match[2]!);
@@ -99,13 +101,18 @@ function mapKeys(value: string): string[] {
 
 /** Parse only non-secret fields needed for model discovery. */
 export function parseGrokBuildModelConfig(text: string, scope: string): ParsedLayer {
-  const parsed: ParsedLayer = { models: new Map(), projectModelFields: false };
+  const parsed: ParsedLayer = { models: new Map(), projectModelFields: false, diagnostics: [] };
   let table = '';
-  for (const raw of text.split(/\r?\n/)) {
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
+    const invalid = (field: string) => parsed.diagnostics.push(`line ${index + 1}: malformed ${field}`);
     const nextTable = tableName(raw);
     if (nextTable !== undefined) { table = nextTable; continue; }
+    if (/^\s*\[models?(?:[.\]\s]|$)/.test(raw)) { invalid('model table'); continue; }
     const match = raw.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.*?)\s*(?:#.*)?$/);
-    if (!match) continue;
+    if (!match) {
+      if (/^models?(?:\.|$)/.test(table) && raw.trim() && !raw.trim().startsWith('#')) invalid('model setting');
+      continue;
+    }
     const [, key, value] = match;
     const top = table.split('.', 1)[0];
     if (scope === 'project' && !PROJECT_ALLOWED.has(top)) {
@@ -116,6 +123,9 @@ export function parseGrokBuildModelConfig(text: string, scope: string): ParsedLa
       if (key === 'default') parsed.defaultModel = unquote(value);
       else if (key === 'allowed_models') parsed.allowedModels = stringArray(value);
       else if (key === 'disabled_models') parsed.disabledModels = stringArray(value);
+      if (key === 'default' && !parsed.defaultModel
+        || key === 'allowed_models' && !parsed.allowedModels
+        || key === 'disabled_models' && !parsed.disabledModels) invalid(key);
       continue;
     }
     const alias = modelAlias(table);
@@ -133,44 +143,71 @@ export function parseGrokBuildModelConfig(text: string, scope: string): ParsedLa
     else if (key === 'context_window') model.contextWindow = Number(value.trim()) || undefined;
     else if (key === 'supports_backend_search') model.supportsBackendSearch = value.trim() === 'true';
     else if (key === 'reasoning_efforts') model.reasoningEfforts = stringArray(value);
+    if (['model', 'name', 'base_url', 'api_base_url'].includes(key) && unquote(value) === undefined
+      || key === 'env_key' && unquote(value) === undefined && stringArray(value) === undefined
+      || ['hidden', 'supports_backend_search'].includes(key) && !/^(true|false)$/.test(value.trim())
+      || key === 'context_window' && (!Number.isSafeInteger(Number(value)) || Number(value) < 1)
+      || key === 'reasoning_efforts' && !model.reasoningEfforts) invalid(key);
     parsed.models.set(alias, model);
   }
   return parsed;
 }
 
-function inspectLayers(report: Record<string, unknown>): Layer[] {
+function inspectLayers(report: Record<string, unknown>, diagnostics: string[]): Layer[] {
   const sources = (report.configSources ?? report.config_sources) as Record<string, unknown> | undefined;
-  if (!sources || !Array.isArray(sources.layers)) return [];
+  if (!sources || !Array.isArray(sources.layers)) {
+    if (sources !== undefined) diagnostics.push('Grok Build /configSources/layers: expected array');
+    return [];
+  }
   return sources.layers.flatMap((entry, index) => {
-    if (!entry || typeof entry !== 'object') return [];
+    if (!entry || typeof entry !== 'object') {
+      diagnostics.push(`Grok Build /configSources/layers/${index}: malformed config layer`);
+      return [];
+    }
     const item = entry as Record<string, unknown>;
-    return typeof item.role === 'string' && typeof item.path === 'string'
-      ? [{ role: item.role, path: item.path, ...(typeof item.note === 'string' ? { note: item.note } : {}), precedence: index + 1 }]
-      : [];
+    if (typeof item.role !== 'string' || !item.role || typeof item.path !== 'string' || !item.path) {
+      diagnostics.push(`Grok Build /configSources/layers/${index}: missing role or path`);
+      return [];
+    }
+    return [{ role: item.role, path: item.path, ...(typeof item.note === 'string' ? { note: item.note } : {}), precedence: index + 1 }];
   });
 }
 
-function inspectModels(report: Record<string, unknown>): DiscoveredModel[] {
-  const candidates = [report.models, report.modelCatalog, report.model_catalog]
-    .find(Array.isArray) as unknown[] | undefined;
-  if (!candidates) return [];
-  return candidates.flatMap(entry => {
-    if (typeof entry === 'string') return [{ id: entry, alias: entry }];
-    if (!entry || typeof entry !== 'object') return [];
-    const model = entry as Record<string, unknown>;
-    const alias = [model.alias, model.key, model.id].find(value => typeof value === 'string') as string | undefined;
-    if (!alias) return [];
-    return [{
-      id: alias,
-      alias,
-      ...(typeof model.name === 'string' ? { displayName: model.name } : {}),
-      ...(model.default === true || model.isDefault === true ? { isDefault: true } : {}),
-      ...(model.hidden === true ? { hidden: true } : {}),
-      ...(Array.isArray(model.reasoningEfforts)
-        ? { reasoningEfforts: model.reasoningEfforts.filter((item): item is string => typeof item === 'string') }
-        : {}),
-    }];
-  });
+function inspectModels(report: Record<string, unknown>, diagnostics: string[]): DiscoveredModel[] {
+  for (const key of ['models', 'modelCatalog', 'model_catalog']) {
+    if (!(key in report)) continue;
+    const candidates = report[key];
+    if (!Array.isArray(candidates)) {
+      diagnostics.push(`Grok Build /${key}: expected model array`);
+      continue;
+    }
+    return candidates.flatMap((entry, index) => {
+      const invalid = () => {
+        diagnostics.push(`Grok Build /${key}/${index}: malformed model row`);
+        return [];
+      };
+      if (typeof entry === 'string') return entry.trim() ? [{ id: entry, alias: entry }] : invalid();
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return invalid();
+      const model = entry as Record<string, unknown>;
+      const alias = [model.alias, model.key, model.id].find(value => typeof value === 'string') as string | undefined;
+      if (!alias?.trim()
+        || (model.name !== undefined && typeof model.name !== 'string')
+        || ['default', 'isDefault', 'hidden'].some(field => model[field] !== undefined && typeof model[field] !== 'boolean')
+        || (model.reasoningEfforts !== undefined && (!Array.isArray(model.reasoningEfforts)
+          || model.reasoningEfforts.some(item => typeof item !== 'string' || !item.trim())))) return invalid();
+      return [{
+        id: alias,
+        alias,
+        ...(typeof model.name === 'string' ? { displayName: model.name } : {}),
+        ...(model.default === true || model.isDefault === true ? { isDefault: true } : {}),
+        ...(model.hidden === true ? { hidden: true } : {}),
+        ...(Array.isArray(model.reasoningEfforts)
+          ? { reasoningEfforts: model.reasoningEfforts.filter((item): item is string => typeof item === 'string') }
+          : {}),
+      }];
+    });
+  }
+  return [];
 }
 
 function setSelected(
@@ -198,13 +235,18 @@ function parseEnvOverlay(env: NodeJS.ProcessEnv): ParsedLayer | null {
   try { content = JSON.parse(env.GROK_CONFIG ?? ''); } catch { return null; }
   if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
   const value = content as Record<string, unknown>;
-  const parsed: ParsedLayer = { models: new Map(), projectModelFields: false };
+  const parsed: ParsedLayer = { models: new Map(), projectModelFields: false, diagnostics: [] };
   const settings = value.models;
   if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
     const table = settings as Record<string, unknown>;
     if (typeof table.default === 'string') parsed.defaultModel = table.default;
     if (Array.isArray(table.allowed_models) && table.allowed_models.every(entry => typeof entry === 'string')) parsed.allowedModels = table.allowed_models;
     if (Array.isArray(table.disabled_models) && table.disabled_models.every(entry => typeof entry === 'string')) parsed.disabledModels = table.disabled_models;
+    if (table.default !== undefined && (typeof table.default !== 'string' || !table.default)
+      || table.allowed_models !== undefined && !parsed.allowedModels
+      || table.disabled_models !== undefined && !parsed.disabledModels) parsed.diagnostics.push('/models: malformed model settings');
+  } else if (settings !== undefined) {
+    parsed.diagnostics.push('/models: expected object');
   }
   // The host allowlists env-overlay sections; per-model secrets and model definitions
   // are intentionally not imported from arbitrary JSON here.
@@ -258,7 +300,8 @@ export async function discoverGrokBuildModels(
     }
   }
 
-  const layers = inspectLayers(report);
+  const validationDiagnostics: string[] = [];
+  const layers = inspectLayers(report, validationDiagnostics);
   if (layers.length === 0 && !Object.keys(report).some(key => ['models', 'modelCatalog', 'model_catalog'].includes(key))) {
     return { ...base, ...(runtimeVersion ? { runtimeVersion } : {}), errorKind: 'invalid-output',
       error: 'Grok Build inspect JSON omitted configSources; update Grok Build or AIWG.' };
@@ -266,7 +309,7 @@ export async function discoverGrokBuildModels(
   const diagnostics: string[] = [];
   const selected: Record<string, ModelValueProvenance> = {};
   const constraints: ProviderModelPolicyReport['constraints'] = [];
-  const discovered = inspectModels(report);
+  const discovered = inspectModels(report, validationDiagnostics);
   const parsedByLayer = await Promise.all(layers.map(layer => layer.role === 'env_overlay'
     && layer.path.includes('(inline)') ? parseEnvOverlay(env) : readLayer(layer)));
   let requirementsDefault: ModelValueProvenance | undefined;
@@ -274,7 +317,11 @@ export async function discoverGrokBuildModels(
   for (let i = 0; i < layers.length; i++) {
     const layer = layers[i]!;
     const parsed = parsedByLayer[i];
-    if (!parsed) continue;
+    if (!parsed) {
+      validationDiagnostics.push(`${layer.path}: config layer could not be read or parsed within bounds`);
+      continue;
+    }
+    validationDiagnostics.push(...parsed.diagnostics.map(diagnostic => `${layer.path}: ${diagnostic}`));
     if (parsed.projectModelFields) diagnostics.push(`${layer.path}: ignored model settings because Grok Build project scope does not allow them`);
     const requirement = /requirements|mdm/i.test(layer.role);
     setSelected(selected, 'models.default', parsed.defaultModel, layer, requirement ? 'pin' : undefined);
@@ -345,10 +392,10 @@ export async function discoverGrokBuildModels(
         policyConstraint: /requirements|mdm/i.test(layer.role) })),
       selected,
       constraints,
-      diagnostics,
+      diagnostics: [...validationDiagnostics, ...diagnostics],
     },
-    ...(models.length === 0 ? { errorKind: 'invalid-output' as const,
-      error: 'Grok Build exposed no model aliases. Configure [models].default or [model.<alias>] in $GROK_HOME/config.toml; AIWG will not fabricate an xAI model ID.' } : {}),
+    ...(validationDiagnostics.length || models.length === 0 ? { errorKind: 'invalid-output' as const,
+      error: validationDiagnostics.join('; ') || 'Grok Build exposed no model aliases. Configure [models].default or [model.<alias>] in $GROK_HOME/config.toml; AIWG will not fabricate an xAI model ID.' } : {}),
   };
 }
 

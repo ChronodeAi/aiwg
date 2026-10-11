@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { prepare, runBundle, runDevReviewMaterial } from '../../../tools/decision/d17-multifact.mjs';
+import { assertD17SealedSource, deriveD17Calibration, prepare, runBundle, runDevReviewMaterial } from '../../../tools/decision/d17-multifact.mjs';
 import { prepare as prepareD17 } from '../../../tools/decision/d17-study.mjs';
 import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle, validateHeldoutInputs } from '../../../src/decision/heldout/contract.js';
@@ -440,10 +440,58 @@ describe('D17-MF CLI', () => {
   it('describes its modes and refuses unknown or open configs', async () => {
     const help = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--help'], { encoding: 'utf8', timeout: 20000 });
     expect(help.status, help.stderr).toBe(0);
-    for (const word of ['--dry-run', '--prepare', '--dev-review-material', '--bundle', '--dry-run-ledger', '--score', 'd17CalibrationRun', 'exact approved source commit']) expect(help.stdout).toContain(word);
+    for (const word of ['--dry-run', '--prepare', '--dev-review-material', '--bundle', '--dry-run-ledger', '--score', 'd17CalibrationRun', 'd17SourceRoot', 'exact approved source commit']) expect(help.stdout).toContain(word);
     const dir = await root(), config = join(dir, 'config.json');
     await writeFile(config, JSON.stringify({ run: dir, unexpected: true }));
     const refused = spawnSync(process.execPath, ['tools/decision/d17-multifact.mjs', '--score', config, join(dir, 'out.json')], { encoding: 'utf8', timeout: 20000 });
     expect(refused.status).toBe(1); expect(refused.stderr).toContain('D17-MF refused'); expect(refused.stdout).toBe('');
   }, 60_000);
+});
+
+describe('D17-MF sealed D17 source', () => {
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', ...args],
+      { cwd, encoding: 'utf8', timeout: 20_000 });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  async function sealedRepo(): Promise<{ dir: string; commit: string }> {
+    const dir = await root();
+    git(dir, 'init', '-q');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/a.ts'), 'export const a = 1;\n');
+    await writeFile(join(dir, '.gitignore'), 'src/*.cache\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'sealed');
+    return { dir, commit: git(dir, 'rev-parse', 'HEAD') };
+  }
+
+  it('accepts a clean work tree at exactly the sealed commit', async () => {
+    const { dir, commit } = await sealedRepo();
+    await expect(assertD17SealedSource(dir, commit)).resolves.toBeTruthy();
+    await writeFile(join(dir, 'notes.md'), 'outside the pinned paths\n');
+    await expect(assertD17SealedSource(dir, commit)).resolves.toBeTruthy();
+  });
+
+  it('refuses another commit, local changes and untracked or ignored files under pinned paths', async () => {
+    const { dir, commit } = await sealedRepo();
+    await expect(assertD17SealedSource(dir, 'b'.repeat(40))).rejects.toThrow('commit mismatch');
+    await expect(assertD17SealedSource(dir, 'not-a-commit')).rejects.toThrow('D17 sealed source');
+    await writeFile(join(dir, 'src/a.ts'), 'export const a = 2;\n');
+    await expect(assertD17SealedSource(dir, commit)).rejects.toThrow('local changes');
+    git(dir, 'checkout', '-q', '--', 'src/a.ts');
+    await writeFile(join(dir, 'src/b.ts'), 'export const b = 1;\n');
+    await expect(assertD17SealedSource(dir, commit)).rejects.toThrow('local changes');
+    await rm(join(dir, 'src/b.ts'));
+    await writeFile(join(dir, 'src/x.cache'), 'ignored but digested\n');
+    await expect(assertD17SealedSource(dir, commit)).rejects.toThrow('local changes');
+  });
+
+  it('refuses a directory that is not a git work tree, and a context without a source root', async () => {
+    const dir = await root();
+    await expect(assertD17SealedSource(dir, 'a'.repeat(40))).rejects.toThrow('not a git work tree');
+    await expect(deriveD17Calibration({ d17CalibrationDir: dir, d17CalibrationReviewFile: dir, d17CalibrationRun: dir,
+      d17DevelopmentReviewFile: dir, trustedD17CalibrationReviewDigest: 'x', trustedD17DevelopmentReviewDigest: 'x' }, 'sha256:x', Date.now()))
+      .rejects.toThrow('D17 calibration context');
+  });
 });

@@ -1,0 +1,18 @@
+{
+  "note": "Host installation-authority allowlist entry for the one OpenCode driver module (#2904). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/opencode-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/opencode-adapter.mjs",
+  "entry": {
+    "reference": "installed:opencode",
+    "packageName": "@aiwg/opencode-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/opencode-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:4148792ac2b14c0ea8209d936eced6b0c67588b5306f3d9610899f5aebdeb12c",
+    "adapterIds": [
+      "opencode-direct"
+    ],
+    "platforms": [
+      "linux"
+    ]
+  }
+}

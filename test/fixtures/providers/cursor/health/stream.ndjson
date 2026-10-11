@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"fixture-session","cwd":"/fixture"}
+{"type":"thinking","subtype":"delta","session_id":"fixture-session","text":"fixture thinking"}
+{"type":"tool_call","subtype":"started","session_id":"fixture-session","call_id":"cursor-fixture-call-1"}
+{"type":"tool_call","subtype":"completed","session_id":"fixture-session","call_id":"cursor-fixture-call-1"}
+{"type":"result","session_id":"fixture-session","subtype":"success","is_error":false,"duration_ms":1,"result":"fixture done"}

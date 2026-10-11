@@ -9,12 +9,64 @@ import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
 import {
   compileModelPolicy, validateCanonicalModelPolicy, validateUserProjectModelConfig,
+  loadProviderModelCapabilities, WorkerPolicyError,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import type { CanonicalModelPolicy, ModelTier } from '../../models/types.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import type { DynamicModelCatalog } from '../../models/model-discovery.js';
 import { resolveGrokBuildRoleModel } from '../../models/grok-build-models.js';
+import { readAiwgConfig, emptyConfig } from '../../config/aiwg-config.js';
+import { ConfigLoader } from '../../models/config-loader.js';
+import { loadRecordedWorkerInstallations } from '../../models/worker-installation.mjs';
+import type { WorkerPlanSnapshot } from '../../models/resolver.js';
+import { parseWorkerCommandArgs, resolveWorkerInvocation, workerInvocationDiagnostic, type WorkerInvocationDriver } from '../../serve/worker-invocation.js';
+
+/** #2885's trusted installation owner supplies qualified bindings and installed drivers.
+ * This is an in-process dependency, never a CLI flag or project-config module path. */
+export interface ModelsWorkerServices {
+  load(ctx: HandlerContext): Promise<{ snapshot: WorkerPlanSnapshot; drivers: Record<string, WorkerInvocationDriver> }>;
+  now?(): string;
+}
+
+/**
+ * #2892: exported so the MCP worker-invoke bridge can resolve a direct worker
+ * plan in-process (same snapshot/driver construction as `aiwg models resolve`),
+ * without shelling out to the CLI. No new loader is introduced; this is the
+ * CLI's own existing default `ModelsWorkerServices.load`.
+ */
+export async function loadWorkerInputs(ctx: HandlerContext) {
+  const config = await readAiwgConfig(ctx.cwd) ?? emptyConfig();
+  const loader = new ConfigLoader(ctx.cwd);
+  const models = await loader.load(config.parallelism);
+  const catalog = await effectiveCatalog(ctx, ctx.cwd, false, parseArgs(['resolve']));
+  const { registry, installations, drivers } = await loadRecordedWorkerInstallations({
+    registry: loadProviderModelCapabilities(), cwd: ctx.cwd, policy: models.defaults.workerSelection,
+  });
+  return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
+    registry, installations }, drivers };
+}
+
+async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {
+  let shell = false;
+  try {
+    const request = parseWorkerCommandArgs(ctx.args.slice(1));
+    shell = request.format === 'shell';
+    const { snapshot, drivers } = await services.load(ctx);
+    const plan = await resolveWorkerInvocation(snapshot, request, drivers, services.now?.());
+    const runnable = plan.invocation?.readiness === 'launchable';
+    if (shell && !runnable) console.error(JSON.stringify({ status: 'blocked', diagnostics: plan.diagnostics }, null, 2));
+    else if (shell && plan.invocation?.transport === 'shell') print(plan.invocation.shellCommand, false);
+    else print(plan, true);
+    return { exitCode: runnable ? 0 : 2 };
+  } catch (error) {
+    const diagnostic = { status: 'blocked', diagnostics: [workerInvocationDiagnostic(error, error instanceof WorkerPolicyError
+      && error.code === 'OG_ADAPTER_UNQUALIFIED' ? '/parallelism/clis' : '/request')] };
+    if (shell) console.error(JSON.stringify(diagnostic, null, 2));
+    else print(diagnostic, true);
+    return { exitCode: 2 };
+  }
+}
 
 type ArtifactKind = 'agent' | 'skill';
 interface Artifact {
@@ -34,10 +86,7 @@ interface ParsedArgs {
   flags: Map<string, string | boolean>;
 }
 const TIERS = new Set(['economy', 'standard', 'premium', 'max-quality']);
-const PROVIDERS = new Set([
-  'antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'grok-build', 'grokbot', 'hermes',
-  'opencode', 'openclaw', 'openhuman', 'omp', 'pi', 'warp', 'windsurf',
-]);
+const PROVIDERS = new Set(Object.keys(loadProviderModelCapabilities().providers));
 
 function parseArgs(args: string[]): ParsedArgs {
   const [subcommand = 'help', ...rest] = args;
@@ -226,8 +275,17 @@ function replaceFrontmatter(raw: string, item: Artifact, tier: string): string {
   }
   return `---\n${frontmatter}\n---\n${match[2]}`;
 }
-async function execute(ctx: HandlerContext): Promise<HandlerResult> {
+async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { load: loadWorkerInputs }): Promise<HandlerResult> {
+  // Preserve artifact/native resolve when direct-only flags are absent.
+  if (ctx.args[0] === 'resolve' && ctx.args.slice(1).some(arg =>
+    /^--(?:task|group|brief|workdir|final-output|transport|format)(?:=|$)/.test(arg))) {
+    return resolveDirect(ctx, services);
+  }
   const parsed = parseArgs(ctx.args);
+  if (parsed.subcommand === 'resolve') {
+    const supported = new Set(['agent', 'skill', 'glob', 'role', 'tier', 'framework', 'all', 'target', 'provider', 'model', 'json', 'help', 'dry-run']);
+    for (const key of parsed.flags.keys()) if (!supported.has(key)) return { exitCode: 2, message: `Unsupported models resolve flag: --${key}` };
+  }
   const json = parsed.flags.has('json');
   const dryRun = parsed.flags.has('dry-run') || ctx.dryRun === true;
   const target = path.resolve(flagString(parsed, 'target') ?? ctx.cwd);
@@ -374,3 +432,7 @@ export const modelsHandler: CommandHandler = {
   aliases: [],
   execute,
 };
+
+export function createModelsHandler(services: ModelsWorkerServices): CommandHandler {
+  return { ...modelsHandler, execute: ctx => execute(ctx, services) };
+}

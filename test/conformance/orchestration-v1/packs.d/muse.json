@@ -1,0 +1,38 @@
+{
+  "T-OG-03": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-06": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-10": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-15": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-17": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-19": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-20": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-21": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ],
+  "T-OG-23": [
+    "test/conformance/orchestration-v1/muse-direct.test.ts",
+    "test/unit/ralph/muse-direct.test.mjs"
+  ]
+}

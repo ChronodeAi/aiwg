@@ -13,6 +13,7 @@ import { routeMission } from './agent-router.js';
 import type { ExecutorRegistration } from './executor-registry.js';
 import type { CycleResult, MissionLedger, MissionPlan, WorkerCycle } from './mission-conductor.js';
 import { StackAdapterRegistry } from './stack-adapters.js';
+import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
 
 export type WorkloadKind =
   | 'persistent-agent'
@@ -298,6 +299,12 @@ export class FleetMissionConductor {
     pool: ExecutorRegistration[],
     resumeFrom?: FleetMissionLedger,
   ): Promise<FleetMissionLedger> {
+    assertMissionWorkerHandoff(plan, 'fleet-conductor');
+    for (const cycle of plan.cycles) assertMissionWorkerHandoff(cycle, 'fleet-conductor');
+    if (resumeFrom) {
+      assertMissionWorkerHandoff(resumeFrom, 'fleet-conductor');
+      for (const cycle of resumeFrom.cycles) assertMissionWorkerHandoff(cycle, 'fleet-conductor');
+    }
     const priorById = new Map((resumeFrom?.cycles ?? []).map((cycle) => [cycle.cycleId, cycle]));
     const ledger: FleetMissionLedger = {
       missionId: plan.missionId,

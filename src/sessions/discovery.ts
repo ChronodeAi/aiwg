@@ -29,6 +29,10 @@ export interface SourceCapabilityReport {
 export class SessionSourceAdapterRegistry {
   private readonly adapters = new Map<SessionProviderId, SessionSourceAdapter>();
 
+  list(): SessionSourceAdapter[] {
+    return [...this.adapters.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+  }
+
   register(adapter: SessionSourceAdapter): void {
     const provider = assertSessionProviderId(adapter.provider);
     if (this.adapters.has(provider)) throw new Error(`session adapter already registered: ${provider}`);

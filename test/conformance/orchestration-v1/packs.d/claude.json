@@ -1,0 +1,23 @@
+{
+  "T-OG-03": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-10": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-14": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-15": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-19": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-20": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ],
+  "T-OG-23": [
+    "test/conformance/orchestration-v1/claude-direct.test.ts"
+  ]
+}

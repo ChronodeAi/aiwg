@@ -4,7 +4,8 @@
  * Run with: node tools/ralph-external/process-monitor.test.mjs
  */
 
-import { ProcessMonitor } from './process-monitor.mjs';
+import { ProcessMonitor, qualifyWorkerCpuTickRate, sampleWorkerCpuTime, sampleWorkerIdentity } from './process-monitor.mjs';
+import fs from 'node:fs';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import assert from 'node:assert/strict';
@@ -15,6 +16,41 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 let TEST_DIR;
+
+test('CPU sample includes waited-for children from /proc stat fields 16 and 17', t => {
+  const fields = Array(20).fill('0');
+  fields[0] = 'S'; fields[11] = '2'; fields[12] = '3'; fields[13] = '7'; fields[14] = '11'; fields[19] = '123';
+  t.mock.method(fs, 'readFileSync', filename => filename.endsWith('/stat') ? `123 (worker (child)) ${fields.join(' ')}`
+    : filename.endsWith('/status') ? 'Uid:\t1000\n' : 'synthetic-boot');
+  t.mock.method(fs, 'readlinkSync', () => '/synthetic/worker');
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.equal(sampleWorkerIdentity(123).cpuTicks, 23);
+});
+
+test('clock tick probe uses only existence-checked absolute getconf paths', t => {
+  let available = '/usr/bin/getconf';
+  t.mock.method(fs, 'existsSync', filename => filename === available);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const calls = [];
+  const probe = (filename, args) => { calls.push([filename, args]); return '250'; };
+  assert.equal(qualifyWorkerCpuTickRate(probe), 250);
+  available = '/bin/getconf';
+  assert.equal(qualifyWorkerCpuTickRate(probe), 250);
+  available = null;
+  assert.equal(qualifyWorkerCpuTickRate(probe), null);
+  assert.deepEqual(calls, [['/usr/bin/getconf', ['CLK_TCK']], ['/bin/getconf', ['CLK_TCK']]]);
+});
+
+test('qualified cumulative CPU uses host tick rate and refuses reused identity', () => {
+  const identity = { pid: 123, pgid: 123, uid: 1000, parentPid: 1, sessionId: 123, host: 'fixture', bootId: 'boot',
+    startTicks: '1', executable: '/fixture/worker', cpuTicks: 10 };
+  assert.equal(qualifyWorkerCpuTickRate(() => '250'), 250);
+  assert.equal(qualifyWorkerCpuTickRate(() => { throw new Error('synthetic blocked probe'); }), null);
+  assert.deepEqual(sampleWorkerCpuTime(identity, { ...identity, cpuTicks: 15 }, 250, identity), { cpuTimeMs: 60, deltaMs: 20 });
+  assert.deepEqual(sampleWorkerCpuTime(identity, { ...identity, startTicks: '2' }, 250, identity), { cpuTimeMs: null, deltaMs: null });
+});
 
 function cleanup() {
   if (TEST_DIR && existsSync(TEST_DIR)) {

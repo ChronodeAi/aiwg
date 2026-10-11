@@ -154,8 +154,24 @@ describe('PiAdapter', () => {
   });
   it('rejects malformed JSONL and distinguishes agent settlement', () => {
     const adapter = new PiAdapter();
+    // Legacy Ralph-loop contract (test/unit/ralph/pi-adapter.test.mjs):
+    // parseOutput() is settlement-only -- exactly {events, settled}, no
+    // `text` key, no answer requirement (roctinam/aiwg#2910 fix round 2
+    // restored this after fix round 1 accidentally tightened it).
     expect(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: true });
+    expect(Object.keys(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n'))).toEqual(['events', 'settled']);
     expect(adapter.parseOutput('{bad}\n')).toBeNull();
+  });
+
+  it('parseDirectFinal() is the strict, text-requiring direct-worker-profile contract, separate from parseOutput()', () => {
+    const adapter = new PiAdapter();
+    // Settlement alone (agent_settled with no error signal) is not a
+    // success for the direct profile: a non-empty assistant answer is
+    // also required (roctinam/aiwg#2910 fix round 1).
+    const answer = '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}';
+    expect(adapter.parseDirectFinal(`${answer}\r\n{"type":"agent_settled"}\r\n`)).toMatchObject({ settled: true, text: 'ok' });
+    expect(adapter.parseDirectFinal('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: false, text: null });
+    expect(adapter.parseDirectFinal('{bad}\n')).toBeNull();
   });
 });
 
@@ -209,7 +225,9 @@ describe('ClaudeAdapter', () => {
   describe('buildSessionArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildSessionArgs({ prompt: 'test task' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('stream-json');
@@ -251,7 +269,9 @@ describe('ClaudeAdapter', () => {
   describe('buildAnalysisArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildAnalysisArgs({ prompt: 'analyze this' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('json');

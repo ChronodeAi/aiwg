@@ -119,6 +119,7 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
       sourceSchemaVersion: header.schemaVersion,
       consistency: header.consistency,
       operationalState: 'available',
+      declaredWorkspaceId: header.workspace.id,
     };
   }
 
@@ -225,7 +226,13 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
     const header = parseHeader(value);
     assertSupportedSchemaMajor(header.schemaVersion);
     if (header.sourceId !== source.sourceId) {
-      throw new SessionContractError('SCHEMA_DRIFT', 'selected source identity does not match interchange header');
+      // SCHEMA_DRIFT: the selected identity no longer describes this file's
+      // declared source, so importing it would attach events to the wrong source.
+      throw new SessionContractError(
+        'SCHEMA_DRIFT',
+        `selected source identity does not match interchange header: --source-id ${quoteValue(source.sourceId)} `
+          + `but header sourceId is ${quoteValue(header.sourceId)}; pass --source-id ${quoteValue(header.sourceId)}`,
+      );
     }
     return header;
   }
@@ -246,9 +253,15 @@ function parseHeader(value: unknown): GenericInterchangeHeader {
   if (hasAmbiguousTimestamp(result.error)) {
     throw new SessionContractError('AMBIGUOUS_TIMESTAMP', 'generic interchange header has an ambiguous timestamp');
   }
+  if (!isDeclaredInterchange(value)) {
+    throw new SessionContractError(
+      'MALFORMED_SOURCE',
+      'input is not a declared AIWG generic session interchange',
+    );
+  }
   throw new SessionContractError(
     'MALFORMED_SOURCE',
-    'input is not a declared AIWG generic session interchange',
+    `generic interchange header ${describeIssue(result.error, true)}`,
   );
 }
 
@@ -258,7 +271,40 @@ function parseEvent(value: unknown): z.infer<typeof GenericInterchangeEventSchem
   if (hasAmbiguousTimestamp(result.error)) {
     throw new SessionContractError('AMBIGUOUS_TIMESTAMP', 'generic interchange event has an ambiguous timestamp');
   }
-  throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange event is malformed');
+  // Event values can carry transcript content, so name the field and the
+  // expected shape without echoing the received value.
+  throw new SessionContractError(
+    'MALFORMED_SOURCE',
+    `generic interchange event is malformed: ${describeIssue(result.error, false)}`,
+  );
+}
+
+function isDeclaredInterchange(value: unknown): boolean {
+  return typeof value === 'object' && value !== null
+    && (value as { type?: unknown }).type === GENERIC_INTERCHANGE_KIND;
+}
+
+function quoteValue(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  return JSON.stringify(text.length > 64 ? `${text.slice(0, 64)}…` : text);
+}
+
+function describeIssue(error: z.ZodError, echoReceived: boolean): string {
+  const issue = error.issues[0];
+  const field = issue.path.length > 0 ? `field "${issue.path.join('.')}"` : 'record';
+  if (issue.code === z.ZodIssueCode.invalid_enum_value) {
+    const received = echoReceived ? ` (got ${quoteValue(issue.received)})` : '';
+    return `${field} must be one of ${issue.options.join('|')}${received}`;
+  }
+  if (issue.code === z.ZodIssueCode.invalid_type) {
+    return issue.received === 'undefined'
+      ? `${field} is required (${issue.expected})`
+      : `${field} must be ${issue.expected} (got ${issue.received})`;
+  }
+  if (issue.code === z.ZodIssueCode.invalid_literal) {
+    return `${field} must be ${quoteValue(issue.expected)}`;
+  }
+  return `${field} is invalid: ${issue.message}`;
 }
 
 function hasAmbiguousTimestamp(error: z.ZodError): boolean {

@@ -74,6 +74,28 @@
  */
 
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
+import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+
+const museEffortValues = JSON.parse(readFileSync(new URL('../../../agentic/code/providers/model-capabilities.v1.json', import.meta.url), 'utf8')).providers.muse.effortValues;
+
+// Syntax inspected only; neither help nor echo qualifies authenticated execution.
+export const MUSE_DIRECT_VERSION = '1.4.4-R5419.1';
+
+/** Quota observations are candidates, not a retry/admission decision. Unknown
+ * scope/reset stay null; the caller binds the account/quota domain separately. */
+export function museQuotaEvidence(payload) {
+  const failure = classifyWorkerHealthFailure({ type: 'error', message: payload?.reason }, { provider: 'muse' });
+  if (failure?.reasonCode !== 'RATE_LIMIT') return null;
+  const text = typeof payload.reason === 'string' ? payload.reason : '';
+  const reset = typeof payload.reset_at === 'string' ? payload.reset_at
+    : /reset(?:[_ -]at)?["\s:=]+(\d{4}-\d\d-\d\dT[\d:.]+Z)/i.exec(text)?.[1];
+  return { reasonCode: failure.reasonCode,
+    quotaScope: typeof payload.quota_scope === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(payload.quota_scope) ? payload.quota_scope : null,
+    resetAt: reset && Number.isFinite(Date.parse(reset)) ? new Date(reset).toISOString() : null,
+    retryAfterSeconds: failure.retryAfterSeconds ?? null };
+}
 
 /**
  * Whether the muse exec Ralph adapter is registered. Enabled by default;
@@ -88,12 +110,76 @@ export function isMuseRalphEnabled() {
 }
 
 export class MuseAdapter extends ProviderAdapter {
+  observeHealthEvent(event, source, binding) {
+    if (source.kind === 'stderr' || !event || typeof event !== 'object' || event.record_type !== 'event') return null;
+    if (event.stream?.kind !== 'session' || typeof event.stream.id !== 'string') return null;
+    const payload = event.payload;
+    if (!payload || typeof payload !== 'object' || typeof payload.run_id !== 'string' || !payload.run_id) return null;
+    if (!healthEventMatchesBinding({ sessionId: event.stream.id, runId: payload.run_id }, binding)) return null;
+    // Native session records require an already bound session and run. Reading
+    // a log from the same provider does not authorize unrelated session traffic.
+    if (source.kind === 'session-log' && (!binding.sessionId || event.stream.id !== binding.sessionId
+      || !binding.runId || payload.run_id !== binding.runId)) return null;
+    if (event.payload_type === 'run.lifecycle.started' && payload.kind === 'run_started') {
+      return { kind: 'accepted', sessionId: event.stream.id, runId: payload.run_id, key: event.id };
+    }
+    // A terminal/delta cannot establish a new session/run binding.
+    if (!binding.sessionId || !binding.runId) return null;
+    if (event.payload_type === 'run.output.delta' && payload.kind === 'run_output_delta' && typeof payload.text === 'string') {
+      return { kind: 'activity', key: event.id };
+    }
+    if (event.payload_type === 'run.terminal.completed' && payload.kind === 'run_terminal' && payload.terminal === 'completed') {
+      return { kind: 'terminal', success: true, key: event.id };
+    }
+    if (event.payload_type === 'run.terminal.failed' && payload.kind === 'run_terminal' && payload.terminal === 'failed') {
+      return { ...classifyWorkerHealthFailure({ type: 'error', message: payload.reason }, { source, provider: 'muse' }),
+        ...museQuotaEvidence(payload), fatal: true };
+    }
+    return null;
+  }
   getBinary() {
     return process.env.AIWG_MUSE_BIN || 'muse';
   }
 
   getName() {
     return 'muse';
+  }
+
+  /** Direct group path, separate from legacy session defaults. Policy is checked
+   * by resolveWorkerPlan/prepareWorkerInvocation, including contributor/ultra
+   * denial. Never map an explicit model away or fall back to a CLI default.
+   * The host binds the schema's absolute path in the existing control mapping
+   * and includes its bytes in installation.runtimeFiles for qualification. */
+  buildWorkerArgs(invocation, profile, permissions) {
+    const { selected, cwd, briefPath, health } = invocation;
+    const model = selected?.model, effort = selected?.effort?.value;
+    if (typeof model !== 'string' || !model || model.includes('\0')) throw new Error('Muse requires an explicit resolved model');
+    if (typeof effort !== 'string' || !museEffortValues.includes(effort)) throw new Error('Muse requires a declared explicit resolved effort');
+    for (const value of [cwd, briefPath]) {
+      if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0') || value.split(path.sep).includes('..')) {
+        throw new Error('Muse requires absolute workspace and prompt-file paths');
+      }
+    }
+    let schema;
+    try { schema = JSON.parse(profile.controls.structuredOutput.mapping); } catch { /* unavailable mapping blocks */ }
+    if (!Array.isArray(schema) || schema.length !== 2 || schema[0] !== '--output-schema'
+      || typeof schema[1] !== 'string' || !path.isAbsolute(schema[1]) || schema[1].includes('\0') || schema[1].split(path.sep).includes('..')) {
+      throw new Error('Muse requires a host-bound output-schema control mapping');
+    }
+    if (!permissions || !['read-only', 'workspace-write', 'external'].includes(permissions.sandbox)
+      || !Number.isSafeInteger(health?.maxSteps) || health.maxSteps < 1) throw new Error('Muse requires bounded steps and sandbox authority');
+    // Trust is a host-owned, qualification-bound control, like the schema.
+    // Brief contents and CLI defaults cannot opt into workspace instructions.
+    let trust;
+    try { trust = JSON.parse(profile.controls.trust.mapping); } catch { /* fail closed below */ }
+    if (!Array.isArray(trust) || !(trust.length === 0 || trust.length === 1 && trust[0] === '--trust-workspace')) {
+      throw new Error('Muse requires an explicit host-controlled workspace trust mapping');
+    }
+    const args = ['exec', '--json', '--provider', 'meta', '--model', model, '--reasoning-effort', effort,
+      '--workspace', cwd, ...trust, '--approval-mode', 'never', '--approval-judge', 'off', '--max-model-steps', String(health.maxSteps),
+      ...schema, '--prompt-file', briefPath];
+    if (permissions.sandbox === 'read-only') args.push('--disable-write', '--disable-shell');
+    return args;
   }
 
   getCapabilities() {
@@ -235,6 +321,7 @@ export class MuseAdapter extends ProviderAdapter {
    *   terminal: string|null, reason: string|null } | null}
    */
   parseOutput(stdout) {
+    if (typeof stdout !== 'string' || Buffer.byteLength(stdout) > 10485760) return null;
     const events = [];
     for (const raw of stdout.split('\n')) {
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
@@ -252,7 +339,12 @@ export class MuseAdapter extends ProviderAdapter {
       const type = typeof event?.payload_type === 'string' ? event.payload_type : '';
       const payload = event?.payload ?? {};
       if (type === 'run.output.delta' && typeof payload.text === 'string') deltas += payload.text;
-      if (type.startsWith('run.terminal.')) terminal = payload;
+      if (terminal) return null; // double final or output after terminal
+      if (type.startsWith('run.terminal.')) {
+        if (!['run.terminal.completed', 'run.terminal.failed'].includes(type)
+          || payload.terminal !== type.slice('run.terminal.'.length)) return null;
+        terminal = payload;
+      }
     }
     const state = typeof terminal?.terminal === 'string' ? terminal.terminal : null;
     const finalText = typeof terminal?.text === 'string' && terminal.text ? terminal.text : deltas;
@@ -262,6 +354,7 @@ export class MuseAdapter extends ProviderAdapter {
       settled: state === null ? null : state === 'completed',
       terminal: state,
       reason: typeof terminal?.reason === 'string' ? terminal.reason : null,
+      ...(terminal && museQuotaEvidence(terminal) ? { quota: museQuotaEvidence(terminal) } : {}),
     };
   }
 }

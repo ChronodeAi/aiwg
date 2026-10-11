@@ -51,6 +51,21 @@ evidence but do not carry a path, so they are not sufficient. If a log has no
 workspace/cwd/root evidence, discovery does not guess from the file path and the
 source is not selected for that workspace.
 
+Discovery scans metadata incrementally and stops on matching evidence, including
+evidence inside retained-frame children. Its inspection budget is 10,000 outer
+records, 10,000 retained children, 8 MiB per outer record or decoded child,
+32 MiB total source bytes, and 64 levels of JSON nesting. Matching evidence near
+the beginning can select a log longer than the inspection budget. Import still
+validates the full selected history under the normal import limits.
+
+The Muse provider report includes content-free `museSourceInspections` receipts
+with the outcome, reason code, inspected counts, and whether inspection reached
+EOF. A confirmed mismatch requires inspecting the whole source and observing
+workspace evidence without a match. Absent evidence, malformed or truncated
+input, unreadable sources, and exhausted budgets are inconclusive; they produce
+explicit diagnostics and mark Muse `not-checked`, keeping coverage partial even
+when other Muse sources were selected.
+
 ## Trajectory shape
 
 The adapter follows the documented export format from the Meta [audit agent

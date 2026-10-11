@@ -9,6 +9,15 @@
  * @implements #621
  */
 
+import { resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
+export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
+
+import Ajv, { type ValidateFunction } from 'ajv';
+import addFormats from 'ajv-formats';
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { isCanonicalWorkerModelKey, loadProviderModelCapabilities, resolveWorkerInstallation } from '../models/provider-policy.js';
+import type { ProviderModelCapabilityRegistry } from '../models/provider-policy.js';
 import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
 import { createHash, randomBytes } from 'crypto';
 import { resolve, join, dirname, isAbsolute } from 'path';
@@ -653,6 +662,33 @@ export interface BuildResourceRequirements {
   min_swap_gb?: number;
 }
 
+/**
+ * Live host-resource thresholds gating worker dispatch and heavy verification
+ * runs (FR-OG-107, #2954). Default thresholds apply to memory/load/pressure;
+ * the optional worker-count cap is enforced only when configured. Defaults mirror the
+ * titan oomd incident prototype (`resource-gate.sh`): load above core count,
+ * single-digit free-memory headroom, and sustained memory pressure all queued
+ * work instead of launching into them.
+ */
+export interface DispatchHostThresholds {
+  /** Minimum available memory (MemAvailable) in GiB. Default 8. */
+  min_avail_mem_gb?: number;
+  /** Maximum 1-minute load relative to core count. Default 1.0. */
+  max_load_ratio?: number;
+  /** Maximum memory PSI `some avg10` (percent). Default 30. */
+  max_mem_psi_avg10?: number;
+  /** Maximum memory PSI `some avg60` (percent). Default 10. */
+  max_mem_psi_avg60?: number;
+  /** Minimum free disk (bavail) in GiB on the evidence/worktree filesystem. Default 2. */
+  min_free_disk_gb?: number;
+  /**
+   * Maximum running worker/test processes before dispatch queues. Unset by
+   * default: counts are reported but do not block unless configured, because
+   * count caps alone cannot bound memory/CPU/pressure (see #2954).
+   */
+  max_workers?: number;
+}
+
 /** Cheap host-resource preflight run before expensive build commands (#1692). */
 export interface BuildResourcePreflightConfig {
   /** Enable preflight checks for project build scripts. Defaults to false when absent. */
@@ -664,6 +700,12 @@ export interface BuildResourcePreflightConfig {
   mode?: BuildResourcePreflightMode;
   /** Project-specific minimum host resources. */
   requirements?: BuildResourceRequirements;
+  /**
+   * Live dispatch thresholds (FR-OG-107, #2954). Checked by the `dispatch`
+   * preflight profile before worker launches and heavy verification runs.
+   * Unset fields fall back to {@link DEFAULT_DISPATCH_HOST_THRESHOLDS}.
+   */
+  dispatch?: DispatchHostThresholds;
 }
 
 /** Project build policy block (#1692). */
@@ -859,7 +901,218 @@ export function resolveDelivery(delivery: DeliveryConfig | undefined): ResolvedD
  *
  * @implements #1359
  */
-export interface ParallelismConfig {
+export interface WorkerInstallation {
+  adapter: string;
+  enabled?: boolean;
+  executable?: string;
+  endpoint?: string;
+  accountScope: string;
+  quotaScope: string;
+  credentialRef?: string;
+  approvalRef?: string;
+  invocationProfile?: string;
+  mcpServerRef?: string;
+}
+export interface WorkerMember {
+  id: string;
+  cli: string;
+  model: string;
+  roles: Array<'efficiency' | 'coding' | 'reasoning'>;
+  enabled?: boolean;
+  priority?: number;
+}
+export interface WorkerExecution {
+  isolation?: 'worktree' | 'snapshot' | 'isolated-copy';
+  sandbox?: 'read-only' | 'workspace-write' | 'external';
+  approval?: 'never' | 'on-request';
+  network?: 'deny' | 'allowlisted';
+  runnerRef?: string;
+  verifierRunnerRef?: string;
+  transport?: 'shell' | 'mcp';
+  receipts?: 'off' | 'optional' | 'required';
+}
+export interface WorkerGroup {
+  members: WorkerMember[];
+  fallback?: string[];
+  execution?: WorkerExecution;
+  requiredRoles?: Array<'efficiency' | 'coding' | 'reasoning'>;
+  maxParallel?: number;
+}
+export interface WorkerActivation {
+  revision: number;
+  configDigest: string;
+  projectModelsDigest: string;
+  userModelsDigest: string;
+  builtinModelsDigest: string;
+  previousRef?: string;
+  snapshotRef: string;
+}
+export interface WorkerParallelism {
+  worker_dispatch?: boolean;
+  worker_mode?: 'direct' | 'managed';
+  clis?: Record<string, WorkerInstallation>;
+  groups?: Record<string, WorkerGroup>;
+  admission?: {
+    groupCaps?: Record<string, number>; cliCaps?: Record<string, number>;
+    memberCaps?: Record<string, number>; modelCaps?: Record<string, number>; quotaCaps?: Record<string, number>;
+    queueTimeoutSeconds?: number; leaseSeconds?: number; maxQueued?: number; authorityRef?: string;
+    /**
+     * Live host-resource thresholds (FR-OG-107, #2954). Tightens
+     * `build.resource_preflight.dispatch` field-by-field; unset fields fall back to
+     * {@link DEFAULT_DISPATCH_HOST_THRESHOLDS}. File-based admission wiring is
+     * advisory for Tier 0 conductors; shared enforced admission lands in S2.
+     */
+    hostResources?: DispatchHostThresholds;
+  };
+  budgets?: {
+    perRun?: { tokens?: number; costUsd?: number; wallSeconds?: number };
+    perTask?: { tokens?: number; costUsd?: number; wallSeconds?: number };
+    enforcement?: 'hard' | 'observed'; unknownCost?: 'deny' | 'reserve'; reservationUsd?: number;
+  };
+  retry?: { maxAttempts?: number; on?: Array<'rate-limit' | 'unavailable' | 'timeout'>; baseDelaySeconds?: number; maxDelaySeconds?: number };
+  health?: {
+    startupSeconds?: number; checkSeconds?: number; quietSeconds?: number; stallSeconds?: number;
+    diagnosticGraceSeconds?: number; terminateGraceSeconds?: number; hardTimeoutSeconds?: number; maxSteps?: number;
+    requireStepCap?: boolean; roleScale?: Partial<Record<'efficiency' | 'coding' | 'reasoning', number>>;
+    effortScale?: Record<string, number>; modelScale?: Record<string, number>; modelStartupSeconds?: Record<string, number>;
+    correlationWindowSeconds?: number; failureCount?: number; allFailedMinimum?: number; cooldownSeconds?: number;
+    maxCooldownSeconds?: number; probeSeconds?: number; probeMaxBytes?: number; halfOpenMaxProbes?: 1;
+  };
+  activation?: WorkerActivation;
+}
+
+let parallelismValidator: ValidateFunction | undefined;
+/** Offline shape and declaration validation. Qualification is checked at use time. */
+export function validateParallelismConfig(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!parallelismValidator) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [resolve(here, '../../vscode-extension/schemas/aiwg.config.v1.json'), resolve(here, '../../../vscode-extension/schemas/aiwg.config.v1.json')];
+    const file = candidates.find(existsSync);
+    if (!file) throw new Error('Parallelism schema is unavailable');
+    const schema = JSON.parse(readFileSync(file, 'utf8'));
+    const ajv = addFormats(new Ajv({ strict: true, allErrors: true }));
+    parallelismValidator = ajv.compile({ ...schema.properties.parallelism, definitions: schema.definitions });
+  }
+  if (!parallelismValidator(value)) return (parallelismValidator.errors ?? []).map(error => `OG_CONFIG_REFERENCE /parallelism${error.instancePath}: ${error.message}`);
+  const policy = value as ParallelismConfig;
+  const errors: string[] = [];
+  const error = (pointer: string, message: string): void => { errors.push(`OG_CONFIG_REFERENCE /parallelism/${pointer}: ${message}`); };
+  const builtinIds = new Set<string>(PROVIDER_IDS.filter(id => id !== 'generic'));
+  for (const [id, installation] of Object.entries(policy.clis ?? {})) {
+    if (installation.adapter.startsWith('providers:') && !builtinIds.has(installation.adapter.slice(10))) error(`clis/${id}/adapter`, 'Unknown provider binding');
+  }
+  for (const [id, group] of Object.entries(policy.groups ?? {})) {
+    const ids = new Set<string>();
+    for (const member of group.members) {
+      if (ids.has(member.id)) error(`groups/${id}/members`, 'Duplicate member ID');
+      ids.add(member.id);
+      if (!policy.clis?.[member.cli] && !builtinIds.has(member.cli)) error(`groups/${id}/members/${member.id}/cli`, 'Unknown installation');
+    }
+    for (const member of group.fallback ?? []) if (!ids.has(member)) error(`groups/${id}/fallback`, 'Unknown fallback member');
+    for (const role of group.requiredRoles ?? []) {
+      if (!group.members.some(m => m.enabled !== false && policy.clis?.[m.cli]?.enabled !== false && m.roles.includes(role))) error(`groups/${id}/requiredRoles`, `No enabled member covers ${role}`);
+    }
+  }
+  const admission = policy.admission;
+  for (const group of Object.keys(admission?.groupCaps ?? {})) if (!policy.groups?.[group]) error('admission/groupCaps', 'Unknown group');
+  for (const cli of Object.keys(admission?.cliCaps ?? {})) if (!policy.clis?.[cli] && !builtinIds.has(cli)) error('admission/cliCaps', 'Unknown installation');
+  for (const key of Object.keys(admission?.memberCaps ?? {})) {
+    const [group, member, extra] = key.split('/');
+    if (extra !== undefined || !policy.groups?.[group]?.members.some(m => m.id === member)) error('admission/memberCaps', 'Unknown group/member');
+  }
+  for (const key of Object.keys(admission?.modelCaps ?? {})) if (!isCanonicalWorkerModelKey(key)) error('admission/modelCaps', 'Noncanonical inference model key');
+  if (admission?.hostResources !== undefined) {
+    try {
+      resolveDispatchHostThresholds(undefined, admission.hostResources);
+    } catch (validation) {
+      error('admission/hostResources', validation instanceof Error ? validation.message : String(validation));
+    }
+  }
+  errors.push(...validateWorkerHealthConfig(policy.health));
+  return errors;
+}
+
+/** Cross-field health preferences are validated offline; controls are qualified at dispatch. */
+export function validateWorkerHealthConfig(health: WorkerParallelism['health']): string[] {
+  if (health === undefined) return [];
+  const errors: string[] = [];
+  const error = (field: string, message: string): void => { errors.push(`OG_CONFIG_REFERENCE /parallelism/health/${field}: ${message}`); };
+  const checkSeconds = health.checkSeconds ?? 15;
+  if (checkSeconds > (health.startupSeconds ?? 60)) error('checkSeconds', 'Must not exceed startupSeconds');
+  if ((health.quietSeconds ?? 90) >= (health.stallSeconds ?? 300)) error('quietSeconds', 'Must be less than stallSeconds');
+  if ((health.cooldownSeconds ?? 120) > (health.maxCooldownSeconds ?? 900)) error('cooldownSeconds', 'Must not exceed maxCooldownSeconds');
+  for (const role of Object.keys(health.roleScale ?? {})) {
+    if (!['efficiency', 'coding', 'reasoning'].includes(role)) error('roleScale', `Unknown role ${role}`);
+  }
+  for (const field of ['modelScale', 'modelStartupSeconds'] as const) {
+    for (const [key, value] of Object.entries(health[field] ?? {})) {
+      if (!isCanonicalWorkerModelKey(key)) error(field, 'Noncanonical inference model key');
+      if (field === 'modelStartupSeconds' && checkSeconds > value) error(field, 'Model startup must cover checkSeconds');
+    }
+  }
+  return errors;
+}
+
+/** Resolve one enabled installation through trusted metadata, without probes.
+ * Implicit canonical IDs inherit current-account auth; no account/quota identity
+ * is invented. Profile qualification remains the invocation owner's obligation.
+ */
+export function resolveWorkerGroupInstallation(
+  parallelism: ParallelismConfig,
+  installationId: string,
+  registry: ProviderModelCapabilityRegistry = loadProviderModelCapabilities(),
+) {
+  const errors = validateParallelismConfig(parallelism);
+  if (errors.length) throw new Error(errors.join('; '));
+  if (!parallelism.worker_dispatch) throw new Error('OG_CONFIG_REFERENCE /parallelism/worker_dispatch: Worker dispatch is disabled');
+  const explicit = parallelism.clis?.[installationId];
+  const installation = explicit
+    ? structuredClone(explicit)
+    : { adapter: `providers:${installationId}`, enabled: true };
+  if (!explicit && (!PROVIDER_IDS.includes(installationId as typeof PROVIDER_IDS[number]) || installationId === 'generic')) {
+    throw new Error(`OG_CONFIG_REFERENCE /parallelism/clis/${installationId}: Unknown canonical installation`);
+  }
+  if (installation.enabled === false) throw new Error(`OG_CONFIG_REFERENCE /parallelism/clis/${installationId}: Installation is disabled`);
+  try {
+    return { installation: { ...installation, enabled: true }, ...resolveWorkerInstallation(registry, installation) };
+  } catch (error) {
+    throw new Error(`OG_ADAPTER_UNQUALIFIED /parallelism/clis/${installationId}: ${error}`);
+  }
+}
+
+/** Validate current model restrictions and group references before any write.
+ * Disabled/unbound projects retain their existing config-only edit behavior.
+ * This is shared validation, not Tier 1 coherent activation.
+ */
+export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig): Promise<void> {
+  const errors = validateParallelismConfig(config.parallelism);
+  if (errors.length) throw new Error(errors.join('; '));
+  if (!config.parallelism?.worker_dispatch) return;
+  const { ConfigLoader } = await import('../models/config-loader.js');
+  await new ConfigLoader(projectDir).load(config.parallelism);
+}
+
+/** Hash canonical JSON, treating absent optional model files as null. */
+export function workerConfigDigest(value: unknown): string {
+  const canonical = (node: any): any => {
+    if (Array.isArray(node)) return node.map(canonical);
+    if (node !== null && typeof node === 'object') return Object.fromEntries(Object.keys(node).sort().filter(key => node[key] !== undefined).map(key => [key, canonical(node[key])]));
+    return node ?? null;
+  };
+  return `sha256:${createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')}`;
+}
+export function workerActivationDigests(config: AiwgConfig, projectModels?: unknown, userModels?: unknown, builtinModels?: unknown): Omit<WorkerActivation, 'revision' | 'snapshotRef' | 'previousRef'> {
+  const candidate = structuredClone(config);
+  if (candidate.parallelism) delete candidate.parallelism.activation;
+  return { configDigest: workerConfigDigest(candidate), projectModelsDigest: workerConfigDigest(projectModels), userModelsDigest: workerConfigDigest(userModels), builtinModelsDigest: workerConfigDigest(builtinModels) };
+}
+/** Pure inventory only: this does not activate, lock, synchronize, or admit work. */
+export function workerActivationCopyInventory(projectDir: string, compatibilityConfig: string, userModels: string, builtinModels: string): string[] {
+  return [...new Set([getConfigPath(projectDir), join(projectDir, 'models.json'), compatibilityConfig, userModels, builtinModels].map(file => resolve(file)))];
+}
+
+export interface ParallelismConfig extends WorkerParallelism {
   /** Max concurrent subagents (Task dispatches, rlm-batch fan-outs). */
   max_parallel_subagents?: number;
   /** Max concurrent Ralph external loops (`aiwg agent-loop-ext`). */
@@ -874,7 +1127,7 @@ export interface ParallelismConfig {
  * Resolved parallelism caps with all defaults applied. Returned by
  * {@link resolveParallelism}.
  */
-export interface ResolvedParallelism {
+export interface ResolvedParallelism extends WorkerParallelism {
   max_parallel_subagents: number;
   max_parallel_ralph_loops: number;
   max_parallel_mc_missions: number;
@@ -958,6 +1211,22 @@ export function resolveParallelism(
     max_parallel_mc_missions: parallelism?.max_parallel_mc_missions ?? defaults.max_parallel_mc_missions,
   };
   if (parallelism?.rationale !== undefined) resolved.rationale = parallelism.rationale;
+  const errors = validateParallelismConfig(parallelism);
+  if (errors.length) throw new Error(errors.join('; '));
+  if (parallelism?.worker_dispatch) {
+    Object.assign(resolved, Object.fromEntries(Object.entries(structuredClone(parallelism)).filter(([, value]) => value !== undefined)));
+    resolved.worker_mode ??= 'direct';
+    for (const group of Object.values(resolved.groups ?? {})) {
+      group.fallback ??= [];
+      group.requiredRoles ??= [];
+      group.execution = { isolation: 'worktree', sandbox: 'workspace-write', approval: 'never', network: 'deny', transport: 'shell', receipts: 'optional', ...group.execution };
+      for (const member of group.members) { member.enabled ??= true; member.priority ??= 50; }
+    }
+    for (const cli of Object.values(resolved.clis ?? {})) cli.enabled ??= true;
+    if (resolved.admission) resolved.admission = { maxQueued: 128, queueTimeoutSeconds: 300, leaseSeconds: 60, authorityRef: 'project', ...resolved.admission };
+    if (resolved.budgets) resolved.budgets = { enforcement: 'observed', unknownCost: 'deny', ...resolved.budgets };
+    if (resolved.retry) resolved.retry = { maxAttempts: 3, on: ['rate-limit', 'unavailable', 'timeout'], baseDelaySeconds: 2, maxDelaySeconds: 60, ...resolved.retry };
+  }
   return resolved;
 }
 
@@ -1660,12 +1929,14 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   let filePath = localPath;
   try {
     await access(localPath);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     if (artifactPath === localPath) return null;
     try {
       await access(artifactPath);
       filePath = artifactPath;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return null;
     }
   }
@@ -1698,6 +1969,7 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   const threatAssessmentErrors = [
     ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
     ...validateProjectConfig(parsed.project),
+    ...validateParallelismConfig(parsed.parallelism),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -1719,6 +1991,8 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     console.warn(`Invalid gates section in .aiwg/aiwg.config (ignored):\n${gatesErrors.join('\n')}`);
   }
 
+  await validateWorkerConfigCandidate(projectDir, parsed);
+
   return parsed;
 }
 
@@ -1731,6 +2005,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   const threatAssessmentErrors = [
     ...validateThreatAssessmentConfig(config.security?.threatAssessment),
     ...validateProjectConfig(config.project),
+    ...validateParallelismConfig(config.parallelism),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -1741,6 +2016,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
   const gatesErrors = validateGatesConfig(config.gates);
   if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
+  await validateWorkerConfigCandidate(projectDir, config);
   const localPath = getConfigPath(projectDir);
   const artifactDir = resolveProjectAiwgDir(projectDir);
   const artifactPath = join(artifactDir, CONFIG_FILENAME);
@@ -2005,4 +2281,37 @@ export async function populateDeployedTo(
   }
 
   return config;
+}
+
+/** Shape validation alone cannot infer process/HTTP metadata or model authority. */
+export function validateWorkerInstallationBindings(parallelism: ParallelismConfig, adapters: Record<string, { transport: 'process' | 'http'; executable?: string }>): string[] {
+  const errors: string[] = [];
+  for (const [id, cli] of Object.entries(parallelism.clis ?? {})) {
+    if (cli.enabled === false) continue;
+    const metadata = adapters[cli.adapter];
+    if (!metadata) errors.push(`OG_ADAPTER_UNQUALIFIED /parallelism/clis/${id}/adapter: Unknown trusted binding`);
+    else if (metadata.transport === 'http' ? (!cli.endpoint || cli.executable !== undefined) : (cli.endpoint !== undefined || !(cli.executable ?? metadata.executable))) errors.push(`OG_CONFIG_REFERENCE /parallelism/clis/${id}: Invalid transport binding`);
+  }
+  return errors;
+}
+export function validateWorkerGroupReferences(parallelism: ParallelismConfig, selection: import('../models/types.js').WorkerSelectionPolicy, qualifiedRoles?: Record<string, string[]>): string[] {
+  const errors = validateParallelismConfig(parallelism);
+  if (errors.length) return errors;
+  for (const [role, guidance] of Object.entries(selection.roleGuidance ?? {})) {
+    for (const group of guidance.groups) if (!parallelism.groups?.[group]) errors.push(`OG_CONFIG_REFERENCE /defaults/workerSelection/roleGuidance/${role}/groups: Unknown group ${group}`);
+  }
+  if (qualifiedRoles) for (const [id, group] of Object.entries(parallelism.groups ?? {})) {
+    for (const role of group.requiredRoles ?? []) if (!group.members.some(m => m.enabled !== false && parallelism.clis?.[m.cli]?.enabled !== false && m.roles.includes(role) && qualifiedRoles[`${id}/${m.id}`]?.includes(role))) errors.push(`OG_ADAPTER_UNQUALIFIED /parallelism/groups/${id}/requiredRoles: No qualified route covers ${role}`);
+  }
+  return errors;
+}
+
+/** A configured hard ceiling is eligible only where a qualified control enforces it. */
+export function validateWorkerBudgetEnforcement(budgets: WorkerParallelism['budgets'], enforceable: Array<'tokens' | 'costUsd' | 'wallSeconds'>): string[] {
+  if (budgets?.enforcement !== 'hard') return [];
+  const errors: string[] = [];
+  for (const scope of ['perRun', 'perTask'] as const) for (const dimension of ['tokens', 'costUsd', 'wallSeconds'] as const) {
+    if (budgets[scope]?.[dimension] !== undefined && !enforceable.includes(dimension)) errors.push(`OG_BUDGET_UNMEASURABLE /parallelism/budgets/${scope}/${dimension}: No qualified enforcing control`);
+  }
+  return errors;
 }

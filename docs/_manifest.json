@@ -347,6 +347,7 @@
     "providers",
     "providers/capability-matrix",
     "providers/provider-inventory",
+    "providers/route-feasibility-inventory",
     "providers/antigravity",
     "providers/deepseek-harness",
     "providers/deepseek-harness-sessions",
@@ -2689,6 +2690,13 @@
       "title": "Provider Inventory",
       "summary": "Canonical list and count of named provider integrations",
       "file": "providers/provider-inventory.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/route-feasibility-inventory",
+      "title": "Route-Feasibility Evidence Inventory",
+      "summary": "S0 per-target feasibility: scope, identity class, evidence channel, fan-out and probe budget",
+      "file": "providers/route-feasibility-inventory.md",
       "parent": "providers"
     },
     {

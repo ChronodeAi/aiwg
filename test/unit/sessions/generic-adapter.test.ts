@@ -56,6 +56,7 @@ describe('generic session interchange adapter', () => {
       sourceSchemaVersion: '1.0.0',
       consistency: 'complete',
       operationalState: 'available',
+      declaredWorkspaceId: 'workspace-fixture',
     });
     const events = await collect(adapter.stream(source));
     expect(events).toHaveLength(2);
@@ -86,9 +87,37 @@ describe('generic session interchange adapter', () => {
     await expect(adapter.inspect(selected(name, sourceId))).rejects.toMatchObject({ code });
   });
 
-  it('rejects source identity drift', async () => {
+  it('rejects source identity drift and names both identities', async () => {
     await expect(adapter.inspect(selected('valid-v1.jsonl', 'wrong-source')))
-      .rejects.toMatchObject({ code: 'SCHEMA_DRIFT' });
+      .rejects.toMatchObject({
+        code: 'SCHEMA_DRIFT',
+        message: expect.stringContaining(
+          '--source-id "wrong-source" but header sourceId is "generic-fixture-v1"',
+        ),
+      });
+  });
+
+  it('names the failing header field and its allowed values', async () => {
+    await expect(adapter.inspect(selected('invalid-consistency-v1.jsonl', 'generic-bad-consistency-v1')))
+      .rejects.toMatchObject({
+        code: 'MALFORMED_SOURCE',
+        message: 'generic interchange header field "consistency" must be one of '
+          + 'provisional|consistent-snapshot|complete (got "partial")',
+      });
+  });
+
+  it('keeps the undeclared-input message for non-interchange files', async () => {
+    await expect(adapter.inspect(selected('opaque-input.jsonl', 'opaque')))
+      .rejects.toMatchObject({ message: 'input is not a declared AIWG generic session interchange' });
+  });
+
+  it('names a malformed event field without echoing its value', async () => {
+    const failure = adapter.inspect(selected('invalid-event-lifecycle-v1.jsonl', 'generic-bad-event-v1'));
+    await expect(failure).rejects.toMatchObject({
+      code: 'MALFORMED_SOURCE',
+      message: 'generic interchange event is malformed: field "lifecycle" must be one of active|complete|archived',
+    });
+    await expect(failure).rejects.not.toMatchObject({ message: expect.stringContaining('secret') });
   });
 });
 

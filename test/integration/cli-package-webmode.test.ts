@@ -275,6 +275,19 @@ describe('@aiwg/cli packaged web distribution', () => {
     )).toBe(true);
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
+      'tools/ralph-external/lib/provider-adapter.mjs',
+      'tools/ralph-external/lib/worker-health.mjs',
+      'tools/ralph-external/lib/claude-adapter.mjs',
+      'tools/ralph-external/lib/codex-adapter.mjs',
+      'tools/ralph-external/lib/opencode-adapter.mjs',
+      'tools/ralph-external/lib/factory-adapter.mjs',
+      'tools/ralph-external/lib/pi-adapter.mjs',
+      'tools/ralph-external/lib/omp-adapter.mjs',
+      'tools/ralph-external/lib/deepseek-harness-adapter.mjs',
+      'tools/ralph-external/lib/muse-adapter.mjs',
+      'tools/ralph-external/lib/openhuman-adapter.mjs',
+      'tools/providers/omp-transport.mjs',
+      'tools/providers/deepseek-harness-transport.mjs',
       'tools/agents/deploy-agents.mjs',
       'tools/agents/providers/',
       'tools/providers/antigravity-transport.mjs',
@@ -283,7 +296,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/skills/deploy-skills-codex.mjs',
     ];
     expect(paths.filter((entry) => entry.startsWith('tools/')).every(
-      (entry) => allowedToolPrefixes.some((allowed) => entry === allowed || entry.startsWith(allowed)),
+      (entry) => allowedToolPrefixes.some((allowed) => entry === allowed || (allowed.endsWith('/') && entry.startsWith(allowed))),
     )).toBe(true);
     expect(paths).toContain('bin/aiwg.mjs');
     expect(paths).toContain('LICENSE');
