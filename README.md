@@ -12,8 +12,8 @@ media, and maintain operational knowledge. AIWG combines agents, skills, rules, 
 around these tasks, adapting them to your existing AI provider.
 
 Project artifacts carry decisions from one session to the next. Domain frameworks supply the procedures; addons extend
-them with writing profiles, task loops, memory, testing tools, and other capabilities. The sections below show what
-you can do, how the pieces work together, and how to use them.
+them with writing profiles, task loops, memory, testing tools, decision support, and other capabilities. The sections
+below show what you can do, how the pieces work together, and how to use them.
 
 The simplest setup is to paste this into a supported AI provider:
 
@@ -95,7 +95,7 @@ Agents and stewards setting up AIWG end-to-end should use the
 
 [![Built With AIWG](https://aiwg.io/assets/badges/built-with-aiwg-dark.png)](https://aiwg.io/badges)
 
-[**Get Started**](#quick-start) · [**Features**](#what-you-get) · [**Agents**](#agents) · [**Documentation**](#documentation) · [**Community**](#community--support) · [**Badges**](https://aiwg.io/badges)
+[**Get Started**](#quick-start) · [**Features**](#what-you-get) · [**Agents**](#agents) · [**Decision Support**](#decision-support--bounded-decisions-offloaded-to-jev) · [**Documentation**](#documentation) · [**Community**](#community--support) · [**Badges**](https://aiwg.io/badges)
 
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/BuAusFMxdA)
 [![Telegram](https://img.shields.io/badge/Telegram-Join-26A5E4?logo=telegram&logoColor=white&style=flat-square)](https://t.me/+oJg9w2lE6A5lOGFh)
@@ -372,7 +372,9 @@ Architecture Document Creation:
 
 Each reviewer receives a defined responsibility and relevant context. The synthesis should resolve duplicate or
 conflicting findings, preserve uncertainty, and identify which conclusions were checked against sources or tests.
-Parallel reviews require the corresponding provider capability and available task budget.
+Parallel reviews require the corresponding provider capability and available task budget. Small bounded judgments
+inside a workflow, such as a yes/no gate or a severity score, can go to [decision
+support](#decision-support--bounded-decisions-offloaded-to-jev) instead of a full reasoning pass.
 
 ### 3. Learning — Closed-Loop Self-Correction (Agent Loop)
 
@@ -631,8 +633,8 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **Artifact templates** — structured requirements, design decisions, campaign briefs, source notes, runbooks, and
   review reports.
 - **Multi-provider deployment** — Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek
-  Harness, Factory AI, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent, Oh My Pi, Warp Terminal, and Devin
-  Desktop.
+  Harness, Factory AI, Grok Bot, Grok Build, Hermes, Muse Code, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent, Oh My
+  Pi, Warp Terminal, and Devin Desktop.
 - **Domain frameworks** — software development, forensics, marketing, research, media curation, operations, knowledge
   base, and security engineering.
 - **Dataset workflows** — assessment, indexing, lineage, synchronization, and retirement through dataset intelligence;
@@ -645,13 +647,15 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **Testing quality** — test conformance, reversible normalization, mutation testing, and flaky-test review.
   See the [AIWG test conformance example](docs/conformance-aiwg-example.md) for reviewed source controls
   and runner evidence.
+- **Decision support** — optional offload of bounded decisions (yes/no gates, a pick from known options, severity
+  scores) to Jev, with a typed answer, a confidence score, and a fallback to the assistant's own reasoning.
 - **Agent loops** — bounded execution, failure analysis, checkpoints, and supported process recovery.
 - **RLM** — recursive context decomposition for tasks whose source material needs to be divided into smaller working sets.
 - **YAML metalanguage** — structured workflow and artifact definitions with schema-oriented validation.
 - **MCP integration** — tools and resources exposed through configured servers and provider connections.
 - **Traceability and provenance** — relationships between requirements, code, tests, sources, and generated artifacts.
-- **Session history and diagnostics** — import and inspect prior AI work, check deployment health, and diagnose
-  provider wiring.
+- **Session history and diagnostics** — import, search, and inspect prior AI work across providers, check deployment
+  health, and diagnose provider wiring.
 - **Project-local extensions and marketplace delivery** — keep custom instructions with the project and package
   reusable capabilities through the appropriate distribution path.
 
@@ -753,7 +757,10 @@ aiwg use all --provider claude         # Claude Code
 aiwg use all --provider codex          # OpenAI Codex
 aiwg use all --provider copilot        # GitHub Copilot
 aiwg use all --provider cursor         # Cursor
+aiwg use all --provider dsh            # DeepSeek Harness
 aiwg use all --provider factory        # Factory AI
+aiwg use all --provider grokbot        # Grok Bot
+aiwg use all --provider grok-build     # Grok Build
 aiwg use all --provider opencode       # OpenCode
 aiwg use all --provider warp           # Warp Terminal
 aiwg use all --provider devin          # Devin Desktop
@@ -818,6 +825,7 @@ lists the current framework names accepted by the CLI.
 | **[Agent Loop](agentic/code/addons/agent-loop/)** | Run bounded iterative agent loops with recovery, reflection, completion tracking, and resumable progress tracking |
 | **[RLM](agentic/code/addons/rlm/)** | Decompose large codebases or document corpora into smaller reviewed slices through recursive planning and subtask execution |
 | **[Composition Engine](agentic/code/addons/composition-engine/)** | Define and validate provider-neutral Flow graph contracts for composed workflows |
+| **[Decision Engine](agentic/code/addons/decision-engine/)** | Offload bounded decisions to Jev or an LLM-subagent binding through normalized rulesets, with typed answers, confidence, and fallback; opt-in and not part of `aiwg use all` |
 | **[Graph Pattern](agentic/code/addons/graph-pattern/)** | Add an optional graph-oriented profile over AIWG Flow for conditional routes, reducers, and graph validation |
 | **[Orchestration Topology Lab](agentic/code/addons/orchestration-topology-lab/)** | Compare single-agent, bounded-parallel, and planner-worker orchestration topologies using local fixtures and explicit evidence |
 | **[Guided Implementation](agentic/code/addons/guided-implementation/)** | Keep issue-to-code work inside a bounded retry loop with validation after each attempt and structured escalation when needed |
@@ -1305,6 +1313,38 @@ See also: [MCP server documentation](docs/mcp/README.md), [MCP capability
 audit](docs/integrations/mcp-capability-audit.md), and [cross-platform
 overview](docs/integrations/cross-platform-overview.md).
 
+## Decision Support — Bounded Decisions Offloaded to Jev
+
+Much of an agent's reasoning goes to small questions with a fixed answer shape: is this test failure flaky, which of
+these four files owns the retry policy, how severe is this finding on a scale of 1 to 5. The optional
+`decision-engine` addon sends those bounded decisions to Jev, a decision service, and returns a typed answer with a
+confidence score. When Jev abstains, times out, is not configured, or falls below the confidence threshold, the
+result is a fallback and the assistant decides as usual.
+
+> Set up Jev decision offload for this workspace and verify it with one test call. Then triage these failing tests:
+> ask Jev whether each failure is flaky, and show me every answer with its confidence.
+
+Decision support is opt-in and is not installed by `aiwg use all`. Enabling it takes one addon and one token:
+
+```bash
+aiwg use decision-engine
+printf '%s' "$TOKEN" | aiwg decision setup jev --token-stdin --verify
+aiwg decision ask --question "Is this test failure flaky?" --yes-no --context-file test-output.log --json
+```
+
+Three answer shapes are supported: `--yes-no`, `--choices` for a pick from known options, and `--scale` for a score
+such as 1–5. The deployed `decision-offload` rule tells agents to try Jev first for these shapes, and never for
+open-ended generation, code, multi-step plans, or anything that authorizes a destructive or outward action. Jev
+output is advisory data, not authorization. Savings vary by workload: offload helps most when a task asks many small
+bounded questions.
+
+The question and its context are sent to Jev, so keep secrets out of both. The same decision definitions can also run
+through an ordinary LLM-subagent binding when you want rulesets without an external service.
+
+See the [Jev quickstart](docs/decision/jev-quickstart.md), [normalized decisions and
+rulesets](docs/decision/README.md), and the MCP `decision-ask` tool in the [CLI/MCP driver
+guide](docs/decision/cli-mcp-driver.md).
+
 ## Agent Evaluation Framework
 
 AIWG treats agents, skills, commands, and rules as reviewable project assets. The evaluation workflow is designed to
@@ -1464,7 +1504,9 @@ sensitive prompts, local paths, and project context.
 > Set up a local session catalog for this workspace. Preview the provider sessions available for import, import
 > the reviewed selection, and find conversations about release blockers with their provenance.
 
-Imported sessions can be tagged, extracted into reusable notes, reviewed for promotion, or audited for provenance.
+Discovery reports each provider's coverage, so a missing history shows as a gap that needs an export or an authorized
+root, not as proof of no activity. Imported sessions can be tagged, extracted into reusable notes, reviewed for
+promotion, or audited for provenance.
 Keep private-provider roots and shared history locations explicit in configuration; do not assume another provider’s
 global history is safe to import by default.
 
@@ -1552,20 +1594,13 @@ model will solve the task. Set wall-clock, token, tool-call, or cost limits for 
 > Search the provider quickstarts for outdated reload instructions. Use at most four parallel workers and a
 > 50,000-token budget; return source links, the quoted statements, and proposed corrections.
 
-### Dataset-backed project knowledge
+### Bounded decisions without a full reasoning pass
 
-> Check and preview our documentation dataset, then find the best Codex quickstart with source and lineage links.
+> Triage these twelve open findings. Ask Jev for a 1–5 severity on each with the finding text as context, show
+> every answer with its confidence, and decide the ones that fall back yourself.
 
-Use dataset intelligence when the source and lineage need to be explicit. Use RLM when the immediate need is recursive
-search or fanout over files.
-
-### Session history reuse
-
-> Find this workspace’s prior marketing-audit conversations. Review their scope before import and extract the
-> relevant decisions into a Markdown artifact with provenance.
-
-This is useful when prior provider conversations contain decisions that should become project artifacts. Keep import
-scope explicit and review the discovered sessions before promotion.
+Dataset-backed knowledge and session history reuse have their own sections under [Configuration &
+Customization](#configuration--customization).
 
 ### Security, forensics, and operations prompts
 
@@ -1594,14 +1629,15 @@ See [cross-platform overview](docs/integrations/cross-platform-overview.md) for 
 | Claude Code | `aiwg use all --provider claude` | `CLAUDE.md` | Skills, commands, hooks, MCP config | Best fit for rich AIWG provider packaging. See [Claude quickstart](docs/integrations/claude-code-quickstart.md). |
 | Codex | `aiwg use all --provider codex` | `AGENTS.md` | Global prompts, project skills, MCP config | Uses AGENTS.md bootstrap plus `.agents/skills/`. See [Codex quickstart](docs/integrations/codex-quickstart.md). |
 | Cursor | `aiwg use all --provider cursor` | Rules and skills | `.cursor/rules/*.mdc`, `.cursor/skills/*/SKILL.md` | Cursor rules are native; some assets remain conventional. See [Cursor quickstart](docs/integrations/cursor-quickstart.md). |
-| Windsurf | `aiwg use all --provider windsurf` | Windsurf rules | Rules and workflows | Uses Windsurf’s local rule model where available. |
 | OpenCode | `aiwg use all --provider opencode` | Agent/rule context | Provider-local agents, commands, rules | Good for lightweight terminal workflows. |
-| Gemini CLI | `aiwg use all --provider gemini` | `GEMINI.md` | Commands and context files | Keeps AIWG guidance in Gemini-readable Markdown. |
-| Qwen Code | `aiwg use all --provider qwen` | `QWEN.md` | Commands and context files | Similar Markdown-first provider packaging. |
-| Firebase Studio | `aiwg use all --provider firebase` | Studio context | Rules and generated context | Focused on Firebase Studio workspace guidance. |
 | GitHub Copilot | `aiwg use all --provider copilot` | `.github` assets | Prompts, instructions, agents, MCP config | Uses `.github/prompts/*.prompt.md`, `.github/instructions/*.instructions.md`, and `.github/agents/*.agent.md`. |
-| Devin | `aiwg use all --provider devin` | Devin-compatible context | Compatibility packaging | Uses compatibility paths where Devin can read project instructions. |
+| Devin Desktop | `aiwg use all --provider devin` | `AGENTS.md` | Rules and workflows | Formerly Windsurf; `windsurf` remains the provider id and `devin` is its alias. See [quickstart](docs/integrations/windsurf-quickstart.md). |
+| DeepSeek Harness | `aiwg use all --provider dsh` | `AGENTS.md` | Provider-local skills and context | Experimental. See [DeepSeek Harness docs](docs/providers/deepseek-harness.md). |
 | Factory | `aiwg use all --provider factory` | Factory context | Agents and commands where supported | Provider behavior depends on the installed Factory environment. |
+| Hermes | `aiwg use all --provider hermes` | `AGENTS.md` | Skills, with context aggregated into `AGENTS.md` | See [Hermes quickstart](docs/integrations/hermes-quickstart.md). |
+| OpenClaw | `aiwg use all --provider openclaw` | `AGENTS.md` | Native agents, skills, rules, and commands | User-scope deployment. See [OpenClaw quickstart](docs/integrations/openclaw-quickstart.md). |
+| OpenHuman | `aiwg use all --provider openhuman` | Provider-managed | Skills, with other assets indexed | Experimental. See [OpenHuman quickstart](docs/integrations/openhuman-quickstart.md). |
+| Warp Terminal | `aiwg use all --provider warp` | `WARP.md` | Skills, with context aggregated into `WARP.md` | See [Warp quickstart](docs/integrations/warp-terminal-quickstart.md). |
 | Grok Bot | `aiwg use all --provider grokbot` | `AGENTS.md` | Discover-first skills when `AIWG_GROKBOT_SKILLS_DIR` is set | Stable; not Cursor / not xAI Grok Build. See [Grok Bot reference](docs/agents/providers/grokbot.md). |
 | Grok Build | `aiwg use all --provider grok-build` | `WORKSPACE.md` via generated `AGENTS.md` | `.grok/skills/` kernel; `$GROK_HOME` user skills | Experimental; distinct from Grok Bot and Grok web Build. [Quickstart](docs/integrations/grok-build-quickstart.md), [reference](docs/agents/providers/grok-build.md), [qualification](docs/providers/grok-build-qualification.md). |
 | Muse Code | `aiwg use all --provider muse` | `AGENTS.md` | `.agents/skills/` project; XDG user root at deploy time | Stable; no aliases. See [Muse quickstart](docs/integrations/muse-quickstart.md). |
@@ -1639,8 +1675,9 @@ Everyday work stays in the conversation. The small manual command set is for set
 
 Installing the executable still requires a package manager, as shown in [Quick Start](#quick-start); an assistant with
 terminal access can perform that step too. Advanced scripting, server configuration, registry operations, indexing,
-issue synchronization, and automation options belong in the [CLI reference](docs/cli/reference.md) and linked guides.
-You do not need to learn those interfaces to request their outcomes.
+session history, decision offload, issue synchronization, and automation options belong in the [CLI
+reference](docs/cli/reference.md) and linked guides. You do not need to learn those interfaces to request their
+outcomes.
 
 ## Architecture
 
@@ -2172,7 +2209,8 @@ project guidelines.
 
 - Found a bug or confusing workflow? [Open an issue](https://github.com/jmagly/aiwg/issues/new).
 - Have a documentation improvement? Submit a PR with the source file and the behavior it clarifies.
-- Want to add an agent? Ask for a role with clear responsibilities; see [the agent template](docs/development/agent-template.md).
+- Want to add an agent? Ask for a role with clear responsibilities; see [the agent
+  template](agentic/code/frameworks/sdlc-complete/agents/agent-template.md).
 - Want to add a skill? Describe its trigger, expected inputs, and verifiable outcome.
 - Want to create an addon? Ask to package related agents, skills, templates, and rules for reuse.
 
