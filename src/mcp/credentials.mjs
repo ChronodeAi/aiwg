@@ -88,16 +88,82 @@ export function renderCredentialMaps(server, provider) {
   };
 }
 
-// A CLI flag whose name itself names a credential kind; the value, in the next
-// argv element or after `=`, is almost always the literal secret. This is a
-// name-shape heuristic, not a value scan: it cannot see an arbitrary flag's
-// value, only flags that advertise what they carry.
-const CREDENTIAL_ARG_FLAG = /^--?(api[-_]?key|access[-_]?key|access[-_]?token|auth[-_]?token|client[-_]?secret|secret|password|passwd|token)(=.*)?$/i;
+// A supported environment-reference value in any documented harness syntax:
+// ${NAME} (claude/factory/omp/grok), ${env:NAME} (cursor/windsurf),
+// {env:NAME} (opencode). Such a value names a variable; it is not a secret.
+const CREDENTIAL_REFERENCE_VALUE = /^(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$\{env:[A-Za-z_][A-Za-z0-9_]*\}|\{env:[A-Za-z_][A-Za-z0-9_]*\})$/;
 
-/** List the `args` entries that look like a credential-bearing CLI flag. */
+/** True when the value is a supported reference form rather than a literal secret. */
+export function isCredentialReferenceValue(value) {
+  return typeof value === 'string' && CREDENTIAL_REFERENCE_VALUE.test(value);
+}
+
+// A long `--flag` whose name itself names a credential kind; the value, in the
+// next argv element or after `=`, is almost always the literal secret. This is
+// a name-shape heuristic over long flags only: short flags (`-p secret`) and
+// positional `KEY=value` forms are not detected, and flags that name a secret
+// location rather than a secret (`--token-file`, `--password-stdin`,
+// `--secret-name`) are excluded. A finding additionally requires a non-empty,
+// non-reference value: bare flags, empty values and `${VAR}`/`${env:VAR}`/
+// `{env:VAR}` references are not findings.
+const CREDENTIAL_ARG_NAME = /^(api[-_]?key|access[-_]?key|access[-_]?token|auth[-_]?token|client[-_]?secret|secret|password|passwd|token)$/i;
+const SECRET_LOCATION_SUFFIX = /-(file|files|path|dir|stdin|name|names)$/i;
+
+/** The credential kind named by a long `--flag`, or null when not credential-like. */
+function credentialFlagName(flag) {
+  if (typeof flag !== 'string' || !flag.startsWith('--')) return null;
+  const name = flag.slice(2).split('=')[0];
+  if (!CREDENTIAL_ARG_NAME.test(name)) return null;
+  if (SECRET_LOCATION_SUFFIX.test(name)) return null;
+  return name;
+}
+
+/**
+ * Scan argv for credential-bearing flags. Each hit is the flag index and the
+ * number of argv elements it occupies: 1 for `--flag=value`, 2 for
+ * `--flag value`.
+ */
+function credentialArgHits(args) {
+  const hits = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (typeof arg !== 'string') continue;
+    const equals = arg.indexOf('=');
+    if (equals >= 0) {
+      if (!credentialFlagName(arg.slice(0, equals))) continue;
+      const value = arg.slice(equals + 1);
+      if (value !== '' && !isCredentialReferenceValue(value)) hits.push({ index, length: 1 });
+      continue;
+    }
+    if (!credentialFlagName(arg)) continue;
+    const next = args[index + 1];
+    if (typeof next === 'string' && next !== '' && !next.startsWith('-') && !isCredentialReferenceValue(next)) {
+      hits.push({ index, length: 2 });
+    }
+  }
+  return hits;
+}
+
+/** List the `args` entries that carry a literal credential value. */
 export function credentialLikeArgs(args) {
   if (!Array.isArray(args)) return [];
-  return args.filter(arg => typeof arg === 'string' && CREDENTIAL_ARG_FLAG.test(arg));
+  return credentialArgHits(args).map(({ index, length }) =>
+    length === 1 ? args[index] : `${args[index]} ${args[index + 1]}`);
+}
+
+/** Copy argv with every detected literal credential value replaced by `***`. */
+export function redactCredentialArgs(args) {
+  if (!Array.isArray(args)) return args;
+  const redacted = [...args];
+  for (const { index, length } of credentialArgHits(args)) {
+    if (length === 1) {
+      const equals = String(args[index]).indexOf('=');
+      redacted[index] = `${String(args[index]).slice(0, equals)}=***`;
+    } else {
+      redacted[index + 1] = '***';
+    }
+  }
+  return redacted;
 }
 
 export function urlCarriesUserinfo(url) {
@@ -117,8 +183,9 @@ export function urlCarriesUserinfo(url) {
  * List the fields of a server that the policy forbids.
  *
  *   literal     nothing is forbidden
- *   references  literal env/headers values, URL userinfo, and literal
- *               auth/oauth secrets are forbidden; header-env/env-from are allowed
+ *   references  literal env/headers values, literal auth argument values, URL
+ *               userinfo, and literal auth/oauth secrets are forbidden;
+ *               header-env/env-from are allowed
  *   none        every credential-bearing field is forbidden, references included
  */
 export function credentialPolicyViolations(server, policy) {
@@ -126,6 +193,7 @@ export function credentialPolicyViolations(server, policy) {
   const violations = [];
   if (hasEntries(server.env)) violations.push('env');
   if (hasEntries(server.headers)) violations.push('headers');
+  if (credentialLikeArgs(server.args).length > 0) violations.push('args');
   if (urlCarriesUserinfo(server.url)) violations.push('url userinfo');
   for (const field of ['auth', 'oauth']) {
     for (const key of ['tokenUrl', 'redirectUri', 'resource']) {

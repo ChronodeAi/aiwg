@@ -7,7 +7,7 @@
  */
 
 import { startServer, createServer } from './server.mjs';
-import { assertConfigDestination, assertConfigObject, assertProjectCredentials, isUserMcpScope, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { assertConfigDestination, assertConfigObject, assertProjectCredentials, assertSupportedScope, isPathInsideDir, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -27,7 +27,7 @@ import {
   prepareClaudePermissions,
   resolveToolFilters,
 } from './tool-filters.mjs';
-import { assertCredentialPolicy, CREDENTIAL_POLICIES, resolveCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, CREDENTIAL_POLICIES, redactCredentialArgs, resolveCredentialPolicy } from './credentials.mjs';
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { unmanageGrokBuildMcp } from './grok-build-config.mjs';
@@ -653,11 +653,26 @@ async function handleUpdate(args) {
   console.log(`Updated MCP server: ${name}`);
   for (const [key, value] of Object.entries(updates)) {
     const display = key === 'url' ? redactUrlUserinfo(value)
+      : key === 'args' ? JSON.stringify(redactCredentialArgs(value))
       : ['env', 'headers', 'headerEnv', 'envFrom'].includes(key) ? Object.keys(value || {}).join(', ')
       : typeof value === 'object' ? JSON.stringify(value) : value;
     console.log(`  ${key}: ${display}`);
   }
   console.log(`\nRe-run "aiwg mcp inject --all" to propagate changes to provider configs.`);
+}
+
+/** Mask every URL query value, keeping keys so the shape stays debuggable. */
+function redactUrlQuery(value) {
+  if (typeof value !== 'string') return value;
+  const query = value.indexOf('?');
+  if (query < 0) return value;
+  const end = value.indexOf('#', query);
+  const tail = end < 0 ? '' : value.slice(end);
+  const redacted = value.slice(query + 1, end < 0 ? value.length : end).split('&').map(pair => {
+    const equals = pair.indexOf('=');
+    return equals < 0 ? pair : `${pair.slice(0, equals)}=***`;
+  }).join('&');
+  return `${value.slice(0, query + 1)}${redacted}${tail}`;
 }
 
 function redactUrlUserinfo(value) {
@@ -666,16 +681,16 @@ function redactUrlUserinfo(value) {
     if (url.username || url.password) {
       url.username = '***';
       url.password = '';
-      return url.toString();
+      return redactUrlQuery(url.toString());
     }
   } catch {
     // Malformed hosts may still carry credentials in the authority.
-    return value.replace(/^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)/, (_, scheme, authority) => {
+    return redactUrlQuery(value.replace(/^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)/, (_, scheme, authority) => {
       const at = authority.lastIndexOf('@');
       return scheme + (at < 0 ? authority : '***@' + authority.slice(at + 1));
-    });
+    }));
   }
-  return value;
+  return redactUrlQuery(value);
 }
 
 /**
@@ -697,7 +712,7 @@ async function handleList() {
     console.log(`  ${server.name}`);
     console.log(`    Type: ${server.type}`);
     if (server.url) console.log(`    URL: ${redactUrlUserinfo(server.url)}`);
-    if (server.command) console.log(`    Command: ${server.command}${server.args ? ' ' + server.args.join(' ') : ''}`);
+    if (server.command) console.log(`    Command: ${server.command}${server.args ? ' ' + redactCredentialArgs(server.args).join(' ') : ''}`);
     if (server.headerEnv) {
       const refs = Object.entries(server.headerEnv).map(([header, envName]) => `${header}←${envName}`);
       console.log(`    Credential refs: ${refs.join(', ')}`);
@@ -801,12 +816,13 @@ async function handleInject(args) {
     const selected = (await registry.list()).filter(server => !serverFilter || serverFilter.includes(server.name));
     for (const p of providers) {
       const configPath = getProviderConfigPath(p, projectDir, { scope });
-      const userScope = isUserMcpScope(p, scope);
-      await assertConfigDestination(configPath, userScope ? undefined : projectDir);
-      // Every shareable project-scope target is meant to be committed to version control;
-      // home-scope targets are private by isUserMcpScope's own definition.
-      if (!userScope) {
-        assertProjectCredentials(selected, configPath);
+      assertSupportedScope(p, scope, configPath, projectDir);
+      const inProject = isPathInsideDir(configPath, projectDir);
+      await assertConfigDestination(configPath, inProject ? projectDir : undefined);
+      // Every destination inside the project directory is meant to be committed
+      // to version control; home destinations are private.
+      if (inProject) {
+        assertProjectCredentials(selected, configPath, projectCredentialRemedy(p, projectDir));
       }
     }
   }
@@ -1395,9 +1411,9 @@ export async function main(args = process.argv.slice(2)) {
       if (!['project', 'user'].includes(scope)) throw new Error('Scope must be project or user');
       const remove = (parseFlag(subArgs, '--servers') || '').split(',').map(s => s.trim()).filter(Boolean);
       if (!remove.length) throw new Error('uninject requires --servers name[,name]');
-      const configPath = getProviderConfigPath(provider, parseFlag(subArgs, '--project') || '.', { scope });
+      const projectDir = parseFlag(subArgs, '--project') || '.';
+      const configPath = getProviderConfigPath(provider, projectDir, { scope });
       if (provider === 'grok-build') {
-        const projectDir = parseFlag(subArgs, '--project') || '.';
         const result = await unmanageGrokBuildMcp(configPath, remove, {
           dryRun: subArgs.includes('--dry-run'),
           root: scope === 'user' ? path.dirname(path.dirname(configPath)) : path.resolve(projectDir),
@@ -1405,7 +1421,14 @@ export async function main(args = process.argv.slice(2)) {
         console.log(JSON.stringify(result, null, 2));
         break;
       }
-      const result = await manageOmpMcp(configPath, [], { remove, dryRun: subArgs.includes('--dry-run') });
+      // OMP enforces ancestor-symlink protection internally even without a
+      // projectRoot; passing it additionally restores project containment.
+      const result = await manageOmpMcp(configPath, [], {
+        remove,
+        dryRun: subArgs.includes('--dry-run'),
+        userScope: scope === 'user',
+        projectRoot: scope === 'user' ? undefined : projectDir,
+      });
       console.log(JSON.stringify(result, null, 2));
       break;
     }

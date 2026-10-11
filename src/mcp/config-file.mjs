@@ -1,9 +1,9 @@
-import { urlCarriesUserinfo, credentialLikeArgs } from './credentials.mjs';
+import { urlCarriesUserinfo, credentialLikeArgs, isCredentialReferenceValue } from './credentials.mjs';
 import { access, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
+import { getMcpInjectionDefinition, resolveMcpConfigPath } from '../providers/provider-definitions.mjs';
 
 export async function assertNoSymlinkParents(file, configRoot = dirname(resolve(file))) {
   const root = resolve(configRoot);
@@ -57,21 +57,95 @@ export function isUserMcpScope(provider, scope) {
   return scope === 'user' || getMcpInjectionDefinition(provider)?.configPath.scope === 'home';
 }
 
-export function assertProjectCredentials(servers, configPath) {
+/** True when the resolved destination lives inside the project directory. */
+export function isPathInsideDir(file, dir) {
+  const root = resolve(dir);
+  const rel = relative(root, resolve(file));
+  return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Refuse a `--scope user` request the provider cannot honour: when the
+ * resolved destination is still the project file, the request would silently
+ * write secrets to a shareable location. Providers whose destination is
+ * genuinely outside the project (home configs, explicit user paths) pass.
+ */
+export function assertSupportedScope(provider, scope, configPath, projectDir = '.') {
+  if (scope !== 'user') return;
+  if (!isPathInsideDir(configPath, projectDir)) return;
+  throw new Error(`Provider "${provider}" has no user-scope destination: --scope user would still write the project file ${configPath}. Use --scope project with --header-env/--env-from references instead of literal credentials.`);
+}
+
+/**
+ * Remediation for a project-scope literal refusal that names the provider's
+ * real private destination when it has one, instead of always naming
+ * ~/.claude.json. Providers without a user-scope destination get reference
+ * guidance instead.
+ */
+export function projectCredentialRemedy(provider, projectDir = '.') {
+  try {
+    const userPath = resolveMcpConfigPath(provider, projectDir, { scope: 'user' });
+    const projectPath = resolveMcpConfigPath(provider, projectDir, { scope: 'project' });
+    if (userPath && userPath !== projectPath && !isPathInsideDir(userPath, projectDir)) {
+      return `Use --scope user to write private ${userPath} instead, or move secrets into environment variables with --header-env/--env-from references.`;
+    }
+  } catch {
+    // An unresolvable user destination means references are the only remedy.
+  }
+  return `Move secrets into environment variables with --header-env/--env-from references instead; --scope user has no private destination for provider "${provider}".`;
+}
+
+/** Reject non-string env/headers values with a schema-style error. */
+function assertStringMap(server, field) {
+  const entries = server[field];
+  if (entries === undefined || entries === null) return {};
+  if (typeof entries !== 'object' || Array.isArray(entries)) {
+    throw new Error(`Invalid MCP server "${server.name}": ${field} must be an object`);
+  }
+  for (const [key, value] of Object.entries(entries)) {
+    if (typeof value !== 'string') {
+      throw new Error(`Invalid MCP server "${server.name}": ${field}["${key}"] must be a string`);
+    }
+  }
+  return entries;
+}
+
+export function assertProjectCredentials(servers, configPath, remedy) {
   const literals = servers.flatMap(server => {
-    const keys = [...Object.keys(server.env || {}), ...Object.keys(server.headers || {})];
-    const reasons = keys.length ? [`${server.name} has literal env/header values (${keys.join(', ')})`] : [];
+    const reasons = [];
+    // A value is shareable only when it is empty or a supported reference
+    // form (${VAR}, ${env:VAR}, {env:VAR}); any other string is a literal.
+    for (const field of ['env', 'headers']) {
+      const entries = assertStringMap(server, field);
+      const literalKeys = Object.entries(entries)
+        .filter(([, value]) => value !== '' && !isCredentialReferenceValue(value))
+        .map(([key]) => key);
+      if (literalKeys.length) reasons.push(`${server.name} has literal ${field} values (${literalKeys.join(', ')})`);
+    }
+    // OMP persists auth/oauth beside env/headers, so the same refusal covers
+    // any secret-bearing value there; `type` alone selects a flow, not a secret.
+    for (const field of ['auth', 'oauth']) {
+      const section = server[field];
+      if (section !== undefined && section !== null) {
+        if (typeof section !== 'object' || Array.isArray(section)) {
+          throw new Error(`Invalid MCP server "${server.name}": ${field} must be an object`);
+        }
+        const literalKeys = Object.keys(section).filter(key =>
+          key !== 'type' && section[key] !== '' && section[key] !== undefined && section[key] !== null);
+        if (literalKeys.length) reasons.push(`${server.name} has literal ${field} values (${literalKeys.join(', ')})`);
+      }
+    }
     if (urlCarriesUserinfo(server.url)) reasons.push(`${server.name} has URL userinfo`);
     // A flag like --token=... or --password <value> almost always carries the secret
     // in argv, visible to every process listing on the host; the same literal-credential
     // refusal that applies to env/headers applies here for a shareable project file.
     // Name only the flag, never the "--flag=value" form's value half.
-    const argFlags = credentialLikeArgs(server.args).map(arg => arg.split('=')[0]);
+    const argFlags = credentialLikeArgs(server.args).map(arg => arg.split('=')[0].split(' ')[0]);
     if (argFlags.length) reasons.push(`${server.name} has credential-like args (${argFlags.join(', ')})`);
     return reasons;
   });
   if (literals.length) {
-    throw new Error(`Refusing to write project MCP config ${configPath}: ${literals.join('; ')}. Use --scope user to write private ~/.claude.json instead.`);
+    throw new Error(`Refusing to write project MCP config ${configPath}: ${literals.join('; ')}. ${remedy || 'Use --scope user to write to a private destination instead.'}`);
   }
 }
 

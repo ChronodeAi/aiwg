@@ -1,5 +1,5 @@
-import { type Layering, isLowerLayerEntry, loadLayered, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
-import { assertConfigDestination, assertProjectCredentials, isUserMcpScope, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { type Layering, isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
+import { assertConfigDestination, assertProjectCredentials, assertSupportedScope, isPathInsideDir, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
@@ -283,7 +283,14 @@ export class McpServerRegistry {
   /** Save the registry to disk */
   async save(data: McpRegistryData | null = this.cache, explicitPolicy = false): Promise<void> {
     if (!data) return;
-    await saveLayerData(this.getPath(), data, 'servers', this.layers, this.layering, explicitPolicy);
+    // A fresh instance has no ownership record yet; load it first so inherited
+    // entries and inherited policy are never copied into the write layer.
+    let layering = this.layering;
+    if (this.layers && !layering) {
+      await this.load();
+      layering = this.layering;
+    }
+    await saveLayerData(this.getPath(), data, 'servers', this.layers, layering, explicitPolicy);
     this.cache = data;
     if (this.layers) {
       this.clearCache();
@@ -321,6 +328,9 @@ export class McpServerRegistry {
 
     if (this.layering && isLowerLayerEntry(this.layering, name)) {
       throw new Error(`Server "${name}" is defined in a lower configuration layer; remove it there.`);
+    }
+    if (this.layering && lowerEntryQualified(this.layering, name)) {
+      throw new Error(`Server "${name}" overrides a qualified lower-layer entry; removing the override would silently re-expose its qualification. Remove the lower-layer entry in its own layer instead.`);
     }
     delete data.servers[name];
     await this.save(data);
@@ -693,14 +703,19 @@ export async function injectServers(
     flag: options.credentialPolicy, registryPolicy: await registry.getCredentialPolicy(),
   }));
 
-  const userScope = isUserMcpScope(provider, options.scope);
-  const projectRoot = userScope ? undefined : projectDir;
+  // The shareable-project decision follows the actual resolved destination,
+  // never the requested scope: a `--scope user` request for a provider without
+  // a user-scope destination still resolves to the project file and is refused.
+  assertSupportedScope(provider, options.scope, configPath, projectDir);
+  const inProject = isPathInsideDir(configPath, projectDir);
+  const userScope = !inProject;
+  const projectRoot = inProject ? projectDir : undefined;
   await assertConfigDestination(configPath, projectRoot);
-  // Every shareable project-scope target is meant to be committed to version control;
-  // home-scope targets (codex, factory, windsurf, warp) are private by isUserMcpScope's own
-  // definition, so literal credentials there are not copied into a shared file.
-  if (!userScope) {
-    assertProjectCredentials(allServers, configPath);
+  // Every destination inside the project directory is meant to be committed to
+  // version control; home destinations are private, so literals there are not
+  // copied into a shared file.
+  if (inProject) {
+    assertProjectCredentials(allServers, configPath, projectCredentialRemedy(provider, projectDir));
   }
   if (provider === 'omp' || provider === 'oh-my-pi') {
     try {

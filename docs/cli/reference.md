@@ -1787,9 +1787,19 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 - `--type <type>` - Server type: `http` (default), `stdio`, `sse`
 - `--url <url>` - URL for http/sse servers
 - `--command <cmd>` - Executable for stdio servers
-- `--args <a,b>` - Comma-separated args for stdio command
+- `--args <a,b>` - Comma-separated args for stdio command. Only long
+  `--flag value` / `--flag=value` forms whose flag names a credential kind
+  (`--token`, `--password`, `--api-key`, …) are scanned for literal secrets;
+  short flags (`-p secret`) and positional `KEY=value` forms are not detected.
 - `--env KEY=VAL` - Environment variable(s) for stdio servers
 - `--headers KEY=VAL` - HTTP headers for http/sse servers
+
+Literal `--env`/`--headers` values are refused when injecting into a
+project-scope (shareable) provider file: only empty strings and supported
+reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be committed.
+Store the real secret in the environment and use `--header-env`/`--env-from`
+references instead, or inject with `--scope user` for providers that document
+a private user destination.
 - `--header-env HEADER=ENV_VAR` - Resolve a remote HTTP/SSE header from an
   environment variable at connection time. The registry stores only the
   variable name. An `Authorization` reference is sent as a Bearer token.

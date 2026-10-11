@@ -564,8 +564,8 @@ describe("injectServers", () => {
     let message = "";
     try { await inject(registry, provider, { projectDir }); }
     catch (error) { message = (error as Error).message; }
-    expect(message).toContain("local has literal env/header values (API_TOKEN)");
-    expect(message).toContain("remote has literal env/header values (Authorization)");
+    expect(message).toContain("local has literal env values (API_TOKEN)");
+    expect(message).toContain("remote has literal headers values (Authorization)");
     expect(message).toContain("--scope user");
     expect(message).not.toContain("canary-env-123");
     expect(message).not.toContain("canary-header-456");
@@ -585,7 +585,7 @@ describe("injectServers", () => {
     let message = "";
     try { await inject(registry, provider as Parameters<typeof inject>[1], { projectDir }); }
     catch (error) { message = (error as Error).message; }
-    expect(message).toContain("local has literal env/header values (API_TOKEN)");
+    expect(message).toContain("local has literal env values (API_TOKEN)");
     expect(message).not.toContain("canary-env-123");
     expect(filesystemBoundary.mutations).toEqual([]);
     expect(existsSync(configPath)).toBe(false);
@@ -697,7 +697,13 @@ describe("injectServers", () => {
       const before = await stat(configPath);
       await inject(registry, provider as Parameters<typeof inject>[1], { projectDir, scope, servers: ["fortemi"] });
       const after = await stat(configPath);
-      expect(after.mode & 0o777).toBe(scope === "user" || ["factory", "codex", "openai", "windsurf", "warp"].includes(provider) ? 0o600 : 0o644);
+      // OMP files can carry oauth/auth secrets, so they are always owner-only,
+      // independent of scope - unlike the other home-scope-only providers below.
+      expect(after.mode & 0o777).toBe(
+        scope === "user" || ["factory", "codex", "openai", "windsurf", "warp", "omp", "oh-my-pi"].includes(provider)
+          ? 0o600
+          : 0o644,
+      );
       expect(after.ino).not.toBe(before.ino);
       expect(await readFile(configPath, "utf-8")).toContain("keep");
       expect((await readdir(dirname(configPath))).some(file => file.endsWith(".tmp"))).toBe(false);

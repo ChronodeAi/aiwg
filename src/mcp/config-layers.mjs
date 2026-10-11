@@ -25,6 +25,14 @@ export function resolveConfigLayers(configDirOverride, env = process.env) {
   const raw = env.AIWG_CONFIG_LAYERS;
   if (!raw || !raw.trim()) return null;
   const entries = raw.split(delimiter).map(entry => entry.trim()).filter(Boolean);
+  // A `\org` entry is current-drive-relative on Windows: resolving it from
+  // C:\work versus D:\work selects different drives. Refuse it on every
+  // platform so a layer list cannot change meaning across hosts. (A `\\server`
+  // UNC prefix is absolute and remains allowed.)
+  const driveRelativeEntries = entries.filter(entry => /^\\(?!\\)/.test(entry));
+  if (driveRelativeEntries.length) {
+    throw new Error(`AIWG_CONFIG_LAYERS entries must be absolute paths; refusing Windows current-drive-relative entries: ${driveRelativeEntries.join(', ')}`);
+  }
   // A relative entry would resolve against the current working directory, so the
   // same AIWG_CONFIG_LAYERS value would name different layers from different
   // invocation directories. Refuse instead of silently picking a directory.
@@ -113,6 +121,20 @@ export async function loadLayered(layers, filename, collection, defaults) {
 /** True when the entry is defined only below the write layer. */
 export function isLowerLayerEntry(layering, name) {
   return layering.lower.has(name) && !layering.own.has(name);
+}
+
+/**
+ * True when the write layer overrides a lower-layer entry that still carries
+ * worker qualification. Removing that override would silently re-expose the
+ * lower entry's qualification, so removal must be refused instead.
+ */
+export function lowerEntryQualified(layering, name) {
+  if (!layering?.lower?.has(name) || !layering?.own?.has(name)) return false;
+  try {
+    return JSON.parse(layering.lower.get(name))?.workerQualification !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -230,14 +252,15 @@ export async function assertLayerWriteDestination(layers, filename) {
 export async function saveLayerData(file, data, collection, layers, layering, explicitPolicy = false) {
   if (layers) await assertLayerWriteDestination(layers, basename(file));
   const persisted = layering ? writeLayerData(data, collection, layering, explicitPolicy) : data;
-  // 0600 is for the personal write/identity layer of an active AIWG_CONFIG_LAYERS
-  // configuration. Without layering, `file` is whatever single directory the
-  // caller configured (which may be a shared, group-readable organisation
-  // checkout maintained directly, not a private identity directory), so this
-  // path must preserve its existing mode instead of forcing 0600 on every save.
-  await writeConfigAtomic(file, JSON.stringify(persisted, null, 2) + '\n', {
-    userScope: Boolean(layers), rejectSymlinkParents: true,
-  });
+  // The active identity layer file is always 0600: it is the personal write
+  // layer of an active AIWG_CONFIG_LAYERS configuration and may carry secrets.
+  // Without layering, `file` is whatever single directory the caller
+  // configured (which may be a shared, group-readable organisation checkout
+  // maintained directly, not a private identity directory): an existing file
+  // keeps its mode, while a newly created file starts private at 0600.
+  await writeConfigAtomic(file, JSON.stringify(persisted, null, 2) + '\n', layers
+    ? { userScope: true, rejectSymlinkParents: true }
+    : { newFileMode: 0o600, rejectSymlinkParents: true });
   if (layering) {
     layering.own = new Set(Object.keys(persisted[collection] || {}));
     layering.ownFields = new Set(Object.keys(persisted).filter(field => field !== collection));

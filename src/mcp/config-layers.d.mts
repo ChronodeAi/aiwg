@@ -19,6 +19,7 @@ export function loadLayered<T extends object>(
   defaults: T,
 ): Promise<{ data: T; layering: Layering }>;
 export function isLowerLayerEntry(layering: Layering, name: string): boolean;
+export function lowerEntryQualified(layering: Layering, name: string): boolean;
 export function writeLayerData<T extends object>(data: T, collection: string, layering: Layering, explicitPolicy?: boolean): T;
 export function resolveProfileExtends<P extends {
   extends?: string[];

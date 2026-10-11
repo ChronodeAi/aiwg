@@ -15,7 +15,9 @@ interface CredentialBearingServer {
 export const ENV_REFERENCE_SYNTAX: Readonly<Record<string, string | null>>;
 export const CREDENTIAL_POLICIES: readonly McpCredentialPolicy[];
 export function urlCarriesUserinfo(url?: string): boolean;
+export function isCredentialReferenceValue(value: unknown): boolean;
 export function credentialLikeArgs(args?: string[]): string[];
+export function redactCredentialArgs(args?: string[]): string[] | undefined;
 export function validateEnvReferenceName(name: string): void;
 export function renderCredentialMaps(
   server: CredentialBearingServer,

@@ -3,7 +3,10 @@ import type { Stats } from 'node:fs';
 export function assertNoSymlinkParents(file: string, configRoot?: string): Promise<void>;
 export function assertConfigDestination(file: string, projectRoot?: string): Promise<Stats | null>;
 export function isUserMcpScope(provider: string, scope?: string): boolean;
-export function assertProjectCredentials(servers: Array<{ name: string; url?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string> }>, configPath: string): void;
+export function isPathInsideDir(file: string, dir: string): boolean;
+export function assertSupportedScope(provider: string, scope: string | undefined, configPath: string, projectDir?: string): void;
+export function projectCredentialRemedy(provider: string, projectDir?: string): string;
+export function assertProjectCredentials(servers: Array<{ name: string; url?: string; args?: string[]; env?: Record<string, unknown>; headers?: Record<string, unknown>; auth?: Record<string, unknown>; oauth?: Record<string, unknown> }>, configPath: string, remedy?: string): void;
 export function assertConfigObject(config: unknown, serversKey: string): void;
 export interface ConfigWriteOptions {
   userScope?: boolean;

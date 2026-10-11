@@ -82,14 +82,23 @@ user`, install writes `AIWG_ROOT` only when it is set in the environment.
 `aiwg mcp inject --provider claude --scope user` (or `aiwg mcp install claude
 --scope user`) writes the top-level `mcpServers` of private `~/.claude.json`.
 User config writes always set mode `0600`, including existing files.
-Project-scope inject and install refuse non-empty literal `env` or `headers`
-and URL userinfo, reporting only server and key names; use `--scope user`
-for those values because `.mcp.json` is meant to be committed.
-Config writes reject symlink destinations; project writes also reject symlink
-parents below the project directory. JSON installation refuses malformed JSON,
+Project-scope inject refuses literal `env`/`headers` values, literal
+`auth`/`oauth` values, credential-bearing argument values, and URL userinfo,
+reporting only server, key and flag names — never secret values. Empty strings
+and supported reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be
+committed; non-string map values are rejected as invalid. The refusal names the
+provider's real private destination when it documents one, otherwise it points
+at `--header-env`/`--env-from` references, because `.mcp.json` is meant to be
+committed. A `--scope user` request for a provider without a user-scope
+destination (Cursor, OpenCode) is refused instead of writing the project file.
+Config writes reject symlink destinations; writes whose destination is inside
+the project directory also reject symlink parents below the project directory.
+JSON installation refuses malformed JSON,
 non-object roots, and non-object server maps without changing the file.
-Writes use atomic replacement, preserve existing project file permissions,
-and apply the process umask to new project files.
+Writes use atomic replacement; existing files keep their mode while newly
+created registry files start at `0600`. Parent-directory checks are repeated
+before the final rename, but when a parent directory is attacker-writable a
+swap between that last check and the rename can still redirect the write.
 Claude Code does not read `mcpServers` from `.claude/settings.json` or
 `.claude/settings.local.json`; entries that earlier AIWG releases wrote there
 were never loaded and can be deleted.
@@ -151,6 +160,9 @@ are not persisted, so that the last layer holds no copy of an unchanged organisa
 Inherited top-level settings are also left out of writes; `apiVersion` and `kind` remain as format fields.
 After an update copies an entry into the write layer, the same registry instance can remove that overlay.
 The lower-layer entry becomes visible again immediately on that instance, and adding its name is refused.
+Removing an override is not revocation: when the lower-layer entry still carries worker qualification, removal
+is refused instead of silently re-exposing that qualification. Remove the lower-layer entry in its own layer,
+or re-qualify the revealed entry before use.
 A profile cannot be removed while other profiles in any layer extend it; the error names the dependents.
 Rejected mutations leave the cached view unchanged. An empty profile injects zero servers in either mode.
 Config directory aliases and symlinked ancestors are supported, including dotfile-manager links.

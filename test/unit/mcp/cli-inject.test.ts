@@ -93,8 +93,8 @@ describe("aiwg mcp inject --provider claude", () => {
     else expect(existsSync(destination)).toBe(false);
     expect(readFileSync(join(configDir, "mcp-servers.json"), "utf-8")).toBe(before);
     expect(result.stderr).toContain("--scope user");
-    expect(result.stderr).toContain("local has literal env/header values (API_TOKEN)");
-    expect(result.stderr).toContain("remote has literal env/header values (Authorization)");
+    expect(result.stderr).toContain("local has literal env values (API_TOKEN)");
+    expect(result.stderr).toContain("remote has literal headers values (Authorization)");
     expect(result.stderr).toContain(".mcp.json");
     expect(`${result.stdout}${result.stderr}`).not.toContain("canary-value-123");
     expect(`${result.stdout}${result.stderr}`).not.toContain("canary-hdr-456");

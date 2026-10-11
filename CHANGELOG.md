@@ -96,6 +96,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Atomic replacement cleans up temporary files even if closing fails, preserves existing project modes,
   applies umask to new project files, and sets user configs to `0600`, including existing files.
   User-scope Claude paths fall back to the OS home directory when `HOME` and `USERPROFILE` are unset.
+- Project-scope refusal now follows the actual resolved destination rather than the requested scope
+  (`--scope user` is refused instead of silently writing the project file for Cursor and opencode,
+  which have no private destination), checks env/header/OMP-auth/oauth VALUES instead of key occupancy
+  so references and empty strings remain writable, and covers credential-bearing argument values too.
+  OMP writes are always private even at project scope, and OMP ancestor-symlink protection applies on
+  inject and uninject regardless of whether a project root was supplied. `aiwg mcp list` and `update`
+  also redact detected credential-like argument values and URL query values, not just userinfo.
 - Ephemeral and Codex runtime-home MCP configs use 0600 permissions; default ephemeral files use a private temp
   directory, and `aiwg mcp list` redacts URL userinfo.
 - Session interchange imports now name the failing header field and its
