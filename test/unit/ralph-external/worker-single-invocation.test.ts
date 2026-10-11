@@ -22,7 +22,7 @@ import { GrokBuildAdapter } from '../../../tools/ralph-external/lib/grok-build-a
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false }: any = {}) {
+async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = false, forgeRealExitCode, semanticHealth = false, artifacts = [] }: any = {}) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const f = workerResolutionFixture();
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-one-shot-')); roots.push(root);
@@ -49,7 +49,9 @@ async function fixture({ stdin = 'closed', scenario = 'success', stdoutOnly = fa
   const driver: any = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
     boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
     buildInvocation: async (input: any) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
-      '--model', input.selected.model, '--final-output', input.finalPath, '--', prompt], stdin,
+      '--model', input.selected.model, '--final-output', input.finalPath,
+      ...(artifacts.length ? ['--generated-artifact', '${artifact:patch}'] : []), '--', prompt], stdin,
+      ...(artifacts.length ? { artifacts } : {}),
       envNames: profile.envAllowlist }),
     extractFinal: (text: string) => { try { const rows = text.trim().split('\n').map(line => JSON.parse(line));
       return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
@@ -719,4 +721,128 @@ describe('#2895 round 2, item 1: a forged identity record cannot authorize a sig
       for (const proc of [transportStandIn, victim]) { try { proc.kill('SIGKILL'); } catch { /* best effort */ } }
     }
   }, 15000);
+});
+
+describe('T-OG-15 execution-time artifacts and adapter stdin (#3002/#2998)', () => {
+  it('records substituted launch argv and artifact byte digests without contents', async () => {
+    const content = 'private patch 雪';
+    const f = await fixture({ artifacts: [{ name: 'patch', content }] });
+    const launchIsolated = vi.fn((_options: any) => { throw new Error('stop after recording launch argv'); });
+    await expect(f.launch({ launchIsolated })).rejects.toThrow('stop after recording launch argv');
+    const launched = launchIsolated.mock.calls[0][0] as any;
+    const argv = [launched.command, ...launched.args];
+    expect(argv).toContain(path.join(f.runDir, 'artifact-patch'));
+    const raw = await readFile(path.join(f.runDir, 'invocation.json'), 'utf8');
+    const record = JSON.parse(raw);
+    const { createHash } = await import('node:crypto');
+    const bytesDigest = (value: string) => `sha256:${createHash('sha256').update(value).digest('hex')}`;
+    expect(record.argv).toEqual(argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`));
+    expect(record.commandDisplay).toBe(record.argv.map((token: string) => JSON.stringify(token)).join(' '));
+    expect(record.executedArgvDigest).toBe(qualificationDigest(argv));
+    expect(record.placeholderArgvDigest).toBe(qualificationDigest(f.plan.invocation!.argv));
+    expect(record.argvDigest).toBe(record.placeholderArgvDigest);
+    expect(record.artifacts).toEqual([{ name: 'patch', byteLength: Buffer.byteLength(content), sha256: bytesDigest(content) }]);
+    expect(raw).not.toContain(content);
+    expect(raw).not.toContain(f.prompt);
+    expect(raw).not.toContain('secret-environment-value');
+    expect((await readdir(f.runDir)).filter(name => name.startsWith('artifact-'))).toEqual([]);
+  });
+  it.each(['stdoutPath', 'stderrPath', 'finalPath'])('refuses %s in the reserved artifact namespace before writes or spawn', async field => {
+    const f = await fixture({ artifacts: [{ name: 'patch', content: 'private patch' }] });
+    await mkdir(f.runDir, { mode: 0o700 });
+    const qualified = structuredClone(f.plan.invocation!);
+    qualified[field as 'stdoutPath' | 'stderrPath' | 'finalPath'] = path.join(f.runDir, 'artifact-patch');
+    const owner = await import('../../../src/serve/worker-invocation.js');
+    vi.spyOn(owner, 'revalidateWorkerInvocationPlan').mockResolvedValue(qualified);
+    const launchIsolated = vi.fn();
+    await expect(f.launch({ launchIsolated })).rejects.toThrow(/distinct.*artifact/i);
+    expect(launchIsolated).not.toHaveBeenCalled();
+    expect(await readdir(f.runDir)).toEqual([]);
+  });
+  it.each(['', Buffer.alloc(0), new Uint8Array(0)])('rejects an empty adapter frame %j', async frame => {
+    const { workerStdinBytes } = await import('../../../src/serve/worker-stdin-frame.mjs');
+    expect(() => workerStdinBytes({ stdin: 'adapter-frame' }, 'brief', { buildWorkerStdinFrame: () => frame })).toThrow(/empty/i);
+  });
+  async function privateRun() {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-artifacts-')); roots.push(root);
+    const runDir = path.join(root, 'run'); await mkdir(runDir, { mode: 0o700 });
+    return { root, runDir };
+  }
+  const declaration = (name = 'patch') => ({ argv: [process.execPath, `\${artifact:${name}}`],
+    artifacts: [{ name, content: 'synthetic patch', location: 'run-directory' }] });
+  it('creates distinct private paths concurrently, mode 0600, then cleans both', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const { materializeWorkerArtifacts } = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const a = await privateRun(), b = await privateRun();
+    const [first, second] = await Promise.all([materializeWorkerArtifacts(declaration(), a.runDir), materializeWorkerArtifacts(declaration(), b.runDir)]);
+    expect(first.argv[1]).not.toBe(second.argv[1]);
+    for (const result of [first, second]) {
+      expect((await lstat(result.argv[1])).mode & 0o777).toBe(0o600);
+      expect(await readFile(result.argv[1], 'utf8')).toBe('synthetic patch');
+      await result.cleanup();
+      expect(await readdir(path.dirname(result.argv[1]))).toEqual([]);
+    }
+  });
+  it.each(['existing', 'symlink'])('refuses a %s path and cleans files created before the refusal', async scenario => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const { materializeWorkerArtifacts } = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const { root, runDir } = await privateRun();
+    const blocked = path.join(runDir, 'artifact-blocked');
+    const target = path.join(root, 'target'); await writeFile(target, 'original');
+    if (scenario === 'symlink') await symlink(target, blocked); else await writeFile(blocked, 'original');
+    const invocation = declaration(); invocation.artifacts.push({ name: 'blocked', content: 'overwrite', location: 'run-directory' });
+    await expect(materializeWorkerArtifacts(invocation, runDir)).rejects.toThrow();
+    expect(await readdir(runDir)).toEqual(['artifact-blocked']);
+    expect(await readFile(target, 'utf8')).toBe('original');
+    expect(await readFile(blocked, 'utf8')).toBe('original');
+  });
+  it.each(['../escape', '.hidden', 'a/b', 'a\\b', 'name\n', '', 'x'.repeat(65)])('refuses artifact name %j', async name => {
+    const { materializeWorkerArtifacts } = await import('../../../tools/ralph-external/session-launcher.mjs');
+    await expect(materializeWorkerArtifacts(declaration(name), '/nonexistent')).rejects.toThrow();
+  });
+  it('bounds count, per-file and total UTF-8 bytes, rejects unknown locations/placeholders before writes', async () => {
+    const { materializeWorkerArtifacts } = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const cases = [
+      { ...declaration(), artifacts: Array.from({ length: 17 }, (_, i) => ({ name: `a${i}`, content: '' })) },
+      { ...declaration(), artifacts: [{ name: 'patch', content: '雪'.repeat(400000) }] },
+      { ...declaration(), artifacts: Array.from({ length: 5 }, (_, i) => ({ name: `a${i}`, content: 'x'.repeat(1048576) })) },
+      { ...declaration(), artifacts: [{ name: 'patch', content: '', location: 'workspace' }] },
+      { ...declaration(), artifacts: [] },
+    ];
+    for (const invocation of cases) await expect(materializeWorkerArtifacts(invocation, '/nonexistent')).rejects.toThrow();
+  });
+  it('bounds exact adapter bytes and rejects missing/nonbyte framers and unknown stdin', async () => {
+    const { workerStdinBytes } = await import('../../../src/serve/worker-stdin-frame.mjs');
+    const invocation = { stdin: 'adapter-frame' as const };
+    expect(() => workerStdinBytes(invocation, 'brief')).toThrow(/framer/);
+    expect(() => workerStdinBytes(invocation, 'brief', { buildWorkerStdinFrame: () => ({}) as any })).toThrow(/bytes/);
+    expect(() => workerStdinBytes(invocation, 'brief', { buildWorkerStdinFrame: () => Buffer.alloc(1048577) })).toThrow(/bound/);
+    const bytes = Buffer.from([0, 1, 255, 10]);
+    expect(workerStdinBytes(invocation, 'brief', { buildWorkerStdinFrame: () => bytes })).toEqual(bytes);
+    expect(() => workerStdinBytes({ stdin: 'other' } as any, 'brief')).toThrow(/Unsupported/);
+  });
+  it.each(['spawn', 'capture', 'gate'])('cleans launcher-written artifacts when %s preparation fails', async stage => {
+    const f = await fixture({ artifacts: [{ name: 'patch', content: 'synthetic patch' }] });
+    let calls = 0;
+    const extra = stage === 'spawn' ? { launchIsolated: () => { throw new Error('synthetic spawn refusal'); } }
+      : stage === 'capture' ? { openCapture: () => { throw new Error('synthetic capture refusal'); } }
+      : { checkDispatch: () => ({ ok: calls++ === 0, enabled: true, failures: [] }) };
+    await expect(f.launch(extra)).rejects.toThrow();
+    expect((await readdir(f.runDir)).filter(name => name.startsWith('artifact-'))).toEqual([]);
+  });
+  it('the attached launcher delivers the adapter NDJSON frame and closes stdin', async () => {
+    const f = await fixture({ stdin: 'brief-text' });
+    const { AntigravityAdapter } = await import('../../../tools/ralph-external/lib/antigravity-adapter.mjs');
+    const agy = new AntigravityAdapter();
+    f.drivers.codex.buildWorkerStdinFrame = (brief: any) => agy.buildWorkerStdinFrame(brief);
+    f.drivers.codex.qualification.stdinFramerBinding = { storePath: path.join(f.root, 'worker-installations.json'),
+      storeDigest: qualificationDigest('synthetic store binding') };
+    const build = f.drivers.codex.buildInvocation;
+    f.drivers.codex.buildInvocation = async (input: any) => ({ ...await build(input), stdin: 'adapter-frame' });
+    const plan = await resolveWorkerInvocation(f.snapshot, f.plan.request!, f.drivers, f.request.now);
+    expect(plan.invocation).toBeDefined();
+    await writeFile(f.invocationPath, JSON.stringify(plan));
+    await f.launch();
+    expect(JSON.parse(await readFile(f.recordPath, 'utf8')).stdin).toBe(agy.buildWorkerStdinFrame(f.prompt).toString());
+  });
 });

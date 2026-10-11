@@ -37,7 +37,7 @@ import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, c
 import { open, mkdir, rename, unlink, lstat, readdir, realpath } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative, isAbsolute } from 'path';
+import { basename, dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
 import { importImpl } from '../_resolve-impl.mjs';
@@ -172,6 +172,56 @@ export function signalOwnedWorker(identity, signal, { sample = sampleWorkerIdent
   try { kill(-identity.pgid, signal); return true; } catch { return false; }
 }
 
+/** Execution-time files in the launcher's private directory. Content producers
+ * are pure; preview paths remain ${artifact:name}. Workspace locations are a
+ * future declaration kind and are refused here. */
+export async function materializeWorkerArtifacts(invocation, runDir) {
+  const artifacts = invocation.artifacts ?? [];
+  if (!Array.isArray(artifacts) || artifacts.length > 16) throw new Error('Worker artifact count exceeds bound');
+  const names = new Set();
+  let total = 0;
+  for (const artifact of artifacts) {
+    if (!artifact || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(artifact.name)
+      || /[^A-Za-z0-9_-]/.test(artifact.name) || names.has(artifact.name) || typeof artifact.content !== 'string'
+      || artifact.location !== undefined && artifact.location !== 'run-directory') throw new Error('Invalid worker artifact declaration');
+    names.add(artifact.name);
+    const size = Buffer.byteLength(artifact.content);
+    total += size;
+    if (size > 1048576 || total > 4194304) throw new Error('Worker artifact bytes exceed bound');
+  }
+  const paths = new Map(artifacts.map(artifact => [artifact.name, join(runDir, `artifact-${artifact.name}`)]));
+  const argv = invocation.argv.map(token => {
+    if (!token.includes('${artifact:')) return token;
+    const match = /^\$\{artifact:([A-Za-z0-9][A-Za-z0-9_-]{0,63})\}$/.exec(token);
+    if (!match || !paths.has(match[1])) throw new Error('Undeclared worker artifact placeholder');
+    return paths.get(match[1]);
+  });
+  const { inspectWorkerPath } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  await inspectWorkerPath(runDir, 'directory');
+  const stat = await lstat(runDir);
+  if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Worker artifact directory must be private and owned');
+  const created = [];
+  const cleanup = async () => {
+    const results = await Promise.allSettled(created.map(filename =>
+      withWorkerPath(filename, target => unlink(target)).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      })));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  };
+  try {
+    for (const artifact of artifacts) {
+      const filename = paths.get(artifact.name);
+      const handle = await withWorkerPath(filename, target => open(target,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      created.push(filename);
+      try { await handle.writeFile(artifact.content); await handle.sync(); }
+      finally { await handle.close(); }
+    }
+    return { argv, cleanup };
+  } catch (error) { await cleanup(); throw error; }
+}
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -203,9 +253,10 @@ async function launchOneWorker(owner, options) {
   const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
   if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
     filename === options.invocationPath || filename === invocation.briefPath
+    || dirname(filename) === runDir && basename(filename).startsWith('artifact-')
     || ['invocation.json', 'process.json', 'exit.json', 'health.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
       'stdout.log', 'stdout.events.jsonl', 'stderr.log', '.launch-owner'].some(name => filename === join(runDir, name)))) {
-    throw new Error('Worker output paths must be distinct from trusted metadata and capture files');
+    throw new Error('Worker output paths must be distinct from trusted metadata, capture files and artifact- paths');
   }
   for (const filename of Object.values(paths)) {
     if (await inspect(filename, 'output')) throw new Error('Fresh worker output paths are required');
@@ -216,7 +267,7 @@ async function launchOneWorker(owner, options) {
   // Frame stdin before any spawn: brief-json delivers a conductor-built params
   // document on the stdin pipe, never brief text in argv (#2911).
   const { workerStdinBytes } = await importImpl(import.meta.url, 'serve/worker-stdin-frame.mjs');
-  const stdinBytes = workerStdinBytes(invocation, brief);
+  const stdinBytes = workerStdinBytes(invocation, brief, inputs.drivers[invocation.selected.cli]);
   let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
   if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
   const isolation = options.isolation ?? detectWorkerIsolation();
@@ -237,7 +288,6 @@ async function launchOneWorker(owner, options) {
   const profile = inputs.drivers[invocation.selected.cli].qualification.adapter.invocationProfiles[invocation.selected.profileRef];
   const captures = { stdout: join(runDir, profile.health?.outputFraming === 'jsonl' ? 'stdout.events.jsonl' : 'stdout.log'),
     stderr: join(runDir, 'stderr.log') };
-  const displayArgv = invocation.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
   const writeRecord = options.publishRecord ?? publishWorkerRecord;
   const publishFailures = [];
   let publishing = Promise.resolve();
@@ -251,22 +301,30 @@ async function launchOneWorker(owner, options) {
     publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
     return write;
   };
-  await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
-    previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
-    selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
-    policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
-    expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
-    argvDigest: qualificationDigest(invocation.argv), envNames: invocation.envNames, stdin: invocation.stdin,
-    prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
-    worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
-    health: invocation.health ?? null, transport: invocation.transport,
-    isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
-    limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
-  await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
-    launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
   const handles = [];
   let outcome;
+  let artifacts;
   try {
+    artifacts = await materializeWorkerArtifacts(invocation, runDir);
+    const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
+    await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
+      previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
+      policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
+      expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
+      // Retain the legacy digest binding while naming both argv stages explicitly.
+      argvDigest: qualificationDigest(invocation.argv), placeholderArgvDigest: qualificationDigest(invocation.argv),
+      executedArgvDigest: qualificationDigest(artifacts.argv),
+      artifacts: (invocation.artifacts ?? []).map(artifact => ({ name: artifact.name,
+        byteLength: Buffer.byteLength(artifact.content), sha256: bytesDigest(artifact.content) })),
+      envNames: invocation.envNames, stdin: invocation.stdin,
+      prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
+      worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
+      health: invocation.health ?? null, transport: invocation.transport,
+      isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+      limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
+    await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+      launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
     // All captures (including the reserved final) open successfully BEFORE spawn.
     for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
       const handle = await withWorkerPath(filename, target => (options.openCapture ?? open)(target, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
@@ -282,7 +340,7 @@ async function launchOneWorker(owner, options) {
       .map(name => [name, process.env[name]]));
     const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
     outcome = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
-      command: invocation.argv[0], args: invocation.argv.slice(1), cwd: invocation.cwd,
+      command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
@@ -294,11 +352,13 @@ async function launchOneWorker(owner, options) {
       endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     throw error;
   } finally {
-    // Never chmod a worker-replaced pathname; only the inodes we opened.
-    for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
-    await inspect(runDir, 'directory');
-    await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    try { await artifacts?.cleanup(); } finally {
+      // Never chmod a worker-replaced pathname; only the inodes we opened.
+      for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
+      await inspect(runDir, 'directory');
+      await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    }
   }
 }
 

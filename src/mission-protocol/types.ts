@@ -361,7 +361,8 @@ export interface WorkerResolvedInvocation {
   expiresAt: string;
   argv?: string[];
   cwd?: string;
-  stdin?: 'closed' | 'brief-text' | 'brief-json';
+  stdin?: 'closed' | 'brief-text' | 'brief-json' | 'adapter-frame';
+  artifacts?: Array<{ name: string; content: string; location?: 'run-directory' }>;
   briefPath?: string;
   stdoutPath?: string;
   stderrPath?: string;

@@ -1,5 +1,7 @@
 import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFile, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
+
+vi.mock('node:child_process', { spy: true });
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -30,6 +34,7 @@ const driver = new FixtureAdapter();
 beforeEach(() => vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src'));
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
     await rm(root, { recursive: true, force: true });
     await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -402,5 +407,60 @@ describe('round 1 security regressions', () => {
 
   it('bumps the changed shared fixture revision', () => {
     expect(fixtureRevision).toBe(2);
+  });
+});
+
+describe('T-OG-14 version banner normalization (#2991)', () => {
+  it('rejects changed captured version text even when leading zeros normalize to the recorded pin', async () => {
+    const f = await setup();
+    // Controlled bounded-probe output; keep real installation/scope inspection.
+    let banner = 'fixture 2026.10.1';
+    vi.mocked(spawn).mockImplementation(() => {
+      const child: any = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+      queueMicrotask(() => { child.stdout.end(banner); child.emit('close', 0); });
+      return child;
+    });
+    f.request.adapter.invocation.versionPattern = '^fixture ([0-9.]{1,32})$';
+    f.request.cliVersion = f.request.adapter.supportedVersions = f.profile.supportedVersions = '2026.10.1';
+    await writeFile(f.config, JSON.stringify({ version: 'fixture 2026.10.1' }));
+    f.request.evidence.scopeDigest = (await driver.inspectWorkerInstallation(f.request)).scopeDigest;
+    const recorded = await driver.qualifyWorkerInstallation(f.request);
+    expect(recorded.status).toBe('ENABLED');
+    f.request.versionProbe = { rawBanner: recorded.rawVersionBanner, version: recorded.cliVersion };
+    expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
+    banner = 'fixture 2026.010.1';
+    await writeFile(f.config, JSON.stringify({ version: banner }));
+    expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
+  });
+  it.each([
+    ['codex', 'codex-cli 0.161.0', '0.161.0'],
+    ['muse', 'Muse Code 1.4.4 (1.4.4-R5419.1)', '1.4.4'],
+    ['claude', '2.1.296 (Claude Code)', '2.1.296'],
+    ['hermes', 'Hermes Agent v0.21.6+387.gdce1e9b (2026.9.24) · stable · local dce1e9b37581', '0.21.6+387.gdce1e9b'],
+    ['cursor', '2026.10.01-e373342', '2026.10.1-e373342'],
+    ['pi', '1.1.0', '1.1.0'],
+  ])('%s passes range and installation pin checks once, retaining bounded raw evidence', async (provider, banner, version) => {
+    const { loadProviderModelCapabilities, inspectWorkerInvocationProfile } = await import('../../../src/models/provider-policy.js');
+    const { normalizeWorkerVersionBanner } = await import('../../../src/models/worker-installation.mjs');
+    const registry = loadProviderModelCapabilities();
+    const bundled: any = registry.providers[provider].workerAdapter ?? registry.providers[provider].workerHealthAdapter;
+    const pattern = bundled.invocation.versionPattern;
+    expect(normalizeWorkerVersionBanner(banner, pattern)).toBe(version);
+    const f = await setup();
+    f.request.adapter.invocation.versionPattern = pattern;
+    f.request.adapter.supportedVersions = f.profile.supportedVersions = version;
+    f.request.cliVersion = version;
+    await writeFile(f.config, JSON.stringify({ version: banner }));
+    f.request.evidence.scopeDigest = (await driver.inspectWorkerInstallation(f.request)).scopeDigest;
+    expect(inspectWorkerInvocationProfile(f.request.adapter, { profile: f.request.profile, transport: 'shell',
+      cliVersion: version, boundary: f.request.boundary })).toBe(f.profile);
+    expect(await driver.qualifyWorkerInstallation(f.request)).toMatchObject({ status: 'ENABLED', cliVersion: version, rawVersionBanner: banner });
+    await writeFile(f.config, JSON.stringify({ version: banner.replace(version.split('.')[0], '9') }));
+    expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
+    if (pattern) {
+      await writeFile(f.config, JSON.stringify({ version: 'not a CLI banner' }));
+      expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
+    }
   });
 });
