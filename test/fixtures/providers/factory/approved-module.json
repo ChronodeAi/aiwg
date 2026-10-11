@@ -1,0 +1,14 @@
+{
+  "note": "Host installation-authority allowlist entry for the one Factory (Droid) driver module (#2902). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/factory-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/factory-adapter.mjs",
+  "entry": {
+    "reference": "installed:factory",
+    "packageName": "@aiwg/factory-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/factory-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:e4101374e6badda8105c27147dcc69da6434888e6e77981e9cbcf813a3d5dea2",
+    "adapterIds": ["factory"],
+    "platforms": ["linux"]
+  }
+}
