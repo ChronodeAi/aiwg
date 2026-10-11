@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 
@@ -124,6 +124,21 @@ describe("resolveConfigLayers", () => {
   });
 });
 
+describe.each([
+  { implementation: "TypeScript", Servers: McpServerRegistry },
+  { implementation: "runtime", Servers: RuntimeServerRegistry as unknown as typeof McpServerRegistry },
+])("$implementation single-directory save (no AIWG_CONFIG_LAYERS)", ({ Servers }) => {
+  it("preserves an existing shared directory's file mode instead of forcing 0600", async () => {
+    // A maintainer may point AIWG_CONFIG directly at what is, for someone else,
+    // an AIWG_CONFIG_LAYERS organisation layer: a shared, group-readable checkout
+    // maintained without layering. Saving through it must not silently strip that.
+    chmodSync(join(org, "mcp-servers.json"), 0o640);
+    const servers = new Servers(org);
+    await servers.add({ name: "new-server", type: "stdio", command: "synthetic-command" });
+    expect(statSync(join(org, "mcp-servers.json")).mode & 0o777).toBe(0o640);
+  });
+});
+
 describe("filesystem case overlap", () => {
   it("refuses differently cased missing paths on an insensitive filesystem", async () => {
     caseProbe.insensitive = true;
@@ -168,6 +183,14 @@ describe.each([
     Profiles: RuntimeProfileRegistry as unknown as typeof McpProfileRegistry,
   },
 ])("$implementation layered registries", ({ Servers, Profiles, inject }) => {
+  it("writes the identity (write) layer 0600 but never touches the org layer's file or mode", async () => {
+    chmodSync(join(org, "mcp-servers.json"), 0o640);
+    const servers = new Servers();
+    await servers.add({ name: "new-server", type: "stdio", command: "synthetic-command" });
+    expect(statSync(join(identity, "mcp-servers.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(org, "mcp-servers.json")).mode & 0o777).toBe(0o640);
+  });
+
   it("injects zero servers for an empty profile filter in persistent mode", async () => {
     const profiles = new Profiles();
     await profiles.add({ name: "minimal", servers: [] });

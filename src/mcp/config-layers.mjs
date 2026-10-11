@@ -230,8 +230,13 @@ export async function assertLayerWriteDestination(layers, filename) {
 export async function saveLayerData(file, data, collection, layers, layering, explicitPolicy = false) {
   if (layers) await assertLayerWriteDestination(layers, basename(file));
   const persisted = layering ? writeLayerData(data, collection, layering, explicitPolicy) : data;
+  // 0600 is for the personal write/identity layer of an active AIWG_CONFIG_LAYERS
+  // configuration. Without layering, `file` is whatever single directory the
+  // caller configured (which may be a shared, group-readable organisation
+  // checkout maintained directly, not a private identity directory), so this
+  // path must preserve its existing mode instead of forcing 0600 on every save.
   await writeConfigAtomic(file, JSON.stringify(persisted, null, 2) + '\n', {
-    userScope: true, rejectSymlinkParents: true,
+    userScope: Boolean(layers), rejectSymlinkParents: true,
   });
   if (layering) {
     layering.own = new Set(Object.keys(persisted[collection] || {}));
