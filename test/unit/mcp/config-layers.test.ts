@@ -565,6 +565,25 @@ describe.each([
     expect(JSON.stringify(await profiles.load())).toBe(cachedBefore);
   });
 
+  it("refuses an import naming invalid profile names instead of silently dropping them", async () => {
+    const profiles = new Profiles();
+    const before = read(identity, "mcp-profiles.json");
+    const cachedBefore = JSON.stringify(await profiles.load());
+    const file = join(root, "import.json");
+    writeFileSync(file, JSON.stringify({ profiles: {
+      valid: { name: "valid", servers: [] },
+      "Not Valid": { name: "Not Valid", servers: [] },
+      all: { name: "all", servers: [] },
+    } }));
+    const error = await profiles.importFrom(file).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Not Valid");
+    expect((error as Error).message).toContain('"all" is a reserved profile name');
+    expect(read(identity, "mcp-profiles.json")).toBe(before);
+    expect(JSON.stringify(await profiles.load())).toBe(cachedBefore);
+    expect((await profiles.list()).some(p => p.name === "valid")).toBe(false);
+  });
+
   it("validates existing profiles even when the import does not touch them", async () => {
     write(org, "mcp-profiles.json", { profiles: { broken: { name: "broken", servers: [], extends: ["missing"] } } });
     const file = join(root, "import.json");

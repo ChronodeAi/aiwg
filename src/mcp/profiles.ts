@@ -348,6 +348,7 @@ export class McpProfileRegistry {
 
     let added = 0;
     let updated = 0;
+    const invalidNames: string[] = [];
 
     const profiles = imported.profiles ?? (
       typeof imported === 'object' && !Array.isArray(imported)
@@ -359,7 +360,10 @@ export class McpProfileRegistry {
     for (const [name, profile] of Object.entries(profiles)) {
       try {
         this.validateName(name);
-      } catch {
+      } catch (error) {
+        // Collected and refused below with the complete graph-validation pass,
+        // instead of silently dropping named profiles from the import.
+        invalidNames.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
       if (candidate[name]) {
@@ -382,6 +386,10 @@ export class McpProfileRegistry {
         };
         added++;
       }
+    }
+
+    if (invalidNames.length) {
+      throw new Error(`Refusing to import profile(s) with invalid names: ${invalidNames.join('; ')}`);
     }
 
     for (const name of Object.keys(candidate)) resolveProfileExtends(name, candidate);
