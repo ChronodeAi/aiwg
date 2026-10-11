@@ -6,7 +6,10 @@
   "framing": "jsonl",
   "fixture": "stream.ndjson",
   "expectedKinds": [
-    null
+    "activity",
+    "activity",
+    "progress",
+    "terminal"
   ],
   "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
   "sanitizedEvidence": "synthetic content and identifiers only",
