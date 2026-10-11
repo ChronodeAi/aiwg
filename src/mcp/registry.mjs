@@ -1,5 +1,5 @@
 import { isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
-import { assertConfigDestination, assertProjectCredentials, assertSupportedScope, isPathInsideDir, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
@@ -456,15 +456,12 @@ export async function injectServers(registry, provider, options = {}) {
   // The shareable-project decision follows the actual resolved destination,
   // never the requested scope: a `--scope user` request for a provider without
   // a user-scope destination still resolves to the project file and is refused.
-  assertSupportedScope(provider, options.scope, configPath, projectDir);
-  const inProject = isPathInsideDir(configPath, projectDir);
-  const userScope = !inProject;
-  const projectRoot = inProject ? projectDir : undefined;
+  const { userScope, projectRoot } = classifyMcpDestination(provider, options.scope, configPath, projectDir);
   await assertConfigDestination(configPath, projectRoot);
   // Every destination inside the project directory is meant to be committed to
   // version control; home destinations are private, so literals there are not
   // copied into a shared file.
-  if (inProject) {
+  if (projectRoot) {
     assertProjectCredentials(allServers, configPath, projectCredentialRemedy(provider, projectDir));
   }
   if (normalizedProvider === 'omp') {

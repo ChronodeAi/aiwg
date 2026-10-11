@@ -7,7 +7,7 @@
  */
 
 import { startServer, createServer } from './server.mjs';
-import { assertConfigDestination, assertConfigObject, assertProjectCredentials, assertSupportedScope, isPathInsideDir, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { assertConfigDestination, assertConfigObject, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -385,8 +385,17 @@ enabled_tools = [
     config = configs[config.alias];
   }
 
-  const userScope = Boolean(config.userScope || scope === 'user');
-  const projectRoot = userScope ? undefined : target === 'opencode' && projectDir === 'global' ? process.cwd() : projectDir;
+  // Destination-derived, not scope-derived (and never from a static
+  // `config.userScope` flag): a target whose resolved path still lands inside
+  // the project directory gets project containment, whatever scope was
+  // requested. Providers with no real user-scope destination (Cursor,
+  // opencode) refuse `--scope user` instead of silently writing the project
+  // file. `config.path` is null only for providers with no config file at all
+  // (Warp, UI-configured), which never reach a destination check.
+  const projectBase = target === 'opencode' && projectDir === 'global' ? process.cwd() : projectDir;
+  const { userScope, projectRoot } = config.path
+    ? classifyMcpDestination(target, scope, config.path, projectBase)
+    : { userScope: Boolean(config.userScope), projectRoot: undefined };
   if (config.path) await assertConfigDestination(config.path, projectRoot);
 
   // Handle custom handler (for TOML configs like Codex, or OpenCode JSON)
@@ -816,12 +825,11 @@ async function handleInject(args) {
     const selected = (await registry.list()).filter(server => !serverFilter || serverFilter.includes(server.name));
     for (const p of providers) {
       const configPath = getProviderConfigPath(p, projectDir, { scope });
-      assertSupportedScope(p, scope, configPath, projectDir);
-      const inProject = isPathInsideDir(configPath, projectDir);
-      await assertConfigDestination(configPath, inProject ? projectDir : undefined);
+      const { projectRoot } = classifyMcpDestination(p, scope, configPath, projectDir);
+      await assertConfigDestination(configPath, projectRoot);
       // Every destination inside the project directory is meant to be committed
       // to version control; home destinations are private.
-      if (inProject) {
+      if (projectRoot) {
         assertProjectCredentials(selected, configPath, projectCredentialRemedy(p, projectDir));
       }
     }
@@ -1337,8 +1345,12 @@ export async function main(args = process.argv.slice(2)) {
         if (!['project', 'user'].includes(scope)) throw new Error('Scope must be project or user');
         const projectDir = parseFlag(args, '--project') || (args[2] && !args[2].startsWith('--') ? args[2] : '.');
         const configPath = getProviderConfigPath('omp', projectDir, { scope });
-        await assertConfigDestination(configPath, scope === 'user' ? undefined : projectDir);
-        const result = await manageOmpMcp(configPath, [{ name: 'aiwg', type: 'stdio', command: 'aiwg', args: ['mcp', 'serve'] }], { dryRun: args.includes('--dry-run'), userScope: scope === 'user', projectRoot: scope === 'user' ? undefined : projectDir });
+        // Destination-derived, not scope-derived: a provider home-directory
+        // override (e.g. PI_CODING_AGENT_DIR) that still resolves inside the
+        // project must get project containment, whatever scope was requested.
+        const { userScope, projectRoot } = classifyMcpDestination('omp', scope, configPath, projectDir);
+        await assertConfigDestination(configPath, projectRoot);
+        const result = await manageOmpMcp(configPath, [{ name: 'aiwg', type: 'stdio', command: 'aiwg', args: ['mcp', 'serve'] }], { dryRun: args.includes('--dry-run'), userScope, projectRoot });
         console.log(JSON.stringify(result, null, 2));
         break;
       }
@@ -1421,13 +1433,16 @@ export async function main(args = process.argv.slice(2)) {
         console.log(JSON.stringify(result, null, 2));
         break;
       }
-      // OMP enforces ancestor-symlink protection internally even without a
-      // projectRoot; passing it additionally restores project containment.
+      // Destination-derived, not scope-derived: a provider home-directory
+      // override that still resolves inside the project must get project
+      // containment, whatever scope was requested.
+      const { userScope: ompUserScope, projectRoot: ompProjectRoot } =
+        classifyMcpDestination(provider, scope, configPath, projectDir);
       const result = await manageOmpMcp(configPath, [], {
         remove,
         dryRun: subArgs.includes('--dry-run'),
-        userScope: scope === 'user',
-        projectRoot: scope === 'user' ? undefined : projectDir,
+        userScope: ompUserScope,
+        projectRoot: ompProjectRoot,
       });
       console.log(JSON.stringify(result, null, 2));
       break;

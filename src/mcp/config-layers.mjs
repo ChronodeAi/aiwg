@@ -16,31 +16,49 @@
  */
 
 import { lstat, mkdtemp, readFile, readlink, realpath, rmdir } from 'fs/promises';
-import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'path';
+import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from 'path';
 import { assertConfigDestination, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
 import { resolveCredentialPolicy, warnCredentialPolicyRelaxation } from './credentials.mjs';
 
-export function resolveConfigLayers(configDirOverride, env = process.env) {
+/**
+ * `platform` lets tests validate Windows path semantics (`C:\org`, UNC
+ * `\\server`, root-relative `\org`/`/org`) deterministically on any host; it
+ * defaults to the real host platform, so production calls behave exactly as
+ * the native `path` module already would.
+ */
+export function resolveConfigLayers(configDirOverride, env = process.env, { platform = process.platform } = {}) {
   if (configDirOverride) return null;
   const raw = env.AIWG_CONFIG_LAYERS;
   if (!raw || !raw.trim()) return null;
-  const entries = raw.split(delimiter).map(entry => entry.trim()).filter(Boolean);
-  // A `\org` entry is current-drive-relative on Windows: resolving it from
-  // C:\work versus D:\work selects different drives. Refuse it on every
-  // platform so a layer list cannot change meaning across hosts. (A `\\server`
-  // UNC prefix is absolute and remains allowed.)
-  const driveRelativeEntries = entries.filter(entry => /^\\(?!\\)/.test(entry));
+  const pathForPlatform = platform === 'win32' ? win32 : posix;
+  // A Windows-formatted value uses `;`; splitting a drive-qualified entry
+  // (`C:\org`) on the real host's POSIX `:` would wrongly cut it at the drive
+  // letter, so the simulated platform's own delimiter is used, not the real
+  // host's - matching the native `path` module's behaviour when the real host
+  // actually is that platform.
+  const entries = raw.split(pathForPlatform.delimiter).map(entry => entry.trim()).filter(Boolean);
+  // A bare leading `\` or `/` with no drive letter is current-drive-relative
+  // under Windows path semantics: resolving it from C:\work versus D:\work
+  // selects different drives, so a layer list could change meaning across
+  // hosts. The backslash form is refused on every platform, since it is never
+  // a valid POSIX absolute path either. The forward-slash form is refused
+  // only when interpreting entries under actual Windows path semantics; on
+  // POSIX, a leading `/` is an unambiguous, fully-qualified absolute path and
+  // must keep working. Drive-qualified (`C:\`, `C:/`) and UNC (`\\server`,
+  // `//server`) forms remain allowed on every platform.
+  const driveRelativePattern = platform === 'win32' ? /^[\\/](?![\\/])/ : /^\\(?!\\)/;
+  const driveRelativeEntries = entries.filter(entry => driveRelativePattern.test(entry));
   if (driveRelativeEntries.length) {
     throw new Error(`AIWG_CONFIG_LAYERS entries must be absolute paths; refusing Windows current-drive-relative entries: ${driveRelativeEntries.join(', ')}`);
   }
   // A relative entry would resolve against the current working directory, so the
   // same AIWG_CONFIG_LAYERS value would name different layers from different
   // invocation directories. Refuse instead of silently picking a directory.
-  const relativeEntries = entries.filter(entry => !isAbsolute(entry));
+  const relativeEntries = entries.filter(entry => !pathForPlatform.isAbsolute(entry));
   if (relativeEntries.length) {
     throw new Error(`AIWG_CONFIG_LAYERS entries must be absolute paths; refusing relative entries: ${relativeEntries.join(', ')}`);
   }
-  const layers = entries.map(entry => resolve(entry));
+  const layers = entries.map(entry => pathForPlatform.resolve(entry));
   return layers.length > 0 ? layers : null;
 }
 

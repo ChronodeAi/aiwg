@@ -11,6 +11,7 @@ export interface Layering {
 export function resolveConfigLayers(
   configDirOverride?: string,
   env?: Record<string, string | undefined>,
+  options?: { platform?: string },
 ): string[] | null;
 export function loadLayered<T extends object>(
   layers: string[],

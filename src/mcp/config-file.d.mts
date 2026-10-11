@@ -5,6 +5,7 @@ export function assertConfigDestination(file: string, projectRoot?: string): Pro
 export function isUserMcpScope(provider: string, scope?: string): boolean;
 export function isPathInsideDir(file: string, dir: string): boolean;
 export function assertSupportedScope(provider: string, scope: string | undefined, configPath: string, projectDir?: string): void;
+export function classifyMcpDestination(provider: string, scope: string | undefined, configPath: string, projectDir?: string): { userScope: boolean; projectRoot: string | undefined };
 export function projectCredentialRemedy(provider: string, projectDir?: string): string;
 export function assertProjectCredentials(servers: Array<{ name: string; url?: string; args?: string[]; env?: Record<string, unknown>; headers?: Record<string, unknown>; auth?: Record<string, unknown>; oauth?: Record<string, unknown> }>, configPath: string, remedy?: string): void;
 export function assertConfigObject(config: unknown, serversKey: string): void;

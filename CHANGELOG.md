@@ -59,8 +59,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Explicit policy saves preserve the requested value, including one equal to the lower floor. Unrelated
   saves preserve policy ownership and drop stale weaker overlay policies with a warning.
 - Empty profiles inject zero servers in persistent mode. Removing a profile extended by remaining profiles
-  is refused with dependent names. Copy-up removal immediately restores lower entries on the same instance,
-  and refused mutations leave cached data unchanged. Config directory aliases and symlinked ancestors work;
+  is refused with dependent names. Copy-up removal restores lower entries on the same instance, except when
+  the lower entry still carries worker qualification: removing that override is refused instead, so removal
+  cannot silently re-expose a qualification that does not demonstrate authorization of the revealed command.
+  Refused mutations leave cached data unchanged. Config directory aliases and symlinked ancestors work;
   missing layer paths use filesystem-aware case comparisons to prevent overlap.
 - Regression coverage verifies inherited tool denies and credential references in Codex runtime configs
   and Claude injection, with TypeScript and runtime registries exercising the same layered behaviour.
@@ -96,13 +98,31 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Atomic replacement cleans up temporary files even if closing fails, preserves existing project modes,
   applies umask to new project files, and sets user configs to `0600`, including existing files.
   User-scope Claude paths fall back to the OS home directory when `HOME` and `USERPROFILE` are unset.
-- Project-scope refusal now follows the actual resolved destination rather than the requested scope
-  (`--scope user` is refused instead of silently writing the project file for Cursor and opencode,
-  which have no private destination), checks env/header/OMP-auth/oauth VALUES instead of key occupancy
-  so references and empty strings remain writable, and covers credential-bearing argument values too.
+- Project-scope refusal now follows the actual resolved destination rather than the requested scope, and
+  that decision is shared by every MCP config writer - `inject`, generic `install`, and OMP's
+  `install`/`uninject` - not only `inject`. `--scope user` is refused instead of silently writing the
+  project file for providers with no private destination (Cursor, opencode); a provider's own
+  environment override for its config location (OMP's `PI_CODING_AGENT_DIR`) is never trusted in place
+  of the resolved destination, so a `--scope user` request that still resolves inside the project is
+  refused there too. Project refusal checks `env`/`headers` VALUES instead of key occupancy, so
+  references and empty strings remain writable; `auth`/`oauth` are stricter and refuse every populated
+  field except `type`, references included, because this registry does not distinguish a reference-shaped
+  OAuth field from a literal one. Refusal also covers credential-bearing argument values, detected for
+  both `-flag`/`--flag value` and `--flag=value` forms (including a value that itself starts with a
+  hyphen); single-letter short flags and positional `KEY=value` forms remain undetected.
   OMP writes are always private even at project scope, and OMP ancestor-symlink protection applies on
   inject and uninject regardless of whether a project root was supplied. `aiwg mcp list` and `update`
   also redact detected credential-like argument values and URL query values, not just userinfo.
+  New registry files (the default registry, an explicitly selected directory, or a newly created
+  layer file) are always created private; an existing file keeps its mode. Saving a freshly constructed
+  layered registry instance initializes ownership first, so it can no longer copy an inherited server or
+  an inherited credential policy into the write layer. `AIWG_CONFIG_LAYERS` entries that are
+  current-drive-relative under Windows path semantics (`\org`, and `/org` when read on Windows) are
+  refused; a leading `/` remains a valid absolute path on POSIX, and drive-qualified and UNC forms are
+  unaffected on every platform. The TypeScript and runtime registries agree on every TS/MJS difference
+  this series introduced, including Codex `envFrom` rendering (both now report nothing to render rather
+  than one throwing where the other does not); a pre-existing Grok `blockedByPolicy`-forwarding difference
+  predates this series and is unchanged.
 - Ephemeral and Codex runtime-home MCP configs use 0600 permissions; default ephemeral files use a private temp
   directory, and `aiwg mcp list` redacts URL userinfo.
 - Session interchange imports now name the failing header field and its

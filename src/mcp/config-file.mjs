@@ -77,6 +77,28 @@ export function assertSupportedScope(provider, scope, configPath, projectDir = '
 }
 
 /**
+ * The single place every MCP config writer - `inject`, `install`, and OMP's
+ * `install`/`uninject` - decides whether a destination is a project write.
+ * The decision follows the RESOLVED destination, never the requested scope
+ * string and never a provider's home-directory override (e.g.
+ * `PI_CODING_AGENT_DIR`, `CODEX_HOME`, `GROK_HOME`): a destination that still
+ * resolves inside the project directory gets project containment rules
+ * (ancestor-symlink checks, literal-credential refusal) regardless of what
+ * scope was requested or which environment variable produced the path.
+ * `userScope: true` from this function means the destination is genuinely
+ * outside the project; callers must never override it with a flag of their
+ * own, and must never derive it from `scope` again downstream.
+ *
+ * Throws via `assertSupportedScope` when `--scope user` was requested but the
+ * destination is still inside the project (no private destination exists).
+ */
+export function classifyMcpDestination(provider, scope, configPath, projectDir = '.') {
+  assertSupportedScope(provider, scope, configPath, projectDir);
+  const inProject = isPathInsideDir(configPath, projectDir);
+  return { userScope: !inProject, projectRoot: inProject ? projectDir : undefined };
+}
+
+/**
  * Remediation for a project-scope literal refusal that names the provider's
  * real private destination when it has one, instead of always naming
  * ~/.claude.json. Providers without a user-scope destination get reference

@@ -82,15 +82,24 @@ user`, install writes `AIWG_ROOT` only when it is set in the environment.
 `aiwg mcp inject --provider claude --scope user` (or `aiwg mcp install claude
 --scope user`) writes the top-level `mcpServers` of private `~/.claude.json`.
 User config writes always set mode `0600`, including existing files.
-Project-scope inject refuses literal `env`/`headers` values, literal
-`auth`/`oauth` values, credential-bearing argument values, and URL userinfo,
-reporting only server, key and flag names — never secret values. Empty strings
-and supported reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be
-committed; non-string map values are rejected as invalid. The refusal names the
-provider's real private destination when it documents one, otherwise it points
-at `--header-env`/`--env-from` references, because `.mcp.json` is meant to be
-committed. A `--scope user` request for a provider without a user-scope
-destination (Cursor, OpenCode) is refused instead of writing the project file.
+Project-scope inject refuses literal `env`/`headers` values, populated
+`auth`/`oauth` fields, credential-bearing argument values, and URL userinfo,
+reporting only server, key and flag names — never secret values. For `env` and
+`headers`, empty strings and supported reference forms (`${VAR}`, `${env:VAR}`,
+`{env:VAR}`) may be committed; non-string map values are rejected as invalid.
+`auth`/`oauth` are stricter: every field except `type` is refused once it is
+non-empty - `credentialId`, `callbackPort`, a `${VAR}`-shaped string, or any
+other value - because OMP persists them alongside the secrets they describe
+and this registry does not distinguish a reference-shaped OAuth field from a
+literal one. The refusal names the provider's real private destination when
+it documents one, otherwise it points at `--header-env`/`--env-from`
+references, because `.mcp.json` is meant to be committed. A `--scope user`
+request for a provider without a user-scope destination (Cursor, OpenCode) is
+refused instead of writing the project file; this scope/destination decision
+applies to every MCP config writer - `inject`, generic `install`, and OMP's
+`install`/`uninject` - not only `inject`, and a provider's own environment
+override for its config location (for example OMP's `PI_CODING_AGENT_DIR`)
+never substitutes for the actual resolved destination.
 Config writes reject symlink destinations; writes whose destination is inside
 the project directory also reject symlink parents below the project directory.
 JSON installation refuses malformed JSON,
@@ -161,8 +170,14 @@ Inherited top-level settings are also left out of writes; `apiVersion` and `kind
 After an update copies an entry into the write layer, the same registry instance can remove that overlay.
 The lower-layer entry becomes visible again immediately on that instance, and adding its name is refused.
 Removing an override is not revocation: when the lower-layer entry still carries worker qualification, removal
-is refused instead of silently re-exposing that qualification. Remove the lower-layer entry in its own layer,
-or re-qualify the revealed entry before use.
+is refused instead of silently re-exposing that qualification. The guard checks the lower-layer entry's own
+qualification, not the override's, so restoring the override's command and re-qualifying the override does not
+lift the refusal. The only way to remove it is to remove or change the entry in the lower layer that owns it -
+which requires write authority over that layer. A user who can write only the identity layer, and whose
+organisation layer is read-only to them, cannot remove such an override through this registry; this is a known
+limitation, not a workaround. Selecting the identity directory directly (bypassing the layered registry
+entirely) also bypasses this guard and can re-expose a qualified lower entry; that is not a qualification-safe
+route either.
 A profile cannot be removed while other profiles in any layer extend it; the error names the dependents.
 Rejected mutations leave the cached view unchanged. An empty profile injects zero servers in either mode.
 Config directory aliases and symlinked ancestors are supported, including dotfile-manager links.

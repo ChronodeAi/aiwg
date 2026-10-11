@@ -98,21 +98,25 @@ export function isCredentialReferenceValue(value) {
   return typeof value === 'string' && CREDENTIAL_REFERENCE_VALUE.test(value);
 }
 
-// A long `--flag` whose name itself names a credential kind; the value, in the
-// next argv element or after `=`, is almost always the literal secret. This is
-// a name-shape heuristic over long flags only: short flags (`-p secret`) and
-// positional `KEY=value` forms are not detected, and flags that name a secret
-// location rather than a secret (`--token-file`, `--password-stdin`,
-// `--secret-name`) are excluded. A finding additionally requires a non-empty,
-// non-reference value: bare flags, empty values and `${VAR}`/`${env:VAR}`/
-// `{env:VAR}` references are not findings.
+// A `-flag` or `--flag` whose name itself names a credential kind (one or two
+// leading dashes, matching the full word - never a single-letter alias); the
+// value, in the next argv element or after `=`, is almost always the literal
+// secret. This is a name-shape heuristic: positional `KEY=value` forms (no
+// leading dash at all) are not detected, short aliases (`-p secret`) are not
+// detected because `p` never matches the full-word list below, and flags
+// that name a secret location rather than a secret (`--token-file`,
+// `--password-stdin`, `--secret-name`) are excluded. A finding additionally
+// requires a non-empty, non-reference value: bare flags, empty values and
+// `${VAR}`/`${env:VAR}`/`{env:VAR}` references are not findings.
 const CREDENTIAL_ARG_NAME = /^(api[-_]?key|access[-_]?key|access[-_]?token|auth[-_]?token|client[-_]?secret|secret|password|passwd|token)$/i;
 const SECRET_LOCATION_SUFFIX = /-(file|files|path|dir|stdin|name|names)$/i;
 
-/** The credential kind named by a long `--flag`, or null when not credential-like. */
+/** The credential kind named by a `-flag` or `--flag`, or null when not credential-like. */
 function credentialFlagName(flag) {
-  if (typeof flag !== 'string' || !flag.startsWith('--')) return null;
-  const name = flag.slice(2).split('=')[0];
+  if (typeof flag !== 'string') return null;
+  const dashes = flag.startsWith('--') ? 2 : flag.startsWith('-') ? 1 : 0;
+  if (!dashes) return null;
+  const name = flag.slice(dashes);
   if (!CREDENTIAL_ARG_NAME.test(name)) return null;
   if (SECRET_LOCATION_SUFFIX.test(name)) return null;
   return name;
@@ -137,7 +141,12 @@ function credentialArgHits(args) {
     }
     if (!credentialFlagName(arg)) continue;
     const next = args[index + 1];
-    if (typeof next === 'string' && next !== '' && !next.startsWith('-') && !isCredentialReferenceValue(next)) {
+    // The next token is this flag's value unless it is itself a long `--flag`
+    // with no embedded value form - a bare flag, not this flag's value. A
+    // value that happens to start with a single dash (`-SYNTHETIC`) is still
+    // a value, not another flag, so it is not exempted here.
+    const nextIsBareFlag = typeof next === 'string' && next.startsWith('--');
+    if (typeof next === 'string' && next !== '' && !nextIsBareFlag && !isCredentialReferenceValue(next)) {
       hits.push({ index, length: 2 });
     }
   }

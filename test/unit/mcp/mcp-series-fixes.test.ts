@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -101,6 +101,18 @@ function runCli(args: string[], cwd = projectDir, extraEnv: Record<string, strin
   });
 }
 
+/** Like runCli, but returns the result instead of throwing, for refusal probes. */
+function runCliWithOutput(args: string[], cwd = projectDir, extraEnv: Record<string, string> = {}) {
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
+    cwd,
+    encoding: "utf-8",
+    timeout: 60_000,
+    env: { PATH: process.env.PATH, HOME: homeDir, AIWG_CONFIG: configDir, TMPDIR: root, ...extraEnv },
+  });
+  if (result.error) throw result.error;
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+}
+
 describe("1. scope follows the resolved destination", () => {
   const secretServer = {
     name: "vault",
@@ -158,6 +170,56 @@ describe("1. scope follows the resolved destination", () => {
 
   it("assertSupportedScope passes genuine home destinations", () => {
     expect(() => assertSupportedScope("factory", "user", join(homeDir, ".factory/mcp.json"), projectDir)).not.toThrow();
+  });
+});
+
+describe("1b. destination-derived scope and containment apply to every write path", () => {
+  it("generic 'install cursor --scope user' cannot escape through a symlinked .cursor directory", () => {
+    const outside = join(root, "outside-install-cursor");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(projectDir, ".cursor"));
+    const result = runCliWithOutput(["install", "cursor", "--scope", "user"]);
+    expect(result.status).not.toBe(0);
+    expect(existsSync(join(outside, "mcp.json"))).toBe(false);
+  });
+
+  it("generic 'install opencode --scope user' cannot escape through a symlinked .opencode directory", () => {
+    const outside = join(root, "outside-install-opencode");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(projectDir, ".opencode"));
+    const result = runCliWithOutput(["install", "opencode", "--scope", "user"]);
+    expect(result.status).not.toBe(0);
+    expect(existsSync(join(outside, "opencode.json"))).toBe(false);
+    expect(existsSync(join(outside, "opencode.jsonc"))).toBe(false);
+  });
+
+  it("'install omp --scope user' cannot escape when PI_CODING_AGENT_DIR resolves inside the project", () => {
+    const outside = join(root, "outside-install-omp");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(projectDir, ".omp"));
+    const result = runCliWithOutput(
+      ["install", "omp", "--project", projectDir, "--scope", "user"],
+      projectDir,
+      { PI_CODING_AGENT_DIR: join(projectDir, ".omp") },
+    );
+    expect(result.status).not.toBe(0);
+    expect(existsSync(join(outside, "mcp.json"))).toBe(false);
+  });
+
+  it("'uninject --provider omp --scope user' cannot escape when PI_CODING_AGENT_DIR resolves inside the project", () => {
+    const outside = join(root, "outside-uninject-omp");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "mcp.json"), JSON.stringify({ mcpServers: { aiwg: { command: "aiwg" } } }));
+    writeFileSync(join(outside, "mcp.json.aiwg-ownership.json"), JSON.stringify({ schema: "aiwg.omp-mcp-ownership.v1", servers: {} }));
+    symlinkSync(outside, join(projectDir, ".omp"));
+    const before = readFileSync(join(outside, "mcp.json"), "utf-8");
+    const result = runCliWithOutput(
+      ["uninject", "--provider", "omp", "--project", projectDir, "--scope", "user", "--servers", "aiwg"],
+      projectDir,
+      { PI_CODING_AGENT_DIR: join(projectDir, ".omp") },
+    );
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(join(outside, "mcp.json"), "utf-8")).toBe(before);
   });
 });
 
@@ -223,6 +285,35 @@ describe("4. value-aware credential argument detection", () => {
     expect(credentialLikeArgs(["--secret-name", "VAULT_TOKEN"])).toEqual([]);
     expect(credentialLikeArgs(["-p", "SYNTHETIC-PW"])).toEqual([]);
     expect(credentialLikeArgs(["API_KEY=SYNTHETIC-KEY"])).toEqual([]);
+  });
+
+  it("restores single-dash long names and leading-hyphen values detected by the parent commit", () => {
+    // Regression: both forms were detected by the pre-series detector and
+    // silently stopped being detected by the value-aware rewrite.
+    expect(credentialLikeArgs(["-token", "SYNTHETIC-TOKEN"])).toEqual(["-token SYNTHETIC-TOKEN"]);
+    expect(credentialLikeArgs(["--token", "-SYNTHETIC-TOKEN"])).toEqual(["--token -SYNTHETIC-TOKEN"]);
+    // --token=-VALUE already worked; keep it working.
+    expect(credentialLikeArgs(["--token=-SYNTHETIC-TOKEN"])).toEqual(["--token=-SYNTHETIC-TOKEN"]);
+    // Still excluded: short aliases, bare flags, and a genuinely following long flag.
+    expect(credentialLikeArgs(["-p", "SYNTHETIC-PW"])).toEqual([]);
+    expect(credentialLikeArgs(["--token", "--verbose"])).toEqual([]);
+    expect(credentialLikeArgs(["--token"])).toEqual([]);
+  });
+
+  it("project refusal and restrictive policies cover single-dash names and hyphen-led values", () => {
+    expect(() => assertProjectCredentials(
+      [{ name: "vault", args: ["-token", "SYNTHETIC-TOKEN"] }], join(projectDir, ".cursor/mcp.json")))
+      .toThrow(/credential-like args \(-token\)/);
+    expect(() => assertProjectCredentials(
+      [{ name: "vault", args: ["--token", "-SYNTHETIC-TOKEN"] }], join(projectDir, ".cursor/mcp.json")))
+      .toThrow(/credential-like args \(--token\)/);
+    expect(credentialPolicyViolations({ name: "vault", args: ["-token", "SYNTHETIC-TOKEN"] }, "references")).toContain("args");
+    expect(credentialPolicyViolations({ name: "vault", args: ["--token", "-SYNTHETIC-TOKEN"] }, "none")).toContain("args");
+  });
+
+  it("redacts single-dash names and hyphen-led values", () => {
+    expect(redactCredentialArgs(["-token", "SYNTHETIC-TOKEN"])).toEqual(["-token", "***"]);
+    expect(redactCredentialArgs(["--token", "-SYNTHETIC-TOKEN"])).toEqual(["--token", "***"]);
   });
 
   it("isCredentialReferenceValue accepts every documented syntax", () => {
@@ -409,6 +500,24 @@ describe("9. Windows current-drive-relative layer paths", () => {
 
   it("still accepts absolute entries", () => {
     expect(resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: root })).toEqual([resolve(root)]);
+  });
+
+  it("refuses /org root-relative entries under Windows path semantics, with either separator", () => {
+    expect(() => resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "/org" }, { platform: "win32" }))
+      .toThrow(/current-drive-relative/);
+    expect(() => resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "\\org" }, { platform: "win32" }))
+      .toThrow(/current-drive-relative/);
+  });
+
+  it("keeps /org valid on POSIX even though Windows path semantics refuse it", () => {
+    expect(resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "/org" })).toEqual([resolve("/org")]);
+  });
+
+  it("keeps drive-qualified and UNC paths under Windows path semantics", () => {
+    expect(() => resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "C:\\org" }, { platform: "win32" })).not.toThrow();
+    expect(resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "C:\\org" }, { platform: "win32" })).toHaveLength(1);
+    expect(() => resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "\\\\server\\share" }, { platform: "win32" })).not.toThrow();
+    expect(resolveConfigLayers(null, { AIWG_CONFIG_LAYERS: "\\\\server\\share" }, { platform: "win32" })).toHaveLength(1);
   });
 });
 
