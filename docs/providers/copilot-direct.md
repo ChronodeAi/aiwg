@@ -139,3 +139,22 @@ Record the installed `copilot --version` output, the command above, and
 the pass/fail outcome (exit code + JSONL validity + no error-shaped lines +
 reply content) on the tracking issue. This manual run is evidence only; it
 never marks the registry profile as qualified for automated dispatch.
+
+## `parseWorkerFinal` fails closed (#2995)
+
+Every other direct profile in this effort (OpenCode, Pi, OMP, Factory,
+Cursor) overrides `parseWorkerFinal` to extract its own final answer text
+from its strict event rule and hand that text to the shared strict
+`workerClaims` parser, so a real run can report health `completed`.
+Copilot's `parseWorkerFinal` cannot do the same: as documented above, the
+JSONL event vocabulary is wholly unevidenced (compiled binary, no readable
+source, live qualification blocked on credentials), so `parseOutput()`
+can only prove "every line is a clean JSON object" — it has no way to name
+which field, if any, holds the model's final answer. Inventing a field
+name here would be exactly the kind of unevidenced grammar this profile
+otherwise refuses to guess. `parseWorkerFinal` therefore throws
+unconditionally (`OG_CONTRACT_UNSUPPORTED`), including for an MCP
+envelope, since this profile has no evidenced MCP transport either: a real
+Copilot run will continue to report health `failed`/not-`completed` until
+a qualified run observes the event stream and this is revisited with a
+named field.

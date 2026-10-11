@@ -336,20 +336,70 @@ export class CursorAdapter extends ProviderAdapter {
   // rather than ever placing brief/prompt content on argv (fix round 1,
   // roctinam/aiwg#2903 item 6); parseOutput()/getEnvOverrides()/
   // getTranscriptPath() fall through to the base class's existing safe
-  // defaults. Only what the installed-module loader and the direct
-  // profile need is defined above.
+  // defaults for the LEGACY class. #2995 moved parseWorkerFinal onto the
+  // `-direct` subclass below: the base class's inherited
+  // `parseOutput`/`parseWorkerFinal` legacy regex-and-generic behavior is
+  // otherwise unchanged.
 }
 
 // Self-register on import for the legacy Ralph loop only. The direct worker
 // profile loads through the #2885 installed loader instead (see below).
 registerProvider('cursor', () => new CursorAdapter());
 
+/**
+ * #2995: `CursorAdapter.parseOutput` (inherited from `ProviderAdapter`, no
+ * override above) is the base class's loose first-`{`-to-last-`}` regex: it
+ * fails (returns null) on any realistic multi-event `stream-json` run
+ * (system/thinking/tool_call lines before the final `result` line), and it
+ * is loose in the other direction too (an empty-text success can still
+ * parse as a truthy object). The installed-module loader's `extractFinal`
+ * hook IS `instance.parseOutput` (src/models/worker-installation.mjs
+ * ~l.730) and session-launcher.mjs's gate (~l.462) throws unless that hook
+ * returns a non-null, non-`success:false` result — so a real direct-shell
+ * run could never reach `parseWorkerFinal` at all with the base regex wired
+ * to it.
+ *
+ * `CursorDirectAdapter` is the Claude/Hermes `-direct`-subclass pattern:
+ * only `parseOutput` changes, to the ALREADY-correct `parseDirectFinal`
+ * (above — one rule, never a second one), which returns null unless the
+ * whole stream is a single cursor-shaped success terminal with non-empty
+ * text. `parseWorkerFinal` lives here too (strict, no fallback needed:
+ * Cursor has no legacy group-mode generic-envelope test to preserve,
+ * confirmed against test/unit/ralph-external/worker-finals.test.ts, which
+ * does not include 'cursor').
+ */
+export class CursorDirectAdapter extends CursorAdapter {
+  // #2995 round 4 (item 3): production resolves the installed adapter by
+  // `adapter.id` (now `cursor-direct`, item B) and src/models/
+  // worker-installation.mjs's `inspectWorkerInstallation` requires
+  // `adapter.id === instance.getName()`. `getBinary()` and the
+  // `provider: 'cursor'` literals inside `observeHealthEvent` are untouched.
+  getName() { return 'cursor-direct'; }
+
+  parseOutput(stdout) {
+    return this.parseDirectFinal(stdout);
+  }
+
+  /**
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseDirectFinal(text);
+    if (!final) throw new Error('Cursor worker stream did not produce a successful final result');
+    return super.parseWorkerFinal(final.result, { ...options, format: 'json' });
+  }
+}
+
 /** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
 export const interfaceVersion = 1;
 
 /** Installed-module registration: exactly the one approved adapter ID. */
 export function register(factory) {
-  factory('cursor', () => new CursorAdapter());
+  factory('cursor-direct', () => new CursorDirectAdapter());
 }
 
 export default CursorAdapter;

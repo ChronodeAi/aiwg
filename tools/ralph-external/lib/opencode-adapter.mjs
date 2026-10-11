@@ -420,18 +420,156 @@ export class OpenCodeAdapter extends ProviderAdapter {
     if (!sawCompleteText && stepFinishStop !== true) return null; // no positive signal at all
     return { text };
   }
+
+  /**
+   * #2995 round 4 (item 1): strict direct-worker-profile final, separate
+   * from the legacy `parseOutput` candidate above (left byte-for-byte
+   * unchanged: it is also the legacy Ralph-loop group-mode candidate,
+   * `registerProvider('opencode', ...)` below, and `test/unit/
+   * ralph-external/worker-finals.test.ts` depends on it falling back to
+   * the generic envelope).
+   *
+   * `step_finish.part.reason` is NOT a two-valued stop/fail field: a
+   * multi-step run (tool use, then an answer) ends EACH intermediate step
+   * with its own `step_finish`, whose reason names why that step itself
+   * ended, not the whole run. The 2.0.26 binary (conductor strings read on
+   * noodle, 2026-10-11) normalizes finish reasons to `stop`, `length`,
+   * `tool-calls`, `content-filter`, `error`, `other` and `unknown`, and its
+   * own UI code treats exactly `tool-calls` (and `unknown`) as not final:
+   * `T.finish && !["tool-calls","unknown"].includes(T.finish)`. So
+   * `tool-calls` is the one evidenced "this step ended because the model
+   * called a tool; another step follows" reason. Every other reason,
+   * including `unknown` and any unrecognized value, fails closed:
+   * CONTINUE_REASONS is the only carve-out from "non-stop fails".
+   *
+   * Algorithm: track one candidate per OPEN step (`step_start` always
+   * resets it — an earlier step's text is never the final answer).
+   * Within a step, a later COMPLETE (`time.end` present) `text` part
+   * REPLACES the candidate (no evidence of a within-step text boundary
+   * requiring concatenation); an INCOMPLETE `text` part arriving after a
+   * complete candidate already exists corrupts that step's candidate
+   * permanently (a dropped/truncated stream is never trusted over an
+   * earlier value). A `step_finish` with reason `"stop"` is terminal
+   * ONLY when nothing legitimately follows it (enforced structurally,
+   * same as before) and requires a non-corrupted, non-empty candidate
+   * from THAT step. A `step_finish` with a CONTINUE_REASONS reason is not
+   * terminal and not a failure: the run proceeds (the next `step_start`
+   * resets the candidate as normal). Any other `step_finish` reason, or
+   * an `error` event, fails closed. When the stream has no step markers
+   * at all (the live 2.0.26 shape evidenced in .aiwg/working/s1-scratch/
+   * smoke-opencode.jsonl — a single `text` event and nothing else), the
+   * same replace/corrupt rule applies to the whole stream's standalone
+   * `text` events.
+   * @param {string} stdout
+   * @returns {{ text: string }|null}
+   */
+  parseDirectFinal(stdout) {
+    if (typeof stdout !== 'string' || !stdout.trim()) return null;
+    const CONTINUE_REASONS = ['tool-calls'];
+    let sawAnyStep = false;
+    let stepText = null;
+    let stepCorrupted = false;
+    let finalStepText = null;
+    let terminal = false;
+    let failed = false;
+    for (const raw of stdout.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (terminal) return null; // nothing may follow a terminal step_finish(stop)
+      let event;
+      try { event = JSON.parse(line); } catch { return null; }
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') return null;
+      if (event.type === 'step_start') {
+        // A new step begins: any earlier step's candidate is never the final answer.
+        sawAnyStep = true; stepText = null; stepCorrupted = false;
+      } else if (event.type === 'text') {
+        if (typeof event.part?.text !== 'string') return null;
+        if (Number.isFinite(event.part?.time?.end)) {
+          stepText = event.part.text; // a later complete part REPLACES, never concatenates
+        } else {
+          // An incomplete part after an established candidate corrupts it
+          // permanently; an incomplete part with no prior candidate is
+          // simply "no positive signal yet" (handled by the end-of-stream
+          // checks below).
+          if (stepText !== null) stepCorrupted = true;
+        }
+      } else if (event.type === 'step_finish') {
+        sawAnyStep = true;
+        const reason = event.part?.reason;
+        if (reason === 'stop') {
+          terminal = true;
+          finalStepText = stepCorrupted ? null : stepText;
+        } else if (!CONTINUE_REASONS.includes(reason)) {
+          failed = true; // a recognized-failure or unrecognized reason fails closed
+        }
+        // CONTINUE_REASONS: not terminal, not a failure; the next step_start resets the candidate.
+      } else if (event.type === 'error') return null;
+      // The 2.0.26 run emitter writes exactly six event types: error, reasoning, step_finish, step_start, text and
+      // tool_use (conductor strings read on noodle, 2026-10-11). tool_use and reasoning are legitimate non-answer
+      // events: they never contribute answer text. Anything else is outside the emitter's vocabulary and rejects.
+      else if (event.type !== 'tool_use' && event.type !== 'reasoning') return null;
+    }
+    if (failed) return null;
+    if (sawAnyStep) {
+      if (!terminal || finalStepText === null || !finalStepText.trim()) return null;
+      return { text: finalStepText };
+    }
+    if (stepCorrupted || stepText === null || !stepText.trim()) return null;
+    return { text: stepText };
+  }
 }
 
 // Self-register on import for the legacy Ralph loop only. The direct worker
 // profile loads through the #2885 installed loader instead (see below).
 registerProvider('opencode', () => new OpenCodeAdapter());
 
+/**
+ * #2995 round 3: `OpenCodeDirectAdapter` is the Claude-precedent `-direct`
+ * subclass, registered under its OWN id (`opencode-direct`, never the
+ * bare `opencode` legacy id above) so loading this installed module
+ * cannot overwrite the legacy registration in-process (src/models/
+ * worker-installation.mjs ~l.550). `parseOutput` here is the strict,
+ * last-step-only `parseDirectFinal` rule (never the loose, concatenating,
+ * generic-accepting legacy candidate), and `parseWorkerFinal` is strict
+ * with no generic-envelope fallback: this class is never reachable from
+ * the legacy bare id, so the legacy group-mode contract (test/unit/
+ * ralph-external/worker-finals.test.ts) never sees it.
+ */
+export class OpenCodeDirectAdapter extends OpenCodeAdapter {
+  // #2995 round 4 (item 3): production resolves the installed adapter by
+  // `adapter.id` (now `opencode-direct`, item B) and src/models/
+  // worker-installation.mjs's `inspectWorkerInstallation` requires
+  // `adapter.id === instance.getName()`. `getBinary()` and the
+  // `provider: 'opencode'` literal inside `observeHealthEvent` are
+  // untouched.
+  getName() { return 'opencode-direct'; }
+
+  parseOutput(stdout) {
+    return this.parseDirectFinal(stdout);
+  }
+
+  /**
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseDirectFinal(text);
+    if (!final || typeof final.text !== 'string' || !final.text.trim()) {
+      throw new Error('OpenCode worker stream did not produce a successful final answer');
+    }
+    return super.parseWorkerFinal(final.text, { ...options, format: 'json' });
+  }
+}
+
 /** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
 export const interfaceVersion = 1;
 
 /** Installed-module registration: exactly the one approved adapter ID. */
 export function register(factory) {
-  factory('opencode', () => new OpenCodeAdapter());
+  factory('opencode-direct', () => new OpenCodeDirectAdapter());
 }
 
 export default OpenCodeAdapter;

@@ -836,7 +836,7 @@
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "cursor",
+        "id": "cursor-direct",
         "provider": "cursor",
         "adapterVersion": "1",
         "supportedVersions": "2026.10.1-e373342",
@@ -1040,7 +1040,7 @@
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "factory",
+        "id": "factory-direct",
         "provider": "factory",
         "adapterVersion": "1",
         "supportedVersions": "0.238.0",
@@ -1230,7 +1230,7 @@
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "opencode",
+        "id": "opencode-direct",
         "provider": "opencode",
         "adapterVersion": "1",
         "supportedVersions": "2.0.26",
@@ -1590,7 +1590,7 @@
       "verifiedAt": "2026-09-04",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "omp",
+        "id": "omp-direct",
         "provider": "omp",
         "adapterVersion": "1",
         "supportedVersions": "18.8.7",
@@ -1790,7 +1790,7 @@
       "verifiedAt": "2026-09-04",
       "workerHealthAdapter": {
         "version": 1,
-        "id": "pi",
+        "id": "pi-direct",
         "provider": "pi",
         "adapterVersion": "1",
         "supportedVersions": "1.1.0",

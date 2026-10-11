@@ -127,6 +127,17 @@ switch (scenario) {
     process.exit(0);
     break;
   }
+  // #2995: a successful terminal whose `result` text is itself a valid
+  // strict workerClaims JSON document, for parseWorkerFinal coverage.
+  case 'claims-final': {
+    if (jsonStream) {
+      line({ type: 'result', session_id: SESSION, subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1,
+        result: JSON.stringify({ version: 1, status: 'completed', summary: 'Synthetic factory claims',
+          claims: [], artifacts: [], checks: [], limitations: [] }) });
+    }
+    process.exit(0);
+    break;
+  }
   case 'malicious-final': {
     if (jsonStream) {
       line({ type: 'result', session_id: SESSION, subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1,

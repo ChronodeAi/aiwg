@@ -59,6 +59,13 @@ async function installPiPackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
+  // resolves mission-protocol/index.js via the same _resolve-impl bridge.
+  await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
+  const protocolTarget = path.resolve('src/mission-protocol/index.ts');
+  const protocolRelative = path.relative(path.join(base, 'src', 'mission-protocol'), protocolTarget);
+  await writeFile(path.join(base, 'src', 'mission-protocol', 'index.js'),
+    `export * from ${JSON.stringify(protocolRelative)};\n`);
   return { packageRoot, writable };
 }
 
@@ -76,7 +83,7 @@ beforeAll(async () => {
     const { packageRoot, writable } = await installPiPackage(readFileSync(MODULE));
     const ids = await loadInstalledWorkerAdapters({ registry: loadingRegistry(),
       modules: [{ ...APPROVED.entry, packageRoot }], workerWritableRoots: [writable], platform: 'linux' });
-    installed = { owner: createProvider('pi'), ids };
+    installed = { owner: createProvider('pi-direct'), ids };
   } finally {
     if (saved === undefined) delete process.env.AIWG_RESOLVE_IMPL_FROM;
     else process.env.AIWG_RESOLVE_IMPL_FROM = saved;
@@ -141,7 +148,7 @@ async function fixture(options: { qualified?: boolean; model?: string; effort?: 
   f.snapshot.installations = { pi: { ...f.snapshot.installations.codex, profile: 'direct-shell', cliVersion: options.version ?? PI_DIRECT_VERSION } };
   if (options.effort) f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding!.initialEffort = options.effort;
   let builds = 0;
-  const drivers: any = { pi: { qualification: { adapter, adapterId: 'pi', cliVersion: options.version ?? PI_DIRECT_VERSION },
+  const drivers: any = { pi: { qualification: { adapter, adapterId: adapter.id, cliVersion: options.version ?? PI_DIRECT_VERSION },
     prepareWorkerInvocation: (invocation: any, qualification: any) => prepareWorkerInvocation(invocation, qualification),
     buildInvocation: async (input: any) => { builds++; return { argv: [process.execPath, FAKE, ...installed.owner.buildWorkerArgs(input, profile, input.permissions)],
       stdin: PI_DIRECT_STDIN, envNames: ['AIWG_FAKE_WORKER_CONFIG'] }; } } };
@@ -185,19 +192,55 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
   it('PD01a loads the one approved module by digest through the production installed loader', async () => {
     expect(APPROVED.source).toBe(MODULE);
     expect(sha256(readFileSync(MODULE))).toBe(APPROVED.entry.sha256);
-    expect(installed.ids).toEqual(['pi']);
-    expect(installed.owner.getName()).toBe('pi');
-    expect(installed.owner.constructor.name).toBe('PiAdapter');
+    expect(installed.ids).toEqual(['pi-direct']);
+    expect(installed.owner.getName()).toBe('pi-direct');
+    // #2995: the installed loader wires the `-direct` subclass (same
+    // Claude/Hermes pattern) so `parseOutput` is the strict, answer-requiring
+    // rule, never the legacy-pinned settlement-only shape `PiAdapter` keeps
+    // for the legacy Ralph-loop registration.
+    expect(installed.owner.constructor.name).toBe('PiDirectAdapter');
     expect(installed.owner.buildWorkerArgs(
       { selected: { model: 'synthetic/a', effort: { value: 'medium' } }, cwd: '/w', brief: 'b' }, null, {}))
       .toEqual(['--mode', 'json', '--no-approve', '--no-context-files', '--no-extensions', '--no-skills', '--no-mcp', '--model', 'synthetic/a', '--thinking', 'medium']);
-    // Legacy Ralph-loop contract (test/unit/ralph/pi-adapter.test.mjs): the
-    // settlement-only shape is settlement-only -- no `text` key, no answer
-    // requirement. Only parseDirectFinal() adds that for the direct profile.
     const noAnswer = [{ type: 'agent_start' }, { type: 'agent_end', willRetry: false }, { type: 'agent_settled' }]
       .map(event => JSON.stringify(event)).join('\n');
-    expect(installed.owner.parseOutput(noAnswer)).toEqual({ events: JSON.parse(`[${noAnswer.split('\n').join(',')}]`), settled: true });
-    expect(Object.keys(installed.owner.parseOutput(noAnswer))).toEqual(['events', 'settled']);
+    // Legacy Ralph-loop contract (test/unit/ralph/pi-adapter.test.mjs): the
+    // BARE legacy adapter's settlement-only shape has no `text` key and no
+    // answer requirement -- unchanged.
+    const legacy = new PiAdapter();
+    expect(legacy.parseOutput(noAnswer)).toEqual({ events: JSON.parse(`[${noAnswer.split('\n').join(',')}]`), settled: true });
+    expect(Object.keys(legacy.parseOutput(noAnswer))).toEqual(['events', 'settled']);
+    // The INSTALLED direct subclass is the strict, answer-requiring rule: a
+    // settled run with no answer text is null, never a false candidate.
+    expect(installed.owner.parseOutput(noAnswer)).toBeNull();
+  });
+
+  it("(#2995 round 4, item 3) inspectWorkerInstallation accepts the direct adapter's identity (adapter.id === instance.getName())", async () => {
+    const { inspectWorkerInstallation } = await import('../../../src/models/worker-installation.mjs');
+    const adapter = structuredClone(loadProviderModelCapabilities().providers['pi'].workerHealthAdapter!);
+    let error: any;
+    try {
+      await inspectWorkerInstallation(installed.owner, { adapter, platform: 'linux', profile: 'direct-shell',
+        cliVersion: adapter.supportedVersions, workerWritableRoots: [], effectiveConfigDigest: `sha256:${'a'.repeat(64)}`,
+        accountScope: 'synthetic', boundary: null, cwd: '/tmp' });
+    } catch (e) { error = e; }
+    // Before this fix, this threw 'Unsupported installation identity/platform'
+    // because the Direct subclass's getName() still returned the bare id
+    // while adapter.id is now `pi-direct`. Any OTHER error here (this minimal
+    // request is deliberately incomplete past the identity gate) proves
+    // the identity check itself passed.
+    expect(error?.message).not.toBe('Unsupported installation identity/platform');
+  });
+
+  it('PD01b (#2995 round 3, item B) loading the installed module under the `pi-direct` id never overwrites the legacy `pi` registration', async () => {
+    const legacyOwner = createProvider('pi');
+    expect(legacyOwner.constructor.name).toBe('PiAdapter');
+    expect(legacyOwner.constructor.name).not.toBe(installed.owner.constructor.name);
+    const claims = { version: 1, status: 'completed', summary: 'Synthetic', claims: [], artifacts: [], checks: [], limitations: [] };
+    const genericEnvelope = JSON.stringify({ type: 'result', result: claims });
+    await expect(legacyOwner.parseWorkerFinal(genericEnvelope,
+      { observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 } }))
+      .resolves.toMatchObject({ status: 'completed' });
   });
 
   it('PD02 renders and executes exact argv with the brief on stdin only; no argv flags carry it', async () => {
@@ -312,5 +355,66 @@ describe('Pi S1 offline direct-shell profile (#2910)', () => {
     expect(rec.envNames).not.toContain('PI_UNRELATED_SECRET');
     const stdout = await readFile(invocation.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);
+  });
+
+  // #2995: production marks a run `completed` only when `parseWorkerFinal`
+  // succeeds. These cases drive the real installed-owner hook, never a
+  // hand-fed finalValid.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+
+  it('PD10 parseWorkerFinal resolves a successful stream whose final answer is a valid claims document', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'success');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).resolves.toMatchObject({ version: 1, status: 'completed' });
+  });
+
+  it('PD11 parseWorkerFinal rejects a successful stream whose final answer is plain text (not claims)', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'plain-text-final');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+  });
+
+  it.each(['error', 'malformed', 'missing-final', 'exit-zero-error'])('PD12 parseWorkerFinal rejects a %s stream', async scenario => {
+    const f = await fixture();
+    const result = await execute(f, scenario);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+  });
+
+  it('PD13 parseWorkerFinal accepts Uint8Array/Buffer bytes input', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'success');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(Buffer.from(result.stdout, 'utf8'), { observation }))
+      .resolves.toMatchObject({ status: 'completed' });
+  });
+
+  // #2995 round 3 (item A.2): before this fix, an `agent_end` with NO
+  // `messages` array at all (not an explicit empty array) was skipped via
+  // `continue` WITHOUT clearing `text`, so an earlier claim survived. And
+  // nothing stopped a new event from arriving after `agent_settled`.
+  it('PD14 (regression) an earlier complete claim followed by an agent_end with no messages array never resolves', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'stale', claims: [], artifacts: [], checks: [], limitations: [] });
+    const stale = [
+      { type: 'agent_start' },
+      { type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', content: [{ type: 'text', text: claims }] }] },
+      { type: 'agent_end', willRetry: false },
+      { type: 'agent_settled' },
+    ].map(event => JSON.stringify(event)).join('\n');
+    expect(installed.owner.parseOutput(stale)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(stale, { observation })).rejects.toThrow();
+  });
+
+  it('PD15 (regression) any event after agent_settled fails the parse, even a repeated clean agent_start', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'x', claims: [], artifacts: [], checks: [], limitations: [] });
+    const trailing = [
+      { type: 'agent_start' },
+      { type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', content: [{ type: 'text', text: claims }] }] },
+      { type: 'agent_settled' },
+      { type: 'agent_start' },
+    ].map(event => JSON.stringify(event)).join('\n');
+    expect(installed.owner.parseOutput(trailing)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(trailing, { observation })).rejects.toThrow();
   });
 });

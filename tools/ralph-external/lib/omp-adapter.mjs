@@ -211,17 +211,105 @@ export class OmpAdapter extends ProviderAdapter {
     if (Buffer.byteLength(stdout) > MAX_MESSAGE) return null;
     try { const decoder = new OmpFrameDecoder({ frameLimit: MAX_MESSAGE }); const events = decoder.push(Buffer.from(stdout)); decoder.end(); return events.length ? summarizeOmpEvents(events, options) : null; } catch { return null; }
   }
+
+  /**
+   * #2995 round 3: strict direct-worker-profile final, separate from the
+   * legacy `parseOutput`/`summarizeOmpEvents` candidate above (that SHARED
+   * helper is never changed here — module doc). `summarizeOmpEvents`
+   * tracks the LAST assistant message across every event with a
+   * `messages`/`message` field, including `tool_execution_end.message`,
+   * so it can retain a stale or tool-carried answer when the real terminal
+   * `agent_end` is answerless. This rule instead: (1) only reads the
+   * assistant answer from the LAST terminal `agent_end` (`willContinue !==
+   * true`) itself, never from any other event type; (2) a non-terminal
+   * `agent_end` (`willContinue: true`) clears any earlier candidate text,
+   * since it is not the run's actual final answer; (3) ANY event observed
+   * after the terminal `agent_end` fails the parse, mirroring Factory/
+   * Cursor's structural "nothing follows the terminal" rule.
+   * @param {string|Uint8Array} stdout
+   * @returns {{ text: string, success: true } | null}
+   */
+  parseDirectFinal(stdout) {
+    if (Buffer.byteLength(stdout) > MAX_MESSAGE) return null;
+    let events;
+    try {
+      const decoder = new OmpFrameDecoder({ frameLimit: MAX_MESSAGE });
+      events = decoder.push(Buffer.from(stdout));
+      decoder.end();
+    } catch { return null; }
+    if (!events.length) return null;
+    let terminal = null, text = null, failed = false, aborted = false, elided = false, afterTerminal = false;
+    for (const event of events) {
+      if (/elided for RPC frame|rpcFrameElidedKeys/.test(JSON.stringify(event))) elided = true;
+      if (terminal) { afterTerminal = true; continue; }
+      if (event.type === 'rpc_frame_error' || event.type === 'error') { failed = true; continue; }
+      if (event.type === 'tool_execution_end' && event.isError) { failed = true; continue; }
+      if (event.type === 'agent_end' && event.willContinue === true) { text = null; continue; }
+      if (event.type === 'agent_end' && event.willContinue !== true) {
+        terminal = event;
+        const assistant = Array.isArray(event.messages) ? event.messages.filter(message => message.role === 'assistant').at(-1) : undefined;
+        if (!assistant) { text = null; continue; }
+        if (assistant.stopReason === 'error') failed = true;
+        if (assistant.stopReason === 'aborted') aborted = true;
+        text = Array.isArray(assistant.content) ? assistant.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : null;
+        continue;
+      }
+    }
+    if (!terminal || afterTerminal || failed || aborted || elided) return null;
+    if (!text || !text.trim()) return null;
+    return { text, success: true };
+  }
 }
 // Self-register on import for the legacy Ralph loop only. The direct worker
 // profile loads through the #2885 installed loader instead (see below).
 registerProvider('omp', () => new OmpAdapter());
+
+/**
+ * #2995 round 3: `OmpDirectAdapter` is the Claude-precedent `-direct`
+ * subclass, registered under its OWN id (`omp-direct`, never the bare
+ * `omp` legacy id above) so loading this installed module cannot overwrite
+ * the legacy registration in-process (src/models/worker-installation.mjs
+ * ~l.550). `parseOutput` here is the strict `parseDirectFinal` rule (never
+ * the loose, generic-accepting legacy candidate), and `parseWorkerFinal`
+ * is strict with no generic-envelope fallback: this class is never
+ * reachable from the legacy bare id, so the legacy group-mode contract
+ * (test/unit/ralph-external/worker-finals.test.ts) never sees it.
+ */
+export class OmpDirectAdapter extends OmpAdapter {
+  // #2995 round 4 (item 3): production resolves the installed adapter by
+  // `adapter.id` (now `omp-direct`, item B) and src/models/
+  // worker-installation.mjs's `inspectWorkerInstallation` requires
+  // `adapter.id === instance.getName()`. `getBinary()` is untouched; the
+  // inherited `createHealthObserver` override's `provider: this.getName()`
+  // label changes too, but it only feeds the shared observer's stderr
+  // classifier/report label -- `observeHealthEvent` below (the actual
+  // event dispatch) is unaffected.
+  getName() { return 'omp-direct'; }
+
+  parseOutput(stdout) {
+    return this.parseDirectFinal(stdout);
+  }
+
+  /**
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseDirectFinal(text);
+    if (!final) throw new Error('OMP worker stream did not produce a successful final answer');
+    return super.parseWorkerFinal(final.text, { ...options, format: 'json' });
+  }
+}
 
 /** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
 export const interfaceVersion = 1;
 
 /** Installed-module registration: exactly the one approved adapter ID. */
 export function register(factory) {
-  factory('omp', () => new OmpAdapter());
+  factory('omp-direct', () => new OmpDirectAdapter());
 }
 
 export default OmpAdapter;

@@ -217,21 +217,39 @@ export class CopilotAdapter {
   observeHealthEvent() { return null; }
 
   /**
-   * Strict JSONL parse of the one evidenced contract: `--output-format json`
-   * is "JSONL, one JSON object per line". Any non-empty line that is not a
-   * JSON object fails the whole parse (never silently dropped); a wholly
-   * empty/whitespace stream has no final. No field name is assumed beyond
-   * "is an object" — the CLI's own event vocabulary is not evidenced, so no
-   * `text`/`type` extraction is invented. Success/failure for the direct
-   * profile is determined by the caller from exit code, never from a
-   * guessed in-stream error marker — EXCEPT the one conservative guard
-   * below, which is a defensive synthetic-shape check, not an observed
-   * Copilot event.
-   *
+   * #2995 round 3 (item D): this installed hook's job is to decide whether
+   * a run's final is a trustworthy CANDIDATE (src/models/
+   * worker-installation.mjs ~l.730, session-launcher.mjs ~l.462 publish
+   * `terminalSuccess`/write a candidate-evidence file on anything
+   * non-null). There is still no evidenced answer field for Copilot (module
+   * doc above — compiled binary, no readable source, live qualification
+   * blocked on auth) — only the one evidenced structural contract (every
+   * non-empty line is a clean JSON object, never error-shaped). That
+   * structural check alone is NOT an affirmative success signal: it is
+   * equally true of a clean stream that never actually answered anything.
+   * Returning a success-looking `{events}` object here would therefore
+   * publish a false candidate for a run this profile can never actually
+   * validate (`parseWorkerFinal` below always throws regardless). This
+   * method always returns null so no such candidate is ever published;
+   * `parseDirectFinal` below keeps the one structural check for any other
+   * internal caller that still wants it (test-only today).
+   * @param {string} _stdout
+   * @returns {null}
+   */
+  parseOutput(_stdout) {
+    return null;
+  }
+
+  /**
+   * The one evidenced structural contract (module doc above), kept
+   * separate from `parseOutput` (which must always return null — see
+   * above): any non-empty line must be a clean JSON object and never
+   * error-shaped. Used only for tests/diagnostics; never wired as the
+   * installed `extractFinal` hook.
    * @param {string} stdout
    * @returns {{ events: object[] } | null}
    */
-  parseOutput(stdout) {
+  parseDirectFinal(stdout) {
     if (typeof stdout !== 'string' || !stdout.trim()) return null;
     const events = [];
     for (const raw of stdout.split('\n')) {
@@ -248,6 +266,45 @@ export class CopilotAdapter {
       events.push(event);
     }
     return events.length ? { events } : null;
+  }
+
+  /**
+   * #2995: production marks a run `completed` only when `parseWorkerFinal`
+   * succeeds (src/models/worker-installation.mjs ~l.733,
+   * tools/ralph-external/session-launcher.mjs ~l.477). Every other direct
+   * profile in this effort extracts its final answer text from its own
+   * strict event rule and hands that text to the shared strict
+   * `workerClaims` parser. Copilot cannot do the same: its JSONL event
+   * vocabulary is wholly unevidenced (module doc above — the installed
+   * binary is compiled, with no readable bundled source, and a live
+   * qualification run is blocked on credentials per
+   * docs/providers/copilot-direct.md). `parseOutput()` above therefore
+   * only proves "every line is a clean JSON object"; it cannot name which
+   * field, if any, holds the model's final answer, and inventing one here
+   * would be exactly the kind of unevidenced grammar this profile's
+   * `observeHealthEvent`/`parseOutput` deliberately refuse to guess.
+   * This override fails closed unconditionally — including for
+   * `options.format === 'mcp'`, since this profile has no evidenced MCP
+   * transport either — until the event stream is observed and the real
+   * answer field is documented.
+   * @param {string|Uint8Array} _output
+   * @param {Object} [_options]
+   * @returns {Promise<never>}
+   */
+  async parseWorkerFinal(_output, _options = {}) {
+    // Deliberately no cross-module import here (never a `../../
+    // _resolve-impl.mjs`/mission-protocol dependency): unlike every other
+    // adapter in this effort, Copilot ships as a flat, standalone module
+    // with no sibling files (module doc above), and this override always
+    // throws regardless of installed package layout. The error carries the
+    // same `code`/`name` shape as mission-protocol's WorkerContractError
+    // (OG_CONTRACT_UNSUPPORTED) so callers that branch on `.code` see a
+    // consistent, if extraction-unavailable, contract failure.
+    const error = new Error(
+      'Copilot final answer extraction is unavailable until the event stream is observed (docs/providers/copilot-direct.md)');
+    error.name = 'WorkerContractError';
+    error.code = 'OG_CONTRACT_UNSUPPORTED';
+    throw error;
   }
 }
 

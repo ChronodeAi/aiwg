@@ -15,6 +15,9 @@ import { stopWorkerUnit, detectWorkerIsolation, launchIsolatedWorker } from '../
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
 import { workerStdinDocument } from '../../../src/serve/worker-stdin-frame.mjs';
 import { CodexAdapter } from '../../../tools/ralph-external/lib/codex-adapter.mjs';
+import { FactoryDirectAdapter } from '../../../tools/ralph-external/lib/factory-adapter.mjs';
+import { PiDirectAdapter } from '../../../tools/ralph-external/lib/pi-adapter.mjs';
+import { GrokBuildAdapter } from '../../../tools/ralph-external/lib/grok-build-adapter.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -109,6 +112,168 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(result.exitCode).toBe(0);
     expect(result.health.state).not.toBe('completed');
     expect(await readFile(path.join(f.runDir, 'stdout.events.jsonl'), 'utf8')).toBe(forged);
+  });
+
+  // #2995: Factory (droid) keeps its final answer inside its own
+  // `stream-json` stdout stream and writes no separate final-output file
+  // (finalStat.size === 0, the realistic case for this profile). This
+  // drives the SAME production hook (worker-installation.mjs ~l.733,
+  // session-launcher.mjs ~l.459-480) through the real `FactoryDirectAdapter`
+  // (round 2: `parseOutput` on this `-direct` subclass IS the strict
+  // `parseDirectFinal` rule, not the legacy regex `FactoryAdapter` keeps —
+  // the legacy regex fails closed on a realistic multi-event stream before
+  // `parseWorkerFinal` is ever reached, which is why this stream below is a
+  // REALISTIC multi-event one: assistant/tool_call/tool_result lines before
+  // the terminal `result` line), with no hand-fed finalValid.
+  function factoryStream(resultText: string) {
+    return [
+      { type: 'assistant', session_id: 'synthetic-session', text: 'synthetic reply' },
+      { type: 'tool_call', session_id: 'synthetic-session', id: 'fixture-call-1', name: 'Read' },
+      { type: 'tool_result', session_id: 'synthetic-session', tool_call_id: 'fixture-call-1' },
+      { type: 'result', session_id: 'synthetic-session', subtype: 'success', is_error: false, duration_ms: 1, num_turns: 1, result: resultText },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n';
+  }
+  async function launchFactoryStream(f: any, stream: string, unit: string) {
+    const adapter = new FactoryDirectAdapter();
+    (f.drivers.codex as any).extractFinal = (text: string) => adapter.parseOutput(text);
+    (f.drivers.codex as any).parseWorkerFinal = (output: any, options: any) => adapter.parseWorkerFinal(output, options);
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
+    return f.launch({ launchIsolated: () => {
+      queueMicrotask(() => {
+        writeFileSync(f.final, ''); // no separate final file: finalStat.size === 0
+        child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return { mode: 'systemd-unit', child, unit };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+  }
+
+  it('a realistic multi-event Factory stream reaches completed health through the real -direct adapter hook, with no hand-fed finalValid', async () => {
+    const f = await fixture();
+    const claims = { version: 1, status: 'completed', summary: 'synthetic only', claims: [], artifacts: [], checks: [], limitations: [] };
+    const result = await launchFactoryStream(f, factoryStream(JSON.stringify(claims)), 'aiwg-worker-synthetic-factory');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health).toMatchObject({ state: 'completed', termination: 'confirmed' });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8')))
+      .toMatchObject({ source: 'adapter-extraction', terminalSuccess: true });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).health.state).toBe('completed');
+  });
+
+  it('the same realistic Factory stream with a plain-text (non-claims) final never reaches completed health', async () => {
+    const f = await fixture();
+    const result = await launchFactoryStream(f, factoryStream('synthetic plain reply, not a claims document'), 'aiwg-worker-synthetic-factory-plain');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health.state).not.toBe('completed');
+  });
+
+  it('a realistic multi-event Factory stream with no terminal result (failed run) never reaches completed health', async () => {
+    const f = await fixture();
+    const stream = [
+      { type: 'assistant', session_id: 'synthetic-session', text: 'synthetic reply' },
+      { type: 'tool_call', session_id: 'synthetic-session', id: 'fixture-call-1', name: 'Read' },
+      { type: 'error', session_id: 'synthetic-session', message: 'synthetic failure' },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n';
+    const result = await launchFactoryStream(f, stream, 'aiwg-worker-synthetic-factory-failed');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0); // exit zero is exactly the trap this guards against
+    expect(result.health.state).not.toBe('completed');
+  });
+
+  // #2995 round 2: the same proof for Pi, whose legacy `parseOutput` is
+  // settlement-only (no answer requirement) and whose `-direct` subclass
+  // (`PiDirectAdapter`) requires a settled, non-empty answer instead.
+  function piStream(resultText: string | null) {
+    const events: unknown[] = [{ type: 'session', id: 'synthetic-session' }, { type: 'agent_start' }];
+    if (resultText !== null) {
+      events.push({ type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', content: [{ type: 'text', text: resultText }] }] });
+    } else {
+      events.push({ type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', stopReason: 'error' }] });
+    }
+    events.push({ type: 'agent_settled' });
+    return events.map(event => JSON.stringify(event)).join('\n') + '\n';
+  }
+  async function launchPiStream(f: any, stream: string, unit: string) {
+    const adapter = new PiDirectAdapter();
+    (f.drivers.codex as any).extractFinal = (text: string) => adapter.parseOutput(text);
+    (f.drivers.codex as any).parseWorkerFinal = (output: any, options: any) => adapter.parseWorkerFinal(output, options);
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
+    return f.launch({ launchIsolated: () => {
+      queueMicrotask(() => {
+        writeFileSync(f.final, '');
+        child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return { mode: 'systemd-unit', child, unit };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+  }
+
+  it('a realistic multi-event Pi stream reaches completed health through the real -direct adapter hook, with no hand-fed finalValid', async () => {
+    const f = await fixture();
+    const claims = { version: 1, status: 'completed', summary: 'synthetic only', claims: [], artifacts: [], checks: [], limitations: [] };
+    const result = await launchPiStream(f, piStream(JSON.stringify(claims)), 'aiwg-worker-synthetic-pi');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health).toMatchObject({ state: 'completed', termination: 'confirmed' });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8')))
+      .toMatchObject({ source: 'adapter-extraction', terminalSuccess: true });
+  });
+
+  it('the same realistic Pi stream with a plain-text (non-claims) final never reaches completed health', async () => {
+    const f = await fixture();
+    const result = await launchPiStream(f, piStream('synthetic plain reply, not a claims document'), 'aiwg-worker-synthetic-pi-plain');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health.state).not.toBe('completed');
+  });
+
+  it('a realistic multi-event Pi stream that fails to settle never reaches completed health', async () => {
+    const f = await fixture();
+    const result = await launchPiStream(f, piStream(null), 'aiwg-worker-synthetic-pi-failed');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health.state).not.toBe('completed');
+  });
+
+  // #2995 round 3: Grok Build's parseOutput was already the strict
+  // ACP-derived direct rule (`parseDirectFinal`); this proves the newly
+  // added `parseWorkerFinal` override is what lets a realistic multi-event
+  // ACP stream (tool_call/tool_call_update/text, then the terminal `end`)
+  // reach `completed`, through the real adapter and no hand-fed finalValid.
+  function grokStream(resultText: string | null) {
+    const events: unknown[] = [
+      { type: 'tool_call', toolCallId: 'call_1', title: 'Read', kind: 'read', status: 'in_progress' },
+      { type: 'tool_call_update', toolCallId: 'call_1', status: 'completed' },
+    ];
+    if (resultText !== null) events.push({ type: 'text', data: resultText });
+    events.push({ type: 'end', stopReason: 'end_turn', sessionId: 'synthetic-session' });
+    return events.map(event => JSON.stringify(event)).join('\n') + '\n';
+  }
+  async function launchGrokStream(f: any, stream: string, unit: string) {
+    const adapter = new GrokBuildAdapter();
+    (f.drivers.codex as any).extractFinal = (text: string) => adapter.parseOutput(text);
+    (f.drivers.codex as any).parseWorkerFinal = (output: any, options: any) => adapter.parseWorkerFinal(output, options);
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483646;
+    return f.launch({ launchIsolated: () => {
+      queueMicrotask(() => {
+        writeFileSync(f.final, '');
+        child.stdout.end(stream); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return { mode: 'systemd-unit', child, unit };
+    }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }) });
+  }
+
+  it('a realistic multi-event Grok Build stream reaches completed health through the real adapter hook, with no hand-fed finalValid', async () => {
+    const f = await fixture();
+    const claims = { version: 1, status: 'completed', summary: 'synthetic only', claims: [], artifacts: [], checks: [], limitations: [] };
+    const result = await launchGrokStream(f, grokStream(JSON.stringify(claims)), 'aiwg-worker-synthetic-grok');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health).toMatchObject({ state: 'completed', termination: 'confirmed' });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8')))
+      .toMatchObject({ source: 'adapter-extraction', terminalSuccess: true });
+  });
+
+  it('the same realistic Grok Build stream with a plain-text (non-claims) final never reaches completed health', async () => {
+    const f = await fixture();
+    const result = await launchGrokStream(f, grokStream('synthetic plain reply, not a claims document'), 'aiwg-worker-synthetic-grok-plain');
+    expect(result.exitCode, JSON.stringify(result)).toBe(0);
+    expect(result.health.state).not.toBe('completed');
   });
 
   it.each(['closed', 'brief-text', 'brief-json'])('preserves exact argv, %s EOF, private metadata and captures', async stdin => {

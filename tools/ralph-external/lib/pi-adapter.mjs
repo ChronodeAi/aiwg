@@ -235,9 +235,19 @@ export class PiAdapter extends ProviderAdapter {
     let settledEvent = false;
     let text = null;
     for (const event of events) {
+      // #2995 round 3: `agent_settled` is documented as terminal; ANY event
+      // observed after it (including a second agent_start) breaks that
+      // contract and fails the parse, exactly like Factory/Cursor's
+      // post-terminal check.
+      if (settledEvent) { failed = true; continue; }
       if (event.type === 'error') failed = true;
-      if (event.type === 'agent_settled') settledEvent = true;
-      if (event.type !== 'agent_end' || !Array.isArray(event.messages)) continue;
+      if (event.type === 'agent_settled') { settledEvent = true; continue; }
+      if (event.type !== 'agent_end') continue;
+      // #2995 round 3: an `agent_end` with NO `messages` array at all (not
+      // just an explicit empty array) must CLEAR any earlier candidate
+      // text -- never let an earlier claim survive a later answerless
+      // terminal.
+      if (!Array.isArray(event.messages)) { text = null; continue; }
       if (event.willRetry === true || event.messages.some(message => message.stopReason === 'error' || message.stopReason === 'aborted')) {
         failed = true;
       }
@@ -254,18 +264,70 @@ export class PiAdapter extends ProviderAdapter {
     const settled = settledEvent && !failed && Boolean(text);
     return { events, settled, text: settled ? text : null };
   }
+
 }
 
 // Self-register on import for the legacy Ralph loop only. The direct worker
 // profile loads through the #2885 installed loader instead (see below).
 registerProvider('pi', () => new PiAdapter());
 
+/**
+ * #2995: `PiAdapter.parseOutput` above is the legacy-pinned, settlement-only
+ * candidate parser (`test/unit/ralph/pi-adapter.test.mjs` and the legacy
+ * Ralph loop depend on its exact `{events,settled}` shape, with no answer
+ * requirement at all) — it is non-null whenever the stream parses as JSONL,
+ * regardless of whether the run actually settled successfully with a
+ * non-empty answer. The installed-module loader's `extractFinal` hook IS
+ * `instance.parseOutput` (src/models/worker-installation.mjs ~l.730) and
+ * session-launcher.mjs's gate (~l.462) throws unless that hook returns
+ * null for anything that is not an affirmative success — so wiring the
+ * legacy parser there would let an unsettled or empty-answer run pass the
+ * gate as a false candidate.
+ *
+ * `PiDirectAdapter` is the Claude/Hermes `-direct`-subclass pattern: only
+ * `parseOutput` changes, to a thin wrapper over the ALREADY-correct
+ * `parseDirectFinal` (above) that returns null unless `settled` is true
+ * AND `text` is a non-empty string — never a second, looser rule.
+ * `parseWorkerFinal` only needs the strict version here (no
+ * generic-envelope fallback): this class is never reachable through the
+ * legacy bare `registerProvider('pi', ...)` id above, only through the
+ * installed-module `register(factory)` export below, so the legacy
+ * group-mode contract (test/unit/ralph-external/worker-finals.test.ts)
+ * never sees it.
+ */
+export class PiDirectAdapter extends PiAdapter {
+  // #2995 round 4 (item 3): production resolves the installed adapter by
+  // `adapter.id` (now `pi-direct`, item B) and src/models/
+  // worker-installation.mjs's `inspectWorkerInstallation` requires
+  // `adapter.id === instance.getName()`. `getBinary()` is untouched.
+  getName() { return 'pi-direct'; }
+
+  /** @param {string} stdout @returns {{events:object[],settled:true,text:string}|null} */
+  parseOutput(stdout) {
+    const final = this.parseDirectFinal(stdout);
+    return final && final.settled && typeof final.text === 'string' && final.text.trim() ? final : null;
+  }
+
+  /**
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseOutput(text);
+    if (!final) throw new Error('Pi worker stream did not produce a settled, non-empty final answer');
+    return super.parseWorkerFinal(final.text, { ...options, format: 'json' });
+  }
+}
+
 /** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
 export const interfaceVersion = 1;
 
 /** Installed-module registration: exactly the one approved adapter ID. */
 export function register(factory) {
-  factory('pi', () => new PiAdapter());
+  factory('pi-direct', () => new PiDirectAdapter());
 }
 
 export default PiAdapter;

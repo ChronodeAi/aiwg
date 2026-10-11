@@ -109,6 +109,7 @@
  */
 
 import { classifyWorkerHealthFailure, healthEventMatchesBinding } from './worker-health.mjs';
+import { ProviderAdapter } from './provider-adapter.mjs';
 
 export const interfaceVersion = 1;
 
@@ -167,7 +168,7 @@ function assertPlainToolPattern(value, label) {
   }
 }
 
-export class GrokBuildAdapter {
+export class GrokBuildAdapter extends ProviderAdapter {
   getBinary() { return 'grok'; }
   getName() { return 'grok-build'; }
   getCapabilities() {
@@ -317,12 +318,34 @@ export class GrokBuildAdapter {
    * failure permanently — once set, nothing later can flip it back to
    * success, so `text -> end(refusal) -> end(end_turn)` and
    * `text -> end(end_turn) -> text` both fail closed.
+   *
+   * #2995 round 4 (item 2): concatenating every `text` event's `data` is
+   * correct ONLY within one model response -- docs/providers/
+   * grok-build-cli-evidence.md ~l.183 documents `usage` as "Per-response
+   * boundary ..., one per model response", i.e. the evidenced response
+   * boundary marker, and separately documents `tool_call`/
+   * `tool_call_update` as distinct event types from `text` (the field
+   * table). A multi-response turn therefore looks like
+   * `text* -> usage -> tool_call -> tool_call_update -> text* -> usage ->
+   * end`: `usage` CLOSES the response that just produced the accumulated
+   * text (the text is kept as that response's candidate, not discarded —
+   * the evidenced single-response fixture ends `... text -> usage ->
+   * end` and must still resolve with that text), but marks the
+   * accumulator closed; a `tool_call`/`tool_call_update`, OR the next
+   * `text` event arriving after a close, both mean a NEW response is
+   * starting and discard whatever was accumulated before it, so text
+   * from an earlier response (or text emitted before a tool call) is
+   * never part of the final answer. Text chunks WITHIN one still-open
+   * response still concatenate (no evidence of a sub-response text
+   * boundary), so `tool_call -> text(chunk1) -> text(chunk2) -> end`
+   * still resolves with chunk1+chunk2.
    * @param {string} stdout
    * @returns {{ text: string, stopReason: string, sessionId: string | null } | null}
    */
   parseDirectFinal(stdout) {
     if (typeof stdout !== 'string' || !stdout.trim()) return null;
     let text = '';
+    let responseClosed = false;
     let endEvent = null;
     let failed = false;
     for (const raw of stdout.split('\n')) {
@@ -337,7 +360,19 @@ export class GrokBuildAdapter {
       if (endEvent) failed = true;
       if (event.type === 'error') failed = true;
       if ((event.type === 'tool_call' || event.type === 'tool_call_update') && event.status === 'failed') failed = true;
-      if (event.type === 'text' && typeof event.data === 'string') text += event.data;
+      // Response-boundary resets (module doc above): a tool call
+      // intervening discards any text accumulated before it (a new
+      // response is starting); `usage` only closes the current response
+      // without discarding its text.
+      if (event.type === 'tool_call' || event.type === 'tool_call_update') { text = ''; responseClosed = false; }
+      if (event.type === 'usage') responseClosed = true;
+      if (event.type === 'text' && typeof event.data === 'string') {
+        // A text event arriving after a response already closed starts a
+        // NEW response: the previous response's text is never part of
+        // a later response's final answer.
+        if (responseClosed) { text = ''; responseClosed = false; }
+        text += event.data;
+      }
       if (event.type === 'end') {
         endEvent = event;
         // Latched: a bad stopReason here can never be repaired by
@@ -349,6 +384,33 @@ export class GrokBuildAdapter {
     if (failed || !endEvent) return null;
     if (!text.trim()) return null;
     return { text, stopReason: endEvent.stopReason, sessionId: typeof endEvent.sessionId === 'string' ? endEvent.sessionId : null };
+  }
+
+  /**
+   * #2995: production marks a run `completed` only when `parseWorkerFinal`
+   * succeeds (src/models/worker-installation.mjs ~l.733,
+   * tools/ralph-external/session-launcher.mjs ~l.477). Grok Build's final
+   * answer lives inside its own ACP-derived `streaming-json` stdout, so the
+   * base `ProviderAdapter.parseWorkerFinal` (which expects a bare claims
+   * document) can never validate it on its own. This override keeps the
+   * shared path for MCP envelopes and otherwise re-validates the stream
+   * with this profile's OWN strict rule (`parseDirectFinal`, above — never
+   * a second, looser rule), extracts the settled answer text, and hands
+   * that text to the shared strict `workerClaims` parser. There is no
+   * legacy Ralph-loop registration for this standalone adapter to
+   * preserve (no `registerProvider('grok-build', ...)` below), so no
+   * generic-envelope fallback is needed: a stream that fails the strict
+   * rule, or a final that is not a valid claims document, stays invalid.
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseDirectFinal(text);
+    if (!final) throw new Error('Grok Build worker stream did not produce a successful final result');
+    return super.parseWorkerFinal(final.text, { ...options, format: 'json' });
   }
 }
 

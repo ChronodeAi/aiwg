@@ -46,22 +46,48 @@ const installRoots: string[] = [];
 const BOUNDARY_DIGEST = workerConfigDigest('synthetic-grok-build-boundary');
 const sha256 = (bytes: Buffer | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
-/** Host-side install of the one approved module into a fresh, read-only package root. */
+/** Host-side install of the one approved module into a fresh, read-only
+ * package root. #2995: grok-build-adapter.mjs now also imports
+ * ProviderAdapter from the sibling ./provider-adapter.mjs (for
+ * parseWorkerFinal's shared strict-claims path), so this mirrors the
+ * `pkg/lib/` layout the other `-direct` adapters use (e.g.
+ * cursor-adapter.mjs's install helper) instead of the old flat package
+ * root: provider-adapter.mjs itself resolves `../../_resolve-impl.mjs` two
+ * directories up, and that in turn resolves `mission-protocol/index.js`
+ * under `src/`. */
 async function installPackage(bytes: Buffer) {
   const base = await mkdtemp(path.join(os.tmpdir(), 'aiwg-grok-install-')); installRoots.push(base);
-  const packageRoot = path.join(base, 'package');
+  const packageRoot = path.join(base, 'pkg');
   const writable = path.join(base, 'worker-writable');
-  await mkdir(packageRoot, { mode: 0o755 }); await mkdir(writable);
-  await chmod(base, 0o755);
+  await mkdir(path.join(packageRoot, 'lib'), { recursive: true, mode: 0o755 }); await mkdir(writable);
+  await chmod(base, 0o755); await chmod(packageRoot, 0o755); await chmod(path.join(packageRoot, 'lib'), 0o755);
+  await writeFile(path.join(base, 'package.json'), JSON.stringify({ name: 'aiwg', version: '0.0.0-test-root', type: 'module' }));
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, APPROVED.entry.modulePath), bytes, { mode: 0o644 });
   // grok-build-adapter.mjs imports classifyWorkerHealthFailure/
-  // healthEventMatchesBinding from the sibling ./worker-health.mjs: copy it
-  // alongside so the isolated installed-module load can resolve it.
-  const healthDest = path.join(packageRoot, 'worker-health.mjs');
-  await copyFile(path.resolve('tools/ralph-external/lib/worker-health.mjs'), healthDest);
-  await chmod(healthDest, 0o644);
+  // healthEventMatchesBinding from ./worker-health.mjs and ProviderAdapter
+  // from ./provider-adapter.mjs: copy both siblings alongside.
+  for (const name of ['worker-health.mjs', 'provider-adapter.mjs']) {
+    const dest = path.join(packageRoot, 'lib', name);
+    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
+    await chmod(dest, 0o644);
+  }
+  const resolveImpl = path.join(base, '_resolve-impl.mjs');
+  await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
+  await chmod(resolveImpl, 0o644);
+  await mkdir(path.join(base, 'src', 'models'), { recursive: true, mode: 0o755 });
+  const target = path.resolve('src/models/worker-installation.mjs');
+  const relative = path.relative(path.join(base, 'src', 'models'), target);
+  await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
+    `export * from ${JSON.stringify(relative)};\n`);
+  // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
+  // resolves mission-protocol/index.js via the same _resolve-impl bridge.
+  await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
+  const protocolTarget = path.resolve('src/mission-protocol/index.ts');
+  const protocolRelative = path.relative(path.join(base, 'src', 'mission-protocol'), protocolTarget);
+  await writeFile(path.join(base, 'src', 'mission-protocol', 'index.js'),
+    `export * from ${JSON.stringify(protocolRelative)};\n`);
   return { packageRoot, writable };
 }
 
@@ -390,6 +416,65 @@ describe('T-OG-03/20/21 Grok Build run identity and ACP-grammar health signals',
     const terminal = installed.owner.observeHealthEvent(events[events.length - 1], stdout, binding);
     expect(terminal).toMatchObject({ kind: 'terminal', success: false });
   });
+
+  // #2995: production marks a run `completed` only when `parseWorkerFinal`
+  // succeeds. These cases drive the real installed-owner hook, never a
+  // hand-fed finalValid.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+  async function streamFor(scenario: string): Promise<string> {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'synthetic brief');
+    const { file } = await fakeConfig(root, scenario);
+    const result = await run(process.execPath, argv(workdir, briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  it('GB16 parseWorkerFinal resolves a successful stream whose final answer is a valid claims document', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).resolves.toMatchObject({ version: 1, status: 'completed' });
+  });
+
+  it('GB17 parseWorkerFinal rejects a successful stream whose final answer is plain text (not claims)', async () => {
+    const stream = await streamFor('success');
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  it.each(['error-event', 'tool-failed', 'refusal', 'malformed'])('GB18 parseWorkerFinal rejects a %s stream', async scenario => {
+    const stream = await streamFor(scenario);
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  it('GB19 parseWorkerFinal accepts Uint8Array/Buffer bytes input', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(installed.owner.parseWorkerFinal(Buffer.from(stream, 'utf8'), { observation })).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  // #2995 round 3 (item E): GrokBuildAdapter now extends ProviderAdapter
+  // (for parseWorkerFinal's shared strict-claims path), which means
+  // `createHealthObserver` is newly INHERITED rather than absent. Pin that
+  // the inherited method still wires Grok's OWN `observeHealthEvent` (ACP
+  // grammar), the same one `buildWorkerArgs`/`parseDirectFinal` already
+  // use directly elsewhere in this file -- never the generic/legacy
+  // grok-build event shape in worker-health.mjs.
+  it('GB20 the inherited createHealthObserver wires Grok Build\'s own ACP observeHealthEvent, not the generic default', async () => {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'synthetic brief');
+    const { file } = await fakeConfig(root, 'success');
+    const clock = { t: 0 };
+    const o = installed.owner.createHealthObserver({ provider: 'grok-build', profile: { health: health() },
+      invocationId: 'grok-fixture-inherited', now: () => clock.t, wallNow: () => 0, startedAt: 0,
+      effectiveHealth: { startupSeconds: 60, checkSeconds: 15, quietSeconds: 90, stallSeconds: 300, diagnosticGraceSeconds: 60 } });
+    const result = await run(process.execPath, argv(workdir, briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
+      onStart: child => o.processStarted({ pid: child.pid!, startTicks: 'fixture', executable: process.execPath }) });
+    expect(result.code, result.stderr).toBe(0);
+    feed(o, result.stdout, 'stdout');
+    clock.t = 1000;
+    const final = installed.owner.parseDirectFinal(result.stdout);
+    const snapshot = o.finish({ exitCode: result.code, termination: 'confirmed', finalValid: final !== null });
+    expect(snapshot.state).toBe('completed');
+    expect(o.evidence().events.map((e: any) => e.kind)).toEqual(expect.arrayContaining(['progress']));
+  });
 });
 
 describe('GB12 parseDirectFinal: latching, ordering and malformed-anywhere rejection', () => {
@@ -437,6 +522,46 @@ describe('GB12 parseDirectFinal: latching, ordering and malformed-anywhere rejec
     const stdout = [ev({ type: 'text', data: 'hello ' }), ev({ type: 'text', data: 'world' }),
       ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' })].join('\n');
     expect(owner().parseDirectFinal(stdout)).toEqual({ text: 'hello world', stopReason: 'end_turn', sessionId: 's1' });
+  });
+
+  // #2995 round 4 (item 2): response boundaries (docs/providers/
+  // grok-build-cli-evidence.md ~l.183, `usage` = "Per-response boundary
+  // ..., one per model response"). Text emitted before a tool call is
+  // never part of the final answer, and a pre-tool prefix can never
+  // repair an otherwise-invalid final.
+  it('(regression) text(valid claims) -> tool_call -> tool_call_update(completed) -> text(whitespace) -> end(end_turn) REJECTS', () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'x', claims: [], artifacts: [], checks: [], limitations: [] });
+    const stdout = [
+      ev({ type: 'text', data: claims }),
+      ev({ type: 'tool_call', toolCallId: 'call_1', status: 'in_progress' }),
+      ev({ type: 'tool_call_update', toolCallId: 'call_1', status: 'completed' }),
+      ev({ type: 'text', data: '   ' }),
+      ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' }),
+    ].join('\n');
+    expect(owner().parseDirectFinal(stdout)).toBeNull();
+  });
+
+  it('(regression) a pre-tool text prefix can never repair an otherwise-invalid final', () => {
+    const stdout = [
+      ev({ type: 'text', data: '{"partial":' }),
+      ev({ type: 'tool_call', toolCallId: 'call_1', status: 'in_progress' }),
+      ev({ type: 'text', data: 'rest that is invalid alone' }),
+      ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' }),
+    ].join('\n');
+    const final = owner().parseDirectFinal(stdout);
+    expect(final?.text).toBe('rest that is invalid alone');
+    expect(final?.text).not.toContain('"partial"');
+  });
+
+  it('(regression) tool_call -> text(chunk1) -> text(chunk2) -> end(end_turn) RESOLVES with the concatenated in-response chunks', () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'x', claims: [], artifacts: [], checks: [], limitations: [] });
+    const stdout = [
+      ev({ type: 'tool_call', toolCallId: 'call_1', status: 'in_progress' }),
+      ev({ type: 'text', data: claims.slice(0, 20) }),
+      ev({ type: 'text', data: claims.slice(20) }),
+      ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' }),
+    ].join('\n');
+    expect(owner().parseDirectFinal(stdout)).toMatchObject({ text: claims });
   });
 });
 

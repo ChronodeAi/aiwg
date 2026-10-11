@@ -33,6 +33,11 @@ if (args.includes('--version')) {
       // agent_end with no assistant message, then settle: no final to parse.
       emit({ type: 'agent_end', willRetry: false });
       emit({ type: 'agent_settled' });
+    } else if (settings.scenario === 'plain-text-final') {
+      // #2995: a settled, non-empty final answer that is plain text, not a
+      // claims document — parseWorkerFinal must still reject it.
+      emit({ type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'synthetic plain reply' }] }] });
+      emit({ type: 'agent_settled' });
     } else {
       const text = JSON.stringify(claims({ provider: 'pi', model: value('--model'), effort: value('--thinking'), brief }));
       emit({ type: 'agent_end', willRetry: false, messages: [{ role: 'assistant', content: [{ type: 'text', text }] }] });
