@@ -15,6 +15,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   files are never read. A truncated cache window is imported as `provisional`,
   and re-imports add only newer entries.
 
+### Changed
+
+- npm package keywords now cover decision support (`decision-engine`,
+  `decision-support`, `decision-offload`, `jev`, `token-optimization`), session
+  history search, and the newer providers, so the package is easier to find.
+
 ### Fixed
 
 - Session interchange imports now name the failing header field and its
