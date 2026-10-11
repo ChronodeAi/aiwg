@@ -20,6 +20,8 @@ deployment regardless of personal setup, stick with the default
 project-scope deploy and commit `.aiwg/` (or whichever provider dirs
 your team uses).
 
+For multi-repository work, see [Working Across Multiple Projects](../guides/multi-project-workspaces.md).
+
 ## Quick Start
 
 ```bash
