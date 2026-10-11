@@ -139,6 +139,18 @@ switch (scenario) {
     process.exit(0);
     break;
   }
+  // #2995: a successful stream whose concatenated text is itself a valid
+  // strict workerClaims JSON document, for parseWorkerFinal coverage.
+  case 'claims-final': {
+    if (format === 'json') {
+      handshake();
+      textEvent('opencode-fixture-part-1', JSON.stringify({ version: 1, status: 'completed',
+        summary: 'Synthetic opencode claims', claims: [], artifacts: [], checks: [], limitations: [] }));
+      finish('stop');
+    }
+    process.exit(0);
+    break;
+  }
   case 'model-not-found':
     fail(`model_not_found: ${model ?? '(no model)'}`);
     break;

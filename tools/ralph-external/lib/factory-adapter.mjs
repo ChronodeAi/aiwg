@@ -274,6 +274,7 @@ export class FactoryAdapter extends ProviderAdapter {
     return final;
   }
 
+
   /** @returns {string} */
   getBinary() {
     return 'droid';
@@ -438,12 +439,65 @@ export class FactoryAdapter extends ProviderAdapter {
 // profile loads through the #2885 installed loader instead (see below).
 registerProvider('factory', () => new FactoryAdapter());
 
+/**
+ * #2995: `FactoryAdapter.parseOutput` above is the legacy-pinned,
+ * loose-regex candidate parser (`test/unit/ralph/factory-adapter.test.mjs`
+ * and the legacy Ralph loop depend on its exact shape) — it extracts the
+ * FIRST `{...}` to the LAST `}` across the whole stdout, so it fails
+ * (returns null) on any realistic multi-event `stream-json` run (assistant/
+ * tool_call/tool_result lines before the final `result` line), and it is
+ * loose in the other direction too (a non-affirmative or empty-text result
+ * can still parse as a truthy object). The installed-module loader's
+ * `extractFinal` hook IS `instance.parseOutput` (src/models/
+ * worker-installation.mjs ~l.730) and session-launcher.mjs's gate
+ * (~l.462) throws unless that hook returns a non-null, non-`success:false`
+ * result — so a real direct-shell run could never reach `parseWorkerFinal`
+ * at all with the legacy parser wired to it.
+ *
+ * `FactoryDirectAdapter` is the Claude/Hermes `-direct`-subclass pattern:
+ * only `parseOutput` changes, to the ALREADY-correct `parseDirectFinal`
+ * (above — one rule, never a second one), which returns null unless the
+ * whole stream is a single droid-shaped success terminal with non-empty
+ * text. `parseWorkerFinal` only needs the strict version here (no
+ * generic-envelope fallback): this class is never reachable through the
+ * legacy bare `registerProvider('factory', ...)` id above, only through
+ * the installed-module `register(factory)` export below, so the legacy
+ * group-mode contract (test/unit/ralph-external/worker-finals.test.ts)
+ * never sees it.
+ */
+export class FactoryDirectAdapter extends FactoryAdapter {
+  // #2995 round 4 (item 3): production resolves the installed adapter by
+  // `adapter.id` (now `factory-direct`, item B) and
+  // src/models/worker-installation.mjs's `inspectWorkerInstallation`
+  // requires `adapter.id === instance.getName()`. `getBinary()` (the real
+  // `droid` executable) and the `provider: 'factory'` literals inside
+  // `observeHealthEvent` are untouched -- only this identity label changes.
+  getName() { return 'factory-direct'; }
+
+  parseOutput(stdout) {
+    return this.parseDirectFinal(stdout);
+  }
+
+  /**
+   * @param {string|Uint8Array} output
+   * @param {Object} [options]
+   * @returns {Promise<import('../../../src/mission-protocol/types.js').WorkerClaims>}
+   */
+  async parseWorkerFinal(output, options = {}) {
+    if (options.format === 'mcp') return super.parseWorkerFinal(output, options);
+    const text = typeof output === 'string' ? output : Buffer.from(output).toString('utf8');
+    const final = this.parseDirectFinal(text);
+    if (!final) throw new Error('Factory worker stream did not produce a successful final result');
+    return super.parseWorkerFinal(final.result, { ...options, format: 'json' });
+  }
+}
+
 /** Installed-module interface version (mirrors #2897 codex-adapter.mjs). */
 export const interfaceVersion = 1;
 
 /** Installed-module registration: exactly the one approved adapter ID. */
 export function register(factory) {
-  factory('factory', () => new FactoryAdapter());
+  factory('factory-direct', () => new FactoryDirectAdapter());
 }
 
 export default FactoryAdapter;

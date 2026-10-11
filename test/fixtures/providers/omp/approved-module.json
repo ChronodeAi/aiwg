@@ -7,9 +7,9 @@
     "packageVersion": "1",
     "modulePath": "lib/omp-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:b4398c8e900c3e09809b4f794b90277e4d0ba4b73a143bd3eeea80912bc16fef",
+    "sha256": "sha256:68e86a39a82067905d7039b9e014823a45cc1afaa0dbb370827abfe20b9d38c3",
     "adapterIds": [
-      "omp"
+      "omp-direct"
     ],
     "platforms": [
       "linux"

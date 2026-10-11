@@ -74,6 +74,13 @@ async function installOpenCodePackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
+  // resolves mission-protocol/index.js via the same _resolve-impl bridge.
+  await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
+  const protocolTarget = path.resolve('src/mission-protocol/index.ts');
+  const protocolRelative = path.relative(path.join(base, 'src', 'mission-protocol'), protocolTarget);
+  await writeFile(path.join(base, 'src', 'mission-protocol', 'index.js'),
+    `export * from ${JSON.stringify(protocolRelative)};\n`);
   return { packageRoot, writable };
 }
 
@@ -91,7 +98,7 @@ beforeAll(async () => {
     const { packageRoot, writable } = await installOpenCodePackage(readFileSync(MODULE));
     const ids = await loadInstalledWorkerAdapters({ registry: loadingRegistry(),
       modules: [{ ...APPROVED.entry, packageRoot }], workerWritableRoots: [writable], platform: 'linux' });
-    installed = { owner: createProvider('opencode'), ids };
+    installed = { owner: createProvider('opencode-direct'), ids };
   } finally {
     if (saved === undefined) delete process.env.AIWG_RESOLVE_IMPL_FROM;
     else process.env.AIWG_RESOLVE_IMPL_FROM = saved;
@@ -208,7 +215,7 @@ async function opencodePlan(options: { qualify?: boolean; effort?: 'ultra'; cliV
   f.snapshot.config.parallelism!.groups!.workers.members = [soleMember];
   f.snapshot.config.parallelism!.groups!.workers.fallback = [];
   const drivers: Record<string, WorkerInvocationDriver> = { opencode: {
-    qualification: { adapter, adapterId: 'opencode', cliVersion: binding.cliVersion, boundary,
+    qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary,
       installation: { evidence: profile.installationQualification, boundary } },
     // Synthetic installation recheck (mirrors muse-direct.test.ts); the real
     // preparation owner still checks all policy, tuple, environment, path
@@ -272,15 +279,32 @@ describe('OpenCode version-bound profile (B-OG-39)', () => {
   it('OC01d pins the one approved module digest and loads OpenCode through the production installed loader', async () => {
     expect(APPROVED.source).toBe(MODULE);
     expect(sha256(readFileSync(MODULE))).toBe(APPROVED.entry.sha256);
-    expect(APPROVED.entry).toMatchObject({ reference: 'installed:opencode', interfaceVersion: 1, adapterIds: ['opencode'],
+    expect(APPROVED.entry).toMatchObject({ reference: 'installed:opencode', interfaceVersion: 1, adapterIds: ['opencode-direct'],
       platforms: ['linux'] });
-    expect(installed.ids).toEqual(['opencode']);
-    expect(installed.owner.getName()).toBe('opencode');
-    expect(installed.owner.constructor.name).toBe('OpenCodeAdapter');
+    expect(installed.ids).toEqual(['opencode-direct']);
+    expect(installed.owner.getName()).toBe('opencode-direct');
+    expect(installed.owner.constructor.name).toBe('OpenCodeDirectAdapter');
     expect(installed.owner.buildWorkerArgs(
       { selected: { model: MODEL, effort: { value: null } }, cwd: '/w', briefPath: '/w/brief.md' }, null, {}))
       .toEqual(['run', '--format', 'json', '-m', MODEL, '-f', '/w/brief.md', OPENCODE_FIXED_MESSAGE]);
     expect(OPENCODE_DIRECT_STDIN).toBe('closed');
+  });
+
+  it("(#2995 round 4, item 3) inspectWorkerInstallation accepts the direct adapter's identity (adapter.id === instance.getName())", async () => {
+    const { inspectWorkerInstallation } = await import('../../../src/models/worker-installation.mjs');
+    const adapter = structuredClone(loadProviderModelCapabilities().providers['opencode'].workerHealthAdapter!);
+    let error: any;
+    try {
+      await inspectWorkerInstallation(installed.owner, { adapter, platform: 'linux', profile: 'direct-shell',
+        cliVersion: adapter.supportedVersions, workerWritableRoots: [], effectiveConfigDigest: `sha256:${'a'.repeat(64)}`,
+        accountScope: 'synthetic', boundary: null, cwd: '/tmp' });
+    } catch (e) { error = e; }
+    // Before this fix, this threw 'Unsupported installation identity/platform'
+    // because the Direct subclass's getName() still returned the bare id
+    // while adapter.id is now `opencode-direct`. Any OTHER error here (this minimal
+    // request is deliberately incomplete past the identity gate) proves
+    // the identity check itself passed.
+    expect(error?.message).not.toBe('Unsupported installation identity/platform');
   });
 
   it('OC01e a tampered copy is refused by the installed loader', async () => {
@@ -486,5 +510,111 @@ describe('T-OG-20 OpenCode run identity and signals', () => {
     expect(result.code).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record.envNames).not.toContain('OPENCODE_API_KEY');
+  });
+
+  // #2995: production marks a run `completed` only when `parseWorkerFinal`
+  // succeeds. These cases drive the real installed-owner hook, never a
+  // hand-fed finalValid.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+  async function streamFor(scenario: string): Promise<string> {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, BRIEF);
+    const { file } = await fakeConfig(root, scenario);
+    const result = await run(process.execPath, argv(briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  it('OC12 parseWorkerFinal resolves a successful stream whose final answer is a valid claims document', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).resolves.toMatchObject({ version: 1, status: 'completed' });
+  });
+
+  it('OC13 parseWorkerFinal rejects a successful stream whose final answer is plain text (not claims)', async () => {
+    const stream = await streamFor('success');
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  it.each(['step-error', 'malformed', 'truncated-after-text'])('OC14 parseWorkerFinal rejects a %s stream', async scenario => {
+    const stream = await streamFor(scenario);
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  it('OC15 parseWorkerFinal accepts Uint8Array/Buffer bytes input', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(installed.owner.parseWorkerFinal(Buffer.from(stream, 'utf8'), { observation })).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  // #2995 round 3 (item A.3): before this fix, every `text` part across
+  // the WHOLE run was concatenated and an earlier completion signal (a
+  // finished `text` part) was never discarded by a later step. This proves
+  // an earlier step's complete claims followed by an empty final step
+  // never resolves.
+  it('OC16a a tool step followed by an answer step resolves with the last step only; non-emitter events reject', () => {
+    const line = (event: unknown) => JSON.stringify(event);
+    const text = (value: string, end: number | null = 2) => line({ type: 'text', sessionID: 's', part: { type: 'text', text: value, time: end ? { start: 1, end } : { start: 1 } } });
+    const start = line({ type: 'step_start', sessionID: 's', part: { type: 'step-start' } });
+    const finish = (reason: string) => line({ type: 'step_finish', sessionID: 's', part: { type: 'step-finish', reason } });
+    const tool = line({ type: 'tool_use', sessionID: 's', part: { type: 'tool', state: { status: 'completed' } } });
+    const reasoning = line({ type: 'reasoning', sessionID: 's', part: { type: 'reasoning', text: 'thinking' } });
+    const parse = (...lines: string[]) => installed.owner.parseDirectFinal(lines.join('\n') + '\n');
+    // 'tool-calls' is the one evidenced continue reason (2.0.26: finish && !["tool-calls","unknown"].includes(finish)).
+    expect(parse(start, text('PRE-TOOL'), tool, finish('tool-calls'), start, reasoning, text('ANSWER'), finish('stop'))).toEqual({ text: 'ANSWER' });
+    expect(parse(start, tool, finish('tool_use'), start, text('A'), finish('stop'))).toBeNull(); // not a normalized reason
+    expect(parse(start, text('A'), finish('unknown'))).toBeNull();
+    expect(parse(start, text('A'), line({ type: 'mystery', sessionID: 's' }), finish('stop'))).toBeNull(); // outside the emitter's six types
+    expect(parse(text('CLAIMS'), text('junk', null))).toBeNull(); // an unfinished part after a complete one invalidates it
+  });
+
+  it('OC16 (regression) an earlier complete claims step followed by an empty final step never resolves', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'stale', claims: [], artifacts: [], checks: [], limitations: [] });
+    const SID = 'opencode-fixture-session';
+    const line = (event: unknown) => JSON.stringify(event);
+    const stream = [
+      line({ type: 'step_start', sessionID: SID, part: {} }),
+      line({ type: 'text', sessionID: SID, part: { id: 'p1', sessionID: SID, type: 'text', text: claims, time: { start: 1, end: 2 } } }),
+      line({ type: 'step_start', sessionID: SID, part: {} }),
+      line({ type: 'step_finish', sessionID: SID, part: { reason: 'stop' } }),
+    ].join('\n') + '\n';
+    expect(installed.owner.parseOutput(stream)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  // #2995 round 4 (item 1): an intermediate step ending for a CONTINUE
+  // reason (the model called a tool, not run completion) must not be
+  // terminal and must not fail; the run resolves with the LAST step's text.
+  it('OC17 (regression) step_start -> step_finish(tool-calls) -> step_start -> text(claims) -> step_finish(stop) RESOLVES with the last step\'s text', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'x', claims: [], artifacts: [], checks: [], limitations: [] });
+    const SID = 'opencode-fixture-session';
+    const line = (event: unknown) => JSON.stringify(event);
+    const stream = [
+      line({ type: 'step_start', sessionID: SID, part: {} }),
+      line({ type: 'step_finish', sessionID: SID, part: { reason: 'tool-calls' } }),
+      line({ type: 'step_start', sessionID: SID, part: {} }),
+      line({ type: 'text', sessionID: SID, part: { id: 'p1', sessionID: SID, type: 'text', text: claims, time: { start: 1, end: 2 } } }),
+      line({ type: 'step_finish', sessionID: SID, part: { reason: 'stop' } }),
+    ].join('\n') + '\n';
+    expect(installed.owner.parseOutput(stream)).toMatchObject({ text: claims });
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  // #2995 round 4 (item 1): any text part WITHOUT time.end arriving after
+  // an established complete candidate invalidates that candidate -- never
+  // silently discarded in favor of the earlier, already-complete one.
+  it.each([
+    ['whitespace', '   '],
+    ['non-claims', 'unfinished but not whitespace either'],
+  ])('OC18 (regression) a complete claims text followed by an unfinished %s text part REJECTS', async (_label, unfinishedText) => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'x', claims: [], artifacts: [], checks: [], limitations: [] });
+    const SID = 'opencode-fixture-session';
+    const line = (event: unknown) => JSON.stringify(event);
+    const stream = [
+      line({ type: 'step_start', sessionID: SID, part: {} }),
+      line({ type: 'text', sessionID: SID, part: { id: 'p1', sessionID: SID, type: 'text', text: claims, time: { start: 1, end: 2 } } }),
+      line({ type: 'text', sessionID: SID, part: { id: 'p2', sessionID: SID, type: 'text', text: unfinishedText } }),
+      line({ type: 'step_finish', sessionID: SID, part: { reason: 'stop' } }),
+    ].join('\n') + '\n';
+    expect(installed.owner.parseOutput(stream)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(stream, { observation })).rejects.toThrow();
   });
 });

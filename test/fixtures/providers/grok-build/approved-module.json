@@ -5,9 +5,9 @@
     "reference": "installed:grok-build",
     "packageName": "@aiwg/grok-build-worker",
     "packageVersion": "1",
-    "modulePath": "grok-build-adapter.mjs",
+    "modulePath": "lib/grok-build-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:ff059eacf4457034b4d00d336fe5127e86348c06a30572ca8bf0246f396f3725",
+    "sha256": "sha256:e271edaac40b5265e89c734c2dca7bab3913dd41dfaac063ba04964754e29ada",
     "adapterIds": ["grok-build"],
     "platforms": ["linux"]
   }

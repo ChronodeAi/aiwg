@@ -32,6 +32,11 @@ if (args.includes('--version')) {
       emit({ type: 'agent_end', willContinue: false, messages: [{ role: 'assistant', stopReason: 'error' }] });
     } else if (settings.scenario === 'missing-final') {
       emit({ type: 'agent_end', willContinue: false });
+    } else if (settings.scenario === 'plain-text-final') {
+      // #2995: a settled, non-empty final answer that is plain text, not a
+      // claims document — parseWorkerFinal must still reject it.
+      emit({ type: 'tool_execution_end', toolCallId: 'synthetic-tool-1', isError: false });
+      emit({ type: 'agent_end', willContinue: false, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'synthetic plain reply' }] }] });
     } else {
       emit({ type: 'tool_execution_end', toolCallId: 'synthetic-tool-1', isError: false });
       const text = JSON.stringify(claims({ provider: 'omp', model: value('--model'), effort: value('--thinking'), brief }));

@@ -280,7 +280,12 @@ describe('T-OG-15 Copilot direct command contract', () => {
     expect(JSON.stringify(record.argv)).not.toContain(MARKER);
     expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG']);
     expect(existsSync(path.join(root, 'injected'))).toBe(false);
-    const final = installed.owner.parseOutput(await readFile(invocation.stdoutPath, 'utf8'));
+    // #2995 round 3 (item D): parseOutput (the installed extractFinal hook)
+    // always returns null -- there is no evidenced answer field, so no
+    // success-looking candidate is ever published. parseDirectFinal keeps
+    // the one structural check for this diagnostic.
+    expect(installed.owner.parseOutput(await readFile(invocation.stdoutPath, 'utf8'))).toBeNull();
+    const final = installed.owner.parseDirectFinal(await readFile(invocation.stdoutPath, 'utf8'));
     expect(final).toEqual({ events: [{ content: `synthetic reply (${payload.length} chars)` }] });
   });
 
@@ -389,9 +394,14 @@ describe('T-OG-20/21/23 Copilot run identity, stall and security signals', () =>
     expect(result.code, result.stderr).toBe(0);
     feed(o, result.stdout, 'stdout');
     clock.t = 1000;
+    // #2995 round 3 (item D): parseOutput always returns null now (no
+    // evidenced answer field), so finalValid is always false here and the
+    // run never reaches `completed` -- exactly the documented, unqualified
+    // state for this profile (see docs/providers/copilot-direct.md).
+    expect(installed.owner.parseOutput(result.stdout)).toBeNull();
     const snapshot = o.finish({ exitCode: result.code, termination: 'confirmed',
       finalValid: installed.owner.parseOutput(result.stdout) !== null });
-    expect(snapshot).toMatchObject({ state: 'completed', handshake: 'process-only', lastProgressAt: null });
+    expect(snapshot).toMatchObject({ state: 'failed', handshake: 'process-only', lastProgressAt: null });
     expect(snapshot.unavailableSignals).toEqual(expect.arrayContaining(['semantic-start', 'semantic-progress']));
     expect(o.evidence().events).toHaveLength(0);
   });
@@ -469,7 +479,11 @@ describe('T-OG-20/21/23 Copilot run identity, stall and security signals', () =>
     expect(record.envNames).not.toContain('COPILOT_GITHUB_TOKEN');
     const stdout = await readFile(plan.invocation!.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);
-    const final = installed.owner.parseOutput(stdout);
+    // #2995 round 3 (item D): parseOutput always returns null; the
+    // structural diagnostic (parseDirectFinal) still shows the malicious
+    // text landed in the stream as inert data, never executed.
+    expect(installed.owner.parseOutput(stdout)).toBeNull();
+    const final = installed.owner.parseDirectFinal(stdout);
     expect(final?.events?.[0]?.content).toContain('touch');
     expect(existsSync(marker)).toBe(false); // worker-returned commands are never executed
   });
@@ -505,6 +519,35 @@ describe('T-OG-20/21/23 Copilot run identity, stall and security signals', () =>
     expect(snapshot.state).not.toBe('completed');
     expect(snapshot.reasonCode).not.toBe('OK');
     expect(snapshot).toMatchObject({ state: 'failed', reasonCode: 'PROVIDER_ERROR' });
+  });
+
+  // #2995: unlike every other adapter in this effort, Copilot's event
+  // vocabulary is wholly unevidenced (module/doc above), so parseWorkerFinal
+  // fails closed unconditionally -- including for a successful stream whose
+  // final line would otherwise look like a valid claims document, since
+  // there is still no evidenced field to extract it from.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+
+  it('CP20 parseWorkerFinal always rejects, even a clean successful stream', async () => {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'synthetic brief');
+    const { file } = await fakeConfig(root, 'success');
+    const result = await run(process.execPath, argv(workdir, briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow(/unavailable/);
+  });
+
+  it('CP21 parseWorkerFinal rejects a malformed stream and Uint8Array/Buffer bytes input alike', async () => {
+    const { root, workdir } = await scratch();
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'synthetic brief');
+    const { file } = await fakeConfig(root, 'malformed');
+    const result = await run(process.execPath, argv(workdir, briefPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+    await expect(installed.owner.parseWorkerFinal(Buffer.from(result.stdout, 'utf8'), { observation })).rejects.toThrow();
+  });
+
+  it('CP22 parseWorkerFinal rejects unconditionally even for an MCP-formatted call', async () => {
+    await expect(installed.owner.parseWorkerFinal('{}', { observation, format: 'mcp' })).rejects.toThrow();
   });
 });
 

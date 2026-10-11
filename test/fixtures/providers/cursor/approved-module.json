@@ -7,8 +7,12 @@
     "packageVersion": "1",
     "modulePath": "lib/cursor-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:88e54aa0194a2f6b7a097f99d65f5d239bbba647cef0abadc895e407a129f432",
-    "adapterIds": ["cursor"],
-    "platforms": ["linux"]
+    "sha256": "sha256:6245c0d9905c8df2f2630690bb17b935eaa48f5a08ded612834e5d9d5914a59a",
+    "adapterIds": [
+      "cursor-direct"
+    ],
+    "platforms": [
+      "linux"
+    ]
   }
 }

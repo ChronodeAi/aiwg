@@ -68,6 +68,13 @@ async function installOmpPackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
+  // resolves mission-protocol/index.js via the same _resolve-impl bridge.
+  await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
+  const protocolTarget = path.resolve('src/mission-protocol/index.ts');
+  const protocolRelative = path.relative(path.join(base, 'src', 'mission-protocol'), protocolTarget);
+  await writeFile(path.join(base, 'src', 'mission-protocol', 'index.js'),
+    `export * from ${JSON.stringify(protocolRelative)};\n`);
   return { packageRoot, writable };
 }
 
@@ -85,7 +92,7 @@ beforeAll(async () => {
     const { packageRoot, writable } = await installOmpPackage(readFileSync(MODULE));
     const ids = await loadInstalledWorkerAdapters({ registry: loadingRegistry(),
       modules: [{ ...APPROVED.entry, packageRoot }], workerWritableRoots: [writable], platform: 'linux' });
-    installed = { owner: createProvider('omp'), ids };
+    installed = { owner: createProvider('omp-direct'), ids };
   } finally {
     if (saved === undefined) delete process.env.AIWG_RESOLVE_IMPL_FROM;
     else process.env.AIWG_RESOLVE_IMPL_FROM = saved;
@@ -151,7 +158,7 @@ async function fixture(options: { qualified?: boolean; model?: string; effort?: 
   if (options.effort) f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding!.initialEffort = options.effort;
   let builds = 0;
   const permissions = options.approval ? { approval: options.approval } : {};
-  const drivers: any = { omp: { qualification: { adapter, adapterId: 'omp', cliVersion: options.version ?? OMP_DIRECT_VERSION },
+  const drivers: any = { omp: { qualification: { adapter, adapterId: adapter.id, cliVersion: options.version ?? OMP_DIRECT_VERSION },
     prepareWorkerInvocation: (invocation: any, qualification: any) => prepareWorkerInvocation(invocation, qualification),
     buildInvocation: async (input: any) => { builds++; return { argv: [process.execPath, FAKE, ...installed.owner.buildWorkerArgs(
       input, profile, { ...input.permissions, ...permissions })],
@@ -203,13 +210,30 @@ describe('OMP S1 offline direct-shell profile (#2910)', () => {
   it('OD01a loads the one approved module by digest through the production installed loader', async () => {
     expect(APPROVED.source).toBe(MODULE);
     expect(sha256(readFileSync(MODULE))).toBe(APPROVED.entry.sha256);
-    expect(installed.ids).toEqual(['omp']);
-    expect(installed.owner.getName()).toBe('omp');
-    expect(installed.owner.constructor.name).toBe('OmpAdapter');
+    expect(installed.ids).toEqual(['omp-direct']);
+    expect(installed.owner.getName()).toBe('omp-direct');
+    expect(installed.owner.constructor.name).toBe('OmpDirectAdapter');
     expect(installed.owner.buildWorkerArgs(
       { selected: { model: 'synthetic/a', effort: { value: 'medium' } }, cwd: '/w', brief: 'b' }, null, {}))
       .toEqual(['--mode', 'json', '--print', '--no-extensions', '--no-skills', '--no-rules',
         '--model', 'synthetic/a', '--thinking', 'medium', '--cwd', '/w', '--approval-mode', 'write']);
+  });
+
+  it("(#2995 round 4, item 3) inspectWorkerInstallation accepts the direct adapter's identity (adapter.id === instance.getName())", async () => {
+    const { inspectWorkerInstallation } = await import('../../../src/models/worker-installation.mjs');
+    const adapter = structuredClone(loadProviderModelCapabilities().providers['omp'].workerHealthAdapter!);
+    let error: any;
+    try {
+      await inspectWorkerInstallation(installed.owner, { adapter, platform: 'linux', profile: 'direct-shell',
+        cliVersion: adapter.supportedVersions, workerWritableRoots: [], effectiveConfigDigest: `sha256:${'a'.repeat(64)}`,
+        accountScope: 'synthetic', boundary: null, cwd: '/tmp' });
+    } catch (e) { error = e; }
+    // Before this fix, this threw 'Unsupported installation identity/platform'
+    // because the Direct subclass's getName() still returned the bare id
+    // while adapter.id is now `omp-direct`. Any OTHER error here (this minimal
+    // request is deliberately incomplete past the identity gate) proves
+    // the identity check itself passed.
+    expect(error?.message).not.toBe('Unsupported installation identity/platform');
   });
 
   it('OD02 renders and executes exact argv with the brief on stdin only; no argv flags carry it', async () => {
@@ -226,12 +250,11 @@ describe('OMP S1 offline direct-shell profile (#2910)', () => {
     expect(result.record).toMatchObject({ argv: invocation.argv.slice(2), cwd: f.cwd, brief: f.payload });
     const { existsSync } = await import('node:fs');
     expect(existsSync(path.join(f.root, 'injected'))).toBe(false);
+    // #2995 round 3: `installed.owner` is the `-direct` subclass now; its
+    // `parseOutput` is the strict `parseDirectFinal` rule, returning only
+    // `{ text, success: true }` on an affirmative success (never the
+    // legacy `summarizeOmpEvents` shape with `settled`/`events`/`failed`).
     const parsed = installed.owner.parseOutput(result.stdout);
-    // `settled` only means a terminal event was reached (agent_end); a
-    // failed/aborted/empty-answer run can also settle, so `success` -
-    // which additionally requires a non-empty assistant answer and no
-    // error/abort signal - is the correct pass/fail field (OD05).
-    expect(parsed?.settled).toBe(true);
     expect(parsed?.success).toBe(true);
     expect(parsed?.text).toBeTruthy();
   });
@@ -310,5 +333,66 @@ describe('OMP S1 offline direct-shell profile (#2910)', () => {
     expect(rec.envNames).not.toContain('OMP_UNRELATED_SECRET');
     const stdout = await readFile(invocation.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);
+  });
+
+  // #2995: production marks a run `completed` only when `parseWorkerFinal`
+  // succeeds. These cases drive the real installed-owner hook, never a
+  // hand-fed finalValid.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+
+  it('OD10 parseWorkerFinal resolves a successful stream whose final answer is a valid claims document', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'success');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).resolves.toMatchObject({ version: 1, status: 'completed' });
+  });
+
+  it('OD11 parseWorkerFinal rejects a successful stream whose final answer is plain text (not claims)', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'plain-text-final');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+  });
+
+  it.each(['error', 'malformed', 'missing-final', 'exit-zero-error'])('OD12 parseWorkerFinal rejects a %s stream', async scenario => {
+    const f = await fixture();
+    const result = await execute(f, scenario);
+    await expect(installed.owner.parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+  });
+
+  it('OD13 parseWorkerFinal accepts Uint8Array/Buffer bytes input', async () => {
+    const f = await fixture();
+    const result = await execute(f, 'success');
+    expect(result.code, result.stderr).toBe(0);
+    await expect(installed.owner.parseWorkerFinal(Buffer.from(result.stdout, 'utf8'), { observation }))
+      .resolves.toMatchObject({ status: 'completed' });
+  });
+
+  // #2995 round 3 (item A.1): before this fix, `summarizeOmpEvents` tracked
+  // the LAST assistant message across every event with a `messages`/
+  // `message` field, so (a) claims from an earlier `agent_end` survived a
+  // later answerless terminal, and (b) claims carried in
+  // `tool_execution_end.message` (never a real final-answer source) could
+  // stand in for an empty terminal. `parseDirectFinal` must reject both.
+  it('OD14 (regression) an earlier complete claim followed by an empty terminal agent_end never resolves', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'stale', claims: [], artifacts: [], checks: [], limitations: [] });
+    const stale = [
+      { type: 'agent_start' },
+      { type: 'agent_end', willContinue: true, messages: [{ role: 'assistant', content: [{ type: 'text', text: claims }] }] },
+      { type: 'agent_end', willContinue: false, messages: [] },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n';
+    expect(installed.owner.parseOutput(stale)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(stale, { observation })).rejects.toThrow();
+  });
+
+  it('OD15 (regression) claims carried in tool_execution_end.message are never promoted to the final answer', async () => {
+    const claims = JSON.stringify({ version: 1, status: 'completed', summary: 'tool-carried', claims: [], artifacts: [], checks: [], limitations: [] });
+    const toolCarried = [
+      { type: 'agent_start' },
+      { type: 'tool_execution_end', toolCallId: 't1', isError: false, message: { role: 'assistant', content: [{ type: 'text', text: claims }] } },
+      { type: 'agent_end', willContinue: false, messages: [] },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n';
+    expect(installed.owner.parseOutput(toolCarried)).toBeNull();
+    await expect(installed.owner.parseWorkerFinal(toolCarried, { observation })).rejects.toThrow();
   });
 });

@@ -71,6 +71,13 @@ async function installCursorPackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // parseWorkerFinal's shared strict-claims path (provider-adapter.mjs)
+  // resolves mission-protocol/index.js via the same _resolve-impl bridge.
+  await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
+  const protocolTarget = path.resolve('src/mission-protocol/index.ts');
+  const protocolRelative = path.relative(path.join(base, 'src', 'mission-protocol'), protocolTarget);
+  await writeFile(path.join(base, 'src', 'mission-protocol', 'index.js'),
+    `export * from ${JSON.stringify(protocolRelative)};\n`);
   return { packageRoot, writable };
 }
 
@@ -88,7 +95,7 @@ beforeAll(async () => {
     const { packageRoot, writable } = await installCursorPackage(readFileSync(MODULE));
     const ids = await loadInstalledWorkerAdapters({ registry: loadingRegistry(),
       modules: [{ ...APPROVED.entry, packageRoot }], workerWritableRoots: [writable], platform: 'linux' });
-    installed = { owner: createProvider('cursor'), ids };
+    installed = { owner: createProvider('cursor-direct'), ids };
   } finally {
     if (saved === undefined) delete process.env.AIWG_RESOLVE_IMPL_FROM;
     else process.env.AIWG_RESOLVE_IMPL_FROM = saved;
@@ -178,7 +185,7 @@ async function cursorPlan(options: { qualify?: boolean; cliVersion?: string; ada
   f.snapshot.catalog.discovery!.instances = { cursor: discovery };
   const owner = installed.owner;
   const drivers: Record<string, WorkerInvocationDriver> = { cursor: {
-    qualification: { adapter, adapterId: 'cursor', cliVersion: binding.cliVersion },
+    qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion },
     buildInvocation: async input => ({ argv: [process.execPath, FAKE, ...owner.buildWorkerArgs(input, profile, input.permissions)],
       stdin: CURSOR_DIRECT_STDIN, envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
   } };
@@ -218,11 +225,43 @@ describe('Cursor Agent version-bound profile (B-OG-38)', () => {
   it('CD01a pins the one approved module digest and loads it through the production installed loader', () => {
     expect(APPROVED.source).toBe(MODULE);
     expect(sha256(readFileSync(MODULE))).toBe(APPROVED.entry.sha256);
-    expect(APPROVED.entry).toMatchObject({ reference: 'installed:cursor', interfaceVersion: 1, adapterIds: ['cursor'],
+    expect(APPROVED.entry).toMatchObject({ reference: 'installed:cursor', interfaceVersion: 1, adapterIds: ['cursor-direct'],
       platforms: ['linux'] });
-    expect(installed.ids).toEqual(['cursor']);
-    expect(installed.owner.getName()).toBe('cursor');
-    expect(installed.owner.constructor.name).toBe('CursorAdapter');
+    expect(installed.ids).toEqual(['cursor-direct']);
+    expect(installed.owner.getName()).toBe('cursor-direct');
+    // #2995: the installed loader wires the `-direct` subclass (same
+    // Claude/Hermes pattern) so `parseOutput` is the strict native rule,
+    // never the base class's loose inherited regex `CursorAdapter` keeps
+    // for the legacy Ralph-loop registration.
+    expect(installed.owner.constructor.name).toBe('CursorDirectAdapter');
+  });
+
+  it("(#2995 round 4, item 3) inspectWorkerInstallation accepts the direct adapter's identity (adapter.id === instance.getName())", async () => {
+    const { inspectWorkerInstallation } = await import('../../../src/models/worker-installation.mjs');
+    const adapter = structuredClone(loadProviderModelCapabilities().providers['cursor'].workerHealthAdapter!);
+    let error: any;
+    try {
+      await inspectWorkerInstallation(installed.owner, { adapter, platform: 'linux', profile: 'direct-shell',
+        cliVersion: adapter.supportedVersions, workerWritableRoots: [], effectiveConfigDigest: `sha256:${'a'.repeat(64)}`,
+        accountScope: 'synthetic', boundary: null, cwd: '/tmp' });
+    } catch (e) { error = e; }
+    // Before this fix, this threw 'Unsupported installation identity/platform'
+    // because the Direct subclass's getName() still returned the bare id
+    // while adapter.id is now `cursor-direct`. Any OTHER error here (this minimal
+    // request is deliberately incomplete past the identity gate) proves
+    // the identity check itself passed.
+    expect(error?.message).not.toBe('Unsupported installation identity/platform');
+  });
+
+  it('CD01c (#2995 round 3, item B) loading the installed module under the `cursor-direct` id never overwrites the legacy `cursor` registration', async () => {
+    const legacyOwner = createProvider('cursor');
+    expect(legacyOwner.constructor.name).toBe('CursorAdapter');
+    expect(legacyOwner.constructor.name).not.toBe(installed.owner.constructor.name);
+    const claims = { version: 1, status: 'completed', summary: 'Synthetic', claims: [], artifacts: [], checks: [], limitations: [] };
+    const genericEnvelope = JSON.stringify({ type: 'result', result: claims });
+    await expect(legacyOwner.parseWorkerFinal(genericEnvelope,
+      { observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 } }))
+      .resolves.toMatchObject({ status: 'completed' });
   });
 
   it('CD01b a tampered copy is refused and the bundled registry stays undispatchable', async () => {
@@ -491,5 +530,46 @@ describe('T-OG-03/20/21/23 Cursor run identity, stall and security signals', () 
     const final = installed.owner.parseDirectFinal(stdout);
     expect(final?.result).toContain('touch');
     expect(existsSync(marker)).toBe(false); // worker-returned commands are never executed
+  });
+
+  // #2995: production marks a run `completed` only when `parseWorkerFinal`
+  // succeeds. These cases drive the real installed-owner hook, never a
+  // hand-fed finalValid.
+  const observation = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
+  async function streamFor(scenario: string): Promise<string> {
+    const { root, workdir } = await scratch();
+    const { file } = await fakeConfig(root, scenario);
+    const result = await run(process.execPath, argv().slice(0, 1).concat(argv().slice(1).map(a => a === '/w' ? workdir : a)),
+      { cwd: workdir, stdinData: 'brief', env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  it('CD13 parseWorkerFinal resolves a successful stream whose final answer is a valid claims document', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(owner().parseWorkerFinal(stream, { observation })).resolves.toMatchObject({ version: 1, status: 'completed' });
+  });
+
+  it('CD14 parseWorkerFinal rejects a successful stream whose final answer is plain text (not claims)', async () => {
+    const stream = await streamFor('success');
+    await expect(owner().parseWorkerFinal(stream, { observation })).rejects.toThrow();
+  });
+
+  it('CD15 parseWorkerFinal rejects a failed or malformed stream', async () => {
+    const { root, workdir } = await scratch();
+    const { file } = await fakeConfig(root, 'malformed');
+    const result = await run(process.execPath, argv().slice(0, 1).concat(argv().slice(1).map(a => a === '/w' ? workdir : a)),
+      { cwd: workdir, stdinData: 'brief', env: { AIWG_FAKE_WORKER_CONFIG: file } });
+    expect(result.code).toBe(0);
+    await expect(owner().parseWorkerFinal(result.stdout, { observation })).rejects.toThrow();
+    const missing = await fakeConfig(root, 'missing-final');
+    const missingResult = await run(process.execPath, argv().slice(0, 1).concat(argv().slice(1).map(a => a === '/w' ? workdir : a)),
+      { cwd: workdir, stdinData: 'brief', env: { AIWG_FAKE_WORKER_CONFIG: missing.file } });
+    await expect(owner().parseWorkerFinal(missingResult.stdout, { observation })).rejects.toThrow();
+  });
+
+  it('CD16 parseWorkerFinal accepts Uint8Array/Buffer bytes input', async () => {
+    const stream = await streamFor('claims-final');
+    await expect(owner().parseWorkerFinal(Buffer.from(stream, 'utf8'), { observation })).resolves.toMatchObject({ status: 'completed' });
   });
 });
