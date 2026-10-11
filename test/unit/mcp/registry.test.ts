@@ -577,6 +577,30 @@ describe("injectServers", () => {
     expect(JSON.parse(await readFile(join(projectDir, ".mcp.json"), "utf-8")).mcpServers).toHaveProperty("fortemi");
   });
 
+  it.each(["cursor", "antigravity", "opencode"] as const)("refuses selected literal credentials for the shareable project-scope %s target too, not just claude", async provider => {
+    await registry.add({ name: "local", type: "stdio", command: "synthetic-command", env: { API_TOKEN: "canary-env-123" } });
+    const configPath = getProviderConfigPath(provider as Parameters<typeof inject>[1], projectDir);
+    const before = await readFile(registry.getPath(), "utf-8");
+    filesystemBoundary.mutations = [];
+    let message = "";
+    try { await inject(registry, provider as Parameters<typeof inject>[1], { projectDir }); }
+    catch (error) { message = (error as Error).message; }
+    expect(message).toContain("local has literal env/header values (API_TOKEN)");
+    expect(message).not.toContain("canary-env-123");
+    expect(filesystemBoundary.mutations).toEqual([]);
+    expect(existsSync(configPath)).toBe(false);
+    expect(await readFile(registry.getPath(), "utf-8")).toBe(before);
+  });
+
+  it("allows literal credentials for the private home-scope windsurf target, by design", async () => {
+    vi.stubEnv("HOME", join(tempDir, "provider-home"));
+    await registry.add({ name: "local", type: "stdio", command: "synthetic-command", env: { API_TOKEN: "canary-env-123" } });
+    const result = await inject(registry, "windsurf", { projectDir });
+    expect(result.error).toBeUndefined();
+    const data = JSON.parse(await readFile(result.configPath, "utf-8"));
+    expect(data.mcpServers.local.env).toEqual({ API_TOKEN: "canary-env-123" });
+  });
+
   it("leaves the original bytes, mode and registry unchanged if atomic replacement fails", async () => {
     const configPath = join(projectDir, ".mcp.json");
     const original = '{ "mcpServers": {}, "preference": "keep" }\n';

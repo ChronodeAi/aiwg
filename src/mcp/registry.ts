@@ -696,7 +696,10 @@ export async function injectServers(
   const userScope = isUserMcpScope(provider, options.scope);
   const projectRoot = userScope ? undefined : projectDir;
   await assertConfigDestination(configPath, projectRoot);
-  if ((provider === 'claude-code' || provider === 'claude') && options.scope !== 'user') {
+  // Every shareable project-scope target is meant to be committed to version control;
+  // home-scope targets (codex, factory, windsurf, warp) are private by isUserMcpScope's own
+  // definition, so literal credentials there are not copied into a shared file.
+  if (!userScope) {
     assertProjectCredentials(allServers, configPath);
   }
   if (provider === 'omp' || provider === 'oh-my-pi') {

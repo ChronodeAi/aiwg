@@ -406,6 +406,10 @@ enabled_tools = [
 
   assertConfigObject(existing, Object.keys(config.content)[0]);
 
+  // Only the claude target's install content can ever embed a literal credential
+  // (`AIWG_ROOT`, gated to `scope === 'user'` above); every other target's `configs[...]`
+  // entry above is a fixed `aiwg mcp serve` stdio/TOML stanza with no env/headers field,
+  // so there is nothing for assertProjectCredentials to check there.
   if (target === 'claude' && scope !== 'user') {
     assertProjectCredentials(Object.entries(config.content.mcpServers).map(([name, server]) => ({ name, ...server })), config.path);
   }
@@ -797,8 +801,11 @@ async function handleInject(args) {
     const selected = (await registry.list()).filter(server => !serverFilter || serverFilter.includes(server.name));
     for (const p of providers) {
       const configPath = getProviderConfigPath(p, projectDir, { scope });
-      await assertConfigDestination(configPath, isUserMcpScope(p, scope) ? undefined : projectDir);
-      if ((p === 'claude' || p === 'claude-code') && scope !== 'user') {
+      const userScope = isUserMcpScope(p, scope);
+      await assertConfigDestination(configPath, userScope ? undefined : projectDir);
+      // Every shareable project-scope target is meant to be committed to version control;
+      // home-scope targets are private by isUserMcpScope's own definition.
+      if (!userScope) {
         assertProjectCredentials(selected, configPath);
       }
     }
