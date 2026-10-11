@@ -1,0 +1,14 @@
+{
+  "T-OG-03": [
+    "test/conformance/orchestration-v1/grok-build-direct.test.ts"
+  ],
+  "T-OG-15": [
+    "test/conformance/orchestration-v1/grok-build-direct.test.ts"
+  ],
+  "T-OG-20": [
+    "test/conformance/orchestration-v1/grok-build-direct.test.ts"
+  ],
+  "T-OG-21": [
+    "test/conformance/orchestration-v1/grok-build-direct.test.ts"
+  ]
+}
