@@ -7,17 +7,19 @@
       "agent": "native",
       "skill": "native",
       "globalChild": "inherited",
-      "identifierSyntax": "model identifier accepted by Antigravity CLI 1.1.26 --model",
+      "identifierSyntax": "model identifier accepted by Antigravity CLI 1.3.3 --model",
       "effortValues": [
         "low",
         "medium",
-        "high"
+        "high",
+        "xhigh",
+        "max"
       ],
       "inheritance": "Omitted model and effort inherit the invoking Antigravity session",
       "invalidPinFallback": "Provider validation/error; never assume fallback",
       "configTarget": "agy launch arguments; custom-agent model tiers are not projected from generic AIWG model ids",
       "artifactFormat": "YAML frontmatter plus Markdown; runtime --model and --effort flags",
-      "verification": "Pinned offline contract; authenticated model selection was not executed",
+      "verification": "Pinned offline contract (--help/--version only); authenticated model selection was not executed",
       "sourceUrl": "https://antigravity.google/docs/cli/subagents/",
       "verifiedAt": "2026-09-04",
       "workerHealthAdapter": {
@@ -25,8 +27,8 @@
         "id": "antigravity",
         "provider": "antigravity",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "unavailable",
+        "supportedVersions": "1.3.3",
+        "runtimeDriver": "installed:antigravity",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -36,12 +38,23 @@
           "kind": "process",
           "executable": "agy",
           "argv": [
-            "-p",
-            "${brief}"
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--model",
+            "${model}",
+            "--effort",
+            "${effort}",
+            "--sandbox",
+            "--disable-slash-commands"
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "GEMINI_API_KEY",
+            "HOME"
+          ],
           "versionArgv": [
             "--version"
           ],
@@ -54,7 +67,7 @@
           "cancel": "none",
           "resume": false,
           "sandboxModes": [
-            "external"
+            "read-only"
           ],
           "nestedAgentsControllable": false,
           "nativeFallbackControllable": false,
@@ -66,74 +79,83 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "1.3.3",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--model MODEL] exact observed model id, never 'auto'/'default' or a generic Ralph-loop alias",
+                "evidence": "H: agy 1.3.3 --help documents --model <MODEL> with no enum; unqualified until live model-pin evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--effort low|medium|high|xhigh|max], always explicit",
+                "evidence": "H: agy 1.3.3 --help documents --effort (low|medium|high|xhigh|max); D (strings): changelog fixes confirm both --model and --effort were previously silently ignored and now apply; unqualified until live evidence"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--sandbox] always emitted (bare boolean, no mode argument documented); only the read-only contract is accepted — write is unavailable because no verified non-blanket write-approval flag is evidenced (--mode accept-edits scope is unconfirmed; --dangerously-skip-permissions is a blanket bypass and is never emitted)",
+                "evidence": "H: agy 1.3.3 --help documents --sandbox ('Run in a sandbox with terminal restrictions enabled'), --mode (accept-edits, plan) and --dangerously-skip-permissions ('Auto-approve all tool permission requests'); unqualified until live evidence"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable as a non-bypass flag: a bare headless run (neither --mode nor --dangerously-skip-permissions) soft-denies a tool permission request and prints a stderr notice rather than hanging or silently approving",
+                "evidence": "D: strings-read changelog v1.1.3: \"Fixed headless (-p) runs hanging or silently auto-approving tools that require a permission confirmation, so the CLI now soft-denies such tools and prints a stderr notice naming the allow-rule needed to permit them.\"; this quote establishes NEITHER exit code 0 NOR a SUCCESS terminal by itself; exact notice text not evidenced, see pitfalls; unqualified until live evidence"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "no --cwd/--workspace flag is documented; the conductor process cwd is the implicit workspace (agy's own default), optionally extended by --add-dir (never emitted by this profile)",
+                "evidence": "H: agy 1.3.3 --help documents --add-dir ('Add a directory to the workspace (repeatable)') but no primary-workspace-path flag; unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable as a file target: no output-file flag is documented; the final is the terminal event.result.response of the captured --output-format stream-json stdout stream",
+                "evidence": "H: agy 1.3.3 --help documents --output-format <text|json|stream-json> with no file-path argument; D (strings, changelog v1.1.8): \"typed init, step_update, and terminal result events\"; live fix-round-1 conductor probe C (2026-10-11): `echo probe | agy --print= --output-format stream-json` returned the stdout line `{\"event\":\"result\",\"result\":{\"conversation_id\":\"\",\"status\":\"ERROR\",\"response\":\"\",\"error\":\"Error: empty prompt. Usage: agy --print \\\"your prompt here\\\"\"}}`, confirming event/result.status/result.response/result.error field names on a real ERROR terminal (no model reached; proves grammar only, not a SUCCESS shape or exit code 0); SUCCESS/init/step_update field shapes remain carried forward from tools/providers/antigravity-transport.mjs and worker-health.mjs observeProviderHealthEvent('antigravity', ...), not independently re-confirmed against 1.3.3 by a live SUCCESS run; unqualified until live evidence"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable through the shared renderer today, so the registry stdin kind is closed (nothing is sent and the CLI fails closed). The profile needs a provider-supplied frame (tracked in #2998): one NDJSON line {\"event\":\"user\",\"message\":<brief>} on stdin, then EOF; no --print flag and no prompt value are ever emitted (--print requires a value, swallows the next argv token when omitted, and still hard-errors on an explicit empty value)",
+                "evidence": "R: live, fix round 1, conductor probes A/B/C/D/E, 2026-10-11, no login reached. (A) `agy --print --output-format bogus-format </dev/null` -> \"Error: --print took \\\"--output-format\\\" as its prompt...\"; (B) `agy --output-format bogus-format --print </dev/null` -> \"flag needs an argument: -print\"; (C) `--print=` -> \"Error: empty prompt...\"; (D)/(E) `--input-format stream-json --output-format stream-json` with or without `--print` omitted entirely both pass argument validation and reach the same auth stop. D (strings, extraction: ssh noodle 'strings -n 8 ~/.local/bin/agy | grep -n \"stream input\"'): \"stream input message is missing the \\\"event\\\" field\", \"stream input message event %q is not supported yet\", \"stream input \\\"user\\\" message is missing the \\\"message\\\" field\" fix the NDJSON input envelope field names; unqualified until live evidence"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--json-schema exists but is never emitted by this profile (no fixed schema is defined for the direct worker contract)",
+                "evidence": "H: agy 1.3.3 --help documents --json-schema ('enforce structured output ... for stream-json, only applicable to the final result'); unqualified until live evidence"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no step/turn cap flag is evidenced; --print-timeout bounds wall time only (always emitted as 0, i.e. wait for completion)",
+                "evidence": "H: agy 1.3.3 --help documents --print-timeout ('0 waits until the turn completes (default 0s)') and no step-cap flag; unknown controls block tasks requiring them"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no workspace-trust flag is documented for this CLI",
+                "evidence": "H: agy 1.3.3 --help advertises no trust flag; unqualified until live evidence"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: --agent (custom agent/subagent selection) is never emitted by this profile; no fan-out flag for --print is documented",
+                "evidence": "H: agy 1.3.3 --help documents --agent ('Agent for the current CLI session') but this profile never selects one; unqualified until live evidence"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no fallback-model flag is documented",
+                "evidence": "H: agy 1.3.3 --help advertises no fallback-model flag; unknown controls block tasks requiring them"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "GEMINI_API_KEY",
+              "HOME"
+            ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "--dangerously-skip-permissions and --remote-control are never part of the direct profile; neither was ever shipped as a new argv-prompt path.",
+              "A soft-denied tool permission request (exit 0, stderr notice naming the allow-rule needed) is NOT the same as success; its exact stderr wording is not evidenced from help or changelog, so this is an open, honestly-marked detection gap rather than an invented check (tools/ralph-external/lib/antigravity-adapter.mjs ANTIGRAVITY_SOFT_DENY_RISK_NOTE).",
+              "GEMINI_API_KEY in envAllowlist is a strings-sourced GUESS, not confirmed to authenticate this CLI. Live fix-round-1 probes (D/E, no login present) show a bare run stops at \"Error: authentication required. Run 'agy' to log in, then retry.\" — this is an interactive Google-account login, not a documented env-key or OpenRouter-style flag. The manual smoke run is BLOCKED until an operator completes an interactive `agy` login on the target host.",
+              "The 1.3.3 --effort enum (low|medium|high|xhigh|max) supersedes the stale 1.1.26-pinned three-value set in tools/providers/antigravity-transport.mjs (a separate, unedited legacy transport used by the MCP/doctor bridge, not this direct-shell profile).",
+              "Flag validation happens BEFORE auth: live probe F, `agy --print=x --input-format bogus --output-format stream-json`, returned \"Error: unknown --input-format \\\"bogus\\\" (want text or stream-json)\" without reaching the auth stop, confirming --input-format is validated against exactly {text, stream-json} independent of login state.",
+              "The brief must reach agy as one NDJSON user message on stdin (adapter: buildAntigravityStdinFrame). The shared stdin vocabulary is frozen (closed, brief-text, brief-json) and has no such kind, so the registry declares stdin closed and the stdin control unqualified; dispatch is blocked until provider-supplied stdin frames exist (#2998)."
             ],
             "health": {
               "version": 1,
