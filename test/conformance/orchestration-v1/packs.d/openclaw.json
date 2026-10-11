@@ -1,0 +1,14 @@
+{
+  "T-OG-15": [
+    "test/conformance/orchestration-v1/openclaw-direct.test.ts"
+  ],
+  "T-OG-20": [
+    "test/conformance/orchestration-v1/openclaw-direct.test.ts"
+  ],
+  "T-OG-21": [
+    "test/conformance/orchestration-v1/openclaw-direct.test.ts"
+  ],
+  "T-OG-23": [
+    "test/conformance/orchestration-v1/openclaw-direct.test.ts"
+  ]
+}
