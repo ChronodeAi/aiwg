@@ -17,6 +17,18 @@ mechanics. They do not claim complete T-OG mechanism or safety coverage.
 Route-feasibility (#2877), configuration vectors (#2878), runtime definitions
 (#2879) and adapter loading (#2880) must add their test paths as they land.
 
+Each provider's `*-direct.test.ts` (and any provider-owned sibling test) is
+registered through its own `packs.d/<provider>.json` fragment — a JSON object
+mapping pack ID to the array of test files that provider adds to that pack —
+rather than through `packs.json` itself. `loadOrchestrationPackRegistry()` in
+`tools/testing/check-orchestration-packs.mjs` merges every fragment into the
+matching pack's `testFiles`, in sorted fragment-filename order, after
+`packs.json`'s own entries, and fails loudly on an unknown pack ID, a
+non-array fragment value, a duplicate test file, or invalid JSON. A new
+provider profile adds `packs.d/<provider>.json`; never edit `packs.json`
+`testFiles` for a provider — that is what used to make every pair of provider
+PRs collide on the same lines.
+
 `npm run lint:orchestration-packs` fails for implemented/partial packs without
 test files, missing paths, missing pack ownership, and qualification passes
 without scoped live evidence. Its report is

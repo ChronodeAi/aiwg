@@ -6,6 +6,55 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const requiredPacks = [...Array.from({ length: 12 }, (_, i) => i + 1), 14, 15, 16, 17, 18, 19, 20, 21, 23].map(id => `T-OG-${String(id).padStart(2, '0')}`);
 export const registryPath = 'test/conformance/orchestration-v1/packs.json';
+export const fragmentsDir = 'test/conformance/orchestration-v1/packs.d';
+
+// Provider profiles register their own test files by adding
+// packs.d/<provider>.json; never edit packs.json's testFiles for a provider.
+// Each fragment is a JSON object mapping an existing pack ID to an array of
+// test files; fragments merge into the base registry (packs.json) in sorted
+// fragment-filename order, appended after packs.json's own testFiles. This
+// keeps every provider's registration in its own file so two provider PRs
+// never touch the same lines of packs.json.
+export function loadOrchestrationPackRegistry(repositoryRoot = root) {
+  const basePath = path.join(repositoryRoot, registryPath);
+  let registry;
+  try {
+    registry = JSON.parse(fs.readFileSync(basePath, 'utf8'));
+  } catch (error) {
+    throw new Error(`${registryPath}: invalid JSON (${error.message})`);
+  }
+  const packs = registry?.packs ?? {};
+  const seenFiles = new Map(Object.entries(packs).map(([id, pack]) => [id, new Set(Array.isArray(pack?.testFiles) ? pack.testFiles : [])]));
+
+  const fragmentsPath = path.join(repositoryRoot, fragmentsDir);
+  const fragmentFiles = fs.existsSync(fragmentsPath)
+    ? fs.readdirSync(fragmentsPath).filter(name => name.endsWith('.json')).sort()
+    : [];
+
+  for (const filename of fragmentFiles) {
+    const relativePath = `${fragmentsDir}/${filename}`;
+    let fragment;
+    try {
+      fragment = JSON.parse(fs.readFileSync(path.join(fragmentsPath, filename), 'utf8'));
+    } catch (error) {
+      throw new Error(`${relativePath}: invalid JSON (${error.message})`);
+    }
+    if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) {
+      throw new Error(`${relativePath}: fragment must be a JSON object mapping pack ID to an array of test files`);
+    }
+    for (const [id, files] of Object.entries(fragment)) {
+      if (!packs[id]) throw new Error(`${relativePath}: unknown pack ${id}`);
+      if (!Array.isArray(files)) throw new Error(`${relativePath}: ${id} must map to an array of test files`);
+      const existing = seenFiles.get(id);
+      for (const file of files) {
+        if (existing.has(file)) throw new Error(`${relativePath}: duplicate test file ${file} already registered for ${id}`);
+        existing.add(file);
+        packs[id].testFiles = [...(packs[id].testFiles ?? []), file];
+      }
+    }
+  }
+  return registry;
+}
 
 // A successful fake run proves mechanics, never live qualification. This same
 // validator is used for optional, separately authorized qualification reports.
@@ -53,7 +102,7 @@ export function inspectPackRegistry(registry, repositoryRoot = root, additionalQ
 }
 
 export function runPackGate({ repositoryRoot = root, qualificationReport } = {}) {
-  const registry = JSON.parse(fs.readFileSync(path.join(repositoryRoot, registryPath), 'utf8'));
+  const registry = loadOrchestrationPackRegistry(repositoryRoot);
   const additional = qualificationReport ? JSON.parse(fs.readFileSync(qualificationReport, 'utf8')).results : [];
   const report = inspectPackRegistry(registry, repositoryRoot, additional);
   const destination = path.join(repositoryRoot, 'test-results/orchestration-pack-registry.json');

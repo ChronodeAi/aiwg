@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { inspectPackRegistry, qualificationErrors, registryPath, requiredPacks } from '../../../tools/testing/check-orchestration-packs.mjs';
+import { fragmentsDir, inspectPackRegistry, loadOrchestrationPackRegistry, qualificationErrors, registryPath, requiredPacks } from '../../../tools/testing/check-orchestration-packs.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const checker = pathToFileURL(path.join(root, 'tools/testing/check-orchestration-packs.mjs')).href;
-const registry = () => JSON.parse(readFileSync(path.join(root, registryPath), 'utf8'));
+const registry = () => loadOrchestrationPackRegistry(root);
 const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
@@ -104,5 +104,95 @@ describe('S0 T-OG registry wiring gate (partial coverage is not release acceptan
     expect(report.releaseQualification).toBe('unqualified');
     if (scenario === 'missing-qualification-pass') expect(report.errors).toContain('fake: missing qualification cannot be reported as a pass');
     if (scenario === 'implemented-without-files') expect(report.errors).toContain('T-OG-06: implemented without test files');
+  });
+
+  it('registers provider profile tests only through packs.d fragments, never in packs.json itself', () => {
+    // Provider CLI profiles each add packs.d/<provider>.json so concurrent
+    // provider changes never edit the same packs.json lines. The one-time
+    // migration was verified equivalent (152 pack/file pairs before and after).
+    const base = JSON.parse(readFileSync(path.join(root, registryPath), 'utf8'));
+    const offenders = Object.entries(base.packs as Record<string, any>)
+      .flatMap(([id, pack]) => (pack.testFiles ?? []).filter((file: string) => /-direct\.test\.(ts|mjs)$/.test(file)).map((file: string) => `${id}::${file}`));
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('loadOrchestrationPackRegistry fragment merge', () => {
+  const makeRoot = () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-pack-fragments-'));
+    roots.push(directory);
+    const base = {
+      revision: 1,
+      packs: {
+        'T-OG-01': { testFiles: ['test/conformance/orchestration-v1/pack-registry.test.ts'] },
+        'T-OG-02': { testFiles: [] },
+      },
+    };
+    mkdirSync(path.dirname(path.join(directory, registryPath)), { recursive: true });
+    writeFileSync(path.join(directory, registryPath), JSON.stringify(base));
+    mkdirSync(path.join(directory, fragmentsDir), { recursive: true });
+    return directory;
+  };
+  const writeFragment = (directory: string, name: string, contents: unknown) =>
+    writeFileSync(path.join(directory, fragmentsDir, name), typeof contents === 'string' ? contents : JSON.stringify(contents));
+
+  it('merges fragments after the base registry in sorted fragment-filename order', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'zeta.json', { 'T-OG-02': ['test/conformance/orchestration-v1/zeta-direct.test.ts'] });
+    writeFragment(directory, 'alpha.json', { 'T-OG-01': ['test/conformance/orchestration-v1/alpha-direct.test.ts'], 'T-OG-02': ['test/conformance/orchestration-v1/alpha-direct.test.ts'] });
+    const merged = loadOrchestrationPackRegistry(directory);
+    expect(merged.packs['T-OG-01'].testFiles).toEqual([
+      'test/conformance/orchestration-v1/pack-registry.test.ts',
+      'test/conformance/orchestration-v1/alpha-direct.test.ts',
+    ]);
+    // alpha.json sorts before zeta.json, so alpha's T-OG-02 entry is appended first.
+    expect(merged.packs['T-OG-02'].testFiles).toEqual([
+      'test/conformance/orchestration-v1/alpha-direct.test.ts',
+      'test/conformance/orchestration-v1/zeta-direct.test.ts',
+    ]);
+  });
+
+  it('throws on a fragment referencing an unknown pack ID', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'bogus.json', { 'T-OG-99': ['test/conformance/orchestration-v1/bogus-direct.test.ts'] });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/unknown pack T-OG-99/);
+  });
+
+  it('throws on a non-array pack value in a fragment', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'bogus.json', { 'T-OG-01': 'not-an-array' });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/must map to an array of test files/);
+  });
+
+  it('throws on a duplicate test file already registered in the base registry', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'dup.json', { 'T-OG-01': ['test/conformance/orchestration-v1/pack-registry.test.ts'] });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/duplicate test file/);
+  });
+
+  it('throws on a duplicate test file registered by two fragments', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'alpha.json', { 'T-OG-02': ['test/conformance/orchestration-v1/shared-direct.test.ts'] });
+    writeFragment(directory, 'beta.json', { 'T-OG-02': ['test/conformance/orchestration-v1/shared-direct.test.ts'] });
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/duplicate test file/);
+  });
+
+  it('throws on malformed fragment JSON', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'broken.json', '{ not valid json');
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/invalid JSON/);
+  });
+
+  it('throws on a fragment that is not a JSON object', () => {
+    const directory = makeRoot();
+    writeFragment(directory, 'array.json', ['not', 'an', 'object']);
+    expect(() => loadOrchestrationPackRegistry(directory)).toThrow(/fragment must be a JSON object/);
+  });
+
+  it('tolerates a missing packs.d directory', () => {
+    const directory = makeRoot();
+    rmSync(path.join(directory, fragmentsDir), { recursive: true, force: true });
+    const merged = loadOrchestrationPackRegistry(directory);
+    expect(merged.packs['T-OG-01'].testFiles).toEqual(['test/conformance/orchestration-v1/pack-registry.test.ts']);
   });
 });
