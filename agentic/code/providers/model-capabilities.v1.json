@@ -2361,8 +2361,8 @@
         "id": "grok-build",
         "provider": "grok-build",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "unavailable",
+        "supportedVersions": "1.0.50",
+        "runtimeDriver": "installed:grok-build",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -2372,25 +2372,45 @@
           "kind": "process",
           "executable": "grok",
           "argv": [
-            "-p",
-            "${brief}"
+            "--prompt-file",
+            "${brief}",
+            "-m",
+            "${model}",
+            "--reasoning-effort",
+            "${effort}",
+            "--permission-mode",
+            "dontAsk",
+            "--sandbox",
+            "${sandbox}",
+            "--cwd",
+            "${workspace}",
+            "--output-format",
+            "streaming-json",
+            "--no-subagents",
+            "--no-plan",
+            "--no-alt-screen",
+            "--disable-web-search"
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "XAI_API_KEY",
+            "HOME"
+          ],
           "versionArgv": [
             "--version"
           ],
           "maxOutputBytes": 10485760
         },
         "capabilities": {
-          "output": "validated-file",
+          "output": "text",
           "modelPin": "unsupported",
           "effort": "unsupported",
           "cancel": "none",
           "resume": false,
           "sandboxModes": [
-            "external"
+            "read-only",
+            "workspace-write"
           ],
           "nestedAgentsControllable": false,
           "nativeFallbackControllable": false,
@@ -2402,74 +2422,82 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "1.0.50",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "-m, --model <MODEL> (exact model id only; 'auto'/'default' and generic Ralph-loop aliases are refused; the driver also refuses any option-prefixed or whitespace-containing value)",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('-m, --model <MODEL> Model ID to use'; root --help lists no enum)"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--reasoning-effort <EFFORT> (none|minimal|low|medium|high|xhigh|max), always explicit; alias --effort never emitted",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--reasoning-effort <EFFORT> Reasoning effort for reasoning models [aliases: --effort]'; full value set from the installed binary's own error text: \"invalid reasoning effort: ... (expected one of: none, minimal, low, medium, high, xhigh, max)\")"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--sandbox <PROFILE>, always explicit for every mode; read-only -> 'read-only', workspace-write -> 'workspace'; 'off'/'devbox'/'strict' never emitted",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--sandbox <PROFILE> Sandbox profile for filesystem and network access [env: GROK_SANDBOX=]'; bundled sandbox doc: built-in profiles 'off, workspace, devbox, read-only, strict; or a custom profile name', default with no flag is 'off'; per-profile semantics table preserved in the evidence file)"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--permission-mode dontAsk (the CLI's only non-prompting, non-bypass mode: \"Only pre-approved tools and built-in read-only handling\" / \"Strict CI allowlists\" / \"denies whatever it would have to prompt for\") plus scoped --allow/--deny rule tokens from the resolved permission tuple; --always-approve and --permission-mode bypassPermissions are never emitted",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--permission-mode <MODE> [possible values: default, acceptEdits, auto, dontAsk, bypassPermissions, plan]'; bundled permission-modes table preserved verbatim in the evidence file; '--allow <RULE> Permission allow rule (compat alias: --allowedTools)'; '--deny <RULE> Permission deny rule (compat alias: --disallowedTools)')"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--cwd <CWD>",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--cwd <CWD> Working directory')"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "stdout --output-format streaming-json (NDJSON, one ACP session update per line); the final 'end' event's stopReason plus concatenated 'text' chunks form the answer; no separate output-file flag is evidenced. NOTE: the SEPARATE, pre-existing src/providers/grok-build-headless.ts transport and its shared tools/ralph-external/lib/worker-health.mjs generic branch use a different, older message/result event shape and --output-format json (a single JSON object); this direct-shell profile's own observeHealthEvent/parseDirectFinal handle only the streaming-json/ACP shape and never touch that other path.",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--output-format <OUTPUT_FORMAT> ... streaming-json: NDJSON: one ACP session update per line, the agent's native format'; bundled output-format doc gives the full event vocabulary and a worked example, preserved in the evidence file, confirming 'json' is a single object with text/stopReason/sessionId/requestId/usage fields -- NOT the message/result shape -- and 'streaming-json' is the ACP-derived text/thought/tool_call/tool_call_update/usage/plan/available_commands/end/error vocabulary)"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable for the brief: -p/--single <PROMPT> and --prompt-json <JSON> are argv-only; the brief instead rides on --prompt-file <PATH> ('Single-turn prompt from a file')",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('-p, --single <PROMPT> Single-turn prompt. Prints the response to stdout and exits'; '--prompt-file <PATH> Single-turn prompt from a file'; '--prompt-json <JSON> Single-turn prompt as JSON content blocks')"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "the ACP-derived streaming-json event grammar itself (module doc in grok-build-adapter.mjs); no --json-schema structured-output constraint is used by this profile",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--json-schema <SCHEMA> JSON Schema for structured output ... Implies --output-format json'; never emitted here since this profile pins streaming-json)"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: --max-turns <N> bounds agent turns but no qualified cap value is evidenced; never emitted by this profile",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--max-turns <N> Maximum number of agent turns')"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--disable-web-search (removes the one evidenced built-in external-network tool so the AIWG worker-invoke bridge remains the one MCP/tool route); no flag to disable configured MCP servers is evidenced (grok has no built-in MCP server, only a user/project mcp.json; unavailable, not invented)",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--disable-web-search Disable web search and web fetch tools')"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "--no-subagents (disables subagent spawning; denies hidden fan-out)",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md) ('--no-subagents Disable subagent spawning')"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no model/account fallback-selection flag is evidenced",
+                "evidence": "H: grok 1.0.50 (c58f321264ba, stable) --help, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt); plus the installed binary's own bundled docs (strings-read, never live qualification; full extracts preserved in docs/providers/grok-build-cli-evidence.md)"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "XAI_API_KEY",
+              "HOME"
+            ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "The separate, pre-existing src/providers/grok-build-headless.ts transport and the generic grok-build branch in tools/ralph-external/lib/worker-health.mjs use --output-format json and an older message/result event shape; this profile's streaming-json/ACP grammar is independent and does not change that path or its consumers.",
+              "No --no-ask-user-equivalent flag is listed in the captured root --help for this version (an internal no-ask-user arg name exists in the compiled binary's own strings but is not printed help text), so it is never emitted; whether an ask_user_question tool call blocks indefinitely under dontAsk in a non-interactive run is unqualified, not invented away.",
+              "--always-approve and --permission-mode bypassPermissions are never emitted; a scoped --allow/--deny rule value, or the model/effort value, starting with '-' or containing whitespace/control characters is refused by the driver before argv is built.",
+              "Permission-mode and sandbox-profile semantics are quoted directly from the installed binary's own bundled documentation (see docs/providers/grok-build-cli-evidence.md for the full extracts, strings command and binary version/hash); where that documentation does not settle a question (e.g. ask_user_question behavior under dontAsk), the control stays unqualified rather than assumed safe.",
+              "Live qualification is an open S1 blocker: this profile has been exercised only against --help/--version/subcommand --help plus strings-read bundled docs, never a live prompted run. The smoke command in docs/providers/grok-build-direct.md is the first live check and needs an XAI_API_KEY (or cached grok login) from the operator."
             ],
             "health": {
               "version": 1,
@@ -2478,24 +2506,24 @@
               "signalParser": "provider-grok-build-health-v1",
               "sessionLogLocator": null,
               "progressEvidence": [
-                "distinct completed message"
+                "distinct tool_call/tool_call_update toolCallId"
               ],
-              "stopEvidence": "owned process identity and observed exit; terminal text alone is insufficient",
-              "fixtureRef": "test/fixtures/providers/grok-build/health/manifest.json",
+              "stopEvidence": "owned process identity and observed exit; the documented terminal 'end' event's stopReason === 'end_turn' plus a standalone 'error' event or a failed tool_call/tool_call_update anywhere always defeats a clean-looking exit; any event observed after 'end' is itself a contract violation and fails the parse",
+              "fixtureRef": "test/fixtures/providers/grok-build/direct-health/manifest.json",
               "qualifiedAt": null,
               "statusOperation": null,
               "cancelOperation": null,
               "coverage": "degraded",
               "qualificationTarget": "semantic",
               "evidenceGrades": [
-                "R"
+                "H"
               ],
               "provenance": [
                 {
-                  "kind": "repository",
-                  "ref": "src/providers/grok-build-headless.ts",
-                  "observedAt": "2026-10-07T00:00:00Z",
-                  "cliVersion": null
+                  "kind": "help",
+                  "ref": ".aiwg/working/s1-scratch/cli-help/grok-1.0.50.txt",
+                  "observedAt": "2026-10-10T00:00:00Z",
+                  "cliVersion": "1.0.50"
                 }
               ],
               "qualificationOwner": "B-OG-41",

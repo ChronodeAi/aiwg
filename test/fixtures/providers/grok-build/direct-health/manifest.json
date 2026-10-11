@@ -1,0 +1,20 @@
+{
+  "scenarioId": "T-OG-03-grok-build-direct-acp-grammar",
+  "provider": "grok-build",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "direct-stream.ndjson",
+  "note": "This fixture is specific to the #2906 direct-shell profile's --output-format streaming-json (ACP-derived event grammar: text/thought/tool_call/tool_call_update/usage/plan/available_commands/end/error). It is consumed only by GrokBuildAdapter.observeHealthEvent (tools/ralph-external/lib/grok-build-adapter.mjs) and test/conformance/orchestration-v1/grok-build-direct.test.ts, never by the generic observeProviderHealthEvent('grok-build', ...) branch in tools/ralph-external/lib/worker-health.mjs. That generic branch, and the sibling ../health/ fixture it reads, remain on the pre-existing message/result shape used by the separate legacy src/providers/grok-build-headless.ts transport; this profile does not change that shape or its consumers.",
+  "expectedKinds": [
+    "activity",
+    "progress",
+    "progress",
+    "activity",
+    "activity",
+    "terminal"
+  ],
+  "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
+  "sanitizedEvidence": "synthetic content and identifiers only",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}
