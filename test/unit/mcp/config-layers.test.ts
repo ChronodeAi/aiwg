@@ -108,12 +108,19 @@ afterEach(() => {
 
 describe("resolveConfigLayers", () => {
   it("splits on the platform delimiter, lowest precedence first", () => {
-    expect(resolveConfigLayers(undefined, { AIWG_CONFIG_LAYERS: ["a", " b ", ""].join(delimiter) })).toEqual([resolve("a"), resolve("b")]);
+    expect(resolveConfigLayers(undefined, { AIWG_CONFIG_LAYERS: ["/org", " /identity ", ""].join(delimiter) })).toEqual([resolve("/org"), resolve("/identity")]);
   });
 
   it("keeps single-directory behaviour when unset or when a directory is passed explicitly", () => {
     expect(resolveConfigLayers(undefined, {})).toBeNull();
-    expect(resolveConfigLayers("/explicit", { AIWG_CONFIG_LAYERS: "a" })).toBeNull();
+    expect(resolveConfigLayers("/explicit", { AIWG_CONFIG_LAYERS: "/a" })).toBeNull();
+  });
+
+  it("refuses relative entries instead of resolving them against the current directory", () => {
+    expect(() => resolveConfigLayers(undefined, { AIWG_CONFIG_LAYERS: ["a", " b ", ""].join(delimiter) }))
+      .toThrow("AIWG_CONFIG_LAYERS entries must be absolute paths; refusing relative entries: a, b");
+    expect(() => resolveConfigLayers(undefined, { AIWG_CONFIG_LAYERS: ["/org", "identity"].join(delimiter) }))
+      .toThrow("refusing relative entries: identity");
   });
 });
 

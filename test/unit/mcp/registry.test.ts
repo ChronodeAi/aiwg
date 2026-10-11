@@ -843,12 +843,12 @@ describe("injectServers", () => {
   });
 
   it.each(jsonAdapters)("writes exact stdio mapping for $provider", async ({ provider, location, file, shape }) => {
-    await registry.add({ name: "matrix", type: "stdio", command: "synthetic-command", args: ["--literal", "space value"], ...(shape === "claude" ? {} : { env: { SYNTHETIC_SETTING: "keep" } }) });
+    await registry.add({ name: "matrix", type: "stdio", command: "synthetic-command", args: ["--literal", "space value"], ...(location === "project" ? {} : { env: { SYNTHETIC_SETTING: "keep" } }) });
     const result = await inject(registry, provider, { projectDir, servers: ["matrix"] });
     const configPath = join(location === "home" ? join(tempDir, "provider-home") : projectDir, file);
     const entry = shape === "opencode"
-      ? { type: "local", command: ["synthetic-command", "--literal", "space value"], environment: { SYNTHETIC_SETTING: "keep" } }
-      : { ...(shape === "factory" ? { type: "stdio", disabled: false } : {}), command: "synthetic-command", args: ["--literal", "space value"], ...(shape === "claude" ? {} : { env: { SYNTHETIC_SETTING: "keep" } }) };
+      ? { type: "local", command: ["synthetic-command", "--literal", "space value"], ...(location === "project" ? {} : { environment: { SYNTHETIC_SETTING: "keep" } }) }
+      : { ...(shape === "factory" ? { type: "stdio", disabled: false } : {}), command: "synthetic-command", args: ["--literal", "space value"], ...(location === "project" ? {} : { env: { SYNTHETIC_SETTING: "keep" } }) };
     expect(result).toEqual({ provider, configPath, serversInjected: ["matrix"], alreadyPresent: [] });
     expect(JSON.parse(await readFile(configPath, "utf-8"))).toEqual({ [shape === "opencode" ? "mcp" : "mcpServers"]: { matrix: entry } });
     const fresh = create(tempDir);
@@ -857,13 +857,13 @@ describe("injectServers", () => {
   });
 
   it.each(jsonAdapters.flatMap(adapter => (["http", "sse"] as const).map(type => ({ ...adapter, type }))))("writes exact $type mapping for $provider", async ({ provider, location, file, shape, type }) => {
-    await registry.add({ name: "matrix", type, url: "https://synthetic.example/mcp", ...(shape === "claude" ? {} : { headers: { "X-Synthetic": "keep" } }) });
+    await registry.add({ name: "matrix", type, url: "https://synthetic.example/mcp", ...(location === "project" ? {} : { headers: { "X-Synthetic": "keep" } }) });
     const result = await inject(registry, provider, { projectDir, servers: ["matrix"] });
     const configPath = join(location === "home" ? join(tempDir, "provider-home") : projectDir, file);
     const entry = {
       ...(shape === "factory" ? { type, disabled: false } : shape === "opencode" ? { type: "remote" } : shape === "claude" ? { type } : {}),
       [shape === "antigravity" ? "serverUrl" : "url"]: "https://synthetic.example/mcp",
-      ...(shape === "claude" ? {} : { headers: { "X-Synthetic": "keep" } }),
+      ...(location === "project" ? {} : { headers: { "X-Synthetic": "keep" } }),
     };
     expect(result).toEqual({ provider, configPath, serversInjected: ["matrix"], alreadyPresent: [] });
     expect(JSON.parse(await readFile(configPath, "utf-8"))).toEqual({ [shape === "opencode" ? "mcp" : "mcpServers"]: { matrix: entry } });

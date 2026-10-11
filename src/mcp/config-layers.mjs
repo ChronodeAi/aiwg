@@ -24,7 +24,15 @@ export function resolveConfigLayers(configDirOverride, env = process.env) {
   if (configDirOverride) return null;
   const raw = env.AIWG_CONFIG_LAYERS;
   if (!raw || !raw.trim()) return null;
-  const layers = raw.split(delimiter).map(entry => entry.trim()).filter(Boolean).map(entry => resolve(entry));
+  const entries = raw.split(delimiter).map(entry => entry.trim()).filter(Boolean);
+  // A relative entry would resolve against the current working directory, so the
+  // same AIWG_CONFIG_LAYERS value would name different layers from different
+  // invocation directories. Refuse instead of silently picking a directory.
+  const relativeEntries = entries.filter(entry => !isAbsolute(entry));
+  if (relativeEntries.length) {
+    throw new Error(`AIWG_CONFIG_LAYERS entries must be absolute paths; refusing relative entries: ${relativeEntries.join(', ')}`);
+  }
+  const layers = entries.map(entry => resolve(entry));
   return layers.length > 0 ? layers : null;
 }
 
