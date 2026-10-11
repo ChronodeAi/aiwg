@@ -77,6 +77,17 @@ export function observeProviderHealthEvent(provider, event, source, binding) {
     if (typeof event.response === 'string' && event.done !== true) return { kind: 'activity' };
     if (event.done === true) return { kind: 'terminal', success: !event.error };
     if (event.error) return { ...classifyWorkerHealthFailure(event, { source, provider }), fatal: true };
+  } else if (provider === 'copilot') {
+    // CONSERVATIVE GUARD ONLY (roctinam/aiwg#2901 round 1): Copilot's own
+    // JSONL event vocabulary is not documented in --help (see
+    // copilot-adapter.mjs module doc) and is never invented here. This
+    // branch defends only against the synthetic "error-shaped JSON at exit
+    // 0" shape — `type: "error"` or a top-level non-null `error` field — so
+    // it can never be mistaken for a completed/OK final. Mirrors
+    // copilot-adapter.mjs's parseOutput guard.
+    if (event.type === 'error' || (event.error !== undefined && event.error !== null)) {
+      return { ...classifyWorkerHealthFailure(event, { source, provider }), fatal: true };
+    }
   }
   return null;
 }
