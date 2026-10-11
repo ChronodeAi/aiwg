@@ -41,6 +41,47 @@ export function sameWorkerIdentity(expected, actual) {
     .every(key => expected[key] === actual[key]);
 }
 
+/** Two matching kernel observations, bounded from the first visible candidate.
+ * Pin each candidate's first observed birth; PID reuse can never gain ownership.
+ */
+export function createWorkerIdentityCapture({ now = () => Number(process.hrtime.bigint()) / 1e6,
+  timeoutMs = 250 } = {}) {
+  let deadline = null;
+  const births = new Map();
+  const reused = new Set();
+  let previous = null;
+  let candidate = null;
+  let candidateVisible = false;
+  return {
+    started: () => deadline !== null,
+    expired: () => deadline !== null && now() >= deadline,
+    observe(current) {
+      if (!current || !Number.isSafeInteger(current.pid) || current.pid <= 0 || !current.startTicks) {
+        candidateVisible = false;
+        return null;
+      }
+      const birth = births.get(current.pid);
+      if (!birth) births.set(current.pid, { ...current });
+      else if (['uid', 'parentPid', 'host', 'bootId', 'startTicks'].some(key => birth[key] !== current[key])) reused.add(current.pid);
+      // A fresh identity can open another window, but never clear birth pins.
+      if (deadline === null || (now() >= deadline && (!candidateVisible || !sameWorkerIdentity(candidate, current)))) {
+        deadline = now() + timeoutMs;
+        previous = null;
+      }
+      candidate = { ...current };
+      candidateVisible = true;
+      if (reused.has(current.pid) || current.pid !== current.pgid || current.uid !== process.getuid?.()) {
+        previous = null;
+        return null;
+      }
+      if (now() >= deadline) return null;
+      const stable = sameWorkerIdentity(previous, current);
+      previous = { ...current };
+      return stable ? current : null;
+    },
+  };
+}
+
 let workerTickRate;
 /** Host-qualified conversion, not an assumed Linux HZ constant. */
 export function qualifyWorkerCpuTickRate(probe = execFileSync) {
