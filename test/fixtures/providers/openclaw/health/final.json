@@ -1,1 +1,1 @@
-{"payloads":[{"text":"synthetic final"}]}
+{"ok":true,"status":"ok","final":"synthetic final","payloads":[{"text":"synthetic final"}],"model":"openrouter/synthetic-model","provider":"openrouter","sessionId":"openclaw-fixture-session"}

@@ -2164,8 +2164,8 @@
         "id": "openclaw",
         "provider": "openclaw",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "unavailable",
+        "supportedVersions": "2026.10.1",
+        "runtimeDriver": "installed:openclaw",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -2177,11 +2177,23 @@
           "argv": [
             "agent",
             "exec",
-            "${brief}"
+            "--isolated",
+            "--auth-env-only",
+            "--json",
+            "--model",
+            "${model}",
+            "--thinking",
+            "${effort}",
+            "--cwd",
+            "${workspace}",
+            "--message-file",
+            "${briefPath}"
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "OPENROUTER_API_KEY"
+          ],
           "versionArgv": [
             "--version"
           ],
@@ -2206,74 +2218,80 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "2026.10.1",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--model provider/model] global flag; exact observed provider/model id, never an alias, 'auto' or 'default'",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --model <id> (provider/model or model id); unqualified until live model-pin evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--thinking T] with T in [off, minimal, low, medium, high, xhigh, max, ultra]; 'adaptive' is excluded and never emitted (OpenClaw choosing its own level is a let-the-tool-pick value)",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --thinking off|minimal|low|medium|high|xhigh|adaptive|max|ultra; unqualified until live evidence"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no sandbox/permission flag is evidenced on `agent exec --help`; an isolated run source-confirms agents.defaults.sandbox.mode=\"off\" with tools.fs.workspaceOnly=true and tools.exec.mode=\"full\" (not flag-controlled)",
+                "evidence": "R: openclaw 2026.10.1 installed package dist/agent-exec-input-C7lx24Ak.mjs buildExecConfigDefaults/resolveExecBaseConfig, read 2026-10-10; unqualified until live evidence"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no approval-policy flag on `agent exec --help`; --isolated skips ambient config and plugin/MCP install roots entirely, so there is no pending-approval surface to bypass in a one-shot run",
+                "evidence": "R: openclaw 2026.10.1 installed package dist/agent-exec-4ENgJefG.mjs (pluginInstallContext skipped when opts.isolated), read 2026-10-10; unqualified until live evidence"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--cwd W] sets both the agent workspace and tool working directory",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --cwd <dir>; unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--json] one envelope object on stdout after completion (final-json): {ok, status, final, payloads, model, provider, sessionId, error?}; no -o/output-file flag is evidenced",
+                "evidence": "H+R: openclaw 2026.10.1 agent exec --help documents --json; envelope shape read from installed package dist/agent-exec-4ENgJefG.mjs writeAgentExecOutput, 2026-10-10; unqualified until live evidence"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "closed: the brief is a host-written file passed as --message-file <briefPath>; brief text never enters argv or stdin",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --message-file <path> (max 4 MiB UTF-8 file); unqualified until live evidence"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no output-schema parameter is evidenced on `agent exec --help`",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help; tasks requiring a schema-bound output are blocked"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no step or turn cap flag is evidenced; --timeout <seconds> bounds wall-clock only and is not emitted by this profile",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --timeout <seconds> (deadline only, default 600); no step-cap flag exists"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unknown: workspace trust behaviour is not evidenced beyond tools.fs.workspaceOnly=true under --isolated",
+                "evidence": "R: openclaw 2026.10.1 installed package dist/agent-exec-input-C7lx24Ak.mjs, read 2026-10-10; live qualification required"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no per-call subagent/child disable is evidenced on `agent exec --help`",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help shows no subagent control; tasks requiring child limits are blocked"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable by design: --fallback <provider/model> exists (repeatable, requires --model) but is never emitted -- no implicit fallback per the S1 direct-handoff scope",
+                "evidence": "H: openclaw 2026.10.1 agent exec --help documents --fallback; this profile never passes it"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "OPENROUTER_API_KEY"
+            ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "`openclaw agent` (without `exec`) routes through the Gateway and can `--deliver` a reply to a chat channel; this profile only ever uses `agent exec` and never emits `--deliver`/`--to`/`--channel`/`--reply-*`.",
+              "--fallback is help-evidenced but never emitted by this profile: no implicit fallback chain.",
+              "--isolated discards ambient config and plugin/MCP install roots; a task depending on configured skills or MCP servers is out of scope for this profile.",
+              "NO CLI SANDBOX: an isolated run has sandbox.mode=\"off\" and tools.exec.mode=\"full\" (source-confirmed) -- the embedded agent can run arbitrary shell commands; only file TOOLS are bounded to --cwd (tools.fs.workspaceOnly), command execution is not. sandboxModes advertises \"external\" only; this profile requires a conductor-owned external boundary (container/worktree/VM isolation) and refuses any read-only or workspace-write sandbox request before rendering argv."
             ],
             "health": {
               "version": 1,
@@ -2290,14 +2308,21 @@
               "coverage": "degraded",
               "qualificationTarget": "process-only",
               "evidenceGrades": [
-                "D"
+                "H",
+                "R"
               ],
               "provenance": [
                 {
-                  "kind": "documentation",
-                  "ref": "03-software-architecture.md §10 openclaw",
-                  "observedAt": "2026-10-07T00:00:00Z",
-                  "cliVersion": null
+                  "kind": "help",
+                  "ref": "tools/ralph-external/lib/openclaw-adapter.mjs (openclaw 2026.10.1 agent exec --help, captured on noodle)",
+                  "observedAt": "2026-10-10T00:00:00Z",
+                  "cliVersion": "2026.10.1"
+                },
+                {
+                  "kind": "repository",
+                  "ref": "tools/ralph-external/lib/openclaw-adapter.mjs (installed openclaw 2026.10.1 npm package dist/agent-exec-4ENgJefG.mjs + dist/agent-exec-input-C7lx24Ak.mjs, read on noodle)",
+                  "observedAt": "2026-10-10T00:00:00Z",
+                  "cliVersion": "2026.10.1"
                 }
               ],
               "qualificationOwner": "B-OG-42",
