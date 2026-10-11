@@ -1,0 +1,8 @@
+{
+  "T-OG-15": [
+    "test/conformance/orchestration-v1/ollama-direct.test.ts"
+  ],
+  "T-OG-20": [
+    "test/conformance/orchestration-v1/ollama-direct.test.ts"
+  ]
+}

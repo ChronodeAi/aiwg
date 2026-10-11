@@ -104,6 +104,13 @@ export const PROVIDER_DISCOVERY_DECISIONS: Record<string, ProviderDiscoveryDecis
     reason: 'OpenHuman profiles accept semantic model hints but expose no standardized local model-list command.',
     documentation: 'https://github.com/roctinam/openhuman',
   },
+  ollama: {
+    provider: 'ollama',
+    status: 'native',
+    interface: 'GET /api/tags on the configured local endpoint',
+    reason: 'The read-only HTTP model-list endpoint reports the locally present models and per-model digests for the configured Ollama server without probing a remote registry or consuming inference tokens. Declared here (roctinam/aiwg#2899, B-OG-09); no fetcher is implemented against this map by this task — see the local-http worker-adapter registry entry and its adapter docstring for what is actually dispatchable today.',
+    documentation: 'https://github.com/ollama/ollama/blob/main/docs/api.md#list-local-models',
+  },
   omp: { provider: 'omp', status: 'native', interface: 'omp models --json --no-extensions',
     reason: 'OMP JSON catalog reports credential-available LLM models; ambient extensions are disabled by default.',
     documentation: 'https://github.com/can1357/oh-my-pi/blob/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent/src/commands/models.ts' },
