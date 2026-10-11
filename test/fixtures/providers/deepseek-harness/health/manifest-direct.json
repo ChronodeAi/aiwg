@@ -1,0 +1,12 @@
+{
+  "scenarioId": "T-OG-03-deepseek-harness-direct-json-grammar",
+  "provider": "deepseek-harness",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "../fake-dsh-direct.mjs",
+  "expectedKinds": ["session", "status", "text", "thinking", "tool_call", "tool_result", "final"],
+  "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
+  "sanitizedEvidence": "synthetic content and identifiers only; no credential, no network",
+  "cleanup": "pure fixture; no persistent runtime beyond the spawned child process"
+}
