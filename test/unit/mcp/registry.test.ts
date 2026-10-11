@@ -23,7 +23,7 @@ vi.mock("path", async importOriginal => {
       // Redirect only the home-scoped adapters exercised by this owner.
       // Do not change HOME or production provider metadata.
       if (filesystemBoundary.root && parts.length === 2 &&
-          [".claude.json", ".factory/mcp.json", ".codex/config.toml", ".codeium/windsurf/mcp_config.json", ".warp/mcp.json"].includes(parts[1])) {
+          [".claude.json", ".claude/settings.json", ".factory/mcp.json", ".codex/config.toml", ".codeium/windsurf/mcp_config.json", ".warp/mcp.json"].includes(parts[1])) {
         return actual.resolve(filesystemBoundary.root, "provider-home", parts[1]);
       }
       return actual.resolve(...parts);
