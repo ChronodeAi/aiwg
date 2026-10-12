@@ -633,24 +633,26 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(true);
   });
 
-  // #2915 P0 (do no harm): with `parallelism.worker_dispatch` off, the
-  // scoped-recovery gate must be completely inert — byte-for-byte what
-  // dispatch looked like before this feature existed. (The full `run()`
-  // path cannot exercise this directly: the models RESOLVER itself treats
-  // `worker_dispatch: false` as "disabled" and produces no launchable plan
-  // at all, independent of this bridge's own recovery admission — see the
-  // `mcpFixture` comment above. `resolveRunRecovery` is exported
-  // test-only to prove ITS OWN inertness directly, regardless of what an
-  // injected breaker would otherwise decide.)
-  it('resolveRunRecovery is inert when worker_dispatch is off, even with an injected breaker that would refuse (#2915 P0)', async () => {
-    const refusingBreaker = { canLaunch: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
+  // #2915 final (step 6, disabled-dispatch-is-inert): with
+  // `parallelism.worker_dispatch` off (or absent), `admitDirectWorker` must
+  // be completely inert — byte-for-byte what dispatch looked like before
+  // this feature existed — even with an injected breaker whose `admit`
+  // would throw if ever reached. Enabled, the same breaker IS reached and
+  // its admission result is honored.
+  it('disabled-dispatch-is-inert: admitDirectWorker never constructs/consults the breaker when the global flag is false or unset', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached while disabled'); } };
     const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' } };
-    const off = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-1', { parallelism: { worker_dispatch: false } });
-    expect(off).toBeNull();
-    const absent = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-2', undefined);
-    expect(absent).toBeNull();
-    const on = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-3', { parallelism: { worker_dispatch: true } });
-    expect(on?.breaker).toBe(refusingBreaker);
+    const off = await sessionLauncher.admitDirectWorker({ gateEnabled: false, config: { parallelism: { worker_dispatch: false } },
+      invocation, invocationId: 'inv-1', scopedBreaker: throwingBreaker });
+    expect(off).toEqual({ gated: false });
+    const absent = await sessionLauncher.admitDirectWorker({ gateEnabled: false, config: undefined,
+      invocation, invocationId: 'inv-2', scopedBreaker: throwingBreaker });
+    expect(absent).toEqual({ gated: false });
+    const refusingBreaker = { admit: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
+    const on = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
+      invocation, invocationId: 'inv-3', scopedBreaker: refusingBreaker });
+    expect(on).toMatchObject({ gated: true, refused: { blockedBy: ['installation:codex'] } });
   });
 
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight

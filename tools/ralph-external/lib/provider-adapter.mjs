@@ -448,18 +448,52 @@ export class ProviderAdapter {
     return this.parseWorkerOutput(output, options);
   }
 
+  /**
+   * #2915 (evidence contract): the attempt-terminal sibling of
+   * `parseWorkerFinal`/`parseWorkerOutput` below. Shares the exact same
+   * strict decoding; the only difference is the terminal assertion —
+   * `assertWorkerAttemptTerminal` requires the launcher/adapter-owned
+   * `attemptOutcome` (never confirmed descendant termination) instead of
+   * `assertWorkerTerminal`'s `termination: 'confirmed'`. This lets a
+   * degraded-isolation shell attempt or an MCP response — neither of which
+   * can ever produce a confirmed descendant-stop — still validate a
+   * genuinely successful attempt's final claims (session-launcher.mjs
+   * `captureOneWorker`). It never manufactures confirmed termination: the
+   * caller's own `termination`/`descendants` fields are untouched.
+   *
+   * NOTE (known limitation, #2915 report): adapters that override
+   * `parseWorkerFinal` to pre-extract a CLI-specific final shape (most
+   * provider adapters in this directory) do not automatically get a
+   * matching extraction for this attempt-terminal entry point unless they
+   * also override `parseWorkerAttemptFinal` the same way. Only the base
+   * adapter's generic json/jsonl/mcp decoding is covered out of the box.
+   */
+  parseWorkerAttemptFinal(output, options = {}) {
+    return this.parseWorkerAttemptOutput(output, options);
+  }
+
+  async parseWorkerAttemptOutput(output, options = {}) {
+    const { assertWorkerAttemptTerminal } = await importImpl(import.meta.url, 'mission-protocol/index.js');
+    return this.parseWorkerOutput(output, { ...options, assertTerminal: assertWorkerAttemptTerminal });
+  }
+
   /** Strict group-mode path, shared by CLI and MCP. Never falls back to regex.
    * Drivers normalize qualified vendor event framing to result/message/terminal
    * JSONL, or supply one claims JSON document. Observation comes from the trusted
    * process/request owner, not from the final. This returns claims, not acceptance.
    * Called directly or through the `parseWorkerFinal()` alias; never through
    * `parseOutput()`, which keeps its own synchronous, non-group contract.
+   * `options.assertTerminal`, when supplied (by `parseWorkerAttemptOutput`
+   * above), replaces the default `assertWorkerTerminal` confirmed-termination
+   * gate with the attempt-terminal one — every other step of decoding is
+   * identical and unmodified.
    */
   async parseWorkerOutput(output, options = {}) {
     const {
       WORKER_MAX_JSON_BYTES, WORKER_MAX_NESTING_DEPTH, WorkerContractError,
       decodeWorkerProducedPayload, assertWorkerTerminal,
     } = await importImpl(import.meta.url, 'mission-protocol/index.js');
+    const assertTerminal = options.assertTerminal ?? assertWorkerTerminal;
     const fail = message => { throw new WorkerContractError('OG_CONTRACT_INVALID', message); };
     const format = options.format ?? 'jsonl';
     const streamLimit = 10 * 1024 * 1024;
@@ -561,7 +595,7 @@ export class ProviderAdapter {
     boundedJson(final, WORKER_MAX_JSON_BYTES);
     const claims = decodeWorkerProducedPayload('workerClaims', 'worker', final);
     if (options.observation?.transport !== (format === 'mcp' ? 'mcp' : 'shell')) fail('Worker transport observation mismatch.');
-    assertWorkerTerminal(options.observation);
+    assertTerminal(options.observation);
     return claims;
   }
 

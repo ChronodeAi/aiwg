@@ -422,6 +422,43 @@ export function assertWorkerTerminal(observation: WorkerTerminalObservation): vo
 }
 
 /**
+ * #2915 (evidence contract): the ATTEMPT succeeded/failed/was-uncertain is a
+ * separate, launcher-owned fact from whether the WORKER's descendant tree is
+ * confirmed stopped (`termination`/`descendants`). `assertWorkerTerminal`
+ * above requires `termination === 'confirmed'`, which degraded-isolation
+ * shell attempts (no systemd unit; descendant stop is never kernel-confirmed)
+ * and most MCP attempts (a response proves request completion, never
+ * descendant termination) can never satisfy — so recovery success could
+ * never be recorded for them even when the attempt itself plainly succeeded
+ * (#2915 final review, finding 4: "degraded success never closes the
+ * scope"). `assertWorkerAttemptTerminal` is the attempt-terminal sibling:
+ * it requires `attemptOutcome === 'succeeded'` (a fact the launcher/adapter
+ * computed from its OWN observed evidence — direct-child clean exit plus a
+ * strictly-valid final, or a transport-correlated MCP response plus a
+ * strictly-valid final; never a worker claim) instead of confirmed
+ * descendant termination. It never manufactures or implies confirmed
+ * termination — `termination`/`descendants` on the same result are
+ * untouched by this assertion and remain whatever the launcher separately
+ * observed.
+ */
+export interface WorkerAttemptTerminalObservation {
+  transport: 'shell' | 'mcp';
+  status: WorkerExecution['status'];
+  attemptOutcome: 'succeeded' | 'failed' | 'uncertain';
+  exitCode: number | null;
+  isError?: boolean;
+}
+
+export function assertWorkerAttemptTerminal(observation: WorkerAttemptTerminalObservation): void {
+  if (!observation || !['shell', 'mcp'].includes(observation.transport)
+    || observation.status !== 'completed' || observation.attemptOutcome !== 'succeeded'
+    || (observation.transport === 'shell' ? observation.exitCode !== 0 : observation.exitCode !== null && observation.exitCode !== 0)
+    || (observation.isError !== undefined && observation.isError !== false)) {
+    throw new WorkerContractError('OG_CONTRACT_INVALID', 'Worker attempt evidence is missing, erroneous or uncertain; exit zero alone is insufficient.');
+  }
+}
+
+/**
  * Assemble detached, immutable evidence from separately attributed producers.
  * artifactBytes are read by the conductor from the exact artifact (or protected
  * canonical tree manifest) being verified/integrated, never a worker digest.

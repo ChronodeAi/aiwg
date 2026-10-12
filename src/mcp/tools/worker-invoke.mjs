@@ -559,30 +559,12 @@ async function loadAiwgConfigModule() {
  * AIWG_ROOT-absolute path is the robust way in rather than a relative
  * specifier (whose depth from this file differs between `src/mcp/tools/`
  * and `dist/src/mcp/tools/`). */
-/**
- * #2915A: resolve the scoped-recovery breaker for one `run()`. Returns null
- * (recovery disabled) when the toolset passes `scopedBreaker: null`, OR
- * (#2915 P0, do no harm) when `parallelism.worker_dispatch` is not enabled
- * in `config` — the recovery gate is additive to that existing switch, so
- * with dispatch disabled this bridge is byte-for-byte what it was before
- * this feature existed (#2915 review: the gate previously ran
- * independently of the switch). Otherwise returns the explicitly injected
- * breaker or the process-shared direct-recovery breaker, with covering
- * scope keys derived from the trusted resolved invocation (never worker
- * text). The invocation key uses the registry entry id, unique per run.
- */
-let cachedRecoveryModule = null;
-export async function resolveRunRecovery(scopedBreakerOption, invocation, drivers, entryInvocationId, config) {
-  if (scopedBreakerOption !== undefined && !scopedBreakerOption) return null;
-  if (!config?.parallelism?.worker_dispatch) return null;
-  if (!cachedRecoveryModule) cachedRecoveryModule = loadRalphExternal('session-launcher.mjs');
-  const module = await cachedRecoveryModule;
-  const breaker = scopedBreakerOption ?? module.getDirectRecoveryBreaker();
-  const quotaAccount = drivers?.[invocation?.selected?.cli]?.qualification?.installation?.accountScope ?? null;
-  const installationQualifier = drivers?.[invocation?.selected?.cli]?.qualification?.installation?.boundary?.digest ?? null;
-  return { breaker, module,
-    scopeKeys: await module.recoveryScopeKeysForInvocation(invocation, { invocationId: entryInvocationId, quotaAccount, installationQualifier }) };
-}
+// #2915 final (step 3): the former `resolveRunRecovery` + per-site
+// `canLaunch`/`noteLaunched`/`recordDirectWorkerOutcome` triple is replaced
+// by `run()`'s own single `admitDirectWorker`/`settleDirectWorker` pair
+// (session-launcher.mjs), which `defaultLaunchShellWorker` below BORROWS
+// rather than re-resolving — deleting the duplicate gate that previously
+// rejected its own already-admitted canary (#2915 final review, finding 4).
 
 async function loadRalphExternal(relativeFromToolsRoot) {
   const absolute = path.join(findOwnPackageRoot(), 'tools/ralph-external', relativeFromToolsRoot);
@@ -1220,6 +1202,20 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
       throw error;
     }
+    // #2915 final: declared here (function scope), not inside the try block
+    // below, so the generic catch-all at the end of this function can also
+    // settle this run's admission (#2915 final review, finding 2: a thrown
+    // error reaching that catch previously left the reservation live with
+    // zero capacity recovered — the exact "slot leak" the final review
+    // named).
+    let admission;
+    let recoveryModule;
+    let recoverySettled = false;
+    const settleRecovery = (outcome) => {
+      if (recoverySettled || !admission?.gated) return;
+      recoverySettled = true;
+      try { recoveryModule.settleDirectWorker(admission, outcome); } catch { /* recovery accounting must never fail a run */ }
+    };
     try {
       try {
         outputReservation = await reserveFinalOutput(request.final_output);
@@ -1255,31 +1251,30 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // to stay uncertain about (#2915 review: a thrown admission error
       // left `canStart:false` with one live slot retained and no worker
       // launched).
-      let recovery;
-      let recoveryScopeKeys;
+      // #2915 final (one admission, step 3): ONE top-level admission for
+      // this whole run(), shared with the shell/MCP branches below — never
+      // re-gated inside `defaultLaunchShellWorker`/`planDirectWorkerLaunch`,
+      // which now BORROW this exact admission instead of re-admitting and
+      // potentially rejecting their own already-admitted canary (#2915
+      // final review, finding 4). `recoverySettled` makes settlement
+      // idempotent across every return path below, including the generic
+      // catch-all at the end of this function (#2915 final review, finding
+      // 2: a thrown error reaching that catch previously left the
+      // reservation live with zero capacity recovered).
       try {
-        recovery = await resolveRunRecovery(options.scopedBreaker, invocation, drivers, entry.invocationId, snapshot.config);
-        recoveryScopeKeys = recovery?.scopeKeys ?? [];
-        if (recovery?.breaker) {
-          const gate = recovery.breaker.canLaunch({ scopeKeys: recoveryScopeKeys });
-          if (!gate.ok) {
-            return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-              diagnostics: [`recovery scope open: ${gate.blockedBy.join(', ')}`] });
-          }
-          recovery.breaker.noteLaunched(recoveryScopeKeys, entry.invocationId);
-        }
+        recoveryModule = await loadRalphExternal('session-launcher.mjs');
+        admission = await recoveryModule.admitDirectWorker({
+          gateEnabled: !!snapshot.config?.parallelism?.worker_dispatch, config: snapshot.config,
+          invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
+        });
       } catch (error) {
         return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
           diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
       }
-      const recordRecovery = (outcome) => {
-        if (!recovery?.breaker) return;
-        try {
-          const { recordDirectWorkerOutcome } = recovery.module;
-          recordDirectWorkerOutcome(recovery.breaker,
-            { scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId, outcome });
-        } catch { /* recovery accounting must never fail a run */ }
-      };
+      if (admission.refused) {
+        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+          diagnostics: [`recovery scope open: ${admission.refused.blockedBy.join(', ')}`] });
+      }
       // F4 (fix-2892-r2, formerly part of M5): per operator decision, the
       // MCP path REQUIRES the structured WorkerDirectBrief — a probe showed
       // a plaintext brief (or a JSON brief swapped to plaintext between
@@ -1321,11 +1316,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
-          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, scopedBreaker: recovery?.breaker ?? null, ...gateInputs });
+          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, admission, ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched && !launch.launchAttempted) {
           mayHaveLaunched = false;
-          try { recovery?.breaker?.noteSettled({ scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId }); } catch { /* never fail a run */ }
+          settleRecovery({ kind: 'uncertain' });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
         }
         // M2: a live stop handle for the duration of this call, so an
@@ -1354,9 +1349,20 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         if (registry.get(entry.invocationId)?.cancelRequested) await control.stop();
         const outcome = launch.launched ? await control.wait(deadlineMs) : await control.stopAndConfirm();
         observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode };
-        // #2915A: launcher-observed process health only (wait status, never
-        // worker claims) — failures record invocation-scoped.
-        recordRecovery({ termination: outcome.termination, exitCode: outcome.exitCode });
+        // #2915 final (evidence contract): the attempt-level fact is derived
+        // from this bridge's own launcher-observed wait status — never a
+        // worker claim — independent of `termination`/`descendants` above.
+        // `termination === 'confirmed'` here already reflects THIS bridge's
+        // own trusted observation (systemd-unit query, or this process's own
+        // `child.close` event), so a clean confirmed exit is a genuine
+        // success; anything else is either a definite bad exit (`failed`) or
+        // genuinely unresolved (`uncertain`) — failures record
+        // invocation-scoped (no `cli`/`inferenceProvider` evidence is
+        // available at this wait-status layer).
+        settleRecovery({
+          kind: outcome.termination === 'confirmed' ? (outcome.exitCode === 0 ? 'succeeded' : 'failed') : 'uncertain',
+          evidenceSource: outcome.termination === 'confirmed' && outcome.exitCode !== 0 ? 'launcher' : undefined,
+        });
         if (outcome.termination !== 'confirmed') {
           // M2: stays LIVE — capacity is held until a stop is proven or the
           // conductor disposes of it explicitly, never freed on a mere
@@ -1401,9 +1407,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           ...gateInputs,
         });
         if (result.outcome === 'blocked') {
-          // Never launched (dispatch gate or queue refusal): settle the noted
-          // cohort membership with no failure evidence.
-          try { recovery?.breaker?.noteSettled({ scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId }); } catch { /* never fail a run */ }
+          // Never launched (dispatch gate or queue refusal): settle with no
+          // failure evidence.
+          settleRecovery({ kind: 'uncertain' });
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
         }
         if (result.outcome !== 'responded') {
@@ -1419,14 +1425,21 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
               : registry.update(entry.invocationId, patch);
           }
           // M2: stays LIVE for the same reason as the shell timeout path above.
-          recordRecovery({ termination: 'uncertain', exitCode: null });
+          settleRecovery({ kind: 'uncertain' });
           return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [`worker ${result.outcome}; cancellation delivered, not confirmed stopped`] });
         }
         rawOutput = result.response;
         observation = { transport: 'mcp', status: result.response.isError ? 'failed' : 'completed', termination: 'confirmed', exitCode: result.response.isError ? 1 : null, isError: !!result.response.isError };
-        // #2915A: launcher-observed transport health only — an isError
-        // response records invocation-scoped, never a shared scope.
-        recordRecovery({ termination: 'confirmed', exitCode: observation.exitCode });
+        // #2915 final (evidence contract): a transport-correlated response
+        // that is not `isError` is a SUCCESSFUL attempt even though
+        // `exitCode` is legitimately `null` for MCP (#2915 final review,
+        // finding 4: "successful responses produce exitCode:null... recorded
+        // one invocation failure and left the shared canary active" — the
+        // former exitCode-based classification treated every successful MCP
+        // response as a failure). Descendant-stop evidence is a separate,
+        // independent fact this bridge never claims here.
+        settleRecovery({ kind: result.response.isError ? 'failed' : 'succeeded',
+          evidenceSource: result.response.isError ? 'launcher' : undefined });
         if (result.response.isError) {
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }
@@ -1463,6 +1476,8 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         result: assembled?.result ?? { claims },
       });
     } catch (error) {
+      // Settle recovery separately from the registry's retained live run slot.
+      settleRecovery({ kind: 'uncertain' });
       if (error.workerNotLaunched) mayHaveLaunched = false;
       if (!mayHaveLaunched) {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });

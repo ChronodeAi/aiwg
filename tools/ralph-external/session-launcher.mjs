@@ -275,54 +275,40 @@ async function launchOneWorker(owner, options) {
   if (isolation.mode === 'degraded' && !options.allowDegraded) {
     throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
   }
-  // Scoped recovery gate (#2915A): consult the process-scoped breaker before
-  // any spawn or runDir creation, using only trusted resolved identities. A
-  // launch covered by an open scope (or an outstanding canary) is refused
-  // here — by the next check — leaving no debris behind.
-  // `scopedBreaker: null` disables the gate for callers that own recovery
-  // themselves; pre-spawn refusals above never reach this point.
-  //
-  // #2915 P0 (do no harm): this gate is additive to the EXISTING dispatch
-  // switch, never independent of it. `gate.enabled` above is resolved from
-  // `parallelism.worker_dispatch` (and the per-CLI enable the resolver
-  // already checked); when it is false, the recovery breaker is never
-  // constructed or consulted at all, so behaviour with dispatch disabled is
-  // byte-for-byte what it was before this feature existed (#2915 review:
-  // the gate previously ran independently of the switch, refusing/launching
-  // regardless of it).
-  const recoveryBreaker = !gate.enabled ? null
-    : options?.scopedBreaker !== undefined ? options.scopedBreaker : getDirectRecoveryBreaker();
-  const installationQualifier = inputs.drivers?.[invocation.selected.cli]?.qualification?.installation?.boundary?.digest ?? null;
-  const recoveryQuotaAccount = inputs.drivers?.[invocation.selected.cli]?.qualification?.installation?.accountScope ?? null;
-  const recoveryScopeKeys = recoveryBreaker
-    ? await recoveryScopeKeysForInvocation(invocation, { quotaAccount: recoveryQuotaAccount, installationQualifier })
-    : [];
-  // Fresh invocation ids are never tracked, so the pre-spawn check omits
-  // the invocation key; it is added to the noted keys once minted below.
-  if (recoveryBreaker) {
-    const recoveryGate = recoveryBreaker.canLaunch({ scopeKeys: recoveryScopeKeys });
-    if (!recoveryGate.ok) {
-      const error = new Error(`Worker launch refused: recovery scope open (${recoveryGate.blockedBy.join(', ')})`);
-      error.code = RECOVERY_SCOPE_OPEN_CODE;
-      error.blockedBy = recoveryGate.blockedBy;
-      throw error;
-    }
+  // #2915 final (one admission, step 3): invocation ids are minted BEFORE
+  // admission, so the exact covering-key set that gated this attempt is the
+  // same set `settleDirectWorker` later resolves against — no separate
+  // pre-mint probe and post-mint noted-keys pair to drift apart. `options.
+  // scopedBreaker === null` disables the gate for callers that own recovery
+  // themselves; pre-spawn refusals above never reach this point. Global
+  // dispatch AND per-CLI enablement are checked inside `admitDirectWorker`
+  // before any breaker construction (#2915 final review, finding 1).
+  const invocationId = randomUUID();
+  let admission;
+  try {
+    admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
+      invocation, invocationId, drivers: inputs.drivers, scopedBreaker: options?.scopedBreaker });
+  } catch (error) {
+    // Fail closed, never fail open or leak a slot: an admission-time
+    // exception (bad breaker state, a thrown import) is a refusal, not a
+    // silent skip of the gate.
+    const wrapped = new Error(`Worker launch refused: recovery admission failed closed: ${error?.message ?? String(error)}`);
+    wrapped.code = RECOVERY_SCOPE_OPEN_CODE;
+    throw wrapped;
+  }
+  if (admission.refused) {
+    const error = new Error(`Worker launch refused: recovery scope open (${admission.refused.blockedBy.join(', ')})`);
+    error.code = admission.refused.code;
+    error.blockedBy = admission.refused.blockedBy;
+    throw error;
   }
   if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
   const runStat = await lstat(runDir);
   if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
   await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try { await handle.chmod(0o700); } finally { await handle.close(); } });
-  const invocationId = randomUUID();
   const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
   try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
-  // The invocation key joins the noted keys once the id is minted, so the
-  // frozen cohort and outstanding set track this attempt under every
-  // covering scope.
-  const recoveryScopeKeysWithInvocation = recoveryBreaker
-    ? await recoveryScopeKeysForInvocation(invocation, { invocationId, quotaAccount: recoveryQuotaAccount, installationQualifier })
-    : recoveryScopeKeys;
-  if (recoveryBreaker) recoveryBreaker.noteLaunched(recoveryScopeKeysWithInvocation, invocationId);
   const supervisor = sampleWorkerIdentity(process.pid);
   const launchTime = new Date().toISOString();
   const monotonicStart = process.hrtime.bigint().toString();
@@ -386,16 +372,21 @@ async function launchOneWorker(owner, options) {
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
-    return await recordRecoveryAfterAttempt(recoveryBreaker, recoveryScopeKeysWithInvocation,
-      invocation, invocationId, recoveryQuotaAccount,
-      captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-        launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir }),
-      installationQualifier);
+    const result = await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir });
+    // #2915 final (production closure): settle using the evidence-contract
+    // `result.attemptOutcome` — never `result.termination` — so a genuinely
+    // successful degraded attempt closes its scope instead of silently
+    // reopening it forever (#2915 final review, finding 4).
+    settleDirectWorker(admission, classifyAttemptForSettlement(invocation, result,
+      { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
+    return result;
   } catch (error) {
     if (!outcome?.child) {
       // Pre-spawn failure (or a recovery-scope refusal): this attempt never
-      // ran, so it settles outstanding membership with NO failure evidence.
-      try { recoveryBreaker?.noteSettled?.({ scopeKeys: recoveryScopeKeysWithInvocation, invocationId }); } catch { /* never fail teardown */ }
+      // ran, so it settles outstanding membership with NO failure evidence
+      // (#2915 final review: "every pre-spawn exit releases capacity").
+      settleDirectWorker(admission, { kind: 'uncertain' });
       await publish('exit.json', { invocationId, exitCode: null, signal: null,
         endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     }
@@ -611,7 +602,28 @@ async function captureOneWorker(owner, ctx) {
       nativeExitCode: native?.execMainCode === 1 ? native.execMainStatus : null,
       captureCoverage: sawClose ? 'complete' : 'gap', isolation: outcome.mode, nativeResult: native?.result ?? null,
       publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
+    // #2915 (evidence contract): `attemptOutcome` is a SEPARATE launcher-owned
+    // fact from `termination`/`descendants` above — whether THIS attempt
+    // succeeded, never whether the descendant tree is confirmed stopped.
+    // `processLevelOutcome` uses only process-observed facts (the direct
+    // child's own wait() exit/signal, the systemd unit's own retained
+    // ExecMainCode/Status when applicable, launcher-detected errors,
+    // timeout and explicit cancellation) — never worker stderr/stdout text
+    // or worker-writable records. A degraded-isolation attempt can reach
+    // 'succeeded' here even though its `termination` stays 'uncertain'
+    // forever (no descendant-stop confirmation is possible without a
+    // systemd unit) — this is exactly the #2915 final-review fix: "give
+    // degraded successful execution a valid recovery-success path without
+    // falsely declaring descendant termination confirmed."
+    const directChildCleanExit = sawExit && waitCode === 0 && waitSignal == null;
+    const unitConfirmedClean = outcome.mode !== 'systemd-unit' || (native?.execMainCode === 1 && native?.execMainStatus === 0);
+    const processLevelOutcome = result.errorCode || result.cancelled || result.timedOut
+      ? 'failed'
+      : directChildCleanExit && unitConfirmedClean ? 'succeeded'
+      : sawExit ? 'failed' // an exit was observed, but it was not a clean one
+      : 'uncertain'; // no direct-child exit was ever observed at all
     let healthFinalValid = false;
+    let healthAttemptFinalValid = false;
     try {
       const finalStat = await lstat(paths.final);
       if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
@@ -647,7 +659,30 @@ async function captureOneWorker(owner, ctx) {
           healthFinalValid = true;
         } catch { /* failed strict claims remain unverified candidate evidence */ }
       }
+      // #2915: the attempt-terminal sibling validation, gating
+      // `result.attemptOutcome` below — same bytes/format, but asserted
+      // against `processLevelOutcome` (never confirmed termination) so a
+      // degraded or MCP attempt's strict final can validate even though
+      // `termination` can never reach 'confirmed' for it.
+      if (driver.parseWorkerAttemptFinal) {
+        try {
+          await driver.parseWorkerAttemptFinal(extracted ? output : finalBytes, {
+            format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
+            status: processLevelOutcome === 'succeeded' ? 'completed' : 'failed',
+            attemptOutcome: processLevelOutcome, exitCode: result.exitCode } });
+          healthAttemptFinalValid = true;
+        } catch { /* invalid/missing final never recovers (invalid-final-never-recovers) */ }
+      }
     } catch { result.errorCode ??= 'FINAL_OUTPUT_INVALID'; }
+    // "Exit zero alone is insufficient": a clean process-level exit without a
+    // strictly-valid final never reaches 'succeeded' — it downgrades to
+    // 'uncertain' (never fabricated as 'failed' either, since the process
+    // evidence alone does not show a failure). A process-level failure stays
+    // 'failed' regardless of final validity (a bad exit is bad regardless of
+    // what the final claims say).
+    result.attemptOutcome = processLevelOutcome === 'succeeded'
+      ? (healthAttemptFinalValid ? 'succeeded' : 'uncertain')
+      : processLevelOutcome;
     // The final exit.json publish must always be attempted, independent of
     // whether the preceding recordProcess() write succeeded: a failing
     // process.json must never suppress the exit.json publication attempt
@@ -1075,89 +1110,81 @@ export async function recoveryScopeKeysForInvocation(invocation, { invocationId 
 export const RECOVERY_SCOPE_OPEN_CODE = 'RECOVERY_SCOPE_OPEN';
 
 /**
- * Attribute a finished direct attempt to the scoped breaker (#2915A/C).
- * Successes and uncertain terminations never open scopes; confirmed
- * failures attribute through launcher-only evidence
- * (classifyLaunchOutcomeForRecovery), so post-spawn task failures land in
- * the invocation scope however loudly the worker blamed the provider.
- * Recording never fails the attempt: the result passes through unchanged.
+ * ONE admission entry point (#2915 final review step 3), shared by
+ * `launchOneWorker`, `planDirectWorkerLaunch` and the MCP `run()` bridge
+ * (`src/mcp/tools/worker-invoke.mjs`). Replaces the three independent
+ * `canLaunch`+`noteLaunched` call sites the review found — one of which
+ * (MCP shell dispatch) re-gated and rejected its own already-admitted
+ * canary, and none of which released capacity uniformly on every pre-spawn
+ * exception.
+ *
+ * Global dispatch (`gateEnabled`, resolved by the caller's own
+ * `checkWorkerDispatch()`/dispatch-gate result) AND per-CLI enablement
+ * (`config.parallelism.clis[<cli>].enabled`) are checked FIRST, before any
+ * import, scope derivation or breaker construction — either disabled
+ * returns `{ gated: false }` ("not-gated"): the recovery breaker is never
+ * constructed or consulted, so behaviour is byte-for-byte what it was
+ * before this feature existed (#2915 final review, finding 1: the planner
+ * checked only the global switch, so a per-CLI-disabled selection still
+ * constructed and consulted the breaker).
+ *
+ * Returns one of:
+ *   - `{ gated: false }` — recovery is not in effect for this attempt.
+ *   - `{ gated: true, refused: { code, blockedBy, nextEligibleAt } }` — a
+ *     covering scope is open and not due; nothing was reserved.
+ *   - `{ gated: true, breaker, token, quotaAccount, installationQualifier }`
+ *     — admitted (ordinarily or as the canary for `token.canaryKeys`).
+ *     `token` MUST be passed to exactly one later `settleDirectWorker` call.
  */
-export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, invocationId, quotaAccount, outcomePromise, installationQualifier = null) {
-  const result = await outcomePromise;
-  if (breaker) {
-    try {
-      if (result?.termination !== 'confirmed') {
-        breaker.noteUncertainTermination({ scopeKeys, invocationId });
-      } else if (result?.exitCode === 0 && !result?.errorCode && !result?.timedOut) {
-        for (const scopeKey of scopeKeys ?? []) breaker.recordSuccess({ scopeKey, invocationId });
-      } else {
-        const selected = invocation?.selected ?? {};
-        const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
-        // `installationQualifier` MUST match the one used to derive the
-        // covering keys this attempt was noted/checked under (#2915
-        // review-adjacent bug: attributing a failure through the
-        // UNqualified `installation:<cli>` key while the pre-launch gate
-        // watches the QUALIFIED `installation:<cli>:<qualifier>` key would
-        // open a scope that `canLaunch` never checks, and vice versa).
-        const attributed = attributeFailureScope({
-          reasonCode,
-          evidenceSource,
-          invocationId,
-          cli: selected.cli ?? null,
-          inferenceProvider: selected.inferenceProvider ?? null,
-          quotaAccount,
-          installationQualifier,
-        });
-        breaker.recordFailure({
-          scope: attributed.scope,
-          scopeKey: attributed.scopeKey,
-          invocationId,
-          reasonCode,
-          evidenceSource,
-          cli: selected.cli ?? null,
-          inferenceProvider: selected.inferenceProvider ?? null,
-          quotaAccount,
-          installationQualifier,
-        });
-      }
-      // Settle outstanding membership on every covering scope (idempotent):
-      // the outcome above records against one scope, and sibling scopes must
-      // not retain a stale member that would veto future cohort unanimity.
-      breaker.noteSettled({ scopeKeys, invocationId });
-    } catch { /* recovery accounting must never fail a launch */ }
+export async function admitDirectWorker({ gateEnabled, config, invocation, invocationId, drivers = {},
+  scopedBreaker, quotaAccount = null, installationQualifier = null } = {}) {
+  if (!gateEnabled) return { gated: false };
+  const cli = invocation?.selected?.cli ?? null;
+  if (cli && config?.parallelism?.clis?.[cli]?.enabled === false) return { gated: false };
+  const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
+  if (!breaker) return { gated: false };
+  const resolvedInstallationQualifier = installationQualifier
+    ?? drivers?.[cli]?.qualification?.installation?.boundary?.digest ?? null;
+  const resolvedQuotaAccount = quotaAccount ?? drivers?.[cli]?.qualification?.installation?.accountScope ?? null;
+  const scopeKeys = invocation?.selected
+    ? await recoveryScopeKeysForInvocation(invocation, { quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier })
+    : [];
+  const admission = breaker.admit({ invocationId, scopeKeys });
+  if (!admission.ok) {
+    return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt } };
   }
-  return result;
+  return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier };
 }
 
 /**
- * Record a direct-dispatch outcome observed OUTSIDE launchOneWorker (the
- * MCP worker-invoke bridge, which launches through planDirectWorkerLaunch
- * and observes termination itself). Same trust contract as
- * recordRecoveryAfterAttempt: `outcome` carries launcher-observed
- * `{ termination, exitCode, errorCode, timedOut }`, never worker text.
- * `invocationId` is the registry entry id (unique per run); scope keys come
- * from the trusted resolved invocation via recoveryScopeKeysForInvocation.
+ * Settle exactly one `admitDirectWorker` admission. A no-op for a
+ * `{ gated: false }` or `{ refused }` admission (nothing was reserved).
+ * Never throws: recovery accounting must never fail a launch whose own
+ * outcome is already decided.
  */
-export function recordDirectWorkerOutcome(breaker, { scopeKeys = [], invocationId = null, outcome = null } = {}) {
-  if (!breaker) return;
-  try {
-    if (outcome?.termination !== 'confirmed') {
-      breaker.noteUncertainTermination({ scopeKeys, invocationId });
-    } else if (outcome?.exitCode === 0 && !outcome?.errorCode && !outcome?.timedOut) {
-      for (const scopeKey of scopeKeys ?? []) breaker.recordSuccess({ scopeKey, invocationId });
-    } else {
-      // Wait-status alone never implicates a shared scope: the failure is
-      // recorded in this run's own invocation scope only.
-      breaker.recordFailure({
-        scope: 'invocation',
-        scopeKey: `invocation:${invocationId ?? 'unknown'}`,
-        invocationId,
-        reasonCode: null,
-        evidenceSource: 'launcher',
-      });
-    }
-    breaker.noteSettled({ scopeKeys, invocationId });
-  } catch { /* recovery accounting must never fail a launch */ }
+export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
+  if (!admission?.gated || !admission.token) return;
+  try { admission.breaker.settle(admission.token, outcome); } catch { /* recovery accounting must never fail a launch */ }
+}
+
+/**
+ * Build the `settleDirectWorker` outcome for a launcher-observed direct
+ * attempt result, from the evidence-contract `result.attemptOutcome`
+ * (#2915 evidence contract — NEVER `result.termination`, which a degraded
+ * or MCP attempt can never confirm even on genuine success). A `'failed'`
+ * outcome attributes through the same launcher-only evidence
+ * `classifyLaunchOutcomeForRecovery` always used, so post-spawn task
+ * failures land in the invocation scope however loudly the worker blamed
+ * the provider; only a launcher-observed pre-spawn missing-binary failure
+ * implicates the installation.
+ */
+export function classifyAttemptForSettlement(invocation, result, { quotaAccount = null, installationQualifier = null } = {}) {
+  const kind = result?.attemptOutcome ?? 'uncertain';
+  if (kind !== 'failed') return { kind };
+  const selected = invocation?.selected ?? {};
+  const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
+  return { kind, reasonCode, evidenceSource, cli: selected.cli ?? null,
+    inferenceProvider: selected.inferenceProvider ?? null, quotaAccount, installationQualifier };
 }
 
 export class SessionLauncher extends EventEmitter {
@@ -2077,7 +2104,7 @@ export async function getClaudeVersion() {
  *   `recoveryBlocked` (covering scope keys) and a `diagnostic`, and likewise
  *   never spawns.
  */
-export async function planDirectWorkerLaunch({
+export function planDirectWorkerLaunch({
   name = 'worker',
   memoryMaxGb,
   invocation,
@@ -2118,16 +2145,28 @@ export async function planDirectWorkerLaunch({
   // for them (never defaulted to a shared scope).
   scopedBreaker,
   recoveryScopeKeys,
+  // #2915 final (one admission, step 3): a caller that already called
+  // `admitDirectWorker` itself (the MCP `run()` bridge, so its own
+  // try/finally owns settlement end-to-end) passes the resulting admission
+  // here. The planner then BORROWS it — it neither re-admits nor settles —
+  // instead of re-gating and potentially rejecting its own already-admitted
+  // canary (#2915 final review, finding 4: "MCP shell dispatch consults the
+  // breaker again... blocked, zero spawns, reservation still active").
+  admission: borrowedAdmission,
+  invocationId,
 } = {}) {
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
   }
-  // #2915 P0 (do no harm): the dispatch switch is consulted FIRST. Legacy
-  // behaviour (`worker_dispatch` off) must be byte-for-byte unchanged, so
-  // the scoped-recovery breaker is never constructed or consulted at all
-  // when the gate is disabled (#2915 review: the recovery gate previously
-  // ran independently of this switch, refusing/launching regardless of it).
-  // Free disk is sampled on the worktree filesystem the worker will actually
+  // #2915 final (step 6, compatibility): the dispatch switch is consulted
+  // FIRST, and legacy behaviour (`worker_dispatch` off, or the resource gate
+  // itself refusing) returns SYNCHRONOUSLY — this function is deliberately
+  // NOT declared `async` so neither path ever manufactures a Promise where
+  // none existed before #2915 (#2915 final review, finding 1: "the planner
+  // now returns a Promise even when off; existing production callers await
+  // it" — literal API equivalence requires the disabled/resource-refused
+  // path to match pre-#2915 byte-for-byte, Promise-wrapping included). Free
+  // disk is sampled on the worktree filesystem the worker will actually
   // write to — never the conductor's process cwd. Without live signals or
   // caller-supplied paths, an unknown worktree fails closed in the gate.
   const gate = checkWorkerDispatch({
@@ -2135,24 +2174,59 @@ export async function planDirectWorkerLaunch({
     paths: paths ?? (typeof cwd === 'string' && cwd ? [cwd] : undefined),
   });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
-  if (gate.enabled) {
-    const recoveryBreaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
-    const coveringKeys = recoveryScopeKeys
-      ?? (invocation?.selected ? await recoveryScopeKeysForInvocation(invocation, {}) : []);
-    if (recoveryBreaker && coveringKeys.length > 0) {
-      const recoveryGate = recoveryBreaker.canLaunch({ scopeKeys: coveringKeys });
-      if (!recoveryGate.ok) {
-        return { launched: false, blocked: true, recoveryBlocked: recoveryGate.blockedBy,
-          diagnostic: `recovery scope open: ${recoveryGate.blockedBy.join(', ')}` };
-      }
-    }
-  }
-  return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
+  const launch = () => launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
     gate, config, allowDegraded, attached, ownedGroup, onSpawnAttempt,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
     ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
     ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}) });
+  if (!gate.enabled) return launch(); // not-gated: synchronous, byte-for-byte legacy behaviour
+  if (borrowedAdmission !== undefined) {
+    // Borrowed: never re-admit, never settle — the outer caller's own
+    // try/finally owns settlement of this exact admission end-to-end.
+    if (borrowedAdmission.refused) {
+      return { launched: false, blocked: true, recoveryBlocked: borrowedAdmission.refused.blockedBy,
+        diagnostic: `recovery scope open: ${borrowedAdmission.refused.blockedBy.join(', ')}` };
+    }
+    return launch();
+  }
+  // Standalone: the planner performs its own admission. It settles LOCALLY
+  // only on a pre-spawn refusal/exception (no observer exists to report a
+  // post-spawn outcome back here); a successful launch returns its
+  // `admission` so a caller that wants to track completion can call
+  // `settleDirectWorker` itself once the attempt concludes (#2915 final
+  // review: "standalone planner launches explicitly transfer settlement
+  // responsibility to their bounded observer; pre-spawn exits settle
+  // locally").
+  return (async () => {
+    const mintedInvocationId = invocationId ?? randomUUID();
+    let admission;
+    try {
+      // `recoveryScopeKeys` (legacy flat-option override) is intentionally
+      // not consulted: `admitDirectWorker` derives covering keys from the
+      // trusted resolved `invocation` only, or skips the gate entirely for
+      // flat-option callers with no resolved invocation (never defaulted to
+      // a shared scope).
+      admission = await admitDirectWorker({ gateEnabled: gate.enabled, config, invocation,
+        invocationId: mintedInvocationId, scopedBreaker, drivers: {} });
+    } catch (error) {
+      return { launched: false, blocked: true,
+        diagnostic: `recovery admission failed closed: ${error?.message ?? String(error)}` };
+    }
+    if (admission.refused) {
+      return { launched: false, blocked: true, recoveryBlocked: admission.refused.blockedBy,
+        diagnostic: `recovery scope open: ${admission.refused.blockedBy.join(', ')}` };
+    }
+    let result;
+    try {
+      result = launch();
+    } catch (error) {
+      settleDirectWorker(admission, { kind: 'uncertain' });
+      throw error;
+    }
+    if (!result?.launched) { settleDirectWorker(admission, { kind: 'uncertain' }); return result; }
+    return { ...result, admission };
+  })();
 }
 
 export default SessionLauncher;
