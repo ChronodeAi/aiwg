@@ -8,7 +8,7 @@
  * @issue #33, #342
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -120,8 +120,23 @@ import {
   utilityHandlers,
 } from '../../../../src/cli/handlers/utilities.js';
 
+// Test isolation (#278/#274 fix-round): doctorHandler.execute() calls several
+// real (non-mocked) checks beyond the mocked script runner — Grok Build and
+// Muse native-extension inspection, Agent Skills conformance, web resource
+// cache, workspace context graph, and the skill collision scan — some of
+// which can read HOME/XDG-rooted config (e.g. a real ~/.config/muse-code) if
+// not stubbed. Every test in this file runs under a fake HOME/USERPROFILE/
+// XDG_* and with artifact-path overrides cleared, so nothing here can read
+// or write the operator's real home directory.
+const ISOLATED_ENV_KEYS = [
+  'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+  'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
+] as const;
+
 describe('Utility Command Handlers', () => {
   let mockContext: HandlerContext;
+  let savedEnv: Record<string, string | undefined>;
+  const isolationRoots: string[] = [];
 
   beforeEach(() => {
     mockContext = {
@@ -134,6 +149,27 @@ describe('Utility Command Handlers', () => {
     // Restore default mock return values after clearAllMocks
     mockRun.mockResolvedValue({ exitCode: 0 });
     mockUseExecute.mockResolvedValue({ exitCode: 0 });
+
+    savedEnv = {};
+    for (const key of ISOLATED_ENV_KEYS) savedEnv[key] = process.env[key];
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-utilities-test-home-'));
+    isolationRoots.push(fakeHome); // registered immediately, before anything that could throw
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    process.env.XDG_CONFIG_HOME = path.join(fakeHome, '.config');
+    process.env.XDG_DATA_HOME = path.join(fakeHome, '.local', 'share');
+    process.env.XDG_CACHE_HOME = path.join(fakeHome, '.cache');
+    delete process.env.AIWG_ARTIFACTS_PATH;
+    delete process.env.AIWG_PROJECT_ARTIFACTS_PATH;
+    delete process.env.AIWG_PROJECT_AIWG_DIR;
+  });
+
+  afterEach(() => {
+    for (const key of ISOLATED_ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    isolationRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
   });
 
   describe('prefillCardsHandler', () => {
@@ -255,6 +291,46 @@ describe('Utility Command Handlers', () => {
           .not.toContain('── Muse Code native extensions ──');
       } finally {
         log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    // #278 — Claude Code's own `.claude/skills/synced/` sync bucket (UUID
+    // bucket dirs + manifest.json, no SKILL.md at the top level) must never
+    // be reported as a colliding AIWG skill. A real skill nested one level
+    // inside a container directory must still be found.
+    it('does not report a non-skill container directory (synced/) as a colliding skill (#278)', async () => {
+      // Cleanup registered immediately after creation, before any setup
+      // that could throw and otherwise leak the temp directory.
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-skill-collision-'));
+      try {
+        const skillsDir = path.join(tmp, '.claude', 'skills');
+        fs.mkdirSync(path.join(skillsDir, 'real-skill'), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, 'real-skill', 'SKILL.md'), '---\nname: real-skill\n---\nBody.\n');
+        // Claude Code bucket storage: UUID dirs with manifest.json, no
+        // SKILL.md anywhere directly under `synced/` itself.
+        fs.mkdirSync(path.join(skillsDir, 'synced', '.bucket-11111111-1111-1111-1111-111111111111'), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, 'synced', '.last-complete-round'), '1\n');
+        // A real nested skill one level inside a container directory must
+        // still be found and reported — only the container itself is exempt.
+        fs.mkdirSync(path.join(skillsDir, 'synced', 'other'), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, 'synced', 'other', 'SKILL.md'), '---\nname: other\n---\nBody.\n');
+
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+          mockContext.cwd = tmp;
+          await doctorHandler.execute(mockContext);
+          const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+          expect(output).toContain('── Skill collision scan ──');
+          // 'synced' itself is never reported as a colliding skill name.
+          expect(output).not.toContain('✗ synced:');
+          // The real top-level skill and the real nested skill are still found.
+          expect(output).toContain('✗ real-skill:');
+          expect(output).toContain('synced/other');
+        } finally {
+          log.mockRestore();
+        }
+      } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
     });

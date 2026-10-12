@@ -11,8 +11,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+import {
+  existsSync,
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} from 'fs';
+import { resolve, join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -262,24 +270,91 @@ describe('doctor: Node.js version check', () => {
 });
 
 // ── MCP server check logic ────────────────────────────────────
+//
+// #276: the check must resolve the exact entrypoint the production
+// launcher (bin/aiwg.mjs's resolveRouterPath → compiled router → mcp/
+// cli.mjs → ./server.mjs, always dist/src/, never a src/ fallback) would
+// load — not accept "either file exists". Production-function coverage
+// (resolveEffectiveInstallationRoot / resolveMcpServerEntrypointPath,
+// including the npm/checkout/dev-root/missing-compiled-with-surviving-
+// source cases) lives in test/unit/channel/manager.test.ts, which imports
+// and calls the real exported functions doctor.mjs itself calls — not a
+// re-implemented predicate.
 
 describe('doctor: MCP server check', () => {
-  async function checkMcp(root: string, exists: (p: string) => Promise<boolean>) {
-    const mcpServer = `${root}/src/mcp/server.mjs`;
-    const present = await exists(mcpServer);
-    return present
-      ? { status: 'ok' as const, message: 'Available (run: aiwg mcp serve)' }
-      : { status: 'warn' as const, message: 'Not found' };
+  it('source script resolves the MCP server via the shared production resolver, not a re-derived "either path" predicate', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("resolveMcpServerEntrypointPath } = await importImpl");
+    expect(content).toContain('resolveMcpServerEntrypointPath(getPackageRoot(), mcpConfig)');
+    // The old re-implemented "accept either dist or src" predicate must not return.
+    expect(content).not.toContain("path.join(AIWG_ROOT, 'src/mcp/server.mjs')");
+    expect(content).not.toContain("path.join(AIWG_ROOT, 'dist/src/mcp/server.mjs')");
+  });
+});
+
+describe('doctor: MCP server check — exercises the production resolver against fixture trees (#276)', () => {
+  // This file mocks channel/manager.mjs (getFrameworkRoot/getVersionInfo only)
+  // for the doctor-wiring tests above; importActual bypasses that mock so
+  // these tests call the real production resolver, not the mock.
+  async function realManager() {
+    return vi.importActual<typeof import('../../../src/channel/manager.mjs')>('../../../src/channel/manager.mjs');
   }
 
-  it('ok when mcp server exists', async () => {
-    const result = await checkMcp('/root', async () => true);
-    expect(result.status).toBe('ok');
+  function makeTempRoot(): string {
+    return mkdtempSync(join(tmpdir(), 'aiwg-doctor-mcp-'));
+  }
+
+  it('ok for an npm/checkout layout with the compiled server present', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'dist/src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'dist/src/mcp/server.mjs'), '// compiled server\n');
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it('warn (not error) when mcp server absent', async () => {
-    const result = await checkMcp('/root', async () => false);
-    expect(result.status).toBe('warn');
+  it('ok for a dev-mode root with the compiled server present under the edge checkout', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const packageRoot = '/opt/node_modules/aiwg';
+    const edgePath = makeTempRoot();
+    try {
+      mkdirSync(join(edgePath, 'dist/src/mcp'), { recursive: true });
+      writeFileSync(join(edgePath, 'dist/src/mcp/server.mjs'), '// compiled server\n');
+      const resolved = resolveMcpServerEntrypointPath(packageRoot, { devMode: true, edgePath });
+      expect(resolved.startsWith(edgePath)).toBe(true);
+      expect(existsSync(resolved)).toBe(true);
+    } finally {
+      rmSync(edgePath, { recursive: true, force: true });
+    }
+  });
+
+  it('warn (not falsely ok) when the compiled server is missing but source survives (the false-positive this bug reported)', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'src/mcp/server.mjs'), '// source survives, but is never what runs\n');
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('warn when neither layout has the server file', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(root, { recursive: true });
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
