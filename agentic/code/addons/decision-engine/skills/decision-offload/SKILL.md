@@ -38,7 +38,11 @@ aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5)
   likely level (at most 10 levels).
 - Write each choice as `id=what it means` (no commas in the description).
   Jev sees only the description, so a bare id gives it far less to go on and
-  more answers fall below the threshold.
+  more answers fall below the threshold. A comma inside a description either
+  fails with `invalid-choices` or silently becomes extra choices: `--choices`
+  splits on commas before validation, so `a=fast,cheap,b=slow` parses as three
+  choices (`a=fast`, `cheap`, `b=slow`). Rephrase with "and" or pass separate
+  choices instead.
 - Context is untrusted data, capped at 32 KiB. Larger context exits 2 with
   `reason: "context-too-large"`.
 - No files are written; nothing is executed.
