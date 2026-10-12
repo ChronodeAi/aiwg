@@ -85,6 +85,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     this.observeResponseBody = options.observeResponseBody;
   }
 
+  /** Used only for non-2xx error bodies, where there is no separate successful parse to stay consistent with. */
   private observeResponse(body: string): void {
     if (!this.observeResponseBody) return;
     let parsed: Record<string, unknown> = {};
@@ -93,6 +94,26 @@ export class JevDecisionAdapter implements DecisionAdapter {
     try { usage = normalizeUsage(parsed.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
     this.observeResponseBody(body, { actualModel: typeof parsed.model === 'string' && parsed.model ? parsed.model : null,
       usage });
+  }
+
+  /**
+   * Derives the observer's model/usage from a value `parseBoundedJson` has already produced (or `undefined`
+   * on a failed parse) -- never from a second, independent parse of the same bytes. `parseBoundedJson` runs
+   * inside a bounded-time VM context (`MAX_PARSE_MS`); calling it twice on identical bytes let one call
+   * succeed while the other spuriously hit that wall-clock bound under host contention, so the reported
+   * metadata could disagree with the actual parsed answer even though both described one response.
+   */
+  private observationMetadataOf(parsed: unknown): { actualModel: string | null; usage: DecisionUsage } {
+    let record: Record<string, unknown> = {};
+    try { record = asRecord(parsed); } catch { /* A non-object (or absent) top-level value has no model; usage stays unknown. */ }
+    let usage = emptyUsage();
+    try { usage = normalizeUsage(record.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
+    return { actualModel: typeof record.model === 'string' && record.model ? record.model : null, usage };
+  }
+
+  /** Observes exactly once, from the single parse attempt `parsed` already represents (successful or not). */
+  private observeParsed(body: string, parsed: unknown): void {
+    this.observeResponseBody?.(body, this.observationMetadataOf(parsed));
   }
 
   async capabilities(): Promise<AdapterCapabilities> {
@@ -219,8 +240,10 @@ export class JevDecisionAdapter implements DecisionAdapter {
     let parsed: unknown;
     try {
       const encoded = await readBoundedBody(response, signal);
-      this.observeResponse(encoded);
-      parsed = parseBoundedJson(encoded);
+      // One parse attempt; the observer reads its outcome (success or failure) before answer validation,
+      // so an invalid answer still gets model/usage checked, and a parse failure is reported as unknown
+      // to both the observer and the main path -- never divergently.
+      try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
       if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
       if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
       const normalized = normalizeResponse(request, parsed);
@@ -307,8 +330,9 @@ export class JevDecisionAdapter implements DecisionAdapter {
     }
     try {
       const encoded = await readBoundedBody(response, signal);
-      this.observeResponse(encoded);
-      const parsed = parseBoundedJson(encoded);
+      // One parse attempt; see the single-request `evaluate()` for why observation never re-parses.
+      let parsed: unknown;
+      try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
       const normalized = normalizeBatchResponse(requests, parsed).map(answer => ({
         questionId: answer.questionId,
         observation: { ...answer.observation, ...metadata },

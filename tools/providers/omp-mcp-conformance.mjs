@@ -6,7 +6,17 @@ import { tmpdir, homedir } from 'node:os';
 import { join, resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runOmpTeam } from './omp-teams.mjs';
-import { OmpRpcClient, waitForOmpProcessCleanup } from './omp-transport.mjs';
+import { OmpRpcClient, waitForOmpProcessCleanup, warmAndConnectOmpRpcClient } from './omp-transport.mjs';
+
+// #2999: the pinned binary's first RPC start in this job competes with whatever else the shared
+// runner is doing (e.g. a concurrent default-lane test job) for memory/CPU. The strict 30s
+// default readiness wait (`OmpRpcClient`'s `timeoutMs`) stays the interactive default everywhere
+// else; this conformance tool's first start alone gets a larger, explicit `readyTimeoutMs` budget
+// -- never `timeoutMs`, which would also widen this client's later command/prompt deadlines --
+// justified by the observed failure (CI run 78994: the wait ran ~33s, just past the 30s default,
+// under one concurrent job). `firstStartMs`/`warmedMs`/`warmup` are recorded in the report so a
+// startup regression is visible as a number trending toward this budget, not only as a timeout.
+const FIRST_START_READY_TIMEOUT_MS = 60000;
 
 /** Credential-free native OMP MCP lifecycle with deterministic loopback model. */
 export async function runOmpMcpConformance({ binary = process.env.AIWG_OMP_BIN || 'omp', outputFile } = {}) {
@@ -54,8 +64,9 @@ export async function runOmpMcpConformance({ binary = process.env.AIWG_OMP_BIN |
     await manageOmpMcp(join(agent, 'mcp.json'), Object.entries(serverDefinitions).map(([name, config]) => ({ name, ...config })));
     await writeFile(join(cwd, '.omp', 'mcp.json'), JSON.stringify({ mcpServers: { fixture_shadow: { enabled: false } } }));
     const env = { PATH: process.env.PATH ?? '', TMPDIR: root, NO_COLOR: '1', PI_CONFIG_DIR: relative(homedir(), join(root, 'config')), PI_CODING_AGENT_DIR: agent };
-    client = new OmpRpcClient({ binary, cwd, env, args: ['--no-extensions', '--no-session', '--model', 'fixture/fixture', '--thinking', 'off'], timeoutMs: 30000 });
-    await client.connect();
+    const firstStart = await warmAndConnectOmpRpcClient({ binary, cwd, env, args: ['--no-extensions', '--no-session', '--model', 'fixture/fixture', '--thinking', 'off'], readyTimeoutMs: FIRST_START_READY_TIMEOUT_MS });
+    client = firstStart.client;
+    const startupTiming = { warmup: firstStart.warmup, warmedMs: firstStart.warmedMs, firstStartMs: firstStart.readyMs, firstStartReadyTimeoutMs: FIRST_START_READY_TIMEOUT_MS };
     const state = await client.command('get_state');
     const nativeTools = state.dumpTools.map(t => t.name).filter(n => n.includes('echo'));
     const result = await client.prompt('Call each fixture echo tool once with text verified. Report completion.');
@@ -89,7 +100,7 @@ export async function runOmpMcpConformance({ binary = process.env.AIWG_OMP_BIN |
     const processes = stdio.filter(event => event.pid);
     const cleanup = await waitForOmpProcessCleanup(processes);
     const childAlive = !cleanup.complete;
-    const report = { binary, sourceVersion: '18.1.10', runtimeVersion: spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 5000, env }).stdout.trim(), credentialFree: true, configGeneratedBy: 'src/mcp/omp-config.mjs manageOmpMcp', model: 'deterministic loopback fixture (not a hosted model)', nativeTools, profileTools, profileIsolated, disabledSuppressed, projectOverrideSuppressed, promptExpanded, teamAllowlistVerified, nativeCancelled, cancellation: { reachedWorker: cancelReached, status: cancellation.results[0].status, error: cancellation.results[0].error }, disabledAndShadowedAbsent: nativeTools.every(name => !/disabled|shadow/.test(name)), nativeTeam: nativeTeam.results.map(task => ({ id: task.id, parentId: task.parentId, role: task.role, ownership: task.ownership, requestedModel: task.model, status: task.status, error: task.error, result: task.result })), resultSuccess: result.success, httpMethods, stdioMethods: stdio.filter(e => e.method).map(e => e.method), childAlive, checkedSubprocesses: processes.length, subprocesses: processes, cleanup, modelCalls, pass: profileIsolated && disabledSuppressed && projectOverrideSuppressed && nativeCancelled && teamAllowlistVerified && promptExpanded && nativeTeam.results.every(task => task.status === 'completed') && result.success && nativeTools.length === 2 && httpMethods.includes('tools/call') && stdio.some(e => e.method === 'tools/call') && !childAlive };
+    const report = { binary, sourceVersion: '18.1.10', runtimeVersion: spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 5000, env }).stdout.trim(), credentialFree: true, configGeneratedBy: 'src/mcp/omp-config.mjs manageOmpMcp', model: 'deterministic loopback fixture (not a hosted model)', startupTiming, nativeTools, profileTools, profileIsolated, disabledSuppressed, projectOverrideSuppressed, promptExpanded, teamAllowlistVerified, nativeCancelled, cancellation: { reachedWorker: cancelReached, status: cancellation.results[0].status, error: cancellation.results[0].error }, disabledAndShadowedAbsent: nativeTools.every(name => !/disabled|shadow/.test(name)), nativeTeam: nativeTeam.results.map(task => ({ id: task.id, parentId: task.parentId, role: task.role, ownership: task.ownership, requestedModel: task.model, status: task.status, error: task.error, result: task.result })), resultSuccess: result.success, httpMethods, stdioMethods: stdio.filter(e => e.method).map(e => e.method), childAlive, checkedSubprocesses: processes.length, subprocesses: processes, cleanup, modelCalls, pass: profileIsolated && disabledSuppressed && projectOverrideSuppressed && nativeCancelled && teamAllowlistVerified && promptExpanded && nativeTeam.results.every(task => task.status === 'completed') && result.success && nativeTools.length === 2 && httpMethods.includes('tools/call') && stdio.some(e => e.method === 'tools/call') && !childAlive };
     if (outputFile) { await mkdir(resolve(outputFile, '..'), { recursive: true }); await writeFile(outputFile, JSON.stringify(report, null, 2) + '\n'); }
     return report;
   } finally { if (client) await client.close(); await new Promise(resolveClose => server.close(resolveClose)); await rm(root, { recursive: true, force: true }); }

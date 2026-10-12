@@ -28,8 +28,23 @@ vi.mock('../../../src/decision/heldout/d29-generator-ids.js', async original => 
   const module = await original<typeof import('../../../src/decision/heldout/d29-generator-ids.js')>();
   return { ...module, D29_PAID_GENERATOR_IDS: [...module.D29_PAID_GENERATOR_IDS, 'heldout-lamp/v1', 'heldout-lamp-splits/v1'] };
 });
+// Deterministically injects jev.ts's bounded-parse watchdog (`ERR_SCRIPT_EXECUTION_TIMEOUT`) on the Nth
+// `node:vm` parse call, with no wall-clock dependency, so a regression test can prove the watchdog firing
+// can no longer produce a divergent (raw vs. wire-observed) outcome now that jev.ts parses each response
+// body exactly once. `armFailure(1)` fails only the next call; passthrough otherwise.
+const vmControl = vi.hoisted(() => ({ failOnCall: 0, call: 0 }));
+vi.mock('node:vm', async original => {
+  const actual = await original<typeof import('node:vm')>();
+  return { ...actual, runInNewContext: (...args: Parameters<typeof actual.runInNewContext>) => {
+    vmControl.call++;
+    if (vmControl.failOnCall === vmControl.call) throw Object.assign(new Error('Script execution timed out after 50ms'), { code: 'ERR_SCRIPT_EXECUTION_TIMEOUT' });
+    return actual.runInNewContext(...args);
+  } };
+});
+const armVmFailure = (onCall = 1) => { vmControl.call = 0; vmControl.failOnCall = onCall; };
 const dirs: string[] = [];
-afterEach(async () => { preflight.failSource = false; vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { preflight.failSource = false; vmControl.failOnCall = 0; vmControl.call = 0; vi.useRealTimers();
+  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('offline-fixture');
 async function setup(count = 2) {
   const root = await mkdtemp(join(tmpdir(), 'heldout-test-')); dirs.push(root); preflight.canonical = root;
@@ -198,6 +213,53 @@ describe('held-out collector dispatch and durable accounting', () => {
     c.bundle.approval.priorStudySpendUsd = 7.9996;
     await expect(c.run(transport)).rejects.toThrow('baseline-changed');
     expect(transport).toHaveBeenCalledOnce();
+  });
+  // Regression for an intermittent CI failure (observed under load as this exact test returning
+  // `{ reason: 'served-model', completedRows: 0 }` instead of `{ reason: 'budget-exhausted',
+  // completedRows: 1 }`). Root cause: `jev.ts` independently re-parsed the identical response bytes
+  // twice (once for its wire-level observer, once for the main answer), and the observer's parse has
+  // a bounded-parse watchdog that can itself fail under host contention even when the main parse (a
+  // second, separate call on the same bytes) succeeded moments later. The fix parses each response
+  // body exactly once in `jev.ts` (`observeParsed`) and derives both the observer's metadata and the
+  // typed answer from that single parse, so the two can no longer disagree about one response: a
+  // parse failure is a failure for both, and a successful parse is identical for both. This group
+  // proves the symptom cannot occur by construction (there is only one parse left to fail on), and
+  // separately proves an unknown model is never treated as success or as a model mismatch.
+  it('a one-time parse-watchdog failure (no wall clock) retries clean and is never classified as served-model', async () => {
+    const c = await setup(1);
+    const transport = fake();
+    // Fails only the very next `node:vm` parse call -- the single parse jev.ts now makes per response.
+    armVmFailure(1);
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'complete', reason: null, completedRows: 1, reservedUsdMicros: 152 });
+    // Retried as a new physical dispatch (collector-level retry), not absorbed inside one jev.ts call.
+    expect(transport).toHaveBeenCalledTimes(2);
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(2);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'retryable', reason: 'invalid-output', inputTokens: null, outputTokens: null });
+    expect(events[0].attempt.result?.reason).not.toBe('served-model');
+    expect(events[1].attempt.result).toMatchObject({ disposition: 'success', reason: 'ok' });
+  });
+  it('a response with no model field at all is reported unknown, not success and not served-model', async () => {
+    const c = await setup(1);
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { model: undefined }));
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'stopped', reason: 'model-unknown', completedRows: 0, reservedUsdMicros: 76 });
+    expect(transport).toHaveBeenCalledOnce();
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(1);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'stop', reason: 'model-unknown', servedModel: null });
+  });
+  it('an approved output-token bound still stops a response over it, with the reservation retained', async () => {
+    const c = await setup(1);
+    c.bundle.approval.priceBound.outputTokenBound = 100;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 101 } }));
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'stopped', reason: 'output-bound', completedRows: 0, reservedUsdMicros: 76 });
+    expect(transport).toHaveBeenCalledOnce();
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(1);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'stop', reason: 'output-bound', outputTokens: 101 });
   });
   it('AC3 cancellation and timeout keep the stopping reservation without retry or undefined hashing', async () => {
     for (const kind of ['cancel', 'timeout']) {
