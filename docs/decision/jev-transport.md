@@ -25,9 +25,15 @@ carries projection evidence, the body `state` is the trust partition `{ verified
 flat object.
 
 Responses are bounded to 32 KiB of headers and 1 MiB of decoded body bytes. A declared oversized content
-length fails early. JSON is parsed in a fresh V8 context with a 50 ms execution timeout, so pathological
-synchronous parsing is interrupted. Invalid or oversized responses become sanitized `invalid-output`
-observations. Error bodies are discarded without retention.
+length fails early. JSON parsing uses [structural bounds](jev-json-parse.md): at most 64 open containers,
+with duplicate keys rejected anywhere in the response, including metadata and nested objects, rather than
+only inside `answers`. Byte/depth bounds and duplicates are checked before the full native `JSON.parse`.
+M01's `SEC-RESPONSE-PARSE-TIME` evidence checks worst admissible 1 MiB shapes against a generous 500 ms
+`process.cpuUsage()` CPU budget per parse; it replaces the 50 ms wall-clock watchdog with structural
+admission and measured CPU regression coverage. Admission is independent of host scheduling
+delay. Invalid or structurally excessive successful responses, and oversized bodies at any status,
+become sanitized `invalid-output` observations. Invalid error-body JSON is discarded for request-ID
+extraction while retaining the HTTP status classification. Error bodies are discarded without retention.
 
 Credential resolution happens after origin authorization and before network dispatch. A missing credential
 reference or denied/configuration resolver error is `unauthorized`; an explicit `missing` resolver category or

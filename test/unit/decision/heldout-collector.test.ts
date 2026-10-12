@@ -28,22 +28,8 @@ vi.mock('../../../src/decision/heldout/d29-generator-ids.js', async original => 
   const module = await original<typeof import('../../../src/decision/heldout/d29-generator-ids.js')>();
   return { ...module, D29_PAID_GENERATOR_IDS: [...module.D29_PAID_GENERATOR_IDS, 'heldout-lamp/v1', 'heldout-lamp-splits/v1'] };
 });
-// Deterministically injects jev.ts's bounded-parse watchdog (`ERR_SCRIPT_EXECUTION_TIMEOUT`) on the Nth
-// `node:vm` parse call, with no wall-clock dependency, so a regression test can prove the watchdog firing
-// can no longer produce a divergent (raw vs. wire-observed) outcome now that jev.ts parses each response
-// body exactly once. `armFailure(1)` fails only the next call; passthrough otherwise.
-const vmControl = vi.hoisted(() => ({ failOnCall: 0, call: 0 }));
-vi.mock('node:vm', async original => {
-  const actual = await original<typeof import('node:vm')>();
-  return { ...actual, runInNewContext: (...args: Parameters<typeof actual.runInNewContext>) => {
-    vmControl.call++;
-    if (vmControl.failOnCall === vmControl.call) throw Object.assign(new Error('Script execution timed out after 50ms'), { code: 'ERR_SCRIPT_EXECUTION_TIMEOUT' });
-    return actual.runInNewContext(...args);
-  } };
-});
-const armVmFailure = (onCall = 1) => { vmControl.call = 0; vmControl.failOnCall = onCall; };
 const dirs: string[] = [];
-afterEach(async () => { preflight.failSource = false; vmControl.failOnCall = 0; vmControl.call = 0; vi.useRealTimers();
+afterEach(async () => { preflight.failSource = false; vi.useRealTimers();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('offline-fixture');
 async function setup(count = 2) {
@@ -217,19 +203,20 @@ describe('held-out collector dispatch and durable accounting', () => {
   // Regression for an intermittent CI failure (observed under load as this exact test returning
   // `{ reason: 'served-model', completedRows: 0 }` instead of `{ reason: 'budget-exhausted',
   // completedRows: 1 }`). Root cause: `jev.ts` independently re-parsed the identical response bytes
-  // twice (once for its wire-level observer, once for the main answer), and the observer's parse has
-  // a bounded-parse watchdog that can itself fail under host contention even when the main parse (a
-  // second, separate call on the same bytes) succeeded moments later. The fix parses each response
+  // twice (once for its wire-level observer, once for the main answer) under a wall-clock parse timer
+  // (since removed), so one parse could fail under host contention while the other succeeded. The fix parses each response
   // body exactly once in `jev.ts` (`observeParsed`) and derives both the observer's metadata and the
   // typed answer from that single parse, so the two can no longer disagree about one response: a
   // parse failure is a failure for both, and a successful parse is identical for both. This group
   // proves the symptom cannot occur by construction (there is only one parse left to fail on), and
   // separately proves an unknown model is never treated as success or as a model mismatch.
-  it('a one-time parse-watchdog failure (no wall clock) retries clean and is never classified as served-model', async () => {
+  it('a one-time unparseable response retries clean and is never classified as served-model', async () => {
     const c = await setup(1);
-    const transport = fake();
-    // Fails only the very next `node:vm` parse call -- the single parse jev.ts now makes per response.
-    armVmFailure(1);
+    // The first body fails the single bounded parse (truncated JSON); the retry is valid.
+    let calls = 0;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => ++calls === 1
+      ? new Response('{"model": "jev-1.13.0", "answers": {', { headers: { 'content-type': 'application/json' } })
+      : reply(init));
     const result = await c.run(transport);
     expect(result).toMatchObject({ status: 'complete', reason: null, completedRows: 1, reservedUsdMicros: 152 });
     // Retried as a new physical dispatch (collector-level retry), not absorbed inside one jev.ts call.

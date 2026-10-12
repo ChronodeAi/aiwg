@@ -682,7 +682,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-amendment-traceability/v1",
-      "digest": "sha256:a6e427c54181eb205d2307498bc16078bebcc4958f7fe9dea1114c9aa8fb70af",
+      "digest": "sha256:a46902cc120ee1938d99dfc798be7fe74edeaa5a37d9286cfb543b5f337bd620",
       "expectedOutcome": "M01-M11 and R-23..R-30 traceability to executable test IDs",
       "links": [
         "NFR-008",
