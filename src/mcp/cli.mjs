@@ -781,6 +781,7 @@ async function handleInject(args) {
   const credentialPolicy = resolveCredentialPolicy({
     flag: noCredentials ? 'none' : strictCredentials ? 'references' : undefined,
     registryPolicy: await registry.getCredentialPolicy(),
+    floorPolicy: await registry.getCredentialPolicyFloor(),
   });
 
   // Resolve server filter: --profile takes precedence over --servers

@@ -415,8 +415,12 @@ describe.each([
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const servers = new Servers();
     expect(await servers.getCredentialPolicy()).toBe(effective);
+    // The environment may relax the merged (personal-or-default) policy, but not
+    // below the enforced organisation floor: it lands on the floor, not on
+    // "effective" (which also reflects a stricter overlay choice, if any).
     expect(resolveCredentialPolicy({ registryPolicy: await servers.getCredentialPolicy(),
-      env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe(effective);
+      floorPolicy: await servers.getCredentialPolicyFloor(),
+      env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe(orgPolicy);
     await servers.recordInjection("github", "codex");
     if (identityPolicy === "literal") {
       expect(JSON.parse(read(identity, "mcp-servers.json"))).not.toHaveProperty("credentialPolicy");

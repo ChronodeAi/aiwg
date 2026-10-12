@@ -28,7 +28,13 @@ export function assertCredentialPolicy(servers: CredentialBearingServer[], polic
 export function resolveCredentialPolicy(options?: {
   flag?: string;
   registryPolicy?: string;
+  floorPolicy?: string;
   env?: Record<string, string | undefined>;
 }): McpCredentialPolicy;
+
+export function stricterCredentialPolicy(
+  a: McpCredentialPolicy | undefined,
+  b: McpCredentialPolicy | undefined,
+): McpCredentialPolicy | undefined;
 
 export function warnCredentialPolicyRelaxation(candidate: McpCredentialPolicy, floor: McpCredentialPolicy): void;

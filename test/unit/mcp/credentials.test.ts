@@ -109,16 +109,24 @@ describe("credential policy", () => {
     }
   });
 
-  it("warns once per process per relaxed policy value", () => {
+  it("refuses an invalid floor policy", () => {
+    expect(() => resolveCredentialPolicy({ floorPolicy: "lax", env: {} } as unknown as
+      Parameters<typeof resolveCredentialPolicy>[0])).toThrow("Unknown MCP credential policy");
+  });
+
+  it("warns once per process per value an organisation floor refuses to relax", () => {
+    // With no floorPolicy, a flag/env/registry relaxation is a plain default
+    // override (see "lets a flag or the environment..." below) and never
+    // warns: only an attempt to relax below an enforced floor does.
     const helper = pathToFileURL(resolve(__dirname, "../../../src/mcp/credentials.mjs")).href;
     const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
       import { resolveCredentialPolicy } from ${JSON.stringify(helper)};
       const warnings = [];
       console.warn = message => warnings.push(message);
       for (let i = 0; i < 3; i++) {
-        resolveCredentialPolicy({ registryPolicy: 'none', flag: 'literal', env: {} });
-        resolveCredentialPolicy({ registryPolicy: 'references', flag: 'literal', env: {} });
-        resolveCredentialPolicy({ registryPolicy: 'none', flag: 'references', env: {} });
+        resolveCredentialPolicy({ floorPolicy: 'none', flag: 'literal', env: {} });
+        resolveCredentialPolicy({ floorPolicy: 'references', flag: 'literal', env: {} });
+        resolveCredentialPolicy({ floorPolicy: 'none', flag: 'references', env: {} });
       }
       process.stdout.write(JSON.stringify(warnings));
     `], { encoding: "utf-8", timeout: 60_000 });
@@ -127,13 +135,31 @@ describe("credential policy", () => {
     ]);
   });
 
-  it("resolves the strictest registry, environment and flag policy", () => {
+  it("lets a flag or the environment relax or tighten a personal stored policy, with no floor", () => {
     expect(resolveCredentialPolicy({ env: {} })).toBe("literal");
     expect(resolveCredentialPolicy({ registryPolicy: "references", env: {} })).toBe("references");
+    // The environment tightens a personal policy.
     expect(resolveCredentialPolicy({ registryPolicy: "references", env: { AIWG_MCP_CREDENTIAL_POLICY: "none" } })).toBe("none");
-    expect(resolveCredentialPolicy({ flag: "references", registryPolicy: "none", env: { AIWG_MCP_CREDENTIAL_POLICY: "none" } })).toBe("none");
-    expect(resolveCredentialPolicy({ registryPolicy: "references", env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe("references");
+    // A flag relaxes a stricter personal policy and a stricter environment value - with no floor,
+    // the most specific source (the flag) wins outright, not the strictest value (#280 restored).
+    expect(resolveCredentialPolicy({ flag: "references", registryPolicy: "none", env: { AIWG_MCP_CREDENTIAL_POLICY: "none" } })).toBe("references");
+    // The environment relaxes a personal policy for the same reason.
+    expect(resolveCredentialPolicy({ registryPolicy: "references", env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe("literal");
+    // A flag beats the environment regardless of which is stricter.
+    expect(resolveCredentialPolicy({ flag: "literal", registryPolicy: "none", env: { AIWG_MCP_CREDENTIAL_POLICY: "none" } })).toBe("literal");
+    expect(resolveCredentialPolicy({ flag: "none", registryPolicy: "literal", env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe("none");
     expect(() => resolveCredentialPolicy({ flag: "lax", env: {} })).toThrow(/Unknown MCP credential policy/);
+  });
+
+  it("holds an organisation floor that a personal policy, flag or environment value cannot relax", () => {
+    // Every non-floor source trying "literal" stays at the "references" floor.
+    expect(resolveCredentialPolicy({ floorPolicy: "references", registryPolicy: "literal", env: {} })).toBe("references");
+    expect(resolveCredentialPolicy({ floorPolicy: "references", env: { AIWG_MCP_CREDENTIAL_POLICY: "literal" } })).toBe("references");
+    expect(resolveCredentialPolicy({ floorPolicy: "references", flag: "literal", env: {} })).toBe("references");
+    // Stricter than the floor is always allowed, from any source.
+    expect(resolveCredentialPolicy({ floorPolicy: "references", flag: "none", env: {} })).toBe("none");
+    // The same attempt relaxes freely once no floor is in play.
+    expect(resolveCredentialPolicy({ registryPolicy: "references", flag: "literal", env: {} })).toBe("literal");
   });
 });
 
@@ -485,14 +511,19 @@ describe("aiwg mcp inject credential flags", () => {
     expect(JSON.parse(readFileSync(out, "utf-8"))).toEqual({ mcpServers: { bare: { type: "http", url: "https://bare.example/mcp" } } });
   });
 
-  it("applies the registry policy and refuses environment relaxation", () => {
+  it("applies the registry policy, which the environment may relax with no floor to enforce it", () => {
     registry([{ name: "leaky", type: "stdio", command: "leaky", env: { TOKEN: "literal" } }]);
     run(["credential-policy", "references"]);
     expect(run(["credential-policy"]).trim()).toBe("references");
     expect(runFailing(["inject", "--provider", "cursor"]).stderr).toContain("leaky (env)");
-    expect(() => run(["inject", "--provider", "cursor"], { AIWG_MCP_CREDENTIAL_POLICY: "literal" }))
-      .toThrow(/credential policy floor|Refusing to render/);
-    expect(existsSync(join(projectDir, ".cursor/mcp.json"))).toBe(false);
+    // A single registry (no AIWG_CONFIG_LAYERS) has no organisation floor, so
+    // AIWG_MCP_CREDENTIAL_POLICY may relax the stored "references" policy back
+    // to "literal" for this invocation - restoring the pre-floor, single-registry
+    // behavior (#280). Ephemeral output avoids the separate, unrelated refusal
+    // of literal credentials in a project-committed config file.
+    const out = join(root, "ephemeral.json");
+    run(["inject", "--provider", "cursor", "--ephemeral", "--out", out], { AIWG_MCP_CREDENTIAL_POLICY: "literal" });
+    expect(JSON.parse(readFileSync(out, "utf-8")).mcpServers.leaky.env).toEqual({ TOKEN: "literal" });
   });
 
   it("stores --env-from as a variable name only", () => {

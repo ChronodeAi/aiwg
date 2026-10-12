@@ -48,14 +48,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Layered MCP writes reject overlapping realpath targets and symlinked files or directories below the config root,
   use atomic replacement, and refresh server/profile ownership after each successful save.
 - Profile imports validate the complete layered `extends` graph before writing, naming cycles and missing bases.
-- Layered credential policy uses the strictest value (`literal` < `references` < `none`) as a floor.
-  Higher layers, environment and rendering flags can only tighten it; relaxations warn and are ignored.
-  CLI policy-setting commands refuse values below the lower-layer floor. Maintainers can adjust that floor.
-  Inherited settings stay out of identity writes, including injection records, while format fields remain.
-- Credential rendering flags and environment values now only tighten even a single registry's policy,
-  changing #280 behavior. Relaxation warnings occur once per process per attempted value, and exported
-  `injectServers` enforces the stored floor even with an omitted or weaker policy option. Invalid present
-  policy values throw with the layer path; an empty environment string is treated as unset.
+- Layered credential policy folds the strictest value (`literal` < `references` < `none`) across every
+  lower (organisation) layer into an enforced floor; CLI policy-setting commands refuse a stored value
+  below that floor, and only a stricter value from any source is always allowed. The write (identity)
+  layer's own stored policy is a personal default, not a second floor: a rendering flag or
+  `AIWG_MCP_CREDENTIAL_POLICY` may freely relax or tighten it for one invocation. Only the organisation
+  floor itself cannot be relaxed - by the stored policy, the environment or a flag; such an attempt
+  warns once per process per attempted value and the floor is used instead. Maintainers can adjust the
+  floor by changing every lower layer that imposes a stricter value. Inherited settings stay out of
+  identity writes, including injection records, while format fields remain.
+- Credential rendering flags and environment values relax or tighten a single registry's stored policy
+  the same way, restoring #280 behavior: with no `AIWG_CONFIG_LAYERS` floor, a flag or environment value
+  can relax the stored policy. Exported `injectServers` resolves the same personal-default-with-floor
+  policy, including when its policy option is omitted. Invalid present policy values throw with the
+  layer path; an empty environment string is treated as unset.
 - Explicit policy saves preserve the requested value, including one equal to the lower floor. Unrelated
   saves preserve policy ownership and drop stale weaker overlay policies with a warning.
 - Empty profiles inject zero servers in persistent mode. Removing a profile extended by remaining profiles

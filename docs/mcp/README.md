@@ -156,7 +156,7 @@ aiwg mcp inject --provider claude --profile acme-dev --ephemeral --out /tmp/acme
 | Rule | Behaviour |
 | --- | --- |
 | Precedence | A server or profile in a later layer replaces the entry of the same name in an earlier one, whole |
-| `credentialPolicy` | Strictest policy across all layers wins; inherited settings are never copied on writes |
+| `credentialPolicy` | Lower (organisation) layers fold to an enforced floor by strictness; the write layer's own value is a personal default that a flag or environment value may relax within that floor; inherited settings are never copied on writes |
 | Writes | Last layer only; atomic replacement refuses symlink files and overlapping layer targets |
 | Lower-layer entries | Updating one copies it into the last layer; removing one is refused |
 | `extends` | A profile inherits the servers of each base profile (base first), from any layer |
@@ -187,13 +187,15 @@ nearest existing ancestor detects filesystem behavior; unprobeable ancestors use
 Profile import validates the complete candidate `extends` graph across all layers before writing;
 cycles and missing bases are refused with the offending profile names.
 
-The organisation layer (the lowest layer that sets `credentialPolicy`) establishes a floor.
-Strictness is `literal` < `references` < `none`: team, identity and project layers can tighten it,
-but a relaxation is ignored with a warning once per process per attempted value. The effective policy
-is the strictest value set in any layer. Maintainers can change the authoritative layer's policy directly,
-or change an overlay with `aiwg mcp credential-policy <policy>` within its lower-layer floor; CLI attempts to
-relax below that floor are refused. To relax the effective policy, adjust every layer that imposes
-a stricter value. Environment variables and rendering flags can only tighten the effective policy.
+Any lower (non-write) layer that sets `credentialPolicy` establishes an enforced organisation floor:
+strictness is `literal` < `references` < `none`, and the floor is the strictest value set across every
+lower layer. The write (identity) layer's own `credentialPolicy` is a personal default, not a second
+floor - `aiwg mcp credential-policy <policy>` can set it to anything at or stricter than the floor;
+CLI attempts to relax it below that floor are refused. A rendering flag or `AIWG_MCP_CREDENTIAL_POLICY`
+may then freely relax or tighten that personal default for one invocation, but still cannot relax
+below the organisation floor - such an attempt is ignored with a warning once per process per
+attempted value, and the floor is used instead. To change the floor itself, adjust every lower layer
+that imposes a stricter value.
 An unrelated save preserves an owned policy without copying an inherited floor; a stale overlay value
 weaker than the floor is dropped with a warning on the next save. Explicit policy writes are preserved,
 including a write equal to the floor. Invalid values in layer files report the file path.
@@ -314,14 +316,20 @@ The credential policy decides what `aiwg mcp inject` will render:
 `references` refuses literal `env`/`headers`, URL userinfo and OAuth client secrets.
 
 A refusal names each server and field, exits non-zero and writes nothing, including in `--ephemeral`
-mode. The strictest of the registry policy, `AIWG_MCP_CREDENTIAL_POLICY` and the rendering flag wins.
-Environment or flag attempts to relax the registry floor warn once per process per attempted value.
-This also applies to a single registry with no layers: unlike #280, a command flag or environment value
-cannot relax its stored policy. Change the stored policy with the command below to permit a weaker value.
-The exported `injectServers` API enforces the same floor, including when its policy option is omitted.
+mode. The stored registry policy is a personal default: `AIWG_MCP_CREDENTIAL_POLICY` and the rendering
+flag may each freely relax or tighten it for one invocation - the most specific source wins (flag over
+environment over the stored policy), including a relaxation. This restores the single-registry
+behavior from before the organisation floor existed (#280): with `AIWG_CONFIG_LAYERS` unset, there is
+no floor, so a command flag or environment value can relax the stored policy.
+When `AIWG_CONFIG_LAYERS` is set and a lower (organisation) layer declares `credentialPolicy`, that
+value becomes an enforced floor that neither the stored policy, the environment nor the rendering flag
+can relax - an attempt warns once per process per attempted value and the floor is used instead.
+Stricter-than-floor values from any source are always allowed. The exported `injectServers` API
+enforces the same floor, including when its policy option is omitted.
 Policy values must be `literal`, `references` or `none`; present `null`, `""`, `false` and `0` are invalid.
 An empty `AIWG_MCP_CREDENTIAL_POLICY` environment string is treated as unset.
-Set the registry policy with `aiwg mcp credential-policy <policy>`.
+Set the registry's own policy with `aiwg mcp credential-policy <policy>`; the command refuses a value
+below an enforced organisation floor.
 `aiwg session --provider codex --profile <p>` applies the same
 policy before setup and launch. Any setup failure prevents launch and reuse of an existing runtime
 config. With `--persist`, successful injection launches against the default Codex home.

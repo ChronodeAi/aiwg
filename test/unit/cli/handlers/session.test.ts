@@ -23,6 +23,7 @@ const {
   mockResolveServers,
   mockResolveProfile,
   mockCredentialPolicy,
+  mockCredentialPolicyFloor,
   mockEnsureRuntimeHome,
   mockWriteProfileConfig,
   mockLaunchWithProfile,
@@ -44,6 +45,7 @@ const {
   mockResolveServers: vi.fn(),
   mockResolveProfile: vi.fn(),
   mockCredentialPolicy: vi.fn(),
+  mockCredentialPolicyFloor: vi.fn().mockResolvedValue(undefined),
   mockEnsureRuntimeHome: vi.fn(),
   mockWriteProfileConfig: vi.fn(),
   mockLaunchWithProfile: vi.fn(),
@@ -53,7 +55,7 @@ vi.mock('../../../../src/mcp/profiles.js', () => ({
   McpProfileRegistry: class { resolveServers = mockResolveServers; resolve = mockResolveProfile; },
 }));
 vi.mock('../../../../src/mcp/registry.js', () => ({
-  McpServerRegistry: class { getCredentialPolicy = mockCredentialPolicy; },
+  McpServerRegistry: class { getCredentialPolicy = mockCredentialPolicy; getCredentialPolicyFloor = mockCredentialPolicyFloor; },
 }));
 vi.mock('../../../../src/mcp/adapters/codex-runtime.js', () => ({
   ensureRuntimeHome: mockEnsureRuntimeHome,

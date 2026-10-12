@@ -245,21 +245,63 @@ export function warnCredentialPolicyRelaxation(candidate, floor) {
   console.warn(`Ignoring MCP credential policy "${candidate}": cannot relax credential policy floor "${floor}".`);
 }
 
-/** Resolve the strictest policy; environment and flags may only tighten the registry floor. */
-export function resolveCredentialPolicy({ flag, registryPolicy, env = process.env } = {}) {
+function validatePolicyValue(candidate) {
+  if (!CREDENTIAL_POLICIES.includes(candidate)) {
+    throw new Error(`Unknown MCP credential policy "${candidate}". Use one of: ${CREDENTIAL_POLICIES.join(', ')}`);
+  }
+}
+
+/**
+ * Resolve a credential policy for one invocation.
+ *
+ * `registryPolicy` (the personal/stored policy), `env`
+ * (AIWG_MCP_CREDENTIAL_POLICY) and `flag` compose as a default: the most
+ * specific source wins outright, including a relaxation. `flag` overrides
+ * `env`, which overrides `registryPolicy`, which overrides the built-in
+ * `literal` default - a flag or the environment may freely relax or tighten
+ * a personal stored policy.
+ *
+ * `floorPolicy`, when given, is an enforced policy from a lower (shared or
+ * organisation) configuration layer - the strictest value declared in any
+ * such layer. It cannot be relaxed by `registryPolicy`, `env` or `flag`,
+ * only tightened further. An attempt to relax below it is ignored, with a
+ * warning once per process per attempted value, and the floor is used
+ * instead.
+ */
+export function resolveCredentialPolicy({ flag, registryPolicy, floorPolicy, env = process.env } = {}) {
   let policy = 'literal';
+  // Whether any of registryPolicy/env/flag actually supplied a value, as
+  // opposed to `policy` merely sitting at the built-in default. The default
+  // landing below an enforced floor is ordinary inheritance, not a
+  // relaxation attempt, and must not warn.
+  let explicit = false;
   // An empty environment string is unset; empty layer/flag values are errors.
   const envPolicy = env.AIWG_MCP_CREDENTIAL_POLICY === '' ? undefined : env.AIWG_MCP_CREDENTIAL_POLICY;
   for (const candidate of [registryPolicy, envPolicy, flag]) {
     if (candidate === undefined) continue;
-    if (!CREDENTIAL_POLICIES.includes(candidate)) {
-      throw new Error(`Unknown MCP credential policy "${candidate}". Use one of: ${CREDENTIAL_POLICIES.join(', ')}`);
-    }
-    if (CREDENTIAL_POLICIES.indexOf(candidate) < CREDENTIAL_POLICIES.indexOf(policy)) {
-      warnCredentialPolicyRelaxation(candidate, policy);
-    } else {
-      policy = candidate;
+    validatePolicyValue(candidate);
+    policy = candidate;
+    explicit = true;
+  }
+  if (floorPolicy !== undefined) {
+    validatePolicyValue(floorPolicy);
+    if (CREDENTIAL_POLICIES.indexOf(policy) < CREDENTIAL_POLICIES.indexOf(floorPolicy)) {
+      if (explicit) warnCredentialPolicyRelaxation(policy, floorPolicy);
+      policy = floorPolicy;
     }
   }
   return policy;
+}
+
+/**
+ * The stricter of two credential policies; `undefined` means no preference
+ * and defers to the other side. Folds an organisation floor across several
+ * lower configuration layers (each layer's own declared value is validated).
+ */
+export function stricterCredentialPolicy(a, b) {
+  if (a !== undefined) validatePolicyValue(a);
+  if (b !== undefined) validatePolicyValue(b);
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return CREDENTIAL_POLICIES.indexOf(a) >= CREDENTIAL_POLICIES.indexOf(b) ? a : b;
 }

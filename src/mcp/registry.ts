@@ -429,9 +429,15 @@ export class McpServerRegistry {
     return data.credentialPolicy;
   }
 
+  /** The enforced organisation floor for this registry, if any layer below the write layer sets one. */
+  async getCredentialPolicyFloor(): Promise<McpCredentialPolicy | undefined> {
+    await this.load();
+    return this.layering?.lowerPolicy;
+  }
+
   async setCredentialPolicy(policy: McpCredentialPolicy): Promise<void> {
     const data = structuredClone(await this.load());
-    const effective = resolveCredentialPolicy({ flag: policy, registryPolicy: this.layering?.lowerPolicy, env: {} });
+    const effective = resolveCredentialPolicy({ flag: policy, floorPolicy: this.layering?.lowerPolicy, env: {} });
     if (effective !== policy) {
       throw new Error(`Cannot relax MCP credential policy floor "${effective}" to "${policy}".`);
     }
@@ -701,6 +707,7 @@ export async function injectServers(
 
   assertCredentialPolicy(allServers, resolveCredentialPolicy({
     flag: options.credentialPolicy, registryPolicy: await registry.getCredentialPolicy(),
+    floorPolicy: await registry.getCredentialPolicyFloor(),
   }));
 
   // The shareable-project decision follows the actual resolved destination,

@@ -461,9 +461,10 @@ export const sessionHandler: CommandHandler = {
           const { resolveToolFilters } = await import('../../mcp/tool-filters.mjs');
           const { assertCredentialPolicy, resolveCredentialPolicy } = await import('../../mcp/credentials.mjs');
           const registryPolicy = await registry.getCredentialPolicy();
+          const floorPolicy = await registry.getCredentialPolicyFloor();
           let credentialPolicy;
           try {
-            credentialPolicy = resolveCredentialPolicy({ registryPolicy });
+            credentialPolicy = resolveCredentialPolicy({ registryPolicy, floorPolicy });
             assertCredentialPolicy(resolvedServers, credentialPolicy);
           } catch (err) {
             console.error(`  ${err instanceof Error ? err.message : String(err)}`);
