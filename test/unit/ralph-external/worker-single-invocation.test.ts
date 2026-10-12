@@ -312,12 +312,13 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8'))).toMatchObject({ invocationId: result.invocationId, candidate: true, verified: false });
     expect(await readdir(f.root)).not.toContain('.aiwg');
     await expect(lstat(path.join(f.root, 'injected'))).rejects.toMatchObject({ code: 'ENOENT' });
-    // #2915: the degraded first attempt ends 'uncertain', so a same-launcher
-    // retry is now refused by the mandatory stop-before-retry gate before any
-    // path check — and the reused-path rejection below is proven with a fresh
-    // launcher, isolating the path check from the retry gate.
-    await expect(f.launch()).rejects.toMatchObject({ code: 'UNCERTAIN_TERMINATION' });
-    await expect(new SessionLauncher().launchWorker(f.options)).rejects.toThrow(/fresh|empty/);
+    // #2915 step 4: path-pair retry inference is deleted (retry is now
+    // `options.retryOf`-declared only), so a same-launcher, same-runDir
+    // call with no `retryOf` is unrelated work — never gated by
+    // stop-before-retry. It reaches `launchOneWorker`'s own independent
+    // fresh/empty runDir precondition directly, restoring this assertion to
+    // its pre-#2915 (origin/main) form.
+    await expect(f.launch()).rejects.toThrow(/fresh|empty/);
   });
 
   it('extracts stdout-only final separately while retaining the original event stream', async () => {
@@ -1032,6 +1033,15 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     for (const flag of ['--resume', '--provider', '--budget', '--dangerously-skip-permissions', '--launch-worker']) {
       expect(() => parseWorkerLaunchArgs([...args, flag])).toThrow();
     }
+  });
+
+  it('#2915 step 4: --retry-of/--retry-of-run-dir parse together or not at all', () => {
+    const args = ['--launch-worker', '--invocation', '/plan.json', '--run-dir', '/run'];
+    expect(parseWorkerLaunchArgs(args)).not.toHaveProperty('retryOf');
+    expect(parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1', '--retry-of-run-dir', '/prev-run']))
+      .toMatchObject({ retryOf: { invocationId: 'prev-1', runDir: '/prev-run' } });
+    expect(() => parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1'])).toThrow(/together/);
+    expect(() => parseWorkerLaunchArgs([...args, '--retry-of-run-dir', '/prev-run'])).toThrow(/together/);
   });
 
   it('T-OG-14 rejects unsupported platforms before helper spawn', async () => {

@@ -655,6 +655,48 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(on).toMatchObject({ gated: true, refused: { blockedBy: ['installation:codex'] } });
   });
 
+  // #2915 follow-up: a CLI whose adapter can never verify a final (Warp,
+  // Copilot — `canVerifyAttempt: false`) is never eligible for
+  // recovery-breaker gating, even with dispatch enabled and a breaker that
+  // would otherwise admit.
+  it('a CLI that cannot verify any final is never eligible for recovery-breaker gating (not-gated)', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const admittingBreaker = { admit: () => { throw new Error('must never be reached: this CLI is not-gated'); } };
+    const invocation = { selected: { cli: 'warp', inferenceProvider: 'warp' } };
+    const result = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
+      invocation, invocationId: 'inv-warp-1', scopedBreaker: admittingBreaker, drivers: { warp: { canVerifyAttempt: false } } });
+    expect(result).toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+  });
+
+  // #2915 step 4: `retry_of` has no server-owned capture-root
+  // configuration on this bridge yet; it must refuse explicitly, before
+  // any capacity is reserved, rather than silently ignoring the conductor's
+  // retry declaration.
+  it('retry_of refuses explicitly before any capacity is reserved (MCP capture-root not yet configured)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'retry-of-refused', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      retry_of: '11111111-1111-1111-1111-111111111111',
+    });
+    expect(result.isError).toBe(true);
+    expect(registry.canStart()).toBe(true); // no capacity was ever reserved
+  });
+
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
   // JSON-RPC request id (captured at the transport layer), never a
   // caller-supplied value with no relationship to the wire protocol

@@ -335,7 +335,12 @@ async function launchOneWorker(owner, options) {
     artifacts = await materializeWorkerArtifacts(invocation, runDir);
     const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
     await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
-      previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      // #2915 step 4: set only after `verifyRetryPredecessor` (SessionLauncher.launchWorker)
+      // independently confirmed the predecessor's owned, launcher-written,
+      // confirmed-terminal evidence for this exact task — never from an
+      // unverified caller claim.
+      previousAttemptId: options.verifiedPreviousAttemptId ?? null,
+      requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
       expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
@@ -960,6 +965,77 @@ export function assertStopBeforeRetry(previousResult, options) {
 }
 
 /**
+ * #2915 step 4 (retry linkage). Replaces the deleted `freshAttempt`
+ * (unauthenticated caller bypass), `afterAttempt` (caller-asserted
+ * evidence) and the path-pair (`invocationPath`+`runDir` equality)
+ * inference entirely. A retry is now conductor-DECLARED, never inferred:
+ * `retryOf` names the previous attempt's `invocationId` AND the exact
+ * `runDir` it ran in; omission means unrelated work and is NEVER refused
+ * for retry reasons, no matter what path coincidence exists.
+ *
+ * When supplied, the predecessor's OWN launcher-written evidence is read
+ * directly from disk with the same anchored, no-follow, bounded readers
+ * `launchOneWorker` uses for every other worker-adjacent file — never a
+ * caller-supplied object. The directory and every file must be privately
+ * owned (0700 dir; 0600, single-link, unaliased regular files); identity
+ * (`.launch-owner`, `invocation.json.invocationId`, `exit.json.invocationId`)
+ * must all agree with `retryOf.invocationId`; `invocation.json.origin` must
+ * be `'launcher'` (never a worker-writable record); and the predecessor's
+ * `taskDigest` must match the NEW attempt's own task (task-chain binding —
+ * a retry can replace only the SAME task's prior attempt, never an
+ * unrelated one that merely shares a directory). Missing, unreadable,
+ * malformed or identity-mismatched evidence refuses the replacement
+ * (`UNBOUND_RETRY_EVIDENCE_CODE`); a present, well-formed, matching record
+ * still must show CONFIRMED termination (`stopBeforeRetryGate`) — an
+ * uncertain predecessor refuses exactly as before.
+ *
+ * Returns the predecessor's verified `exit.json` record on success; throws
+ * on any refusal.
+ */
+export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspect } = {}) {
+  const fail = (reason) => {
+    const error = new Error(`Retry predecessor evidence refused: ${reason}`);
+    error.code = UNBOUND_RETRY_EVIDENCE_CODE;
+    throw error;
+  };
+  if (!retryOf || typeof retryOf.invocationId !== 'string' || !retryOf.invocationId
+    || typeof retryOf.runDir !== 'string' || !retryOf.runDir) {
+    fail('retryOf requires both a non-empty invocationId and runDir');
+  }
+  const { invocationId: prevId, runDir: prevRunDir } = retryOf;
+  if (!await inspect(prevRunDir, 'directory')) fail('predecessor run directory is missing');
+  const dirStat = await lstat(prevRunDir);
+  if (dirStat.uid !== process.getuid() || (dirStat.mode & 0o077)) fail('predecessor run directory is not privately owned');
+  let ownerBytes, invocationBytes, exitBytes;
+  try {
+    ownerBytes = await boundedPrivateRead(join(prevRunDir, '.launch-owner'), 256, inspect, true);
+    invocationBytes = await boundedPrivateRead(join(prevRunDir, 'invocation.json'), 1048576, inspect, true);
+    exitBytes = await boundedPrivateRead(join(prevRunDir, 'exit.json'), 1048576, inspect, true);
+  } catch (error) { fail(`predecessor metadata is missing or not a bounded, privately-owned, unaliased regular file (${error.message})`); }
+  if (ownerBytes.toString('utf8') !== prevId) fail('.launch-owner does not match retryOf.invocationId');
+  let invocationRecord, exitRecord;
+  try {
+    invocationRecord = JSON.parse(invocationBytes.toString('utf8'));
+    exitRecord = JSON.parse(exitBytes.toString('utf8'));
+  } catch { fail('predecessor metadata is not valid JSON'); }
+  if (invocationRecord?.invocationId !== prevId || invocationRecord?.origin !== 'launcher') {
+    fail('invocation.json identity does not match retryOf (or is not launcher-written)');
+  }
+  if (exitRecord?.invocationId !== prevId) fail('exit.json identity does not match retryOf');
+  if (newInvocationPath !== undefined) {
+    const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+    let newTaskDigest;
+    try {
+      const newPlanBytes = await boundedPrivateRead(newInvocationPath, 1048576, inspect);
+      newTaskDigest = qualificationDigest(JSON.parse(newPlanBytes.toString('utf8')).request);
+    } catch { fail('new attempt plan is missing or invalid; cannot bind the retry to a task'); }
+    if (invocationRecord.taskDigest !== newTaskDigest) fail('predecessor task does not match the new attempt (task-chain binding)');
+  }
+  assertStopBeforeRetry(exitRecord, { expectedInvocationId: prevId });
+  return exitRecord;
+}
+
+/**
  * One corrected startup retry (#2915, 03 §11.5 step 1). A failed start may
  * correct a demonstrated qualified mechanical cause at most once — and only
  * within the task's existing attempts/budget, which the caller enforces.
@@ -1141,6 +1217,14 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   if (!gateEnabled) return { gated: false };
   const cli = invocation?.selected?.cli ?? null;
   if (cli && config?.parallelism?.clis?.[cli]?.enabled === false) return { gated: false };
+  // #2915 follow-up: an adapter whose `parseWorkerFinal`/`parseWorkerAttemptFinal`
+  // can NEVER validate a final (Warp, Copilot — `canVerifyAttempt: false`,
+  // see worker-installation.mjs) can never report a verified success back
+  // to the breaker. Admitting a canary for such a CLI would gate it behind
+  // a success that is structurally unreachable, not merely unlikely — so
+  // this CLI is never eligible for recovery-breaker gating at all, exactly
+  // like the global/per-CLI dispatch switch being off.
+  if (cli && drivers?.[cli]?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
   const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
   if (!breaker) return { gated: false };
   const resolvedInstallationQualifier = installationQualifier
@@ -1190,14 +1274,11 @@ export function classifyAttemptForSettlement(invocation, result, { quotaAccount 
 export class SessionLauncher extends EventEmitter {
   constructor() {
     super();
+    // Informational bookkeeping only (#2915 step 4): the retry gate itself
+    // no longer reads these — see `launchWorker`'s `options.retryOf`,
+    // verified fresh against disk evidence on every call.
     this.lastAttemptResult = null;
     this.lastAttemptInvocationId = null;
-    // Launcher-owned identity of the last POST-SPAWN attempt's target work
-    // item (#2915 P1: "retry" is precisely defined as relaunching the SAME
-    // `invocationPath`+`runDir` — the only identity available before the
-    // attempt's own fresh `invocationId` is minted inside `launchOneWorker`).
-    // Set only alongside `lastAttemptResult`; never touched by a caller.
-    this.lastAttemptIdentity = null;
     this.currentProcess = null;
     this.startTime = null;
     /** @type {import('./lib/provider-adapter.mjs').ProviderAdapter|null} */
@@ -1215,35 +1296,19 @@ export class SessionLauncher extends EventEmitter {
   /**
    * Attached direct attempt; no Ralph state, monitor constructor, retry or legacy args.
    *
-   * Stop-before-retry is MANDATORY, not opt-in (#2915B), but it applies
-   * ONLY to a RETRY, defined precisely (#2915 P1) as relaunching the SAME
-   * work item a previous attempt on THIS launcher targeted — same
-   * `options.invocationPath` AND `options.runDir` as the stored attempt's
-   * own, launcher-owned identity (`lastAttemptIdentity`, set only from a
-   * completed attempt, never from caller input). Unrelated work — a
-   * different `invocationPath`/`runDir` — is never treated as a retry and
-   * is never gated here, no matter what the previous attempt's termination
-   * was (#2915 review: an unrelated sequential launch on the same launcher
-   * was being refused as if it were a retry).
-   *
-   * `options.afterAttempt` supplies retry evidence explicitly for a FRESH
-   * launcher with no stored attempt of its own (a cross-restart retry).
-   * It can only ADD evidence where none exists — it can never override,
-   * fabricate past, or null out evidence this launcher itself observed:
-   * whenever `lastAttemptResult` is already set, THAT is what gets
-   * checked, regardless of what `afterAttempt` the caller passes (#2915
-   * review: `afterAttempt: null` bypassed the gate entirely, and a
-   * fabricated `{invocationId, termination:'confirmed'}` for a mismatched
-   * invocation overrode stored uncertainty). A first launch (no previous
-   * attempt) and launches after pre-spawn refusals (which never record an
-   * attempt) pass the gate vacuously.
-   *
-   * `options.freshAttempt: true` is an explicit caller override that forces
-   * UNRELATED classification even if `invocationPath`/`runDir` happen to
-   * coincide with the stored attempt — it never widens what passes evidence
-   * review (the "fresh, empty runDir" precondition in `launchOneWorker`
-   * independently refuses an actual same-directory relaunch), it only lets
-   * a caller declare intent instead of relying on path comparison alone.
+   * Stop-before-retry is MANDATORY, not opt-in (#2915B). #2915 step 4
+   * DELETED the path-pair (`invocationPath`+`runDir` equality) inference,
+   * `afterAttempt` (caller-asserted evidence) and `freshAttempt` (an
+   * unauthenticated bypass of the whole gate) entirely. A retry is now
+   * conductor-DECLARED, never inferred: `options.retryOf = { invocationId,
+   * runDir }` names the previous attempt explicitly. Omission means
+   * UNRELATED work and is never refused for retry reasons, no matter what
+   * path coincidence exists (#2915 review: an unrelated sequential launch
+   * on the same launcher was being refused as if it were a retry). When
+   * supplied, `verifyRetryPredecessor` reads the predecessor's OWN
+   * launcher-written, privately-owned evidence directly from disk — never
+   * a caller-supplied claim — and refuses on anything missing, unreadable,
+   * identity-mismatched, or not CONFIRMED terminal.
    *
    * `options.correctStartup: { reasonCode, correctionsUsed }` enforces the
    * one-qualified-startup-correction budget on a conductor-declared
@@ -1253,22 +1318,11 @@ export class SessionLauncher extends EventEmitter {
    */
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
-    const sameWork = this.lastAttemptIdentity !== null
-      && options?.invocationPath === this.lastAttemptIdentity.invocationPath
-      && options?.runDir === this.lastAttemptIdentity.runDir;
-    const explicitAfterAttempt = options?.afterAttempt !== undefined;
-    const isRetry = options?.freshAttempt === true ? false
-      : explicitAfterAttempt || (this.lastAttemptResult !== null && sameWork);
-    if (isRetry) {
-      // Launcher-owned evidence wins: `afterAttempt` is consulted ONLY when
-      // this launcher holds no stored attempt of its own to check.
-      const previousResult = this.lastAttemptResult !== null ? this.lastAttemptResult : (options.afterAttempt ?? null);
-      assertStopBeforeRetry(previousResult, { expectedInvocationId: this.lastAttemptInvocationId });
-      // An explicitly supplied cross-restart retry adopts its evidence's
-      // chain so the next retry binds against it.
-      if (this.lastAttemptInvocationId === null && previousResult?.invocationId != null) {
-        this.lastAttemptInvocationId = previousResult.invocationId;
-      }
+    let verifiedPreviousAttemptId = null;
+    if (options?.retryOf !== undefined) {
+      const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+      const exitRecord = await verifyRetryPredecessor(options.retryOf, { newInvocationPath: options?.invocationPath, inspect });
+      verifiedPreviousAttemptId = exitRecord.invocationId;
     }
     if (options?.correctStartup !== undefined) {
       const gate = startupCorrectionGate(options.correctStartup ?? {});
@@ -1280,12 +1334,13 @@ export class SessionLauncher extends EventEmitter {
     }
     this.workerLaunchPending = true;
     try {
-      const result = await launchOneWorker(this, options);
-      // Only post-spawn attempts record: pre-spawn refusals throw before
-      // any result exists, so they never create linkage or gate later calls.
+      const result = await launchOneWorker(this, { ...options, verifiedPreviousAttemptId });
+      // Informational only: no longer consulted by the retry gate above
+      // (which is now `options.retryOf`-driven and disk-verified every
+      // time), kept for callers/diagnostics that read the launcher's own
+      // last-attempt bookkeeping.
       this.lastAttemptResult = result ?? null;
       this.lastAttemptInvocationId = result?.invocationId ?? this.lastAttemptInvocationId;
-      this.lastAttemptIdentity = result ? { invocationPath: options?.invocationPath, runDir: options?.runDir } : this.lastAttemptIdentity;
       return result;
     } finally { this.workerLaunchPending = false; }
   }

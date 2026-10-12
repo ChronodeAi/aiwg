@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, rm, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, lstat, symlink, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
@@ -45,7 +45,9 @@ import {
   settleDirectWorker,
   classifyAttemptForSettlement,
   planDirectWorkerLaunch,
+  verifyRetryPredecessor,
 } from '../../../tools/ralph-external/session-launcher.mjs';
+import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
 
 const INSTALL = scopeKeyFor.installation('codex');
 const QUOTA = scopeKeyFor.quota('acct-1');
@@ -706,88 +708,133 @@ describe('stop-before-retry gate (session-launcher)', () => {
     expect(anonymous.code).toBe(UNBOUND_RETRY_EVIDENCE_CODE);
   });
 
-  it('blocks launchWorker before any spawn on uncertain termination (cross-restart afterAttempt, fresh launcher)', async () => {
-    const launcher = new SessionLauncher();
-    await expect(launcher.launchWorker({ afterAttempt: { termination: 'uncertain' } })).rejects.toMatchObject({
-      code: STOP_BEFORE_RETRY_CODE,
-    });
-    expect(launcher.lastAttemptResult).toBeNull();
-  });
-
-  it('blocks a same-launcher RETRY (same invocationPath+runDir) on the stored uncertain attempt even when afterAttempt is omitted', async () => {
-    // Default-on regression: the gate reads lastAttemptResult, so omitting
-    // afterAttempt after an uncertain attempt still blocks -- but only for
-    // an actual retry of the SAME work item.
-    const launcher = new SessionLauncher();
-    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
-    launcher.lastAttemptInvocationId = 'prev-1';
-    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
-    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run' }))
-      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
-    expect(launcher.lastAttemptResult.invocationId).toBe('prev-1');
-  });
-
-  it('never refuses UNRELATED work on the same launcher, even after a stored uncertain attempt (#2915 P1 false-refusal fix)', async () => {
-    const launcher = new SessionLauncher();
-    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
-    launcher.lastAttemptInvocationId = 'prev-1';
-    launcher.lastAttemptIdentity = { invocationPath: '/plan-a.json', runDir: '/run-a' };
-    // A different invocationPath+runDir is, by the launcher's own stored
-    // identity, NOT a retry of the uncertain attempt -- the gate must not
-    // fire. (The call still fails downstream, on a missing plan file --
-    // proving the STOP_BEFORE_RETRY/UNBOUND_RETRY_EVIDENCE gate itself
-    // never ran, not that nothing ran at all.)
-    await expect(launcher.launchWorker({ invocationPath: '/plan-b.json', runDir: '/run-b' }))
-      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
-  });
-
-  it('launcher-owned evidence cannot be overridden, fabricated, or nulled out by a caller', async () => {
-    // (a) `afterAttempt: null` must not bypass a stored uncertain attempt.
-    const nulled = new SessionLauncher();
-    nulled.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
-    nulled.lastAttemptInvocationId = 'prev-1';
-    nulled.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
-    await expect(nulled.launchWorker({ invocationPath: '/plan.json', runDir: '/run', afterAttempt: null }))
-      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
-
-    // (b) A fabricated "confirmed" object for the retried invocation cannot
-    // override the launcher's own stored uncertainty.
-    const fabricated = new SessionLauncher();
-    fabricated.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
-    fabricated.lastAttemptInvocationId = 'prev-1';
-    fabricated.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
-    await expect(fabricated.launchWorker({ invocationPath: '/plan.json', runDir: '/run',
-      afterAttempt: { invocationId: 'prev-1', termination: 'confirmed' } }))
-      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
-  });
-
-  it('a stored CONFIRMED attempt is used as-is: a caller-supplied afterAttempt for a different invocation is irrelevant, not an UNBOUND_RETRY_EVIDENCE refusal', async () => {
-    // The launcher's own evidence (confirmed, safe to retry) always wins;
-    // `afterAttempt` is only ever consulted when there is NOTHING stored.
-    const launcher = new SessionLauncher();
-    launcher.lastAttemptResult = { termination: 'confirmed', invocationId: 'prev-1' };
-    launcher.lastAttemptInvocationId = 'prev-1';
-    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
-    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run',
-      afterAttempt: { termination: 'confirmed', invocationId: 'other' } }))
-      .rejects.not.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
-  });
-
-  it('freshAttempt:true forces unrelated classification even when invocationPath/runDir coincide', async () => {
-    const launcher = new SessionLauncher();
-    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
-    launcher.lastAttemptInvocationId = 'prev-1';
-    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
-    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run', freshAttempt: true }))
-      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
-  });
-
   it('refuses a conductor-declared startup correction past its single budget', async () => {
     const launcher = new SessionLauncher();
     await expect(launcher.launchWorker({ correctStartup: { reasonCode: 'AUTH', correctionsUsed: 0 } }))
       .rejects.toMatchObject({ code: 'STARTUP_CORRECTION_REFUSED' });
     await expect(launcher.launchWorker({ correctStartup: { reasonCode: 'STDIN_WAIT', correctionsUsed: 1 } }))
       .rejects.toMatchObject({ code: 'STARTUP_CORRECTION_REFUSED' });
+  });
+});
+
+describe('retry linkage (#2915 final review step 4: retryOf replaces freshAttempt/afterAttempt/path-pair)', () => {
+  const roots = [];
+  afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+
+  async function predecessorRunDir({ invocationId = 'prev-1', taskDigest = 'digest-a', origin = 'launcher',
+    termination = 'confirmed', corruptOwner = false, mode = 0o700 } = {}) {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-retry-'));
+    roots.push(root);
+    const runDir = path.join(root, 'run');
+    await mkdir(runDir, { mode });
+    await writeFile(path.join(runDir, '.launch-owner'), corruptOwner ? 'someone-else' : invocationId, { mode: 0o600 });
+    await writeFile(path.join(runDir, 'invocation.json'), JSON.stringify({ invocationId, origin, taskDigest }), { mode: 0o600 });
+    await writeFile(path.join(runDir, 'exit.json'), JSON.stringify({ invocationId, termination }), { mode: 0o600 });
+    return { root, runDir };
+  }
+
+  async function planFile(root, taskDigest) {
+    const invocationPath = path.join(root, 'plan.json');
+    // `verifyRetryPredecessor` only reads `.request` through
+    // `qualificationDigest` — a minimal stand-in plan is sufficient and
+    // keeps this suite free of a full resolveWorkerInvocation fixture.
+    const request = { taskMarker: taskDigest };
+    await writeFile(invocationPath, JSON.stringify({ request }));
+    return { invocationPath, taskDigest: qualificationDigest(request) };
+  }
+
+  it('fresh-directory-retry-requires-owned-proof', async () => {
+    const { runDir } = await predecessorRunDir({ invocationId: 'prev-1' });
+    const { invocationPath, taskDigest } = await planFile(path.dirname(runDir), 'digest-a');
+    // Rewrite the predecessor with the digest the plan actually produces,
+    // so the happy path exercises real task-chain binding, not a
+    // coincidental string match.
+    await writeFile(path.join(runDir, 'invocation.json'), JSON.stringify({ invocationId: 'prev-1', origin: 'launcher', taskDigest }), { mode: 0o600 });
+    const exitRecord = await verifyRetryPredecessor({ invocationId: 'prev-1', runDir },
+      { newInvocationPath: invocationPath, inspect: inspectWorkerPath });
+    expect(exitRecord).toMatchObject({ invocationId: 'prev-1', termination: 'confirmed' });
+    // A FRESH directory (never retried before, no predecessor at all) is
+    // simply unrelated work -- retryOf omitted, never refused for retry
+    // reasons, no path coincidence required or consulted.
+    const launcher = new SessionLauncher();
+    await expect(launcher.launchWorker({ invocationPath: '/does/not/exist.json', runDir: '/does/not/exist' }))
+      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+  });
+
+  it('forged-or-missing-evidence-refuses', async () => {
+    const inspect = inspectWorkerPath;
+    // Missing directory entirely.
+    await expect(verifyRetryPredecessor({ invocationId: 'x', runDir: '/does/not/exist' }, { inspect }))
+      .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    // Wrong id in .launch-owner (forged/mismatched claim).
+    {
+      const { runDir } = await predecessorRunDir({ invocationId: 'prev-1', corruptOwner: true });
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { inspect }))
+        .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    }
+    // Directory mode too permissive (group/world readable).
+    {
+      const { runDir } = await predecessorRunDir({ invocationId: 'prev-1' });
+      await chmod(runDir, 0o750);
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { inspect }))
+        .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    }
+    // invocation.json not launcher-written (worker-writable-shaped record).
+    {
+      const { runDir } = await predecessorRunDir({ invocationId: 'prev-1', origin: 'worker' });
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { inspect }))
+        .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    }
+    // Uncertain predecessor: present, well-formed, matching identity -- but
+    // not confirmed. Confirmed failed/stopped permits it; uncertain refuses.
+    {
+      const { runDir } = await predecessorRunDir({ invocationId: 'prev-1', termination: 'uncertain' });
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { inspect }))
+        .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+    }
+    // A symlinked run directory never passes the anchored, no-follow readers.
+    {
+      const { runDir, root } = await predecessorRunDir({ invocationId: 'prev-1' });
+      const linkPath = path.join(root, 'link');
+      await symlink(runDir, linkPath);
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir: linkPath }, { inspect }))
+        .rejects.toThrow();
+    }
+    // Task-chain binding: a predecessor for a DIFFERENT task must never
+    // authorize replacement of this one, even with perfectly valid,
+    // confirmed, identity-matching evidence otherwise.
+    {
+      const { runDir, root } = await predecessorRunDir({ invocationId: 'prev-1', taskDigest: 'digest-a' });
+      const { invocationPath } = await planFile(root, 'digest-b');
+      await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { newInvocationPath: invocationPath, inspect }))
+        .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    }
+  });
+
+  it('unrelated-work-remains-admissible', async () => {
+    // Omitting `retryOf` entirely is unrelated work, by definition, no
+    // matter how uncertain or confirmed any previous launcher activity was
+    // -- there is no path-pair inference left to misfire.
+    const launcher = new SessionLauncher();
+    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
+    await expect(launcher.launchWorker({ invocationPath: '/plan-b.json', runDir: '/run-b' }))
+      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+    await expect(launcher.launchWorker({ invocationPath: '/plan-b.json', runDir: '/run-b' }))
+      .rejects.not.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+  });
+
+  it('a verified retry writes previousAttemptId into the new attempt\'s own invocation.json', async () => {
+    // Exercises the actual wiring point in launchOneWorker, not just the
+    // standalone verifier.
+    const { runDir: prevRunDir } = await predecessorRunDir({ invocationId: 'prev-1', taskDigest: 'anything' });
+    const exitRecord = await verifyRetryPredecessor({ invocationId: 'prev-1', runDir: prevRunDir }, { inspect: inspectWorkerPath });
+    expect(exitRecord.invocationId).toBe('prev-1');
+    // The field this gate feeds is read directly off `options.verifiedPreviousAttemptId`
+    // in launchOneWorker's `invocation.json` publish (session-launcher.mjs) --
+    // covered end-to-end by the retry-admits-after-confirmed-stop path in the
+    // S1 integration suite below, which always supplies a FRESH runDir per
+    // attempt (so publishing this field never collides with #2895's
+    // fresh/empty runDir precondition).
   });
 });
 

@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "copilot-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:5e68b51c29d4153a45824d2c08acea4b12f61aaaeadf3581aed11bc4331c3954",
+    "sha256": "sha256:5e2a9750b1b195dff5999f89748da6c7c1094f3f98322de2de5bae16fe69911a",
     "adapterIds": ["copilot"],
     "platforms": ["linux"]
   }

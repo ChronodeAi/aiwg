@@ -854,6 +854,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         extractFinal: output => instance.parseOutput(output),
         ...(typeof instance.parseWorkerFinal === 'function'
           ? { parseWorkerFinal: (output, options) => instance.parseWorkerFinal(output, options) } : {}),
+        // #2915 follow-up: the attempt-terminal sibling of `parseWorkerFinal`
+        // above, forwarded the same way, plus the capability signal
+        // `admitDirectWorker` uses to treat a CLI whose adapter can never
+        // verify a final (Warp, Copilot: `supportsAttemptVerification()
+        // === false`) as never eligible for recovery-breaker gating.
+        ...(typeof instance.parseWorkerAttemptFinal === 'function'
+          ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
+        canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
+          ? !!instance.supportsAttemptVerification() : true,
         ...(typeof instance.createHealthObserver === 'function'
           ? { createHealthObserver: options => instance.createHealthObserver(options) } : {}),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,

@@ -1096,6 +1096,13 @@ const inputSchema = z.object({
   workdir: z.string().min(1).optional(),
   final_output: z.string().min(1).optional(),
   transport: z.enum(['shell', 'mcp']).default('shell'),
+  // #2915 step 4 (retry linkage): conductor-declared predecessor invocation
+  // id. Accepted and shape-validated here; `run()` below refuses explicitly
+  // rather than silently ignoring it (no server-owned capture-root
+  // configuration exists yet for the MCP shell-launch path — see
+  // session-launcher.mjs `verifyRetryPredecessor`, which the CLI entry
+  // point already uses). Omission is unrelated work, as always.
+  retry_of: z.string().uuid().optional(),
 }).strict();
 
 /**
@@ -1167,6 +1174,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     if (!input.role || !input.task || !input.group || !input.brief || !input.workdir || !input.final_output) {
       throw new Error('Incomplete worker invocation');
     }
+    // #2915 step 4: `retry_of` has no server-owned capture-root
+    // configuration to verify a predecessor against on this bridge yet
+    // (see the schema comment above) — refuse explicitly, before any
+    // capacity is reserved, rather than silently accepting and ignoring a
+    // conductor's retry declaration.
+    if (input.retry_of !== undefined) throw new Error('retry_of is not yet supported on the MCP worker-invoke bridge (OG_RETRY_UNSUPPORTED_MCP)');
     if (!registry.canStart()) throw new Error('Worker invocation capacity is reserved; no live run slot is available');
     const existing = registry.claimRequestId(input.request_id);
     if (existing) throw new Error('Worker request_id was already used; mint a fresh request_id instead of replaying');

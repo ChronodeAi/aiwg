@@ -451,22 +451,34 @@ export class ProviderAdapter {
   /**
    * #2915 (evidence contract): the attempt-terminal sibling of
    * `parseWorkerFinal`/`parseWorkerOutput` below. Shares the exact same
-   * strict decoding; the only difference is the terminal assertion —
-   * `assertWorkerAttemptTerminal` requires the launcher/adapter-owned
-   * `attemptOutcome` (never confirmed descendant termination) instead of
-   * `assertWorkerTerminal`'s `termination: 'confirmed'`. This lets a
-   * degraded-isolation shell attempt or an MCP response — neither of which
-   * can ever produce a confirmed descendant-stop — still validate a
-   * genuinely successful attempt's final claims (session-launcher.mjs
-   * `captureOneWorker`). It never manufactures confirmed termination: the
-   * caller's own `termination`/`descendants` fields are untouched.
+   * strict decoding AND the exact same per-CLI extraction every subclass's
+   * own `parseWorkerFinal` override performs — the only difference is the
+   * terminal assertion: `assertWorkerAttemptTerminal` requires the
+   * launcher/adapter-owned `attemptOutcome` (never confirmed descendant
+   * termination) instead of `assertWorkerTerminal`'s
+   * `termination: 'confirmed'`. This lets a degraded-isolation shell
+   * attempt or an MCP response — neither of which can ever produce a
+   * confirmed descendant-stop — still validate a genuinely successful
+   * attempt's final claims (session-launcher.mjs `captureOneWorker`). It
+   * never manufactures confirmed termination: the caller's own
+   * `termination`/`descendants` fields are untouched.
    *
-   * NOTE (known limitation, #2915 report): adapters that override
-   * `parseWorkerFinal` to pre-extract a CLI-specific final shape (most
-   * provider adapters in this directory) do not automatically get a
-   * matching extraction for this attempt-terminal entry point unless they
-   * also override `parseWorkerAttemptFinal` the same way. Only the base
-   * adapter's generic json/jsonl/mcp decoding is covered out of the box.
+   * Fixed once here, for every adapter, with NO per-adapter edit required
+   * (2915 follow-up: the previous version called `parseWorkerOutput`
+   * directly, skipping every subclass's own extraction override entirely).
+   * The trick is calling `this.parseWorkerFinal` — polymorphic dispatch
+   * picks up the ACTUAL (possibly overridden) method — with
+   * `assertTerminal` folded into `options`. Every subclass override in this
+   * directory follows the same shape: extract a CLI-specific final, then
+   * `return super.parseWorkerFinal(extracted, { ...options, format: '...' })`
+   * — the `...options` spread carries `assertTerminal` straight through to
+   * the base `parseWorkerOutput` below, so the base class never needs
+   * subclass-specific knowledge of each extraction. An adapter whose
+   * override always throws regardless of input (Warp, Copilot:
+   * `supportsAttemptVerification() === false`) throws here too, by the same
+   * unconditional path — exactly the intended "never verifiable" behavior
+   * for those two; `admitDirectWorker` treats such a CLI as `not-gated`
+   * (recovery never consulted) rather than permanently blocking it.
    */
   parseWorkerAttemptFinal(output, options = {}) {
     return this.parseWorkerAttemptOutput(output, options);
@@ -474,8 +486,20 @@ export class ProviderAdapter {
 
   async parseWorkerAttemptOutput(output, options = {}) {
     const { assertWorkerAttemptTerminal } = await importImpl(import.meta.url, 'mission-protocol/index.js');
-    return this.parseWorkerOutput(output, { ...options, assertTerminal: assertWorkerAttemptTerminal });
+    return this.parseWorkerFinal(output, { ...options, assertTerminal: assertWorkerAttemptTerminal });
   }
+
+  /**
+   * Capability signal (#2915 follow-up), default `true`: can this adapter's
+   * `parseWorkerFinal`/`parseWorkerAttemptFinal` ever validate a genuine
+   * final for ANY input, given a real completed attempt? Override `false`
+   * only for an adapter whose `parseWorkerFinal` always throws regardless
+   * of input (no observed output envelope exists to extract from yet —
+   * Warp, Copilot). `admitDirectWorker` uses this to treat such a CLI as
+   * never eligible for recovery-breaker gating, rather than admitting a
+   * canary that can structurally never report success.
+   */
+  supportsAttemptVerification() { return true; }
 
   /** Strict group-mode path, shared by CLI and MCP. Never falls back to regex.
    * Drivers normalize qualified vendor event framing to result/message/terminal

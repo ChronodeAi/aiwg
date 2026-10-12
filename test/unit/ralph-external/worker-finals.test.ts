@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter, createProvider, ensureProvidersRegistered } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { WORKER_MAX_JSON_BYTES } from '../../../src/mission-protocol/index.js';
+import { FactoryDirectAdapter } from '../../../tools/ralph-external/lib/factory-adapter.mjs';
+import { CursorDirectAdapter } from '../../../tools/ralph-external/lib/cursor-adapter.mjs';
+import { OpenClawAdapter } from '../../../tools/ralph-external/lib/openclaw-adapter.mjs';
+import { WarpAdapter } from '../../../tools/ralph-external/lib/warp-adapter.mjs';
+import { CopilotAdapter } from '../../../tools/ralph-external/lib/copilot-adapter.mjs';
 
 class FixtureAdapter extends ProviderAdapter {}
 const adapter = new FixtureAdapter();
@@ -149,5 +154,51 @@ describe('T-OG-17 MCP terminal and schema consistency', () => {
   });
   it('does not promote disconnected or late completion to successful termination', async () => {
     await expect(parse({ structuredContent: claims() }, { ...options, observation: { ...mcp, termination: 'uncertain' } })).rejects.toThrow();
+  });
+});
+
+// #2915 follow-up: `parseWorkerAttemptFinal` must reuse each adapter's OWN
+// per-CLI extraction (never only the base class's generic decoding), since
+// `attemptOutcome` is the fact that gates recovery-breaker closure for a
+// degraded/MCP attempt that can never produce confirmed termination. One
+// adapter instance per distinct wire format exercises the base-class fix
+// (`parseWorkerAttemptFinal` -> polymorphic `this.parseWorkerFinal` ->
+// subclass extraction -> `super.parseWorkerFinal(..., { assertTerminal })`)
+// directly, with NO per-adapter edit required for any of them.
+describe('#2915 parseWorkerAttemptFinal reuses per-CLI extraction (no per-adapter edit)', () => {
+  const attemptObservation = (ok: boolean) => ({ transport: 'shell' as const, status: ok ? 'completed' : 'failed',
+    attemptOutcome: ok ? 'succeeded' as const : 'failed' as const, exitCode: ok ? 0 : 1 });
+  const cases: Array<{ name: string; adapter: InstanceType<typeof ProviderAdapter>; valid: string; invalid: string }> = [
+    {
+      name: 'factory', adapter: new FactoryDirectAdapter(),
+      valid: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(claims()) }),
+      invalid: JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: JSON.stringify(claims()) }),
+    },
+    {
+      name: 'cursor', adapter: new CursorDirectAdapter(),
+      valid: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(claims()) }),
+      invalid: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '' }),
+    },
+    {
+      name: 'openclaw', adapter: new OpenClawAdapter(),
+      valid: JSON.stringify({ ok: true, status: 'ok', final: JSON.stringify(claims()) }),
+      invalid: JSON.stringify({ ok: false, status: 'error', final: JSON.stringify(claims()) }),
+    },
+  ];
+  it.each(cases)('$name: a strictly-valid final yields attemptOutcome succeeded; an invalid one never does', async ({ adapter, valid, invalid }) => {
+    await expect(adapter.parseWorkerAttemptFinal(valid, { observation: attemptObservation(true) })).resolves.toEqual(claims());
+    await expect(adapter.parseWorkerAttemptFinal(invalid, { observation: attemptObservation(true) })).rejects.toThrow();
+    // The exact same bytes are refused via the CONFIRMED-termination entry
+    // point too (degraded attempts never produce confirmed termination, so
+    // production never actually calls this with `termination: 'confirmed'`,
+    // but the assertion itself must still require it independently).
+    await expect(adapter.parseWorkerFinal(valid, { observation: { transport: 'shell', status: 'completed', termination: 'uncertain', exitCode: 0 } })).rejects.toThrow();
+  });
+
+  it('warp and copilot never verify any final: supportsAttemptVerification() is false and parseWorkerAttemptFinal always refuses', async () => {
+    for (const adapter of [new WarpAdapter(), new CopilotAdapter() as unknown as InstanceType<typeof ProviderAdapter>]) {
+      expect(adapter.supportsAttemptVerification()).toBe(false);
+      await expect(adapter.parseWorkerAttemptFinal('anything', { observation: attemptObservation(true) })).rejects.toThrow();
+    }
   });
 });
