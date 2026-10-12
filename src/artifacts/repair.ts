@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   PROJECT_CONTROL_PLANE_FILES,
   auditProjectArtifactHealth,
+  isProjectArtifactRootExternal,
 } from '../config/project-artifacts.js';
 
 export interface RepairProjectArtifactsOptions {
@@ -42,15 +43,20 @@ export async function repairProjectArtifacts(
   options: RepairProjectArtifactsOptions,
 ): Promise<RepairProjectArtifactsResult> {
   const projectDir = path.resolve(options.projectDir);
+  // Refuse local mode before auditing — the audit's own payload scan is a
+  // no-op in local mode now (#274), but the refusal should not depend on
+  // running the audit first either (repair.ts:45-51 previously audited
+  // before this check existed, so the refusal reason always paid for the
+  // scan it was about to reject).
+  if (!isProjectArtifactRootExternal(projectDir)) {
+    throw new Error('No external AIWG artifact corpus is configured for this project.');
+  }
   const before = auditProjectArtifactHealth(projectDir);
   const copied: string[] = [];
   const migrated: string[] = [];
   const archivedConflicts: string[] = [];
   const removed: string[] = [];
 
-  if (!before.external_configured) {
-    throw new Error('No external AIWG artifact corpus is configured for this project.');
-  }
   if (!before.external_reachable) {
     throw new Error(`External AIWG artifact corpus is unavailable: ${before.artifact_root}`);
   }

@@ -10,8 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
-import { satisfies, validRange } from 'semver';
-import { compileWorkerVersionPattern } from './worker-installation.mjs';
+import { compileWorkerVersionPattern, workerVersionRangeMismatch } from './worker-installation.mjs';
 import type { WorkerExecution } from '../config/aiwg-config.js';
 import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
 import { qualificationDigest } from './qualification-digest.mjs';
@@ -634,7 +633,10 @@ export function inspectWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
   if (adapter.qualification.status !== 'qualified' || !profile || profile.transport !== selection.transport) {
     throw new Error('Worker transport/profile is unqualified');
   }
-  if (![adapter.supportedVersions, profile.supportedVersions].every(range => validRange(range) && satisfies(selection.cliVersion, range))) {
+  // Shared range predicate (worker-installation.mjs): read-only surfaces
+  // (worker-direct-readiness.ts) reuse the same helper instead of
+  // re-deriving this inspector's range logic.
+  if (workerVersionRangeMismatch(selection.cliVersion, [adapter.supportedVersions, profile.supportedVersions]) !== null) {
     throw new Error('Worker CLI version is outside qualified profile');
   }
   const requiredControls = requiredWorkerControls(selection);

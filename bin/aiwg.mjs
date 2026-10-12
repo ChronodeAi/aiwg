@@ -309,10 +309,11 @@ trace('bin:entry');
  * emit a clear error and exit rather than falling back to a tsx fork.
  */
 async function resolveRouterPath() {
-  const { loadConfig } = await import('../dist/src/channel/manager.mjs');
+  const { loadConfig, resolveEffectiveInstallationRoot } = await import('../dist/src/channel/manager.mjs');
   const config = await loadConfig({ createIfMissing: !process.argv.slice(2).includes('--dry-run') });
-  if (config.devMode && config.edgePath && config.edgePath !== packageRoot) {
-    const devRouter = path.join(config.edgePath, 'dist', 'src', 'cli', 'router.js');
+  const effectiveRoot = resolveEffectiveInstallationRoot(packageRoot, config);
+  if (effectiveRoot !== packageRoot) {
+    const devRouter = path.join(effectiveRoot, 'dist', 'src', 'cli', 'router.js');
     if (!existsSync(devRouter)) {
       console.error(`Dev mode: compiled router not found at ${devRouter}`);
       console.error(`  Run: (cd ${config.edgePath} && npm run build)`);

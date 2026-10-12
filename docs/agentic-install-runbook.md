@@ -50,14 +50,16 @@ inside the session, not commands the user has to learn.
 ## Choose The Setup Scope
 
 Use **project-local setup** for a repository, product, investigation, campaign,
-or research corpus. This is the default and keeps project context isolated.
+or research corpus. This is the default and keeps project context with its repository.
 
 Use **global/user-scope setup** when the user wants the same AIWG agent surface
 available across many workspaces. This is useful for personal defaults and for
 providers whose primary artifact location is under the user's home directory,
 but it can make unrelated projects share more context than expected.
 
-If the user is unsure, choose project-local setup first.
+For a single project, project-local setup is the simplest start.
+
+For multi-repository work, see [Working Across Multiple Projects](guides/multi-project-workspaces.md).
 
 ## Prerequisites
 

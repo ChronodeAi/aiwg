@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeAllArtifactBasenames, discoverAddons, getAddonRuleFiles, getAddonSkillDirs } from '../../../tools/agents/providers/base.mjs';
 
 const root = path.resolve(import.meta.dirname, '../../..');
@@ -44,5 +44,68 @@ describe('discoverAddons explicitInstall', () => {
       .toContain('decision-offload.md');
     expect(discoverAddons(root, { includeExplicit: true }).map((addon: { name: string }) => addon.name)).toContain('decision-engine');
     expect(computeAllArtifactBasenames(root, 'rules').has('decision-offload')).toBe(true);
+  });
+});
+
+describe('direct addon/framework skill discovery (#3035)', () => {
+  async function sourceFixture(): Promise<string> {
+    const source = await mkdtemp(path.join(os.tmpdir(), 'aiwg-direct-addon-'));
+    temps.push(source);
+    await mkdir(path.join(source, 'skills/probe'), { recursive: true });
+    await writeFile(path.join(source, 'manifest.json'), JSON.stringify({ explicitInstall: true }));
+    await writeFile(path.join(source, 'skills/probe/SKILL.md'), '---\nname: probe\n---\n');
+    await mkdir(path.join(source, 'skills/not-a-skill'));
+    return source;
+  }
+
+  it('discovers an explicitly selected source and honors exclusions', async () => {
+    const source = await sourceFixture();
+    expect(getAddonSkillDirs(source)).toEqual([path.join(source, 'skills/probe')]);
+    expect(getAddonSkillDirs(source, [path.basename(source)])).toEqual([]);
+  });
+
+  it('ignores top-level skills for repository-root sources without duplicate discovery', async () => {
+    const source = await sourceFixture();
+    const addon = path.join(source, 'agentic/code/addons/plain');
+    await mkdir(path.join(addon, 'skills/nested'), { recursive: true });
+    await writeFile(path.join(addon, 'skills/nested/SKILL.md'), '# Nested skill\n');
+    expect(getAddonSkillDirs(source)).toEqual([path.join(addon, 'skills/nested')]);
+  });
+
+  it('ignores missing sources and skills paths that are files', async () => {
+    const source = await mkdtemp(path.join(os.tmpdir(), 'aiwg-direct-files-'));
+    temps.push(source);
+    await writeFile(path.join(source, 'skills'), '# Not a directory\n');
+    expect(getAddonSkillDirs(source)).toEqual([]);
+    expect(getAddonSkillDirs(path.join(source, 'missing'))).toEqual([]);
+  });
+
+  it('skips an escaping skills symlink with a warning, including a sibling with the same prefix', async () => {
+    const source = await sourceFixture();
+    const outside = `${source}-outside`;
+    temps.push(outside);
+    await mkdir(path.join(outside, 'pulled-skill'), { recursive: true });
+    await writeFile(path.join(outside, 'pulled-skill/SKILL.md'), '# Outside skill\n');
+    await rm(path.join(source, 'skills'), { recursive: true });
+    await symlink(outside, path.join(source, 'skills'), 'dir');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(getAddonSkillDirs(source)).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('resolves outside source root'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('allows a contained skills symlink and a symlinked source root after realpath', async () => {
+    const source = await sourceFixture();
+    await mkdir(path.join(source, 'contained/probe'), { recursive: true });
+    await writeFile(path.join(source, 'contained/probe/SKILL.md'), '# Contained skill\n');
+    await rm(path.join(source, 'skills'), { recursive: true });
+    await symlink(path.join(source, 'contained'), path.join(source, 'skills'), 'dir');
+    const alias = `${source}-alias`;
+    temps.push(alias);
+    await symlink(source, alias, 'dir');
+    expect(getAddonSkillDirs(alias)).toEqual([path.join(alias, 'skills/probe')]);
   });
 });

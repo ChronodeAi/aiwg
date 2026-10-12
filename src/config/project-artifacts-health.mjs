@@ -10,6 +10,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   PROJECT_AIWG_LOCATION_FILE,
+  isProjectArtifactRootExternal,
   readProjectArtifactLocation,
   resolveProjectAiwgDir,
 } from './project-artifacts-runtime.mjs';
@@ -57,8 +58,16 @@ export function auditProjectArtifactHealth(projectDir, env = process.env) {
   const localRoot = join(root, DEFAULT_PROJECT_AIWG_DIR);
   const artifactRoot = resolveProjectAiwgDir(root, env);
   const source = configuredSource(root, env);
-  const externalConfigured = resolve(localRoot) !== resolve(artifactRoot);
-  const externalReachable = existsSync(artifactRoot) && statSync(artifactRoot).isDirectory();
+  // Cheap, read-only check for whether an external root is configured at all
+  // — reused so repair's early refusal (src/artifacts/repair.ts) and this
+  // audit agree on the same definition of "local mode" (#274).
+  const externalConfigured = isProjectArtifactRootExternal(root, env);
+  // In local mode (no external root configured) artifactRoot === localRoot:
+  // there is nothing external to reach or compare against. Skip the
+  // reachability stat and the full-corpus listing/byte-compare entirely —
+  // previously this read and byte-compared every local payload file with
+  // itself on every `aiwg status`/`doctor`/`repair` call (#274).
+  const externalReachable = externalConfigured && existsSync(artifactRoot) && statSync(artifactRoot).isDirectory();
 
   const controls = PROJECT_CONTROL_PLANE_FILES.map((file) => {
     const localPath = join(localRoot, file);
@@ -69,7 +78,9 @@ export function auditProjectArtifactHealth(projectDir, env = process.env) {
   });
   const missingLocal = controls.filter((item) => !item.local).map((item) => item.file);
   const divergentControl = controls.filter((item) => item.identical === false).map((item) => item.file);
-  const localPayload = listFiles(localRoot).filter((file) => !PROJECT_CONTROL_PLANE_FILES.includes(file));
+  const localPayload = externalConfigured
+    ? listFiles(localRoot).filter((file) => !PROJECT_CONTROL_PLANE_FILES.includes(file))
+    : [];
   const divergentPayload = externalReachable
     ? localPayload.filter((file) => !sameFile(join(localRoot, file), join(artifactRoot, file)))
     : [];

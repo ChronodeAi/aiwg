@@ -136,6 +136,50 @@ export function getPackageRoot() {
 }
 
 /**
+ * Resolve the installation root bin/aiwg.mjs actually dispatches to.
+ *
+ * This is the exact decision `resolveRouterPath()` in bin/aiwg.mjs makes
+ * when picking which `dist/` to load the compiled router (and therefore
+ * every compiled-dist module it imports, including the MCP server) from:
+ * the dev-mode edge checkout when configured and present and distinct from
+ * the package root, otherwise the package root itself. Shared so health
+ * checks (doctor) validate the layout the launcher will actually execute
+ * instead of re-deriving — and risking drifting from — the same decision
+ * (#276).
+ *
+ * @param {string} packageRoot - This install's own package root (`getPackageRoot()`).
+ * @param {{devMode?: boolean, edgePath?: string}} config - Channel config (`loadConfig()`).
+ * @returns {string} The effective root whose `dist/src/...` the launcher loads from.
+ */
+export function resolveEffectiveInstallationRoot(packageRoot, config) {
+  if (config?.devMode && config.edgePath && config.edgePath !== packageRoot) {
+    return config.edgePath;
+  }
+  return packageRoot;
+}
+
+/**
+ * Resolve the absolute path to the MCP server entrypoint the production
+ * launcher actually loads: `bin/aiwg.mjs` always dispatches to the
+ * *compiled* router (`resolveRouterPath()`, never an uncompiled `src/`
+ * tree), whose MCP handler imports `../../mcp/cli.mjs` relative to its own
+ * compiled location, which in turn imports `./server.mjs` relative to
+ * itself — i.e. always `<effective root>/dist/src/mcp/server.mjs`, in every
+ * layout (npm install, source checkout, dev-mode edge checkout). There is
+ * no runtime path that falls back to `src/mcp/server.mjs` directly, so a
+ * health check that also accepts that source path can report OK for a
+ * layout where `aiwg mcp serve` will actually fail (#276).
+ *
+ * @param {string} packageRoot - This install's own package root (`getPackageRoot()`).
+ * @param {{devMode?: boolean, edgePath?: string}} config - Channel config (`loadConfig()`).
+ * @returns {string} Absolute path to the compiled MCP server entrypoint.
+ */
+export function resolveMcpServerEntrypointPath(packageRoot, config) {
+  const root = resolveEffectiveInstallationRoot(packageRoot, config);
+  return path.join(root, 'dist', 'src', 'mcp', 'server.mjs');
+}
+
+/**
  * Load channel configuration
  * @returns {Promise<object>} Channel configuration
  */

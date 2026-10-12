@@ -1118,12 +1118,31 @@ describe('#2895 round 2, item 3: the final exit.json publish is always attempted
     const f = await fixture();
     let processJsonAttempts = 0;
     const result = await f.launch({
-      // Bypass the attached transport wrapper so there are exactly three
-      // deterministic process.json writes: the pre-spawn write, the single
-      // post-spawn observeIdentity() write (no transport to poll for), and
-      // the FINAL write from finish(). Failing exactly that third call
-      // reproduces "the final recordProcess() call fails" without racing
-      // transport identity-resolution polling.
+      // Bypass the attached transport wrapper so there is no transport to
+      // poll for identity (hasTransport stays false): the only identity
+      // source is the launcher's own synchronous, pre-spawn `sampleIdentity`
+      // call.
+      //
+      // That single call is pinned here rather than left to the real spawned
+      // process: `observeIdentity()` only records its own post-spawn
+      // process.json write when `identity` is already resolved (or its
+      // 250ms capture window has expired) -- see session-launcher.mjs
+      // `observeIdentity`'s `if (!identity && !identityCapture.expired())`
+      // guard, which schedules a retry and returns *before* reaching the
+      // write. A real worker that happens to exit (and get reaped) before
+      // this synchronous sample runs leaves `identity` null, so that guard
+      // fires and the post-spawn write never happens -- collapsing the
+      // write count from 3 (pre-spawn, post-spawn, FINAL) to 2 (pre-spawn,
+      // FINAL) purely depending on real process-exit timing (#3010 CI
+      // flake: `expected 2 to be 3`). Injecting a deterministic
+      // `sampleIdentity` that always resolves the launcher's own direct
+      // child on its one synchronous call removes that race entirely: the
+      // write count is pinned to exactly 3 regardless of host scheduling,
+      // and the FINAL write (from finish()) is unambiguously the third and
+      // last `process.json` publish attempt -- the one this test fails.
+      sampleIdentity: (pid: number) => ({ pid, pgid: pid, uid: process.getuid!(), parentPid: process.pid,
+        sessionId: pid, host: os.hostname(), bootId: 'fixture-boot-id', startTicks: '1',
+        executable: process.execPath, state: 'R', cpuTicks: 0 }),
       launchIsolated: (opts: any) => (launchIsolatedWorker as any)({ ...opts, attached: false }),
       publishRecord: async (runDir: string, name: string, value: unknown, inspect: any) => {
         if (name === 'process.json') {

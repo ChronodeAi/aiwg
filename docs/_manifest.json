@@ -90,6 +90,7 @@
     "quickstart-mmk",
     "guides",
     "guides/external-trigger-jobs",
+    "guides/multi-project-workspaces",
     "models",
     "models/claude-optimization",
     "models/gpt-optimization",
@@ -888,6 +889,13 @@
       "id": "guides",
       "title": "Guides",
       "summary": "Learn AI model optimization and prompting techniques"
+    },
+    {
+      "id": "guides/multi-project-workspaces",
+      "title": "Working Across Multiple Projects",
+      "summary": "Set up member repositories, declare workspace access, and choose what context and memory may cross project boundaries.",
+      "file": "guides/multi-project-workspaces.md",
+      "parent": "guides"
     },
     {
       "id": "models",

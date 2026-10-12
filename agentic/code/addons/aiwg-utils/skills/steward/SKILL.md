@@ -248,6 +248,66 @@ When triggered:
    - Emulated support: show the `aiwg` command that emulates the feature
    - No support: report clearly and suggest the nearest alternative
 
+## Direct Worker Onboarding and Readiness
+
+When the user asks whether a worker profile is ready to dispatch ("is codex
+ready", "onboard the workers", "doctor says direct worker not installed"),
+use the readiness report — never launch a worker to answer it:
+
+```bash
+aiwg doctor
+```
+
+By default, the direct-worker section of `aiwg doctor` reports configuration
+only and starts no subprocess for this feature (ordinary `aiwg doctor` does
+start other subprocesses for unrelated checks — this claim is scoped to
+direct-worker readiness, not to doctor as a whole). For live install/version
+evidence, opt into the bounded probes explicitly:
+
+```bash
+aiwg doctor --probe-workers
+```
+
+Read the two facts separately; they never merge. `Direct Worker (<cli>)`
+checks report installation readiness (installed with an in-range version,
+installed but out of range, banner not matching the registered version
+pattern, CLI not installed, probe failed, probe not run, or dispatch
+disabled). `Direct Worker Dispatch (<cli>)` checks report dispatch
+eligibility. When doctor has the offline model/catalog snapshot available
+(worker dispatch on, parallelism valid), this is the actual offline dispatch
+resolver's verdict for every group member referencing the cli — including
+member-specific refusals and missing installation/model evidence, not a
+re-derived approximation. Without that snapshot it falls back to a
+binding-only check and says so. Either way, an installed, in-range CLI can
+still be refused, and the finding says why. Each check carries its config
+pointer (file + key), member context, and a `next:` action naming the exact
+fix (install, upgrade/pin, reinstall, retry the probe, enable dispatch,
+rerun with `--probe-workers`).
+
+Accuracy rules (decision 17 dropped provider-qualification runners and
+evidence files, but the resolver's installation/model-evidence gates stand):
+
+- Never call a profile "qualified". All direct profiles are unqualified until
+  an authenticated smoke run; the doctor output says this and names the smoke
+  tracker issue #3005.
+- A `WORKER_DIRECT_READY` finding means only: installed, version in range.
+  It says nothing about dispatch — read the dispatch finding, which stays
+  blocked until the resolver's gates (including the smoke run from #3005)
+  are satisfied. Even an `eligible` dispatch finding is not launch
+  authorization; it means the offline resolver placed the route, under the
+  evidence available to it, without denying it.
+- Probes are opt-in and bounded: `<executable> ...versionArgv` with a cleared
+  environment, explicit working directory, time and output bounds, never a
+  worker launch — and each resolved executable is announced immediately,
+  before it is spawned. **Trust boundary**: the probe runs exactly the
+  executable named by project configuration (or the registry default) with
+  only its registered version arguments. That configuration is an execution
+  trust boundary, not an executable allowlist — project configuration can
+  point at an arbitrary binary, and a `versionArgv` label cannot prove that
+  binary has no side effects. Opting into `--probe-workers` trusts that
+  executable to the same extent any other locally invoked tool is trusted.
+  No new top-level command exists for this — do not invent one.
+
 ## Project-Local Authoring Routing
 
 Steward capability routing is intentionally broader than the provider matrix when the user asks how to create AIWG artifacts for their own project. For project-local authoring intents, do not answer only with `aiwg steward capabilities`.

@@ -10,10 +10,22 @@
  * @parent #684
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  existsSync,
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} from 'fs';
+import { resolve, join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DOCTOR_SCRIPT = resolve(__dirname, '../../../tools/cli/doctor.mjs');
@@ -262,24 +274,91 @@ describe('doctor: Node.js version check', () => {
 });
 
 // ── MCP server check logic ────────────────────────────────────
+//
+// #276: the check must resolve the exact entrypoint the production
+// launcher (bin/aiwg.mjs's resolveRouterPath → compiled router → mcp/
+// cli.mjs → ./server.mjs, always dist/src/, never a src/ fallback) would
+// load — not accept "either file exists". Production-function coverage
+// (resolveEffectiveInstallationRoot / resolveMcpServerEntrypointPath,
+// including the npm/checkout/dev-root/missing-compiled-with-surviving-
+// source cases) lives in test/unit/channel/manager.test.ts, which imports
+// and calls the real exported functions doctor.mjs itself calls — not a
+// re-implemented predicate.
 
 describe('doctor: MCP server check', () => {
-  async function checkMcp(root: string, exists: (p: string) => Promise<boolean>) {
-    const mcpServer = `${root}/src/mcp/server.mjs`;
-    const present = await exists(mcpServer);
-    return present
-      ? { status: 'ok' as const, message: 'Available (run: aiwg mcp serve)' }
-      : { status: 'warn' as const, message: 'Not found' };
+  it('source script resolves the MCP server via the shared production resolver, not a re-derived "either path" predicate', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("resolveMcpServerEntrypointPath } = await importImpl");
+    expect(content).toContain('resolveMcpServerEntrypointPath(getPackageRoot(), mcpConfig)');
+    // The old re-implemented "accept either dist or src" predicate must not return.
+    expect(content).not.toContain("path.join(AIWG_ROOT, 'src/mcp/server.mjs')");
+    expect(content).not.toContain("path.join(AIWG_ROOT, 'dist/src/mcp/server.mjs')");
+  });
+});
+
+describe('doctor: MCP server check — exercises the production resolver against fixture trees (#276)', () => {
+  // This file mocks channel/manager.mjs (getFrameworkRoot/getVersionInfo only)
+  // for the doctor-wiring tests above; importActual bypasses that mock so
+  // these tests call the real production resolver, not the mock.
+  async function realManager() {
+    return vi.importActual<typeof import('../../../src/channel/manager.mjs')>('../../../src/channel/manager.mjs');
   }
 
-  it('ok when mcp server exists', async () => {
-    const result = await checkMcp('/root', async () => true);
-    expect(result.status).toBe('ok');
+  function makeTempRoot(): string {
+    return mkdtempSync(join(tmpdir(), 'aiwg-doctor-mcp-'));
+  }
+
+  it('ok for an npm/checkout layout with the compiled server present', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'dist/src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'dist/src/mcp/server.mjs'), '// compiled server\n');
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it('warn (not error) when mcp server absent', async () => {
-    const result = await checkMcp('/root', async () => false);
-    expect(result.status).toBe('warn');
+  it('ok for a dev-mode root with the compiled server present under the edge checkout', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const packageRoot = '/opt/node_modules/aiwg';
+    const edgePath = makeTempRoot();
+    try {
+      mkdirSync(join(edgePath, 'dist/src/mcp'), { recursive: true });
+      writeFileSync(join(edgePath, 'dist/src/mcp/server.mjs'), '// compiled server\n');
+      const resolved = resolveMcpServerEntrypointPath(packageRoot, { devMode: true, edgePath });
+      expect(resolved.startsWith(edgePath)).toBe(true);
+      expect(existsSync(resolved)).toBe(true);
+    } finally {
+      rmSync(edgePath, { recursive: true, force: true });
+    }
+  });
+
+  it('warn (not falsely ok) when the compiled server is missing but source survives (the false-positive this bug reported)', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'src/mcp/server.mjs'), '// source survives, but is never what runs\n');
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('warn when neither layout has the server file', async () => {
+    const { resolveMcpServerEntrypointPath } = await realManager();
+    const root = makeTempRoot();
+    try {
+      mkdirSync(root, { recursive: true });
+      const resolved = resolveMcpServerEntrypointPath(root, { devMode: false });
+      expect(existsSync(resolved)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -707,4 +786,191 @@ describe('doctor: unknown-provider check names installation drift (#270)', () =>
       'Unknown provider: muse (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)',
     );
   });
+});
+
+// ── Direct-worker readiness opt-in probes (#2894) ──
+//
+// Wiring contract for tools/cli/doctor.mjs: probes are opt-in behind
+// --probe-workers, the section is silent without configured workers, and the
+// live behavior (no-spawn default, silence, advisory statuses) is covered by
+// buildDirectWorkerDoctorSection tests in
+// test/unit/models/worker-direct-readiness.test.ts.
+
+describe('doctor: direct-worker probes are opt-in (#2894)', () => {
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+  it('parses --probe-workers in the existing boolean flag style', () => {
+    expect(content).toContain("if (a === '--probe-workers') { out.probeWorkers = true; continue; }");
+  });
+
+  it('renders the section through the shared builder with the flag', () => {
+    expect(content).toContain('buildDirectWorkerDoctorSection');
+    expect(content).toMatch(/probeWorkers,\s*\n/);
+    expect(content).not.toContain('diagnoseDirectWorkerReadiness');
+  });
+
+  it('emits no direct-worker section when no workers are configured, explicitly or implicitly', () => {
+    // Gating covers both an explicit parallelism.clis entry and a cli
+    // referenced only implicitly by a group member (#2894 fix: implicit
+    // group-referenced installations must not be skipped).
+    expect(content).toContain('directCliIds');
+    expect(content).toContain('if (directCliIds.size) {');
+  });
+
+  it('reuses the shared config read instead of reading aiwg.config a second time', () => {
+    // #2894 fix: a second readAiwgConfig() call duplicated non-fatal
+    // diagnostics (for example the "Invalid gates section" warning) for
+    // every project, not just ones with workers configured. Baseline
+    // (pre-#2894) has exactly 2 `readAiwgConfig(process.cwd())` call sites
+    // elsewhere in doctor.mjs; worker-health and direct-worker readiness
+    // must share one more of their own, not add a second one.
+    expect(content.match(/await readAiwgConfig\(process\.cwd\(\)\)/g)?.length).toBe(2);
+    expect(content).toContain('workerSectionsConfig = await readAiwgConfig(process.cwd());');
+  });
+
+  it('announces each resolved executable before spawning, not through the buffered check() report', () => {
+    expect(content).toContain('process.stdout.write(`  ○ Direct Worker Probes: about to run');
+  });
+
+  it('threads the worker-health offline snapshot into the direct-worker dispatch resolver check', () => {
+    expect(content).toContain('resolverSnapshot:');
+    expect(content).toContain('workerSnapshotModels');
+  });
+
+  it('documents the default config-only behavior in doctor help', () => {
+    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/utilities.ts'), 'utf-8');
+    expect(utilities).toContain('--probe-workers');
+  });
+});
+
+// ── Real-process behavioral regression (#2894 review round 2, required fix) ──
+//
+// The suite above inspects doctor.mjs source text because the script has
+// top-level await and calls process.exit() directly. For the one guarantee
+// that actually matters — a project with no workers configured sees
+// unchanged output and exit code, including when the config has unrelated
+// warnings or fails to load entirely — source inspection cannot prove
+// anything about real behavior. These tests spawn the real script as a
+// child process against synthetic scratch projects. No real provider CLI is
+// executed (no --probe-workers is ever passed here, so no worker executable
+// is spawned), no network call is made, and HOME/USERPROFILE/XDG_* are
+// pointed at an isolated empty scratch directory so the run never reads the
+// operator's real home.
+describe('doctor: real-process no-workers-configured output/exit regression (#2894)', () => {
+  const scratchRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of scratchRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  function makeScratchProject(configContent: string | null): string {
+    const projectDir = mkdtempSync(join(tmpdir(), 'aiwg-doctor-noworkers-'));
+    scratchRoots.push(projectDir);
+    if (configContent !== null) {
+      mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+      writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), configContent, 'utf-8');
+    }
+    return projectDir;
+  }
+
+  async function runDoctorIn(projectDir: string): Promise<{ stdout: string; exitCode: number }> {
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'aiwg-doctor-home-'));
+    scratchRoots.push(isolatedHome);
+    const env = {
+      ...process.env,
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      XDG_CONFIG_HOME: join(isolatedHome, '.config'),
+      XDG_DATA_HOME: join(isolatedHome, '.local', 'share'),
+      XDG_CACHE_HOME: join(isolatedHome, '.cache'),
+      XDG_STATE_HOME: join(isolatedHome, '.local', 'state'),
+      // Point at this checkout's own bundled framework/model defaults
+      // instead of the (isolated, empty) home install location — this repo
+      // is the code under test, not operator data, so this keeps the run
+      // hermetic while still letting worker-dispatch config load cleanly.
+      AIWG_HOME: resolve(__dirname, '../../..'),
+    };
+    try {
+      const { stdout } = await execFileAsync('node', [DOCTOR_SCRIPT], { cwd: projectDir, env, timeout: 60_000 });
+      return { stdout, exitCode: 0 };
+    } catch (error) {
+      const err = error as { stdout?: string; code?: number };
+      return { stdout: err.stdout ?? '', exitCode: typeof err.code === 'number' ? err.code : 1 };
+    }
+  }
+
+  function directWorkerLines(stdout: string): string[] {
+    return stdout.split('\n').filter(line => line.includes('Direct Worker'));
+  }
+
+  it('adds no Direct Worker lines and keeps exit 0 for a clean project with no workers configured', async () => {
+    const projectDir = makeScratchProject(JSON.stringify({ providers: ['claude'], installed: {}, scripts: {} }));
+    const result = await runDoctorIn(projectDir);
+    expect(directWorkerLines(result.stdout)).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  }, 60_000);
+
+  it('adds no Direct Worker lines when the config has an unrelated non-fatal warning (invalid gates section)', async () => {
+    const projectDir = makeScratchProject(JSON.stringify({
+      providers: ['claude'], installed: {}, scripts: {}, gates: { bogus: 123 },
+    }));
+    const result = await runDoctorIn(projectDir);
+    expect(directWorkerLines(result.stdout)).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  }, 60_000);
+
+  it('adds no Direct Worker lines when the config fails to load (invalid JSON)', async () => {
+    const projectDir = makeScratchProject('{ not valid json');
+    const result = await runDoctorIn(projectDir);
+    expect(directWorkerLines(result.stdout)).toEqual([]);
+  }, 60_000);
+
+  it('adds no Direct Worker lines when parallelism is present but declares no clis or groups', async () => {
+    // worker_dispatch is intentionally left off here: turning it on with no
+    // role guidance configured trips an unrelated, pre-existing (#2913)
+    // Worker Health error that has nothing to do with this assertion.
+    const projectDir = makeScratchProject(JSON.stringify({
+      providers: ['claude'], installed: {}, scripts: {}, parallelism: {},
+    }));
+    const result = await runDoctorIn(projectDir);
+    expect(directWorkerLines(result.stdout)).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  }, 60_000);
+
+  it('still prints the pre-existing Worker Health line exactly once regardless of the config outcome', async () => {
+    // #2894 added a second readAiwgConfig() call that duplicated non-fatal
+    // read-time diagnostics (e.g. the gates warning) for every project. The
+    // pre-existing (#2913) "Worker Health" line itself must still appear
+    // exactly once per run, proving the shared-read refactor did not
+    // introduce its own duplication.
+    const projectDir = makeScratchProject(JSON.stringify({
+      providers: ['claude'], installed: {}, scripts: {}, gates: { bogus: 123 },
+    }));
+    const result = await runDoctorIn(projectDir);
+    const workerHealthLines = result.stdout.split('\n').filter(line => line.includes('Worker Health:'));
+    expect(workerHealthLines).toHaveLength(1);
+    expect(workerHealthLines[0]).toContain('group dispatch is disabled');
+  }, 60_000);
+
+  it('renders a Direct Worker section with both facts when a worker is configured and probed', async () => {
+    const projectDir = makeScratchProject(JSON.stringify({
+      providers: ['claude'], installed: {}, scripts: {},
+      parallelism: { worker_dispatch: true, clis: { codex: {
+        adapter: 'providers:codex', accountScope: 'local', quotaScope: 'local', executable: '/definitely/not/here',
+      } } },
+    }));
+    const result = await runDoctorIn(projectDir);
+    const lines = directWorkerLines(result.stdout);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some(line => line.includes('Direct Worker (codex)'))).toBe(true);
+    expect(lines.some(line => line.includes('Direct Worker Dispatch (codex)'))).toBe(true);
+    // 'codex' is not referenced by any group's requiredRoles (there are no
+    // groups at all here), so the Direct Worker section itself must stay
+    // advisory and contribute no 'error' status on its own — independent of
+    // whatever the unrelated Worker Health role-guidance check reports for
+    // this same no-groups config.
+    expect(lines.every(line => !line.includes('✗'))).toBe(true);
+  }, 60_000);
 });

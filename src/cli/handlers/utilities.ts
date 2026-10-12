@@ -358,6 +358,59 @@ export const validateMetadataHandler: CommandHandler = {
 };
 
 /**
+ * A directory is a deployed skill only if it carries a SKILL.md manifest —
+ * the same marker `isOwnedByNamespace()` in collision-detector.ts reads for
+ * ownership. Harness container/bucket directories (e.g. Claude Code's own
+ * `.claude/skills/synced/` sync storage, which holds UUID-named dirs with
+ * `manifest.json`, not SKILL.md) have no manifest of their own and must
+ * never be reported as a colliding skill (#278).
+ *
+ * A container directory without its own SKILL.md is still descended exactly
+ * one level: a real skill nested inside it (`<container>/<skill>/SKILL.md`)
+ * is reported as `<container>/<skill>`, while the container itself never is.
+ */
+async function hasSkillManifest(dirPath: string): Promise<boolean> {
+  try {
+    await fsp.access(path.join(dirPath, 'SKILL.md'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function collectDeployedSkillDirNames(skillsDir: string): Promise<string[]> {
+  let topEntries;
+  try {
+    topEntries = await fsp.readdir(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  for (const entry of topEntries) {
+    if (!entry.isDirectory()) continue;
+    const dirPath = path.join(skillsDir, entry.name);
+    if (await hasSkillManifest(dirPath)) {
+      names.push(entry.name);
+      continue;
+    }
+    let nestedEntries;
+    try {
+      nestedEntries = await fsp.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const nested of nestedEntries) {
+      if (!nested.isDirectory()) continue;
+      const nestedPath = path.join(dirPath, nested.name);
+      if (await hasSkillManifest(nestedPath)) {
+        names.push(path.join(entry.name, nested.name));
+      }
+    }
+  }
+  return names;
+}
+
+/**
  * #1156 Phase 1 — Validate the per-user registry at `~/.aiwg/installed.json`.
  *
  * Checks each registered framework+provider deploy:
@@ -487,6 +540,7 @@ Options:
   --bundle <name>       Limit deployment verification to one bundle
   --scope <scope>       Verification scope: project or user
   --user                Alias for --scope user
+  --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
   --json                Emit machine-readable deployment verification output
   --verbose, -v         Include verbose diagnostics
@@ -608,13 +662,7 @@ export const doctorHandler: CommandHandler = {
     try {
       const projectDir = ctx.cwd || process.cwd();
       const skillsDir = path.join(projectDir, '.claude', 'skills');
-      let deployedSkillNames: string[] = [];
-      try {
-        const entries = await fsp.readdir(skillsDir, { withFileTypes: true });
-        deployedSkillNames = entries.filter(e => e.isDirectory()).map(e => e.name);
-      } catch {
-        // No .claude/skills — nothing to check
-      }
+      const deployedSkillNames = await collectDeployedSkillDirNames(skillsDir);
 
       if (deployedSkillNames.length > 0) {
         const collisions = await checkCollisions({

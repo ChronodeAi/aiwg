@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { auditProjectArtifactHealth } from '../../../src/config/project-artifacts.js';
@@ -96,5 +97,68 @@ describe('auditProjectArtifactHealth', () => {
     expect(report.classification).toBe('duplicated-divergent');
     expect(report.repairable).toBe(false);
     expect(report.divergent_local_corpus_files).toEqual(['requirements/UC-1.md']);
+  });
+
+  // #274 — local mode (no external root configured) must never byte-compare
+  // the local payload with itself. Previously `externalReachable` was true
+  // in local mode (artifactRoot === localRoot, which exists), so every
+  // payload file was read twice and compared with itself for nothing.
+  describe('local mode (no external root configured)', () => {
+    it('reports external_reachable=false and skips the payload scan entirely', () => {
+      const project = mkdtempSync(join(tmpdir(), 'aiwg-artifact-health-local-'));
+      roots.push(project);
+      controls(join(project, '.aiwg'));
+      mkdirSync(join(project, '.aiwg', 'requirements'), { recursive: true });
+      writeFileSync(join(project, '.aiwg', 'requirements', 'UC-1.md'), '# Local only\n');
+
+      const readSpy = vi.spyOn(fs, 'readFileSync');
+      const readdirSpy = vi.spyOn(fs, 'readdirSync');
+      try {
+        const report = auditProjectArtifactHealth(project, {});
+        expect(report.external_configured).toBe(false);
+        expect(report.external_reachable).toBe(false);
+        expect(report.classification).toBe('local');
+        expect(report.duplicated_local_corpus_files).toEqual([]);
+        expect(report.divergent_local_corpus_files).toEqual([]);
+        // No payload file content was read, and the payload directory was
+        // never listed — local mode has nothing to compare against.
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(readdirSpy).not.toHaveBeenCalled();
+      } finally {
+        readSpy.mockRestore();
+        readdirSpy.mockRestore();
+      }
+    });
+
+    // `chmod 000` is not a portable way to prove "this file is never read" —
+    // it is a no-op for the root user and is not reliably enforced on every
+    // platform/filesystem. Use a sentinel instead: make reading one specific
+    // payload file throw unconditionally (regardless of OS permission
+    // semantics, and regardless of which user runs the test), and assert
+    // the audit still succeeds because it never attempts that read at all
+    // in local mode.
+    it('still succeeds when a local payload file would throw if ever read (portable sentinel, not chmod)', () => {
+      const project = mkdtempSync(join(tmpdir(), 'aiwg-artifact-health-local-unreadable-'));
+      roots.push(project);
+      controls(join(project, '.aiwg'));
+      mkdirSync(join(project, '.aiwg', 'requirements'), { recursive: true });
+      const sentinel = join(project, '.aiwg', 'requirements', 'UC-1.md');
+      writeFileSync(sentinel, '# Local only\n');
+
+      const realReadFileSync = fs.readFileSync.bind(fs);
+      const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+        if (String(args[0]) === sentinel) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${sentinel}'`), { code: 'EACCES' });
+        }
+        return realReadFileSync(...args);
+      }) as typeof fs.readFileSync);
+
+      try {
+        expect(() => auditProjectArtifactHealth(project, {})).not.toThrow();
+        expect(auditProjectArtifactHealth(project, {}).classification).toBe('local');
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
   });
 });
