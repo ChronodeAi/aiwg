@@ -1,6 +1,7 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,8 +21,7 @@ beforeEach(async () => {
   log = join(root, 'calls.log');
   await mkdir(bin);
   const fakeAiwg = join(bin, 'aiwg');
-  await writeFile(fakeAiwg, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$AIWG_ROUTER_LOG"\n');
-  await chmod(fakeAiwg, 0o755);
+  await writeExecutable(fakeAiwg, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$AIWG_ROUTER_LOG"\n');
 });
 
 afterEach(async () => rm(root, { recursive: true, force: true }));
