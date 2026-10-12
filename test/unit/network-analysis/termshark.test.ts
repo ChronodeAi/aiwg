@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { writeExecutable } from '../../helpers/write-executable.js';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,12 +45,11 @@ async function fixture(): Promise<{
   await mkdir(path.dirname(profilePath), { recursive: true });
   await writeFile(capture, pcapHeader());
   await writeFile(profilePath, 'private_seed = "profile-secret-must-not-be-copied"\n');
-  await writeFile(termsharkPath, [
+  await writeExecutable(termsharkPath, [
     `#!${process.execPath}`,
     `import { writeFileSync } from 'node:fs';`,
     `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
   ].join('\n'));
-  await chmod(termsharkPath, 0o755);
   return { root, capture, configRoot, profilePath, argvPath, termsharkPath };
 }
 

@@ -1,3 +1,4 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -183,11 +184,11 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
   it('invalidates changed binary bytes, executable permissions and runtime dependencies', async () => {
     const f = await setup();
     const binary = path.join(f.packageRoot, 'binary');
-    await writeFile(binary, '#!/bin/sh\nprintf 1.0.0', { mode: 0o755 });
+    await writeExecutable(binary, '#!/bin/sh\nprintf 1.0.0');
     f.request.executable = binary;
     f.request.evidence.scopeDigest = (await driver.inspectWorkerInstallation(f.request)).scopeDigest;
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
-    await writeFile(binary, '#!/bin/sh\nprintf 1.0.0\n#changed');
+    await writeExecutable(binary, '#!/bin/sh\nprintf 1.0.0\n#changed');
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
     await chmod(binary, 0o777);
     await expect(driver.inspectWorkerInstallation(f.request)).rejects.toThrow('permissions');
@@ -282,7 +283,7 @@ describe('T-OG-10/17 synthetic forbidden effects for every enabled profile and p
 // cannot turn a failing authorization assertion into an accidental pass.
 async function shellProbe(f: Awaited<ReturnType<typeof setup>>) {
   f.request.executable = path.join(f.packageRoot, 'version-probe');
-  await writeFile(f.request.executable, '#!/bin/sh\nprintf 1.0.0', { mode: 0o755 });
+  await writeExecutable(f.request.executable, '#!/bin/sh\nprintf 1.0.0');
   f.request.evidence.scopeDigest = (await driver.inspectWorkerInstallation(f.request)).scopeDigest;
 }
 

@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { writeExecutableSync } from '../../helpers/write-executable.js';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,8 +21,7 @@ function temporaryRoot(prefix: string): string {
 function writeFakeGrok(binDir: string, scriptBody: string): string {
   mkdirSync(binDir, { recursive: true });
   const binary = join(binDir, 'grok');
-  writeFileSync(binary, `#!/bin/sh\n${scriptBody}\n`, { mode: 0o755 });
-  chmodSync(binary, 0o755);
+  writeExecutableSync(binary, `#!/bin/sh\n${scriptBody}\n`);
   return binary;
 }
 

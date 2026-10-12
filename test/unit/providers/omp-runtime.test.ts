@@ -1,4 +1,5 @@
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { compileModelPolicy } from '../../../src/models/provider-policy.js';
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -200,10 +201,10 @@ describe('OMP External Ralph session integration', () => {
     const launcher = new SessionLauncher(); launcher.setProviderAdapter(adapter);
     const options = { prompt: 'work', sessionId: 'aiwg-tracking-uuid', workingDir: dir, stdoutPath: join(dir, 'stdout'), stderrPath: join(dir, 'stderr'), timeoutMs: 1000 };
     try {
-      await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: 'agent_end', messages: [message] })}'\n`, { mode: 0o755 });
+      await writeExecutable(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: 'agent_end', messages: [message] })}'\n`);
       const success = await launcher._launchSession(options);
       expect(received.sessionId).toBeUndefined(); expect(success.exitCode).toBe(0);
-      await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: 'agent_end', messages: [{ ...message, stopReason: 'error' }] })}'\n`, { mode: 0o755 });
+      await writeExecutable(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: 'agent_end', messages: [{ ...message, stopReason: 'error' }] })}'\n`);
       const failed = await launcher._launchSession({ ...options, resumeSession: '/existing/native.jsonl' });
       expect(received.sessionId).toBe('/existing/native.jsonl'); expect(failed.exitCode).toBe(1);
     } finally { await rm(dir, { recursive: true, force: true }); }

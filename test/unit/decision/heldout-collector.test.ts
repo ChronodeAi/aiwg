@@ -1,3 +1,4 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -350,8 +351,8 @@ describe('held-out recorded evidence and study interface', () => {
     await expect(real.assertContextLiveSource(process.cwd(), '0'.repeat(40))).rejects.toThrow();
     expect(await readdir(c.root)).toEqual([]);
     const bin = join(c.root, 'bin'); await mkdir(bin);
-    await writeFile(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n', { mode: 0o700 });
-    await writeFile(join(bin, 'npm'), '#!/usr/bin/env node\nprocess.exit(99);\n', { mode: 0o700 });
+    await writeExecutable(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n');
+    await writeExecutable(join(bin, 'npm'), '#!/usr/bin/env node\nprocess.exit(99);\n');
     const prepared = spawnSync(process.execPath, [cli, '--prepare', resolve('agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs'), 'cli-seed', join(c.root, 'prepared')],
       { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
     expect(prepared.status, prepared.stderr).toBe(0);
@@ -780,8 +781,8 @@ describe('held-out calibration scope and two-phase approval', () => {
     expect(estimate).toMatchObject({ calibration: { mode: 'staged', phase: 'calibration' }, rowsInScope: ['row_0', 'row_1'],
       maximumAttempts: 4, reservedUsdMicros: 304, fitsBeforeStop: true, providerCalls: 0 });
     const bin = join(c.root, 'bin'); await mkdir(bin);
-    await writeFile(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n', { mode: 0o700 });
-    await writeFile(join(bin, 'git'), '#!/usr/bin/env node\nif (process.argv[2] === "rev-parse") process.stdout.write("a".repeat(40)); else if (process.argv[2] !== "status") process.exit(2);\n', { mode: 0o700 });
+    await writeExecutable(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n');
+    await writeExecutable(join(bin, 'git'), '#!/usr/bin/env node\nif (process.argv[2] === "rev-parse") process.stdout.write("a".repeat(40)); else if (process.argv[2] !== "status") process.exit(2);\n');
     const path = join(c.root, 'bundle.json'); await writeFile(path, JSON.stringify(c.bundle));
     const dry = spawnSync(process.execPath, [resolve('tools/decision/heldout-study.mjs'), '--dry-run', path, heldoutDigest(c.bundle.approval), c.root],
       { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: bin + ':' + process.env.PATH } });

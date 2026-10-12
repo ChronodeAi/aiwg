@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { writeExecutableSync } from '../../helpers/write-executable.js';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -21,7 +22,7 @@ function fakeGh(mode: 'retry' | 'lightweight' | 'mismatch' | 'missing') {
   temporaryDirectories.add(directory)
   const executable = join(directory, 'gh')
   const counter = join(directory, 'count')
-  writeFileSync(executable, `#!/bin/sh
+  writeExecutableSync(executable, `#!/bin/sh
 count=0
 [ ! -f "$COUNT_FILE" ] || count=$(cat "$COUNT_FILE")
 count=$((count + 1))
@@ -37,7 +38,6 @@ case "$MODE" in
   missing) exit 1 ;;
 esac
 `)
-  chmodSync(executable, 0o755)
   return { executable, counter, mode }
 }
 

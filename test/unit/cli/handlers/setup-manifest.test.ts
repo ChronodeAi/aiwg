@@ -1,3 +1,4 @@
+import { writeExecutableSync } from '../../../helpers/write-executable.js';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
@@ -28,8 +29,7 @@ function ctx(tmpDir: string, args: string[] = []): HandlerContext {
 
 function writeExecutable(filePath: string, body: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, body, 'utf8');
-  fs.chmodSync(filePath, 0o755);
+  writeExecutableSync(filePath, body);
 }
 
 function writeManifest(tmpDir: string, manifest: Record<string, unknown>, name = 'setup.manifest.yaml'): string {
