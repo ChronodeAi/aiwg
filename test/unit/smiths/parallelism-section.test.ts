@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -18,7 +18,7 @@ import {
   PARALLELISM_BLOCK_END,
   PARALLELISM_HEALTH_UNRESOLVED_NOTE,
 } from '../../../src/smiths/context-pipeline/parallelism-section.js';
-import { emptyConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { emptyConfig, writeAiwgConfig, getConfigPath, type AiwgConfig } from '../../../src/config/aiwg-config.js';
 import { parseWorkerCommandArgs } from '../../../src/serve/worker-invocation.js';
 import { createWorkerHealthObserver } from '../../../tools/ralph-external/lib/worker-health.mjs';
 import { parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
@@ -27,6 +27,45 @@ function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-parallelism-section-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** Write an aiwg.config file directly, bypassing `writeAiwgConfig`'s own
+ * worker-model-defaults validation — used only by the AIWG_HOME-fallback
+ * tests below, where that validation would otherwise require a real home
+ * install that intentionally does not exist in the test fixture. */
+function writeConfigFileDirect(projectDir: string, config: AiwgConfig): void {
+  const path = getConfigPath(projectDir);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2));
+}
+
+/**
+ * Detect any write (set or delete) to `process.env` during the wrapped
+ * window, without the illegal `Object.defineProperty(process.env, key,
+ * {get, set})` form (`process.env` rejects accessor descriptors). Swaps
+ * `process.env` itself for a `Proxy` wrapping the real object, so every
+ * read/write still behaves normally — only writes are additionally logged.
+ */
+function watchEnvWrites(): { log: Array<{ op: 'set' | 'delete'; key: string }>; restore: () => void } {
+  const original = process.env;
+  const log: Array<{ op: 'set' | 'delete'; key: string }> = [];
+  const proxy = new Proxy(original, {
+    set(target, prop, value) {
+      log.push({ op: 'set', key: String(prop) });
+      return Reflect.set(target, prop, value);
+    },
+    deleteProperty(target, prop) {
+      log.push({ op: 'delete', key: String(prop) });
+      return Reflect.deleteProperty(target, prop);
+    },
+  });
+  Object.defineProperty(process, 'env', { value: proxy, configurable: true, enumerable: true, writable: true });
+  return {
+    log,
+    restore: () => {
+      Object.defineProperty(process, 'env', { value: original, configurable: true, enumerable: true, writable: true });
+    },
+  };
 }
 
 describe('buildParallelismSection (#1362)', () => {
@@ -243,7 +282,7 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(section).not.toContain('Orchestration groups');
   });
 
-  it('dispatch enabled renders configured groups with caps, roles, and eligibility inside the managed block', async () => {
+  it('dispatch enabled renders configured groups as configured, never labeled eligible/not-eligible, with a request-scoped resolve pointer', async () => {
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('### Orchestration groups (group dispatch enabled)');
@@ -251,7 +290,12 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(section).toContain('default (members: 2');
     expect(section).toContain('maxParallel: 2');
     expect(section).toContain('requiredRoles: coding');
-    expect(section).toContain('; eligible)');
+    expect(section).toContain('; configured)');
+    expect(section).not.toContain('eligible)');
+    expect(section).not.toContain('not eligible');
+    expect(section).toContain('is a static config read — not a live eligibility verdict');
+    expect(section).toContain('resolved per (group, member, effort) tuple');
+    expect(section).toContain('aiwg models resolve` below');
     expect(section).not.toContain('Available groups');
     expect(section.indexOf('### Orchestration groups')).toBeGreaterThan(
       section.indexOf(PARALLELISM_BLOCK_START),
@@ -261,7 +305,7 @@ The primary agent retains orchestration, final integration, conflict resolution,
     );
   });
 
-  it('dispatch enabled with a disabled member marks the group configured-not-eligible', async () => {
+  it('dispatch enabled with a disabled member lists that member excluded without excluding the whole group', async () => {
     const cfg = groupConfig();
     cfg.parallelism.groups!.stale = {
       members: [
@@ -273,8 +317,22 @@ The primary agent retains orchestration, final integration, conflict resolution,
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('default (members: 2');
     expect(section).toContain('stale (members: 2');
-    expect(section).toContain('configured — not eligible: member muse-d is disabled');
+    // The group itself is "configured" — only the disabled member is excluded.
+    expect(section).toContain('stale (members: 2; clis: codex/muse; roles: coding; configured; excluded members: muse-d (member disabled))');
+    expect(section).not.toContain('not eligible');
     expect(section).not.toContain('Available groups');
+  });
+
+  it('a config with an uncoverable required role is rejected before rendering (validateParallelismConfig OG_CONFIG_REFERENCE)', async () => {
+    // Confirms the premise behind dropping "uncovered role" rendering: this
+    // shape never reaches `groupSummaries()` because `writeAiwgConfig` (and
+    // `buildParallelismSection`'s own `resolveParallelism()` call) reject it
+    // first, every single enabled-member exclusion remains representable.
+    const cfg = groupConfig();
+    cfg.parallelism.groups!.default.members = [
+      { id: 'codex-a', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'], enabled: false },
+    ];
+    await expect(writeAiwgConfig(tmpDir, cfg)).rejects.toThrow('No enabled member covers coding');
   });
 
   it('dispatch enabled without groups keeps the native rubric and names no Available groups', async () => {
@@ -317,17 +375,35 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(section).toContain('invocation.health');
   });
 
-  it('omits the health block with a one-line note when bundled defaults cannot be loaded', async () => {
+  it('omits only the orchestration/health block with a one-line note when bundled defaults cannot be loaded, preserving caps and rubric', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir, {
-      readConfig: () => Promise.reject(new Error('Failed to load AIWG default config: Error: ENOENT: no such file or directory')),
+      validateWorkerConfig: () => Promise.reject(new Error('Failed to load AIWG default config: Error: ENOENT: no such file or directory')),
     });
     expect(section).toContain(PARALLELISM_BLOCK_START);
     expect(section).toContain(PARALLELISM_BLOCK_END);
     expect(section).toContain(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
+    // Everything that does not depend on the worker-model defaults still renders.
+    expect(section).toContain('max_parallel_subagents');
+    expect(section).toContain('*Rationale*:');
+    expect(section).toContain('### Model-selected delegation rubric');
+    expect(section).toContain('aiwg-model-efficiency-worker');
+    expect(section).toContain('aiwg-model-coding-worker');
+    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('native custom subagents');
+    // Only the orchestration/health details that need the defaults are omitted.
     expect(section).not.toContain('### Orchestration groups');
+    expect(section).not.toContain('Configured groups:');
     expect(section).not.toContain('Configured health windows');
     const noteLines = section.split('\n').filter((line) => line.includes('could not be resolved'));
     expect(noteLines).toHaveLength(1);
+  });
+
+  it('propagates a worker-config validation error unrelated to bundled defaults instead of degrading', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    await expect(buildParallelismSection(tmpDir, {
+      validateWorkerConfig: () => Promise.reject(new Error('OG_CONFIG_REFERENCE: some unrelated fatal validation error')),
+    })).rejects.toThrow('some unrelated fatal validation error');
   });
 
   it('every advertised CLI command parses in the real argument parsers', async () => {
@@ -388,12 +464,20 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(section).not.toContain('suspect transition');
     expect(section).toContain('is not a stop');
     expect(section).toContain('only `hung`');
+    expect(section).toContain('a no-progress stop');
     expect(section).toContain('only a worker this conductor owns');
     expect(section).toContain('Confirm the stop');
     expect(section).toContain('preserve partial work');
     expect(section).toContain('OBSERVER_GAP');
     expect(section).toContain('unknown, never worker failure');
     expect(section).toContain('Heartbeats and log bytes are not progress');
+    // "only `hung`" is scoped to no-progress diagnosis; the launcher's other
+    // independent stop conditions (session-launcher.mjs ~596) are named too.
+    expect(section).toContain('stops independently of progress state');
+    expect(section).toContain('failed-to-start');
+    expect(section).toContain('HARD_DEADLINE');
+    expect(section).toContain('STEP_LIMIT');
+    expect(section).toContain('fatal observer-record failure');
   });
 
   it('preserves caps and rubric alongside the dispatch block', async () => {
@@ -403,6 +487,97 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(section).toContain('aiwg-model-efficiency-worker');
     expect(section).toContain('aiwg-model-coding-worker');
     expect(section).toContain('aiwg-model-reasoning-worker');
+  });
+
+  it('describes health-window scaling as the largest applicable factor, never a product, and limits only the hard deadline/grace periods by wall-transport ceilings', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('the single largest applicable role/effort/model factor, never their product');
+    expect(section).toContain('180s/600s from the 90s/300s defaults');
+    expect(section).toContain('112.5s/375s');
+    expect(section).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
+    expect(section).toContain('startup, quiet, and stall keep their configured or scaled values');
+    expect(section).toContain('truncatedWindows');
+    expect(section).not.toContain('cap every window');
+  });
+
+  it('never writes process.env.AIWG_HOME while resolving the config (no set/delete observed)', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const watch = watchEnvWrites();
+    try {
+      await buildParallelismSection(tmpDir);
+    } finally {
+      watch.restore();
+    }
+    expect(watch.log.filter((entry) => entry.key === 'AIWG_HOME')).toEqual([]);
+  });
+
+  it('two concurrent builds resolve independently without observing or mutating a shared AIWG_HOME', async () => {
+    const dirA = makeTmpDir();
+    const dirB = makeTmpDir();
+    try {
+      await writeAiwgConfig(dirA, groupConfig());
+      await writeAiwgConfig(dirB, emptyConfig(['claude']));
+      const watch = watchEnvWrites();
+      let sectionA = '';
+      let sectionB = '';
+      try {
+        [sectionA, sectionB] = await Promise.all([
+          buildParallelismSection(dirA),
+          buildParallelismSection(dirB),
+        ]);
+      } finally {
+        watch.restore();
+      }
+      expect(sectionA).toContain('### Orchestration groups');
+      expect(sectionB).not.toContain('### Orchestration groups');
+      expect(sectionB).toContain('4 (provider default for claude)');
+      expect(watch.log.filter((entry) => entry.key === 'AIWG_HOME')).toEqual([]);
+    } finally {
+      rmSync(dirA, { recursive: true, force: true });
+      rmSync(dirB, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AIWG_HOME bundled-defaults fallback with no env mutation (#1362 fix-first review item 1)', () => {
+  let projectDir: string;
+  let emptyHomeDir: string;
+  const originalAiwgHome = process.env.AIWG_HOME;
+  const originalHome = process.env.HOME;
+
+  beforeEach(() => {
+    projectDir = makeTmpDir();
+    emptyHomeDir = makeTmpDir();
+    delete process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(emptyHomeDir, { recursive: true, force: true });
+    if (originalAiwgHome !== undefined) process.env.AIWG_HOME = originalAiwgHome;
+    else delete process.env.AIWG_HOME;
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+  });
+
+  it('resolves bundled defaults via findPackageRoot when AIWG_HOME is unset and HOME is an empty temp dir', async () => {
+    delete process.env.AIWG_HOME;
+    process.env.HOME = emptyHomeDir; // no `.local/share/ai-writing-guide` exists here
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    cfg.parallelism.groups = {
+      default: { members: [{ id: 'codex-a', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'] }] },
+    };
+    // Bypass writeAiwgConfig's own validation: it resolves ConfigLoader's
+    // default location directly from AIWG_HOME/HOME with no bundled-defaults
+    // fallback, so it would fail here even though the generator should not.
+    writeConfigFileDirect(projectDir, cfg);
+    const section = await buildParallelismSection(projectDir);
+    expect(section).not.toContain(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
+    expect(section).toContain('### Orchestration groups (group dispatch enabled)');
+    expect(section).toContain('check every 15s (default)');
+    expect(section).toContain('hard stop 1800s (default)');
   });
 });
 
