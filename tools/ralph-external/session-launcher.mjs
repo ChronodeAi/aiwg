@@ -41,7 +41,7 @@ import { basename, dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
 import { importImpl } from '../_resolve-impl.mjs';
-import { sampleWorkerIdentity, sameWorkerIdentity, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
+import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
@@ -365,8 +365,33 @@ async function launchOneWorker(owner, options) {
 async function captureOneWorker(owner, ctx) {
   const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
   const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
+  const sampleIdentity = options.sampleIdentity ?? sampleWorkerIdentity;
+  // Separate hook from `sampleIdentity` (the worker-side sampler): this one
+  // samples the launcher's own trusted transport child, never a worker PID,
+  // and tests need to control the two independently (e.g. the transport
+  // dies as soon as it is sampled once, while the worker side is never
+  // reached at all).
+  const sampleNativeSupervisor = options.sampleNativeSupervisor ?? sampleWorkerIdentity;
+  // For our own detached child, spawn waits through setsid/exec; one owned leader sample suffices.
+  const immediate = !hasTransport ? sampleIdentity(child.pid) : null;
+  let identity = immediate?.pid === child.pid && immediate?.pid === immediate?.pgid
+    && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
+  // Pin the transport's own birth identity at the earliest possible moment --
+  // synchronously, before any await can let it exit and be reaped. For
+  // degraded/attached mode `child` IS the transport process (its PID is
+  // `native.mainPid` below), so this sample is as trustworthy as the direct
+  // child's `immediate` sample above. Sampling this only inside the polling
+  // loop (as before) raced a worker that ran and exited fast enough that the
+  // transport itself had already exited by the loop's first `await`,
+  // leaving `nativeSupervisor` permanently null -- a dead process can never
+  // be resampled back to non-null, so no later retry could recover it,
+  // which is exactly the ordering that produced the null `worker` field.
+  // For systemd-unit mode the unit's MainPID is not known synchronously; it
+  // is still resolved once inside observeIdentity.
+  let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
   const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
-  let identity = !hasTransport ? sampleWorkerIdentity(child.pid) : null;
+  let identityObservation = 'pending';
+  let reportedWorker = null;
   let output = Buffer.alloc(0);
   let total = 0;
   let timedOut = false;
@@ -376,9 +401,9 @@ async function captureOneWorker(owner, ctx) {
   let settled = false;
   let waitCode = null;
   let waitSignal = null;
+  let deliveredSignal = null;
   let sawExit = false;
   let sawClose = false;
-  let nativeSupervisor = null;
   const driver = ctx.inputs.drivers[invocation.selected.cli];
   const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
     effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
@@ -398,9 +423,16 @@ async function captureOneWorker(owner, ctx) {
     return health;
   };
   const timers = new Set();
-  const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
+  const later = (fn, ms) => {
+    if (settled) return null;
+    const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t;
+  };
   const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
-  const signal = value => !settled && signalOwnedWorker(identity, value, { supervisor });
+  const signal = value => {
+    if (settled || !signalOwnedWorker(identity, value, { supervisor })) return false;
+    deliveredSignal = value;
+    return true;
+  };
   const readNative = () => { try { return (options.isolationStatus ?? getWorkerIsolationStatus)(outcome.unit); } catch { return null; } };
   const transportRecord = async filename => {
     const target = join(ctx.runDir, filename);
@@ -465,13 +497,14 @@ async function captureOneWorker(owner, ctx) {
   const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
     transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
     nativeSupervisor,
-    worker: identity, launchTime, monotonicStart, ownership: identity && identity.pgid === identity.pid ? 'owned-group' : 'unknown',
+    worker: identity ?? reportedWorker, identityObservation, launchTime, monotonicStart, ownership: identity ? 'owned-group' : 'unknown',
     isolation: outcome.mode, unit: outcome.unit ?? null });
   let resolveDone;
   const done = new Promise(resolve => { resolveDone = resolve; });
   const finish = async () => {
     if (settled) return;
     settled = true;
+    identityObservation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
@@ -489,18 +522,34 @@ async function captureOneWorker(owner, ctx) {
     // worker can plant either file before the trusted transport ever writes
     // it. Treat both as unauthenticated, worker-reported hints only: they may
     // inform diagnostics (`workerTermination`, `nativeSupervisor` fallback)
-    // but MUST NOT set exitCode/signal/termination/confirmed. Those come only
-    // from the kernel-observed wait() status of the launcher's own direct
+    // but MUST NOT set exitCode/signal/termination/confirmed. Authority comes
+    // from successful launcher-owned signal delivery, the wait() status of its direct
     // child (never the worker — `child` here is the trusted transport or the
     // systemd-run wrapper that mirrors the unit's real exit) or, for
     // systemd-unit mode, from `getWorkerIsolationStatus` queried against the
     // unit by name, also not a worker-writable path.
     const workerExit = hasTransport ? await transportRecord('worker-exit.json') : null;
-    const workerStart = hasTransport ? await transportRecord('worker-identity.json') : null;
-    if (workerStart && !identity) { identity = workerStart.worker; nativeSupervisor = workerStart.supervisor; }
-    const exitCode = outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
-    const resultSignal = outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
-      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal;
+    // A worker that exits before the launcher sees it alive leaves only the
+    // transport's start record. Publish it as a diagnostic, labelled
+    // unverified and with ownership unknown: it is never signal authority
+    // (`identity` stays null) and needs the supervisor the launcher sampled.
+    if (!identity && hasTransport && nativeSupervisor) {
+      const workerStart = await transportRecord('worker-identity.json');
+      if (workerStart?.worker && sameWorkerIdentity(workerStart.supervisor, nativeSupervisor)
+        && workerStart.worker.parentPid === nativeSupervisor.pid) {
+        reportedWorker = workerStart.worker;
+        identityObservation = 'transport-reported-unverified';
+      }
+    }
+    // Successful owned-group delivery is a fallback only while both wait
+    // and unit-native exit status are unavailable. Observed status wins.
+    // Failed/refused signals and worker-writable records grant no evidence.
+    const nativeExited = outcome.mode === 'systemd-unit' && [1, 2, 3].includes(native?.execMainCode);
+    const resultSignal = (outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
+      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal)
+      ?? (!sawExit && waitCode === null && waitSignal === null && !nativeExited ? deliveredSignal : null);
+    const exitCode = resultSignal ? null
+      : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
       descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
@@ -576,7 +625,10 @@ async function captureOneWorker(owner, ctx) {
     observer.observe(classifyWorkerHealthFailure({ code: errorCode }, { source: { kind: 'stderr' } }));
     later(() => finish(), 0);
   });
-  child.once('exit', (code, sig) => { sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs); });
+  child.once('exit', (code, sig) => {
+    if (settled) return;
+    sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs);
+  });
   // sawExit/waitCode/waitSignal come solely from the 'exit' handler above; a
   // failed spawn (e.g. ENOENT) never emits 'exit' in this Node, so they stay
   // at their unset defaults (false/null/null) here, which is already correct
@@ -592,32 +644,90 @@ async function captureOneWorker(owner, ctx) {
     // monotonic hard cancellation target.
     reportHealth(); stop('HARD_DEADLINE');
   }, hardRemaining());
-  const observeIdentity = async () => {
+  const identityCapture = createWorkerIdentityCapture();
+  const observeIdentity = async (firstSample) => {
     if (settled) return;
-    if (!identity && hasTransport) {
+    let candidate = !hasTransport ? firstSample === undefined ? sampleIdentity(child.pid) : firstSample : null;
+    // Once the transport is observed to have exited, stop trying to acquire
+    // the worker's identity through it: `nativeSupervisor.pid` is a fixed
+    // pid *number*, and after the real transport process is gone the OS can
+    // reuse that number for an unrelated process, so a live resample of "its"
+    // children or a live-resample match against a stale disk record could
+    // silently pivot onto that unrelated process. Nothing further can be
+    // learned this way regardless -- a dead transport can never produce a
+    // new, valid live sample -- so this is a pure safety stop, not a loss.
+    if (hasTransport && !sawExit) {
       const native = outcome.mode === 'systemd-unit' ? readNative() : { mainPid: child.pid };
       const recorded = await transportRecord('worker-identity.json');
-      if (settled) return;
-      nativeSupervisor = sampleWorkerIdentity(native?.mainPid);
+      // Re-check, not just `settled`: the transport's exit can be observed
+      // while this very call is awaiting the disk read above, and resuming
+      // into the containment/children-scan work below on a transport pid
+      // the OS may have already reused is exactly what this guard exists to
+      // prevent -- checking only at entry is not enough once an await
+      // separates the check from the work it is meant to gate.
+      if (settled || sawExit) return;
+      // The transport's own identity cannot change while it is alive. Once
+      // pinned, a later non-null resample is never accepted as a
+      // replacement: if the transport's pid were reused after it exited,
+      // that unrelated process would otherwise become the trusted ancestor
+      // for every containment check below. The first successful sample is
+      // either the launcher's own spawn-time pin (captured above, before any
+      // await could let the transport exit and be reaped) or, for
+      // systemd-unit mode where the unit's MainPID isn't known
+      // synchronously, the first live resample here.
+      nativeSupervisor ??= sampleNativeSupervisor(native?.mainPid);
       const contained = candidatePid => verifyWorkerContainment(candidatePid, { mode: outcome.mode, unit: outcome.unit, nativeSupervisor });
       // A disk record that merely matches a REAL process on resample is not
       // enough: that real process can be any same-UID process on the host.
       // Containment (cgroup for systemd-unit, kernel ppid ancestry for
       // degraded) must also hold before the record is trusted.
+      const current = recorded?.worker ? sampleIdentity(recorded.worker.pid) : null;
       if (recorded && sameWorkerIdentity(recorded.supervisor, nativeSupervisor)
-        && sameWorkerIdentity(recorded.worker, sampleWorkerIdentity(recorded.worker?.pid))
-        && contained(recorded.worker?.pid)) identity = recorded.worker;
-      else {
-        const children = sampleWorkerChildren(nativeSupervisor?.pid);
+        && sameWorkerIdentity(recorded.worker, current)
+        && contained(current?.pid)) {
+        candidate = current;
+        // The transport spawned this worker itself (its sample is past
+        // setsid) and this live sample matches its record field for field:
+        // two concordant observations by different observers. Only the
+        // children scan below can see a pre-setsid fork.
+        if (current.pid === current.pgid && current.uid === process.getuid()) identity ??= current;
+      } else {
+        const children = (options.sampleChildren ?? sampleWorkerChildren)(nativeSupervisor?.pid);
         if (children?.length === 1 && children[0].uid === process.getuid() && children[0].parentPid === nativeSupervisor.pid
-          && contained(children[0].pid)) identity = children[0];
+          && contained(children[0].pid)) {
+          const current = sampleIdentity(children[0].pid);
+          if (current?.parentPid === nativeSupervisor.pid && contained(current.pid)) candidate = current;
+        }
       }
     }
+    // A third-party children scan requires two matching samples: setsid may be pending.
+    // A direct child uses stable capture only when its immediate sample was unusable.
+    const observed = identityCapture.observe(candidate);
+    // The capture's two-matching-samples stability only proves the *same*
+    // process answered twice; it says nothing about whose child it is. A
+    // transport-path candidate reaching here is already launcher/transport
+    // -parented (verified above, before being assigned to `candidate`), but
+    // a direct child's candidate is not -- require it here, or an unrelated
+    // same-uid group leader (e.g. the OS reusing `child.pid` for something
+    // else entirely after our own child exited before the immediate sample)
+    // would be accepted merely for repeating within the window. This is
+    // deliberately checked *after* `identityCapture.observe()`, not before:
+    // rejecting the candidate earlier would starve the capture's own
+    // window/deadline bookkeeping of ever seeing a non-null sample.
+    if (observed && (hasTransport || observed.parentPid === process.pid)) identity ??= observed;
     if (identity) observer.processStarted(identity);
-    recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
-    if (!identity && hasTransport) later(observeIdentity, 50);
+    if (!identity && !identityCapture.expired()) {
+      later(observeIdentity, identityCapture.started() ? 5 : 50); return;
+    }
+    const observation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
+    if (identityObservation !== observation) {
+      identityObservation = observation;
+      recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
+    }
+    // Keep looking for a fresh candidate after an unsuccessful window.
+    if (!identity) later(observeIdentity, 50);
   };
-  observeIdentity();
+  observeIdentity(immediate);
   const sampleLog = async () => {
     const locator = options.healthSessionLog;
     if (!locator || !ctx.profile.health?.sessionLogLocator || !locator.sessionId) return;

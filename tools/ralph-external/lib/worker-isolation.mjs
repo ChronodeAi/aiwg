@@ -34,7 +34,7 @@ import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { constants, openSync, closeSync, writeFileSync, fsyncSync, renameSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import { sampleWorkerIdentity } from '../process-monitor.mjs';
+import { sampleWorkerIdentity, createWorkerIdentityCapture } from '../process-monitor.mjs';
 import { checkWorkerDispatch } from '../../scripts/resource-preflight.mjs';
 
 const UNIT_SAFE = /[^A-Za-z0-9:_.@-]/g;
@@ -389,7 +389,7 @@ export function launchIsolatedWorker({
       const stdinFd = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
       const stdoutFd = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
       const stderrFd = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
-      child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd] });
+      child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd], detached: ownedGroup });
       // Node dup()s a numeric stdio fd into the child and never closes the
       // parent's own copy; the child's duplicated fd keeps working after this
       // call returns (verified empirically), so closing here is what the
@@ -549,6 +549,51 @@ export function readUnitControlGroup(unit, { spawn = spawnSync } = {}) {
 
 export { checkWorkerDispatch };
 
+/** Supervise the private transport's worker, with injectable kernel sampling. */
+export function runWorkerTransport({ command, args, environment, record,
+  spawn = nodeSpawn, sampleIdentity = sampleWorkerIdentity,
+  now = () => Number(process.hrtime.bigint()) / 1e6,
+  setExitCode = code => { process.exitCode = code; },
+  propagateSignal = signal => process.kill(process.pid, signal) }) {
+  record('worker-start.json', { supervisor: sampleIdentity(process.pid), worker: null });
+  const worker = spawn(command, args, { env: environment, detached: true, stdio: 'inherit' });
+  // We spawned this detached child: spawn waits through setsid/exec, so one owned leader sample suffices.
+  const immediate = sampleIdentity(worker.pid);
+  let identity = immediate?.pid === worker.pid && immediate?.pid === immediate?.pgid
+    && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
+  // Transport lifetime, rather than startup latency, bounds this capture.
+  const capture = createWorkerIdentityCapture({ now, timeoutMs: Infinity });
+  let identityTimer;
+  let identityRecorded = false;
+  const recordIdentity = () => {
+    if (identityRecorded) return;
+    identityRecorded = true;
+    clearTimeout(identityTimer);
+    record('worker-identity.json', { supervisor: sampleIdentity(process.pid), worker: identity,
+      identityObservation: identity ? 'stable-owned-group' : 'no-stable-owned-group' });
+  };
+  const observeIdentity = (current = sampleIdentity(worker.pid)) => {
+    identity ??= capture.observe(current);
+    if (identity) recordIdentity();
+    else identityTimer = setTimeout(observeIdentity, 5);
+  };
+  worker.once('error', error => {
+    try {
+      recordIdentity();
+      record('worker-exit.json', { worker: identity, exitCode: null, signal: null, errorCode: error.code ?? 'SPAWN_ERROR', endedAt: new Date().toISOString() });
+    } finally { setExitCode(127); }
+  });
+  worker.once('exit', (code, signal) => {
+    // Bookkeeping must never replace the true wait status.
+    try {
+      recordIdentity();
+      record('worker-exit.json', { worker: identity, exitCode: code, signal, errorCode: null, endedAt: new Date().toISOString() });
+    } finally { if (signal) propagateSignal(signal); else setExitCode(code); }
+  });
+  observeIdentity(immediate);
+  return worker;
+}
+
 // Private attached transport entry, never a public CLI or legacy Ralph route.
 // The systemd unit owns this supervisor and its worker; cgroup exit evidence
 // includes descendants. Only the actual worker receives the allowed values.
@@ -602,20 +647,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '-
     catch (error) { recordAnomaly(filename, temporary, error); }
   };
   const environment = Object.fromEntries(names.filter(name => process.env[name] !== undefined).map(name => [name, process.env[name]]));
-  record('worker-start.json', { supervisor: sampleWorkerIdentity(process.pid), worker: null });
-  const worker = nodeSpawn(command, args, { env: environment, detached: true, stdio: 'inherit' });
-  // Start identity is recorded separately from the service's MainPID.
-  const identity = sampleWorkerIdentity(worker.pid);
-  record('worker-identity.json', { supervisor: sampleWorkerIdentity(process.pid), worker: identity });
-  worker.once('error', error => {
-    try { record('worker-exit.json', { worker: identity, exitCode: null, signal: null, errorCode: error.code ?? 'SPAWN_ERROR', endedAt: new Date().toISOString() }); }
-    finally { process.exitCode = 127; }
-  });
-  worker.once('exit', (code, signal) => {
-    // The true wait() status is propagated first/independently of the
-    // publish: a collision on worker-exit.json must never suppress or
-    // replace the real exit code/signal reported to the launcher's parent.
-    try { record('worker-exit.json', { worker: identity, exitCode: code, signal, errorCode: null, endedAt: new Date().toISOString() }); }
-    finally { if (signal) process.kill(process.pid, signal); else process.exitCode = code; }
-  });
+  runWorkerTransport({ command, args, environment, record });
 }

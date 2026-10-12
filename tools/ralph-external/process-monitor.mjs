@@ -41,6 +41,47 @@ export function sameWorkerIdentity(expected, actual) {
     .every(key => expected[key] === actual[key]);
 }
 
+/** Two matching kernel observations, bounded from the first visible candidate.
+ * Pin each candidate's first observed birth; PID reuse can never gain ownership.
+ */
+export function createWorkerIdentityCapture({ now = () => Number(process.hrtime.bigint()) / 1e6,
+  timeoutMs = 250 } = {}) {
+  let deadline = null;
+  const births = new Map();
+  const reused = new Set();
+  let previous = null;
+  let candidate = null;
+  let candidateVisible = false;
+  return {
+    started: () => deadline !== null,
+    expired: () => deadline !== null && now() >= deadline,
+    observe(current) {
+      if (!current || !Number.isSafeInteger(current.pid) || current.pid <= 0 || !current.startTicks) {
+        candidateVisible = false;
+        return null;
+      }
+      const birth = births.get(current.pid);
+      if (!birth) births.set(current.pid, { ...current });
+      else if (['uid', 'parentPid', 'host', 'bootId', 'startTicks'].some(key => birth[key] !== current[key])) reused.add(current.pid);
+      // A fresh identity can open another window, but never clear birth pins.
+      if (deadline === null || (now() >= deadline && (!candidateVisible || !sameWorkerIdentity(candidate, current)))) {
+        deadline = now() + timeoutMs;
+        previous = null;
+      }
+      candidate = { ...current };
+      candidateVisible = true;
+      if (reused.has(current.pid) || current.pid !== current.pgid || current.uid !== process.getuid?.()) {
+        previous = null;
+        return null;
+      }
+      if (now() >= deadline) return null;
+      const stable = sameWorkerIdentity(previous, current);
+      previous = { ...current };
+      return stable ? current : null;
+    },
+  };
+}
+
 let workerTickRate;
 /** Host-qualified conversion, not an assumed Linux HZ constant. */
 export function qualifyWorkerCpuTickRate(probe = execFileSync) {
@@ -586,7 +627,15 @@ export function classifyWorkerStatus(records, facts = {}) {
   const transport = invocation?.transport ?? (identity?.request ? 'mcp' : 'shell');
   if (!['shell', 'mcp', 'http'].includes(transport)) throw statusError('INVALID_TRANSPORT');
   const expected = identity?.worker;
-  const actual = facts.actual ?? null;
+  // A 'transport-reported-unverified' worker is a diagnostic guess, never
+  // kernel-verified ownership (see session-launcher.mjs finish()). Treating
+  // it as `expected` for live-identity comparison would let a forged or
+  // merely unlucky worker record manufacture a mismatch against
+  // `facts.actual` and downgrade an otherwise kernel-confirmed exit to
+  // uncertain/IDENTITY_CHANGED. There is nothing reliable to compare
+  // against, so suppress the signal entirely rather than risk a false
+  // mismatch.
+  const actual = identity?.identityObservation === 'transport-reported-unverified' ? null : facts.actual ?? null;
   const matched = transport !== 'mcp' && expected?.uid === process.getuid() && sameWorkerIdentity(expected, actual)
     && (facts.bootId == null || actual.bootId === facts.bootId);
   const running = matched ? !['Z', 'X', 'x'].includes(actual.state) : null;
@@ -761,7 +810,11 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
           exit: await statusRecord(directory, 'exit.json'), scratch: await statusRecord(directory, 'last-observed.json') };
         const ownerRecord = await statusRecord(directory, '.status-observer');
         const expected = records.process.worker;
-        const actual = records.invocation?.transport !== 'mcp' && !records.process.request && expected?.uid === process.getuid()
+        // classifyWorkerStatus() also ignores an unverified worker for this
+        // comparison; skip the resample too so this never samples an
+        // unrelated process merely because a diagnostic record named its PID.
+        const actual = records.process.identityObservation !== 'transport-reported-unverified'
+          && records.invocation?.transport !== 'mcp' && !records.process.request && expected?.uid === process.getuid()
           ? (options.sampleIdentity ?? sampleWorkerIdentity)(expected.pid) : null;
         const key = records.process.invocationId;
         const counters = await captureSizes(directory);
