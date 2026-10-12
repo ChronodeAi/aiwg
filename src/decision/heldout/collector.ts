@@ -193,6 +193,12 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           // No raw provider exceptions, model IDs or request IDs cross this boundary when a secret matches.
           const raw = observation as AdapterObservation | null;
           const metadata = wireMetadata as { actualModel: string | null; usage: AdapterObservation['usage'] } | null;
+          // `metadata` is `jev.ts`'s observer, reading model/usage off the exact same single parse that
+          // produced `raw` (never a second, independent parse of the same bytes -- see jev.ts `observeParsed`).
+          // The two can therefore no longer disagree on a successful response; preferring `metadata` here
+          // only matters when `raw` is a failure (e.g. an otherwise-parseable but invalid answer), so the
+          // model/usage bound checks below still see the wire-observed values jev.ts's `failure()` does not
+          // carry.
           const observed = raw && metadata ? { ...raw, actualModel: metadata.actualModel, usage: metadata.usage } : raw;
           const completed = receipt as RulesetResult | null;
           const captures = QUALIFICATION_PRIVACY_SURFACES.map(surface => ({ surface,
@@ -211,7 +217,9 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
             || (observed.usage.inputTokens ?? 0) + (observed.usage.outputTokens ?? 0) > reserveTokens)) outcome = 'usage-bound';
           else if (observed?.usage.costUsd !== null && observed?.usage.costUsd !== undefined && observed.usage.costUsd * 1_000_000 > reserveMicros) outcome = 'price-bound';
           else if (observed?.status === 'success') {
-            if (observed.actualModel !== a.servedModel) outcome = 'served-model';
+            // A null model is unknown, not a mismatch: it must complete neither as 'ok' nor as 'served-model'.
+            if (observed.actualModel === null) outcome = 'model-unknown';
+            else if (observed.actualModel !== a.servedModel) outcome = 'served-model';
             else if (observed.usage.inputTokens === null || observed.usage.outputTokens === null) outcome = 'usage-unknown';
             else { disposition = 'success'; outcome = 'ok'; }
           } else if (observed?.dispatchCertainty === 'terminal-response' && observed.remoteExecution !== 'unknown'

@@ -28,8 +28,33 @@ import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
 
 const {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
-  registerWorkerInvokeToolset, WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
+  registerWorkerInvokeToolset: registerProductionToolset,
+  WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
 } = workerInvoke as any;
+
+/** A fixed, generous `readLiveHostResources()`-shaped sample (see
+ * `tools/scripts/resource-preflight.mjs`), injected via the real
+ * `registerWorkerInvokeToolset({ gateInputs: { live } })` test-only seam
+ * (forwarded to `planDirectWorkerLaunch` → `checkWorkerDispatch`) so the
+ * REAL dispatch gate still runs — on fixed synthetic signals instead of
+ * this host's actual load/memory/PSI/disk — making these transport tests
+ * deterministic under load. Comfortably clears every default threshold
+ * (`DEFAULT_DISPATCH_HOST_THRESHOLDS`: 8GB avail mem, load ratio <= 1.0,
+ * mem PSI avg10 <= 30 / avg60 <= 10, 2GB free disk). */
+const HEALTHY_GATE_LIVE = Object.freeze({
+  supported: true, availMemGb: 64, load1: 0.1, cores: 8, loadRatio: 0.05,
+  memPsiAvg10: 0, memPsiAvg60: 0, memPsiAvg300: 0, workers: 0, freeDiskGb: 100,
+});
+
+/** Register the toolset the way every test in this file should: with the
+ * dispatch gate pinned to `HEALTHY_GATE_LIVE`. The real gate reads this
+ * host's load and memory, so a test that launches a worker without pinning
+ * it is refused on a busy CI runner and then times out waiting for a worker
+ * that never started (#3026). A test that passes its own `gateInputs`, for
+ * example to prove a failing signal still refuses, overrides the default. */
+function registerWorkerInvokeToolset(server: any, options: Record<string, unknown> = {}) {
+  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
+}
 
 const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.stringify(v)).digest('hex')}`;
 const roots: string[] = [];
@@ -739,25 +764,27 @@ function fakeNeverClosingChild() {
   return child;
 }
 
-/** A fixed, generous `readLiveHostResources()`-shaped sample (see
- * `tools/scripts/resource-preflight.mjs`), injected via the real
- * `registerWorkerInvokeToolset({ gateInputs: { live } })` test-only seam
- * (forwarded to `planDirectWorkerLaunch` → `checkWorkerDispatch`) so the
- * REAL dispatch gate still runs — on fixed synthetic signals instead of
- * this host's actual load/memory/PSI/disk — making these transport tests
- * deterministic under load. Comfortably clears every default threshold
- * (`DEFAULT_DISPATCH_HOST_THRESHOLDS`: 8GB avail mem, load ratio <= 1.0,
- * mem PSI avg10 <= 30 / avg60 <= 10, 2GB free disk). */
-const HEALTHY_GATE_LIVE = Object.freeze({
-  supported: true, availMemGb: 64, load1: 0.1, cores: 8, loadRatio: 0.05,
-  memPsiAvg10: 0, memPsiAvg60: 0, memPsiAvg300: 0, workers: 0, freeDiskGb: 100,
-});
-
 /** Minimal #2887 fixture + driver wiring, closely modeled on the CLI's own
  * `models-direct-invocation.test.ts` fixture builder — reused shape, not a
  * parallel contract. */
 function buildFixture(root: string, transport: 'shell' | 'mcp') {
   const f = workerResolutionFixture();
+  // The shared fixture's synthetic model observation has a tiny 4096-token context window
+  // (test/conformance/mission-v1/fixtures/worker-contracts/shared-vectors.json
+  // "observation-no-effort"). Admission (resolveWorkerInvocation, src/serve/worker-invocation.ts)
+  // estimates `briefTokens` as the raw byte length of the structured WorkerDirectBrief, which
+  // embeds this test's absolute workdir/final_output paths (built under TMPDIR via
+  // `tempRoot()`/os.tmpdir()). With the default short /tmp this fits; with a longer TMPDIR (for
+  // example a `/var/tmp/<name>` override) the extra path bytes alone were enough to push the
+  // estimate over the 4096-token budget — every launch was then refused as 'blocked' with
+  // `plan.selected === null`, whose per-candidate `OG_MODEL_UNAPPROVED /worker/contextTokens`
+  // reason lives only in `plan.exclusions`, never in the diagnostics this test observes. Widen
+  // the window so admission in this file is independent of the host's TMPDIR path length; no
+  // assertion here depends on the specific 4096/1024 figures.
+  for (const model of f.snapshot.catalog.discovery!.instances!.codex.models) {
+    model.worker!.contextTokens = 200000;
+    model.worker!.maxOutputTokens = 32000;
+  }
   const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
   adapter.id = 'codex';
   const binding = f.snapshot.installations.codex;

@@ -1,4 +1,5 @@
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { writeExecutable } from '../../../helpers/write-executable.js';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -104,8 +105,7 @@ describe('models CLI handler', () => {
     const config = path.join(home, 'config.toml');
     await writeFile(config, '[model.local]\nmodel = "actual-backend-id"\nenv_key = "TEST_GROK_API_KEY"\nextra_headers = { Authorization = "secret-config-value" }\n[models]\ndefault = "local"\n');
     const executable = path.join(bin, 'grok');
-    await writeFile(executable, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'grok 1.0.38'; else printf '%s\\n' '{"configSources":{"layers":[{"role":"user","path":"${config}"}]}}'; fi\n`);
-    await chmod(executable, 0o755);
+    await writeExecutable(executable, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'grok 1.0.38'; else printf '%s\\n' '{"configSources":{"layers":[{"role":"user","path":"${config}"}]}}'; fi\n`);
     await writeFile(path.join(root, 'models.json'), JSON.stringify({ providers: { 'grok-build': { efficiency: 'local' } } }));
     const previous = { PATH: process.env.PATH, GROK_HOME: process.env.GROK_HOME, TEST_GROK_API_KEY: process.env.TEST_GROK_API_KEY };
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});

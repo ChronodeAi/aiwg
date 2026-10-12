@@ -1,3 +1,5 @@
+import baseline from '../../fixtures/providers/worker-delivery-baseline.json';
+import { workerStdinBytes, workerStdinDocument } from '../../../src/serve/worker-stdin-frame.mjs';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -6,7 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
-import { workerModelKey } from '../../../src/models/provider-policy.js';
+import { workerModelKey, loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
 import { workerInputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
@@ -321,5 +323,70 @@ describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () 
     expect(result.finalPath).toBe(result.stdoutPath);
     f.invocation.stdoutPath = '/fixture/dir/../brief 雪.md';
     await expect(adapter.prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toThrow('distinct');
+  });
+});
+
+describe('T-OG-15 adapter stdin rendering (#2998)', () => {
+  it('renders only framing identities on argv; the brief stays in its input file', async () => {
+    const f = setup();
+    f.invocation.stdin = 'adapter-frame';
+    f.qualification.adapter.invocation.stdin = 'adapter-frame';
+    f.qualification.stdinFramerBinding = { storePath: '/trusted/worker-installations.json', storeDigest: `sha256:${'a'.repeat(64)}` };
+    const prepared = await adapter.prepareWorkerInvocation(f.invocation, f.qualification);
+    expect(prepared.shellCommand).toContain("'--adapter-frame'");
+    expect(prepared.shellCommand).toContain(f.invocation.briefPath);
+    expect(prepared.argv).toEqual(f.invocation.argv);
+  });
+  it('clears the adapter framer environment and binds the conductor store and policy', async () => {
+    const f = setup();
+    f.invocation.stdin = 'adapter-frame';
+    f.qualification.adapter.invocation.stdin = 'adapter-frame';
+    f.qualification.stdinFramerBinding = { storePath: '/trusted/worker-installations.json', storeDigest: `sha256:${'a'.repeat(64)}` };
+    const prepared = await adapter.prepareWorkerInvocation(f.invocation, f.qualification);
+    const framer = prepared.shellCommand!.split(' | ')[0];
+    expect(framer).toContain(`&& env -i PATH="\${PATH-}" '${process.execPath}'`);
+    expect(framer).toContain("'/trusted/worker-installations.json'");
+    expect(framer).toContain(f.qualification.stdinFramerBinding.storeDigest);
+    expect(framer).toContain(JSON.stringify(f.qualification.policy));
+  });
+  it('fails closed when the adapter framer has no trusted installation binding', async () => {
+    const f = setup();
+    f.invocation.stdin = 'adapter-frame';
+    f.qualification.adapter.invocation.stdin = 'adapter-frame';
+    await expect(adapter.prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toThrow(/framer.*binding/i);
+  });
+  it('refuses an unknown stdin kind before emitting shell syntax', async () => {
+    const f = setup();
+    f.invocation.stdin = 'unknown-kind';
+    await expect(adapter.prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toThrow();
+  });
+});
+
+// Frozen baseline covers the shared rendering boundary for every other bundled
+// process profile, including profiles being developed in other worktrees.
+describe('T-OG-15 bundled delivery remains byte-identical', () => {
+  it.each(baseline.rows)('$provider $field argv and stdin bytes', async row => {
+    const metadata = (loadProviderModelCapabilities().providers as any)[row.provider][row.field];
+    expect(metadata.invocation.argv).toEqual(row.argv);
+    expect(metadata.invocation.stdin).toBe(row.stdin);
+    const f = setup();
+    const invocation = f.invocation;
+    invocation.stdin = row.stdin;
+    invocation.envNames = [];
+    invocation.argv = [process.execPath, ...row.argv.map(token => token.replace(/\$\{([a-zA-Z]+)\}/g,
+      (_, name) => ({ model: invocation.selected.model, effort: 'medium', workspace: invocation.cwd,
+        briefPath: invocation.briefPath, finalPath: invocation.finalPath, finalOutput: invocation.finalPath } as any)[name] ?? `/preview/${name}`))];
+    const prepared = await adapter.prepareWorkerInvocation(invocation, f.qualification);
+    const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+    const worker = `env -i ${invocation.argv.map(quote).join(' ')}`;
+    const outputs = `> ${quote(invocation.stdoutPath)} 2> ${quote(invocation.stderrPath)}`;
+    const expected = row.stdin === 'brief-json'
+      ? `cd ${quote(invocation.cwd)} && env -i ${[process.execPath, path.resolve('src/serve/worker-stdin-frame.mjs'), invocation.briefPath, invocation.selected.model, invocation.cwd].map(quote).join(' ')} | ${worker} ${outputs}`
+      : `cd ${quote(invocation.cwd)} && ${worker} ${row.stdin === 'closed' ? '< /dev/null' : `< ${quote(invocation.briefPath)}`} ${outputs}`;
+    expect(prepared.shellCommand).toBe(expected);
+    const brief = Buffer.from('synthetic 雪\nbrief');
+    const bytes = row.stdin === 'closed' ? null : row.stdin === 'brief-text' ? brief
+      : Buffer.from(workerStdinDocument({ brief, model: invocation.selected.model, cwd: invocation.cwd }));
+    expect(workerStdinBytes(invocation, brief)).toEqual(bytes);
   });
 });

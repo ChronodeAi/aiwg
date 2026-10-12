@@ -55,7 +55,7 @@ describe('Grok Build governed dispatch', () => {
       // loaded runners the 5th dispatch's own admission work (git resolution)
       // can otherwise outlast a short task, freeing a slot and resolving
       // instead of rejecting with the parallelism cap.
-      const fake = { command: process.execPath, prefixArgs: ['-e', 'setTimeout(()=>console.log(JSON.stringify({type:"result",text:process.env.GROK_SUBAGENTS})),8000)', '--'] };
+      const fake = { command: process.execPath, prefixArgs: ['-e', 'setTimeout(()=>{console.log(JSON.stringify({type:"text",data:process.env.GROK_SUBAGENTS}));console.log(JSON.stringify({type:"end",stopReason:"end_turn"}));},8000)', '--'] };
       await expect(dispatcher.dispatch({ ...fake, projectRoot: root, prompt: 'x', authorize: () => false, budgetRemaining: () => true })).rejects.toThrow(/authorization gate/);
       await expect(dispatcher.dispatch({ ...fake, projectRoot: root, prompt: 'x', authorize: () => true, budgetRemaining: () => false })).rejects.toThrow(/budget exhausted/);
       const running = Array.from({ length: dispatcher.maxParallel }, () => dispatcher.dispatch({
@@ -69,8 +69,8 @@ describe('Grok Build governed dispatch', () => {
       expect(dispatcher.activeDispatches).toBe(4);
       await expect(dispatcher.dispatch({ ...fake, projectRoot: root, prompt: 'x', authorize: () => true, budgetRemaining: () => true })).rejects.toThrow(/parallelism cap/);
       const results = await Promise.all(running);
-      expect(results.every(item => item.result.text.includes('"text":"0"'))).toBe(true);
-      expect(results.every(item => item.result.text.includes('"type":"result"'))).toBe(true);
+      expect(results.every(item => item.result.text.includes('"data":"0"'))).toBe(true);
+      expect(results.every(item => item.result.text.includes('"type":"end"'))).toBe(true);
       expect(dispatcher.activeDispatches).toBe(0);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -80,7 +80,7 @@ describe('Grok Build governed dispatch', () => {
     const key = join(root, '.git');
     mkdirSync(join(root, '.aiwg'));
     writeFileSync(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({ parallelism: { max_parallel_subagents: 1 } }));
-    const fake = { command: process.execPath, prefixArgs: ['-e', 'console.log(JSON.stringify({type:"result"}))', '--'] };
+    const fake = { command: process.execPath, prefixArgs: ['-e', 'console.log(JSON.stringify({type:"end",stopReason:"end_turn"}))', '--'] };
     try {
       const dispatcher = await GrokBuildDispatcher.forProject(root);
       expect(dispatcher.maxParallel).toBe(1);

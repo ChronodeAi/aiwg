@@ -2,7 +2,7 @@
  * Tests for ValidationRuleLoader
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ValidationRuleLoader, ValidationRule, RuleSet } from '../../../src/writing/validation-rules.ts';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -14,13 +14,18 @@ describe('ValidationRuleLoader', () => {
 
   beforeEach(() => {
     // Create temp directory for test files
-    testDir = join(tmpdir(), `aiwg-test-${Date.now()}`);
+    testDir = join(tmpdir(), `aiwg-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(testDir, { recursive: true });
     mkdirSync(join(testDir, 'validation'), { recursive: true });
     mkdirSync(join(testDir, 'patterns'), { recursive: true });
     mkdirSync(join(testDir, 'core'), { recursive: true });
 
     loader = new ValidationRuleLoader(testDir);
+  });
+
+  // testDir was never removed (#3018), leaking one directory per test.
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   describe('Default Rules', () => {

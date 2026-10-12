@@ -361,6 +361,12 @@
     "configuration/setup-manifest",
     "getting-started/README",
     "mcp",
+    "decision",
+    "decision/jev-quickstart",
+    "decision/README",
+    "decision/cli-mcp-driver",
+    "getting-started/session-history",
+    "sessions/cli",
     "configuration",
     "frameworks/forensics-complete/agent-examples",
     "frameworks/forensics-complete/agent-examples/container-analyst-examples",
@@ -551,7 +557,7 @@
     {
       "id": "welcome",
       "title": "Home",
-      "summary": "AIWG documentation home",
+      "summary": "Reusable project context and specialist workflows for the AI tools you already use: agents, skills, rules, MCP tools, SDLC workflows, and Jev decision support.",
       "file": "welcome.html"
     },
     {
@@ -2787,6 +2793,47 @@
       "id": "mcp",
       "title": "MCP",
       "summary": "Model Context Protocol servers and profiles"
+    },
+    {
+      "id": "decision",
+      "title": "Decision Support",
+      "summary": "Offload bounded decisions to Jev and get typed answers with confidence",
+      "parent": "reference"
+    },
+    {
+      "id": "decision/jev-quickstart",
+      "title": "Jev Quickstart",
+      "summary": "Set up Jev decision offload and send yes/no, pick-from-options, and 1-5 score decisions with aiwg decision ask",
+      "file": "decision/jev-quickstart.md",
+      "parent": "decision"
+    },
+    {
+      "id": "decision/README",
+      "title": "Decisions and Rulesets",
+      "summary": "Normalized decision definitions and rulesets that run through a Jev binding or an LLM-subagent binding",
+      "file": "decision/README.md",
+      "parent": "decision"
+    },
+    {
+      "id": "decision/cli-mcp-driver",
+      "title": "Decision CLI and MCP Driver",
+      "summary": "The aiwg decision commands and the MCP decision-ask tool for governed decision evaluation",
+      "file": "decision/cli-mcp-driver.md",
+      "parent": "decision"
+    },
+    {
+      "id": "getting-started/session-history",
+      "title": "Import AI Session History",
+      "summary": "Discover, import, and search prior AI conversations across providers in a local, privacy-aware session catalog",
+      "file": "getting-started/session-history.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "sessions/cli",
+      "title": "Sessions CLI",
+      "summary": "Commands for the session catalog: discover, import, list, search, timeline, analytics, and export",
+      "file": "sessions/cli.md",
+      "parent": "reference"
     },
     {
       "id": "configuration",

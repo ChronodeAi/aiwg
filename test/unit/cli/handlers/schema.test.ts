@@ -1,13 +1,20 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { schemaHandler } from '../../../../src/cli/handlers/schema.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
+// Fixture roots were never removed (#3018); track and clean them up after each test.
+const tmpRoots: string[] = [];
+afterEach(() => {
+  for (const root of tmpRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'aiwg-schema-handler-'));
+  tmpRoots.push(root);
   mkdirSync(join(root, 'schemas', 'catalog'), { recursive: true });
   writeFileSync(join(root, 'schemas', 'example.schema.json'), JSON.stringify({
     $schema: 'https://json-schema.org/draft/2020-12/schema',

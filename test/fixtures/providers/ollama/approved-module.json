@@ -1,0 +1,14 @@
+{
+  "note": "Host installation-authority allowlist entry for the Ollama backend of the registry's generic local-http worker-adapter slot (roctinam/aiwg#2899, B-OG-09). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/ollama-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/ollama-adapter.mjs",
+  "entry": {
+    "reference": "installed:local-http",
+    "packageName": "@aiwg/local-http-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/ollama-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:1343ce9da5ace5377990e01b1012e05ec40b7c585642fe060b464fffdf241c0b",
+    "adapterIds": ["local-http"],
+    "platforms": ["linux"]
+  }
+}

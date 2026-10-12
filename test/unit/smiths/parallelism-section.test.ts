@@ -6,22 +6,66 @@
  * @implements #1362
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   buildParallelismSection,
   replaceOrAppendParallelismBlock,
+  MAX_SHOWN_GROUPS,
   PARALLELISM_BLOCK_START,
   PARALLELISM_BLOCK_END,
+  PARALLELISM_HEALTH_UNRESOLVED_NOTE,
 } from '../../../src/smiths/context-pipeline/parallelism-section.js';
-import { emptyConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { emptyConfig, writeAiwgConfig, getConfigPath, type AiwgConfig } from '../../../src/config/aiwg-config.js';
+import { parseWorkerCommandArgs } from '../../../src/serve/worker-invocation.js';
+import { createWorkerHealthObserver } from '../../../tools/ralph-external/lib/worker-health.mjs';
+import { parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-parallelism-section-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** Write an aiwg.config file directly, bypassing `writeAiwgConfig`'s own
+ * worker-model-defaults validation — used only by the AIWG_HOME-fallback
+ * tests below, where that validation would otherwise require a real home
+ * install that intentionally does not exist in the test fixture. */
+function writeConfigFileDirect(projectDir: string, config: AiwgConfig): void {
+  const path = getConfigPath(projectDir);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2));
+}
+
+/**
+ * Detect any write (set or delete) to `process.env` during the wrapped
+ * window, without the illegal `Object.defineProperty(process.env, key,
+ * {get, set})` form (`process.env` rejects accessor descriptors). Swaps
+ * `process.env` itself for a `Proxy` wrapping the real object, so every
+ * read/write still behaves normally — only writes are additionally logged.
+ */
+function watchEnvWrites(): { log: Array<{ op: 'set' | 'delete'; key: string }>; restore: () => void } {
+  const original = process.env;
+  const log: Array<{ op: 'set' | 'delete'; key: string }> = [];
+  const proxy = new Proxy(original, {
+    set(target, prop, value) {
+      log.push({ op: 'set', key: String(prop) });
+      return Reflect.set(target, prop, value);
+    },
+    deleteProperty(target, prop) {
+      log.push({ op: 'delete', key: String(prop) });
+      return Reflect.deleteProperty(target, prop);
+    },
+  });
+  Object.defineProperty(process, 'env', { value: proxy, configurable: true, enumerable: true, writable: true });
+  return {
+    log,
+    restore: () => {
+      Object.defineProperty(process, 'env', { value: original, configurable: true, enumerable: true, writable: true });
+    },
+  };
 }
 
 describe('buildParallelismSection (#1362)', () => {
@@ -31,10 +75,15 @@ describe('buildParallelismSection (#1362)', () => {
   beforeEach(() => {
     tmpDir = makeTmpDir();
     delete process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+    // Locate the bundled model defaults from this checkout (same as
+    // test/unit/models/resolver.test.ts); never the user's home install.
+    vi.stubEnv('AIWG_HOME', process.cwd());
+    vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
   });
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     if (originalEnv !== undefined) {
       process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT = originalEnv;
     } else {
@@ -146,6 +195,389 @@ describe('buildParallelismSection (#1362)', () => {
   ])('qualifies provider delegation for %s', async (provider, expected) => {
     await writeAiwgConfig(tmpDir, emptyConfig([provider]));
     expect(await buildParallelismSection(tmpDir)).toContain(expected);
+  });
+});
+
+describe('orchestration groups block (#2893 / #2914)', () => {
+  let tmpDir: string;
+  const originalEnv = process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    delete process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+    // Locate the bundled model defaults from this checkout (same as
+    // test/unit/models/resolver.test.ts); never the user's home install.
+    vi.stubEnv('AIWG_HOME', process.cwd());
+    vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    if (originalEnv !== undefined) {
+      process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT = originalEnv;
+    } else {
+      delete process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+    }
+  });
+
+  function groupConfig() {
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    cfg.parallelism.groups = {
+      'default': {
+        members: [
+          { id: 'codex-a', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'] },
+          { id: 'muse-b', cli: 'muse', model: 'muse-spark-1.3', roles: ['efficiency', 'coding'] },
+        ],
+        maxParallel: 2,
+        requiredRoles: ['coding'],
+      },
+    };
+    return cfg;
+  }
+
+  // Byte-for-byte rendering of buildParallelismSection() at HEAD (before the
+  // orchestration-guidance block existed) for emptyConfig(['codex']): no
+  // worker_dispatch, no groups. Regenerate only from HEAD sources.
+  const PRE_DISPATCH_GOLDEN = `<!-- AIWG-PARALLELISM-CAP:START -->
+## Parallelism Cap
+
+This project caps parallel agent fan-out (#1359):
+
+- **max_parallel_subagents**: 10 (provider default for codex)
+- **max_parallel_ralph_loops**: 3 (provider default for codex)
+- **max_parallel_mc_missions**: 6 (provider default for codex)
+
+*Rationale*: Provider default for codex — adjust via 'aiwg config set --project parallelism.max_parallel_subagents N'
+
+### Model-selected delegation rubric
+
+For each non-trivial task, assess whether it contains independent, bounded subtasks that can run concurrently. When delegation is supported, prefer the deployed model-pinned wrappers by task characteristics and consequence:
+
+- \`aiwg-model-efficiency-worker\`: discovery, inventory, focused edits, and other bounded low-cost work.
+- \`aiwg-model-coding-worker\`: implementation, tests, debugging, and routine technical delivery.
+- \`aiwg-model-reasoning-worker\`: architecture, synthesis, difficult analysis, and high-consequence review.
+
+Do not delegate trivial work, tightly coupled changes, serial dependencies, or tasks likely to collide in shared state; also keep work local when coordination costs exceed the expected benefit. Parallelize only independent work, and take the MIN of provider limits, \`max_parallel_subagents\`, \`AIWG_CONTEXT_WINDOW\` budget, framework-specific caps (including the RLM 7-agent hard cap for RLM dispatches), and natural task decomposition. Bump the project cap via \`aiwg config set --project parallelism.max_parallel_subagents N\`.
+
+The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.
+
+**Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
+
+<!-- AIWG-PARALLELISM-CAP:END -->
+`;
+
+  it('dispatch disabled renders byte-identical output to the pre-dispatch rendering', async () => {
+    await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
+    expect(await buildParallelismSection(tmpDir)).toBe(PRE_DISPATCH_GOLDEN);
+  });
+
+  it('dispatch explicitly false renders byte-identical output even with groups configured', async () => {
+    const cfg = groupConfig();
+    cfg.parallelism.worker_dispatch = false;
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toBe(PRE_DISPATCH_GOLDEN);
+    expect(section).not.toContain('Orchestration groups');
+  });
+
+  it('dispatch enabled renders configured groups as configured, never labeled eligible/not-eligible, with a request-scoped resolve pointer', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('### Orchestration groups (group dispatch enabled)');
+    expect(section).toContain('Configured groups:');
+    expect(section).toContain('default (members: 2');
+    expect(section).toContain('maxParallel: 2');
+    expect(section).toContain('requiredRoles: coding');
+    expect(section).toContain('; configured)');
+    expect(section).not.toContain('eligible)');
+    expect(section).not.toContain('not eligible');
+    expect(section).toContain('is a static config read — not a live eligibility verdict');
+    expect(section).toContain('resolved per (group, member, effort) tuple');
+    expect(section).toContain('aiwg models resolve` below');
+    expect(section).not.toContain('Available groups');
+    expect(section.indexOf('### Orchestration groups')).toBeGreaterThan(
+      section.indexOf(PARALLELISM_BLOCK_START),
+    );
+    expect(section.indexOf('### Orchestration groups')).toBeLessThan(
+      section.indexOf(PARALLELISM_BLOCK_END),
+    );
+  });
+
+  it('dispatch enabled with a disabled member lists that member excluded without excluding the whole group', async () => {
+    const cfg = groupConfig();
+    cfg.parallelism.groups!.stale = {
+      members: [
+        { id: 'codex-c', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'] },
+        { id: 'muse-d', cli: 'muse', model: 'muse-spark-1.3', roles: ['coding'], enabled: false },
+      ],
+    };
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('default (members: 2');
+    expect(section).toContain('stale (members: 2');
+    // The group itself is "configured" — only the disabled member is excluded.
+    expect(section).toContain('stale (members: 2; clis: codex/muse; roles: coding; configured; excluded members: muse-d (member disabled))');
+    expect(section).not.toContain('not eligible');
+    expect(section).not.toContain('Available groups');
+  });
+
+  it('a config with an uncoverable required role is rejected before rendering (validateParallelismConfig OG_CONFIG_REFERENCE)', async () => {
+    // Confirms the premise behind dropping "uncovered role" rendering: this
+    // shape never reaches `groupSummaries()` because `writeAiwgConfig` (and
+    // `buildParallelismSection`'s own `resolveParallelism()` call) reject it
+    // first, every single enabled-member exclusion remains representable.
+    const cfg = groupConfig();
+    cfg.parallelism.groups!.default.members = [
+      { id: 'codex-a', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'], enabled: false },
+    ];
+    await expect(writeAiwgConfig(tmpDir, cfg)).rejects.toThrow('No enabled member covers coding');
+  });
+
+  it('dispatch enabled without groups keeps the native rubric and names no Available groups', async () => {
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('Configured groups: none');
+    expect(section).toContain('the native delegation rubric above applies unchanged');
+    expect(section).not.toContain('Available groups');
+    expect(section).not.toContain('keep work local or add a group');
+  });
+
+  it('overriding all five health settings changes the rendered numbers and shows project origin', async () => {
+    const cfg = groupConfig();
+    cfg.parallelism.health = {
+      checkSeconds: 7, startupSeconds: 30, quietSeconds: 45, stallSeconds: 120, hardTimeoutSeconds: 600,
+    };
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('check every 7s (project config)');
+    expect(section).toContain('confirm startup within 30s (project config)');
+    expect(section).toContain('quiet limit 45s (project config)');
+    expect(section).toContain('stall limit 120s (project config)');
+    expect(section).toContain('hard stop 600s (project config)');
+    expect(section).not.toContain('every 15s');
+    expect(section).not.toContain('(default)');
+  });
+
+  it('unconfigured health renders defaults with default origin', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('check every 15s (default)');
+    expect(section).toContain('confirm startup within 60s (default)');
+    expect(section).toContain('quiet limit 90s (default)');
+    expect(section).toContain('stall limit 300s (default)');
+    expect(section).toContain('hard stop 1800s (default)');
+    expect(section).toContain('Resolved values win over these configured values');
+    expect(section).toContain('--format json');
+    expect(section).toContain('invocation.health');
+  });
+
+  it('omits only the orchestration/health block with a one-line note when bundled defaults cannot be loaded, preserving caps and rubric', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir, {
+      validateWorkerConfig: () => Promise.reject(new Error('Failed to load AIWG default config: Error: ENOENT: no such file or directory')),
+    });
+    expect(section).toContain(PARALLELISM_BLOCK_START);
+    expect(section).toContain(PARALLELISM_BLOCK_END);
+    expect(section).toContain(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
+    // Everything that does not depend on the worker-model defaults still renders.
+    expect(section).toContain('max_parallel_subagents');
+    expect(section).toContain('*Rationale*:');
+    expect(section).toContain('### Model-selected delegation rubric');
+    expect(section).toContain('aiwg-model-efficiency-worker');
+    expect(section).toContain('aiwg-model-coding-worker');
+    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('native custom subagents');
+    // Only the orchestration/health details that need the defaults are omitted.
+    expect(section).not.toContain('### Orchestration groups');
+    expect(section).not.toContain('Configured groups:');
+    expect(section).not.toContain('Configured health windows');
+    const noteLines = section.split('\n').filter((line) => line.includes('could not be resolved'));
+    expect(noteLines).toHaveLength(1);
+  });
+
+  it('propagates a worker-config validation error unrelated to bundled defaults instead of degrading', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    await expect(buildParallelismSection(tmpDir, {
+      validateWorkerConfig: () => Promise.reject(new Error('OG_CONFIG_REFERENCE: some unrelated fatal validation error')),
+    })).rejects.toThrow('some unrelated fatal validation error');
+  });
+
+  it('every advertised CLI command parses in the real argument parsers', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    const resolveMatch = /`(aiwg models resolve [^`]+)`/.exec(section);
+    expect(resolveMatch).not.toBeNull();
+    const argv = resolveMatch![1].split(' ').slice(3).map((token) => token
+      .replace('<role>', 'coding').replace('<class>', 'bugfix').replace('<group>', 'default')
+      .replace('<file>', '/tmp/brief.md').replace('<tree>', '/tmp/tree'));
+    const request = parseWorkerCommandArgs(argv);
+    expect(request).toMatchObject({
+      role: 'coding', task: 'bugfix', group: 'default', brief: '/tmp/brief.md',
+      workdir: '/tmp/tree', final_output: '/tmp/brief.md', transport: 'shell', format: 'shell',
+    });
+    const jsonArgv = argv.map((token, index) => (token === 'shell' && argv[index - 1] === '--format' ? 'json' : token));
+    expect(parseWorkerCommandArgs(jsonArgv).format).toBe('json');
+    const statusMatch = /`(aiwg ralph-external --status --workers --runs-root [^`]+)`/.exec(section);
+    expect(statusMatch).not.toBeNull();
+    const statusArgv = statusMatch![1].split(' ').slice(2).map((token) => (token === '<dir>' ? '/tmp/runs' : token));
+    expect(parseWorkerStatusArgs(statusArgv)).toMatchObject({ runsRoot: '/tmp/runs', json: true });
+    expect(section).not.toContain('doctor --groups');
+    expect(section).not.toContain('steward models --group');
+  });
+
+  it('100 groups render at most eight summaries with a +N more tail', async () => {
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    cfg.parallelism.groups = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`g-${i}`, {
+      members: [{ id: `m-${i}`, cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'] }],
+    }]));
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('(+92 more)');
+    expect((section.match(/\(members: /g) ?? []).length).toBe(MAX_SHOWN_GROUPS);
+    expect(section.length).toBeLessThan(12000);
+  });
+
+  it('quiet-state guidance matches the observer: quiet never stops, only hung authorizes an owned stop', async () => {
+    let now = 0;
+    const observer = createWorkerHealthObserver({
+      invocationId: 'guidance-quiet', now: () => now, wallNow: () => 0,
+      launchTime: new Date(0).toISOString(), health: { handshake: 'process-only' },
+    });
+    observer.processStarted({ pid: 1, startTicks: 100, executable: '/usr/bin/codex' });
+    now = 91_000;
+    expect(observer.check(now).state).toBe('quiet');
+    expect(observer.check(now).confidence).toBe('suspected');
+    expect(observer.shouldStop()).toBe(false);
+    now = 301_000;
+    expect(observer.check(now).state).toBe('stalled');
+    expect(observer.shouldStop()).toBe(false);
+    now = 361_000;
+    expect(observer.check(now).state).toBe('hung');
+    expect(observer.shouldStop()).toBe(false);
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).not.toContain('suspect transition');
+    expect(section).toContain('is not a stop');
+    expect(section).toContain('only `hung`');
+    expect(section).toContain('a no-progress stop');
+    expect(section).toContain('only a worker this conductor owns');
+    expect(section).toContain('Confirm the stop');
+    expect(section).toContain('preserve partial work');
+    expect(section).toContain('OBSERVER_GAP');
+    expect(section).toContain('unknown, never worker failure');
+    expect(section).toContain('Heartbeats and log bytes are not progress');
+    // "only `hung`" is scoped to no-progress diagnosis; the launcher's other
+    // independent stop conditions (session-launcher.mjs ~596) are named too.
+    expect(section).toContain('stops independently of progress state');
+    expect(section).toContain('failed-to-start');
+    expect(section).toContain('HARD_DEADLINE');
+    expect(section).toContain('STEP_LIMIT');
+    expect(section).toContain('fatal observer-record failure');
+  });
+
+  it('preserves caps and rubric alongside the dispatch block', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('max_parallel_subagents');
+    expect(section).toContain('aiwg-model-efficiency-worker');
+    expect(section).toContain('aiwg-model-coding-worker');
+    expect(section).toContain('aiwg-model-reasoning-worker');
+  });
+
+  it('describes health-window scaling as the largest applicable factor, never a product, and limits only the hard deadline/grace periods by wall-transport ceilings', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('the single largest applicable role/effort/model factor, never their product');
+    expect(section).toContain('180s/600s from the 90s/300s defaults');
+    expect(section).toContain('112.5s/375s');
+    expect(section).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
+    expect(section).toContain('startup, quiet, and stall keep their configured or scaled values');
+    expect(section).toContain('truncatedWindows');
+    expect(section).not.toContain('cap every window');
+  });
+
+  it('never writes process.env.AIWG_HOME while resolving the config (no set/delete observed)', async () => {
+    await writeAiwgConfig(tmpDir, groupConfig());
+    const watch = watchEnvWrites();
+    try {
+      await buildParallelismSection(tmpDir);
+    } finally {
+      watch.restore();
+    }
+    expect(watch.log.filter((entry) => entry.key === 'AIWG_HOME')).toEqual([]);
+  });
+
+  it('two concurrent builds resolve independently without observing or mutating a shared AIWG_HOME', async () => {
+    const dirA = makeTmpDir();
+    const dirB = makeTmpDir();
+    try {
+      await writeAiwgConfig(dirA, groupConfig());
+      await writeAiwgConfig(dirB, emptyConfig(['claude']));
+      const watch = watchEnvWrites();
+      let sectionA = '';
+      let sectionB = '';
+      try {
+        [sectionA, sectionB] = await Promise.all([
+          buildParallelismSection(dirA),
+          buildParallelismSection(dirB),
+        ]);
+      } finally {
+        watch.restore();
+      }
+      expect(sectionA).toContain('### Orchestration groups');
+      expect(sectionB).not.toContain('### Orchestration groups');
+      expect(sectionB).toContain('4 (provider default for claude)');
+      expect(watch.log.filter((entry) => entry.key === 'AIWG_HOME')).toEqual([]);
+    } finally {
+      rmSync(dirA, { recursive: true, force: true });
+      rmSync(dirB, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AIWG_HOME bundled-defaults fallback with no env mutation (#1362 fix-first review item 1)', () => {
+  let projectDir: string;
+  let emptyHomeDir: string;
+  const originalAiwgHome = process.env.AIWG_HOME;
+  const originalHome = process.env.HOME;
+
+  beforeEach(() => {
+    projectDir = makeTmpDir();
+    emptyHomeDir = makeTmpDir();
+    delete process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT;
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(emptyHomeDir, { recursive: true, force: true });
+    if (originalAiwgHome !== undefined) process.env.AIWG_HOME = originalAiwgHome;
+    else delete process.env.AIWG_HOME;
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+  });
+
+  it('resolves bundled defaults via findPackageRoot when AIWG_HOME is unset and HOME is an empty temp dir', async () => {
+    delete process.env.AIWG_HOME;
+    process.env.HOME = emptyHomeDir; // no `.local/share/ai-writing-guide` exists here
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    cfg.parallelism.groups = {
+      default: { members: [{ id: 'codex-a', cli: 'codex', model: 'gpt-6.1-sol', roles: ['coding'] }] },
+    };
+    // Bypass writeAiwgConfig's own validation: it resolves ConfigLoader's
+    // default location directly from AIWG_HOME/HOME with no bundled-defaults
+    // fallback, so it would fail here even though the generator should not.
+    writeConfigFileDirect(projectDir, cfg);
+    const section = await buildParallelismSection(projectDir);
+    expect(section).not.toContain(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
+    expect(section).toContain('### Orchestration groups (group dispatch enabled)');
+    expect(section).toContain('check every 15s (default)');
+    expect(section).toContain('hard stop 1800s (default)');
   });
 });
 

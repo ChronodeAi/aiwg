@@ -1,8 +1,8 @@
 import {
-  mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
@@ -13,6 +13,11 @@ import {
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 import { describeWithSqlite } from '../../../helpers/sqlite.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const grokbotNativeRoot = resolve('test/fixtures/sessions/grokbot/native');
 const grokbotFixtureIds = JSON.parse(readFileSync(resolve(grokbotNativeRoot, 'fixture-ids.json'), 'utf8')) as {
@@ -47,6 +52,19 @@ describe('sessions CLI contracts', () => {
     const handlers = buildHandlerMap();
     expect(handlers.get('session')?.description).toContain('Start an agentic session');
     expect(handlers.get('sessions')).toBe(sessionsHandler);
+  });
+
+  it('documents workspace selection, catalog overrides and native IDs in help', async () => {
+    expect((await sessionsHandler.execute(context(['--help', '--json']))).exitCode).toBe(0);
+    const usage = jsonOutput(log).data.usage;
+    for (const command of ['list', 'show', 'timeline', 'search']) {
+      expect(usage.split('\n').find((line: string) => line.trimStart().startsWith(`${command} `)))
+        .toContain('--workspace <path-or-id>');
+    }
+    expect(usage).toContain('--db <path>');
+    expect(usage).toContain('relative paths resolve from cwd');
+    expect(usage).toContain('provider-native IDs');
+    expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
   });
 
   it('returns one explicit deterministic disposition for every canonical provider', async () => {
@@ -590,14 +608,275 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   let root: string;
   let log: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = mkdtempSync(resolve(tmpdir(), 'aiwg-sessions-cli-'));
+    // Project inference must not adopt real or sandbox-supplied ancestor
+    // markers outside this test's temporary filesystem.
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const ancestorMarkers = new Set<string>();
+    for (let ancestor = dirname(root);; ancestor = dirname(ancestor)) {
+      ancestorMarkers.add(resolve(ancestor, '.git'));
+      ancestorMarkers.add(resolve(ancestor, '.aiwg/aiwg.config'));
+      if (dirname(ancestor) === ancestor) break;
+    }
+    vi.mocked(existsSync).mockImplementation((path) =>
+      !ancestorMarkers.has(String(path)) && actual.existsSync(path));
     log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  async function importOtherWorkspace(nativeId = '00000000-0000-4000-8000-000000002820') {
+    const project = resolve(root, 'project');
+    const other = resolve(root, 'other');
+    const home = resolve(root, 'provider-home');
+    const manifest = resolve(root, 'discovery.json');
+    const database = resolve(project, '.aiwg/sessions/catalog.sqlite');
+    mkdirSync(resolve(project, '.aiwg'), { recursive: true });
+    writeFileSync(resolve(project, '.aiwg/aiwg.config'), '{}\n');
+    mkdirSync(other);
+    const providerDirectory = resolve(home, '.claude/projects', other.replace(/[/:]+/g, '-'));
+    mkdirSync(providerDirectory, { recursive: true });
+    for (const id of [nativeId, `${nativeId}-child`]) {
+      writeFileSync(resolve(providerDirectory, `${id}.jsonl`), JSON.stringify({
+        type: 'user', uuid: `event-${id}`, sessionId: id, cwd: other,
+        timestamp: '2026-10-01T10:00:00.000Z',
+        message: { role: 'user', content: 'Synthetic recovery transcript.' },
+      }) + '\n');
+    }
+    expect((await sessionsHandler.execute(context([
+      'import', resolve('test/fixtures/sessions/generic/valid-v1.jsonl'),
+      '--source-id', 'generic-fixture-v1', '--workspace', project, '--json',
+    ], project))).exitCode).toBe(0);
+    expect((await sessionsHandler.execute(context([
+      'discover', '--workspace', other, '--provider-home', home,
+      '--expected-providers', 'claude', '--manifest', manifest, '--json',
+    ], project))).exitCode).toBe(0);
+    expect((await sessionsHandler.execute(context([
+      'import-discovered', '--workspace', other, '--manifest', manifest, '--confirm', '--json',
+    ], project))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      receipt: { totals: { accepted: 2, sessionsAccepted: 2 } },
+      catalog: { database, workspaceId: other, hint: expect.stringContaining('--db') },
+    });
+    return { project, other, database, nativeId };
+  }
+
+  it('finds outside-workspace discovered imports from both cwds and reports scoped-out counts', async () => {
+    const { project, other, database, nativeId } = await importOtherWorkspace();
+    expect((await sessionsHandler.execute(context(['list', '--limit', '1', '--json'], project))).exitCode).toBe(0);
+    const defaultList = jsonOutput(log).data;
+    expect(defaultList.page.total).toBe(1);
+    expect(defaultList.coverage.catalogScope).toMatchObject({
+      database, workspaceId: project, total: 3,
+      otherWorkspaces: [{ workspaceId: other, count: 2 }],
+      hint: expect.stringContaining('--workspace'),
+    });
+    await sessionsHandler.execute(context(['list'], project));
+    const textList = String(log.mock.calls.at(-1)?.[0]);
+    expect(textList).toContain(other);
+    expect(textList).toContain('2 sessions');
+    expect(textList).toContain('--workspace');
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--json'], project))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.session.workspaceId).toBe(other);
+    await sessionsHandler.execute(context(['show', 'missing-native-id', '--json'], project));
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'SESSION_NOT_FOUND',
+      details: { catalogScope: { otherWorkspaces: [{ workspaceId: other, count: 2 }] } },
+    });
+    expect(jsonOutput(log).error.message).toContain('--workspace');
+
+    let internalId = '';
+    for (const cwd of [project, other]) {
+      // --db from the non-project cwd must read the importing project's catalog.
+      const scope = cwd === project ? ['--workspace', other] : ['--db', database];
+      expect((await sessionsHandler.execute(context(['list', '--limit', '1', ...scope, '--json'], cwd))).exitCode).toBe(0);
+      const listed = jsonOutput(log).data;
+      expect(listed.page.total).toBe(2);
+      expect(listed.items).toHaveLength(1);
+      expect(listed.coverage.catalogScope.otherWorkspaces).toEqual([{ workspaceId: project, count: 1 }]);
+      expect((await sessionsHandler.execute(context(['show', nativeId, ...scope, '--json'], cwd))).exitCode).toBe(0);
+      const shown = jsonOutput(log).data;
+      expect(shown.session).toMatchObject({ nativeSessionId: nativeId, workspaceId: other });
+      expect(shown.events).toHaveLength(1);
+      if (internalId) expect(shown.session.sessionId).toBe(internalId);
+      internalId = shown.session.sessionId;
+      expect((await sessionsHandler.execute(context(['timeline', ...scope, '--json'], cwd))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toHaveLength(2);
+      expect((await sessionsHandler.execute(context(['search', 'recovery', ...scope, '--json'], cwd))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toHaveLength(2);
+    }
+  });
+
+  it('resolves relative --db and canonical cwd without a project instead of choosing another workspace', async () => {
+    const { other, database, nativeId } = await importOtherWorkspace();
+    expect((await sessionsHandler.execute(context([
+      'list', '--db', '../project/.aiwg/sessions/catalog.sqlite', '--json',
+    ], other))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      page: { total: 2 }, coverage: { workspaceId: other, catalogScope: { database } },
+    });
+    const alias = resolve(root, 'other-alias');
+    symlinkSync(other, alias, 'dir');
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--db', database, '--json'], alias))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.session.workspaceId).toBe(other);
+
+    expect((await sessionsHandler.execute(context([
+      'import', resolve('test/fixtures/sessions/claude/active-session.jsonl'),
+      '--provider', 'claude', '--source-id', 'local-other', '--workspace', other, '--json',
+    ], other))).exitCode).toBe(0);
+    expect((await sessionsHandler.execute(context(['list', '--json'], alias))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      page: { total: 1 },
+      coverage: { catalogScope: { database: resolve(other, '.aiwg/sessions/catalog.sqlite') } },
+    });
+  });
+
+  it('reproduces issue 2820 reads, including no-project list before and after --db', async () => {
+    // The helper performs discover and import-discovered from the importing
+    // project with --workspace pointing outside it, using only temporary data.
+    const { project, other, database, nativeId } = await importOtherWorkspace();
+    expect((await sessionsHandler.execute(context(['list', '--limit', '100', '--json'], project))).exitCode).toBe(0);
+    const original = jsonOutput(log).data;
+    expect(original.page.total).toBe(1);
+    expect(original.coverage.catalogScope.otherWorkspaces).toEqual([{ workspaceId: other, count: 2 }]);
+    // Reindex is an existing mutation: unlike reads, it requires --workspace.
+    expect((await sessionsHandler.execute(context(['reindex', '--json'], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error.code).toBe('MISSING_ARGUMENT');
+    expect((await sessionsHandler.execute(context(['reindex', '--workspace', project, '--json'], project))).exitCode).toBe(0);
+    await sessionsHandler.execute(context(['list', '--limit', '100', '--json'], project));
+    expect(jsonOutput(log).data.items).toEqual(original.items);
+    expect(jsonOutput(log).data.page.total).toBe(1);
+    await sessionsHandler.execute(context(['list', '--limit', '1', '--workspace', other, '--json'], project));
+    expect(jsonOutput(log).data.page.total).toBe(2);
+
+    // With no project there is a separate empty cwd catalog. --db is necessary
+    // to reach the original catalog, and matching cwd now selects its rows.
+    expect((await sessionsHandler.execute(context(['list', '--limit', '1', '--json'], other))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({
+      page: { total: 0 },
+      coverage: { catalogScope: { database: resolve(other, '.aiwg/sessions/catalog.sqlite') } },
+    });
+    expect((await sessionsHandler.execute(context(['list', '--limit', '1', '--db', database, '--json'], other))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.page.total).toBe(2);
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--json'], project))).exitCode).toBe(0);
+    const parent = jsonOutput(log).data.session.sessionId;
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--db', database, '--json'], other))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.session.sessionId).toBe(parent);
+  });
+
+  it.each(['00000000-0000-4000-8000-000000002820', 'session_native-2820'])(
+    'lists every native-ID candidate across workspaces and providers in JSON and text errors (%s)', async (reference) => {
+    const { project, other, database, nativeId } = await importOtherWorkspace(reference);
+    const sameId = resolve(root, `${nativeId}.jsonl`);
+    writeFileSync(sameId, JSON.stringify({
+      type: 'user', uuid: 'other-parent', sessionId: nativeId,
+      timestamp: '2026-10-01T10:00:00.000Z',
+      message: { role: 'user', content: 'Another workspace parent.' },
+    }) + '\n');
+    expect((await sessionsHandler.execute(context([
+      'import', sameId, '--provider', 'claude', '--source-id', 'other-parent',
+      '--workspace', project, '--json',
+    ], project))).exitCode).toBe(0);
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--json'], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'SESSION_AMBIGUOUS',
+      details: { candidates: expect.arrayContaining([
+        expect.objectContaining({ provider: 'claude', workspaceId: project }),
+        expect.objectContaining({ provider: 'claude', workspaceId: other }),
+      ]) },
+    });
+    // Explicit workspace selection resolves the cross-workspace collision.
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--workspace', other, '--json'], project))).exitCode).toBe(0);
+    const generic = resolve(root, 'same-id-generic.jsonl');
+    writeFileSync(generic, readFileSync(resolve('test/fixtures/sessions/generic/valid-v1.jsonl'), 'utf8')
+      .replaceAll('session-1', nativeId).replaceAll('generic-fixture-v1', 'other-provider'));
+    expect((await sessionsHandler.execute(context([
+      'import', generic, '--source-id', 'other-provider', '--workspace', other, '--json',
+    ], project))).exitCode).toBe(0);
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--json'], project))).exitCode).toBe(2);
+    const candidates = jsonOutput(log).error.details.candidates;
+    expect(candidates).toHaveLength(3);
+    expect((await sessionsHandler.execute(context(['show', nativeId.slice(0, -1), '--json'], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error.code).toBe('SESSION_AMBIGUOUS');
+    expect(new Set(candidates.map((candidate: any) => candidate.provider))).toEqual(new Set(['claude', 'generic']));
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--workspace', other, '--json'], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error.details.candidates).toHaveLength(2);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect((await sessionsHandler.execute(context(['show', nativeId, '--db', database], other))).exitCode).toBe(2);
+    const message = String(error.mock.calls.at(-1)?.[0]);
+    expect(message).toContain('SESSION_AMBIGUOUS');
+    for (const candidate of candidates) {
+      expect(message).toContain(candidate.sessionId);
+      expect(message).toContain(candidate.provider);
+      expect(message).toContain(candidate.workspaceId);
+      expect((await sessionsHandler.execute(context([
+        'show', candidate.sessionId, '--workspace', candidate.workspaceId, '--db', database, '--json',
+      ], other))).exitCode).toBe(0);
+    }
+  });
+
+  it('resolves native IDs and unique prefixes with events and tags, and rejects ambiguous references', async () => {
+    const { project, other, database, nativeId } = await importOtherWorkspace();
+    const scope = ['--workspace', other, '--db', database, '--json'];
+    await sessionsHandler.execute(context(['show', nativeId, ...scope], project));
+    const internalId = jsonOutput(log).data.session.sessionId;
+    expect((await sessionsHandler.execute(context(['tag', internalId, 'recovered', ...scope], project))).exitCode).toBe(0);
+    for (const reference of [nativeId, `${nativeId}-c`, internalId]) {
+      expect((await sessionsHandler.execute(context(['show', reference, ...scope], project))).exitCode).toBe(0);
+      const shown = jsonOutput(log).data;
+      expect(shown.events).toHaveLength(1);
+      expect(shown.session.nativeSessionId).toBe(reference === `${nativeId}-c` ? `${nativeId}-child` : nativeId);
+      if (reference !== `${nativeId}-c`) expect(shown.tags).toEqual(['recovered']);
+    }
+    expect((await sessionsHandler.execute(context(['show', nativeId.slice(0, -1), ...scope], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error.code).toBe('SESSION_AMBIGUOUS');
+    expect((await sessionsHandler.execute(context(['show', '%', ...scope], project))).exitCode).toBe(4);
+    expect(jsonOutput(log).error.code).toBe('SESSION_NOT_FOUND');
+
+    // A native ID duplicated across sources must not silently pick one record.
+    for (const source of ['duplicate-a', 'duplicate-b']) {
+      expect((await sessionsHandler.execute(context([
+        'import', resolve('test/fixtures/sessions/claude/active-session.jsonl'),
+        '--provider', 'claude', '--source-id', source, ...scope,
+      ], project))).exitCode).toBe(0);
+    }
+    expect((await sessionsHandler.execute(context(['show', 'active-session', ...scope], project))).exitCode).toBe(2);
+    expect(jsonOutput(log).error.code).toBe('SESSION_AMBIGUOUS');
+    for (const candidate of jsonOutput(log).error.details.candidates) {
+      expect((await sessionsHandler.execute(context(['delete', candidate.sessionId, '--confirm', ...scope], project))).exitCode).toBe(0);
+    }
+    await sessionsHandler.execute(context(['list', ...scope], project));
+    expect(jsonOutput(log).data.coverage.catalogScope.total).toBe(3);
+    expect((await sessionsHandler.execute(context(['show', 'active-session', ...scope], project))).exitCode).toBe(4);
+  });
+
+  it('resolves the parent native ID when subagent artifacts repeat it', async () => {
+    const { project, other, database, nativeId } = await importOtherWorkspace();
+    const scope = ['--workspace', other, '--db', database, '--json'];
+    await sessionsHandler.execute(context(['show', nativeId, ...scope], project));
+    const parentId = jsonOutput(log).data.session.sessionId;
+    const subagent = resolve(root, 'agent-synthetic.jsonl');
+    writeFileSync(subagent, JSON.stringify({
+      type: 'user', uuid: 'subagent-event', sessionId: nativeId,
+      isSidechain: true, agentId: 'agent-synthetic',
+      timestamp: '2026-10-01T10:00:01.000Z',
+      message: { role: 'user', content: 'Synthetic subagent transcript.' },
+    }) + '\n');
+    expect((await sessionsHandler.execute(context([
+      'import', subagent, '--provider', 'claude', '--source-id', 'subagent', ...scope,
+    ], project))).exitCode).toBe(0);
+    await sessionsHandler.execute(context(['list', ...scope], project));
+    const subagentId = jsonOutput(log).data.items.find((session: any) => session.sourceId === 'subagent').sessionId;
+    await sessionsHandler.execute(context(['show', subagentId, ...scope], project));
+    expect(jsonOutput(log).data.events[0].extensions['native.claude'].transcriptFamily)
+      .toMatchObject({ sourceArtifactSessionId: '[REDACTED:content]', subagent: true });
+    expect((await sessionsHandler.execute(context(['show', nativeId, ...scope], project))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.session.sessionId).toBe(parentId);
+    expect(jsonOutput(log).data.events).toHaveLength(1);
   });
 
   it('imports a Grok Bot native transcript replica into the catalog', async () => {
@@ -699,7 +978,7 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   });
 
   it('fails safely when a non-project catalog has multiple workspace candidates', async () => {
-    const isolated = mkdtempSync('/var/tmp/aiwg-sessions-ambiguous-');
+    const isolated = mkdtempSync(resolve(tmpdir(), 'aiwg-sessions-ambiguous-'));
     try {
       const fixture = resolve('test/fixtures/sessions/claude/active-session.jsonl');
       const database = resolve(isolated, 'ambiguous.sqlite');

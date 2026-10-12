@@ -67,13 +67,9 @@
  * `{"event":"user","message":<brief>}` (brief JSON-encoded so embedded
  * newlines can never desynchronize the one-line/one-turn framing or be
  * mistaken for a second message), then closes stdin (EOF) —
- * `buildAntigravityStdinFrame` below. The shared stdin vocabulary is
- * frozen (`closed`/`brief-text`/`brief-json`) and has no such frame, and
- * the shared `workerStdinBytes()` cannot render one. The registry therefore
- * declares `stdin: "closed"` with the stdin control unqualified, so dispatch
- * is blocked; delivering this frame needs provider-supplied stdin frames in
- * the shared renderer (#2998). `ANTIGRAVITY_DIRECT_STDIN` names the frame
- * this adapter needs; it is not a registry stdin kind.
+ * `buildAntigravityStdinFrame` below. The shared adapter-frame stdin kind
+ * delivers those exact bytes and closes stdin. The stdin control remains
+ * unqualified pending an authenticated smoke run.
  *
  * Model/effort/sandbox/no-bypass evidence, and the rest of the headless
  * invariants, are unchanged from round 0 and still hold: `--model`/
@@ -113,14 +109,8 @@ export const ANTIGRAVITY_SUPPORTED_VERSIONS = Object.freeze(['1.3.3']);
 /** Live `agy --help` (1.3.3): "Reasoning effort for the current CLI
  * session (low|medium|high|xhigh|max)". */
 export const ANTIGRAVITY_DIRECT_EFFORT_VALUES = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-/** New stdin contract (module doc above): one NDJSON `{"event":"user",
- * "message":<brief>}` line, then EOF. NOT yet implemented by the shared
- * `workerStdinBytes()` in src/serve/worker-stdin-frame.mjs (needed follow-up,
- * reported rather than made here). Supersedes round 0's incorrect
- * 'brief-text' (a bare `--print` with no value is a hard argv error on the
- * real CLI, module doc above; raw unframed brief text is also not valid
- * stream-json input). */
-export const ANTIGRAVITY_DIRECT_STDIN = 'ndjson-user-message';
+/** One adapter-supplied NDJSON user line, then EOF. */
+export const ANTIGRAVITY_DIRECT_STDIN = 'adapter-frame';
 /** Only the sandboxed, non-write contract is accepted: `--mode accept-edits`
  * is never emitted (module doc above), so a 'workspace-write' request is
  * refused rather than silently downgraded to read-only. */
@@ -232,9 +222,13 @@ export class AntigravityAdapter extends ProviderAdapter {
       throw new Error('Antigravity worker requires an absolute workspace');
     }
     const brief = invocation?.brief;
-    if (typeof brief !== 'string' || !brief || brief.includes('\0')) {
-      throw new Error('Antigravity worker requires a non-empty brief');
+    // Resolution supplies brief text; installed rechecks carry only its path.
+    // Neither form contributes prompt bytes to argv.
+    if (brief !== undefined ? typeof brief !== 'string' || !brief || brief.includes('\0')
+      : typeof invocation?.briefPath !== 'string' || !invocation.briefPath.startsWith('/') || invocation.briefPath.includes('\0')) {
+      throw new Error('Antigravity worker requires a non-empty brief or an absolute brief path');
     }
+
     return [
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -244,6 +238,8 @@ export class AntigravityAdapter extends ProviderAdapter {
       '--disable-slash-commands',
     ];
   }
+
+  buildWorkerStdinFrame(brief) { return buildAntigravityStdinFrame(brief); }
 
   /** No documented stdin abort channel; cancellation stays with owned process control. */
   getAbortInput() { return null; }

@@ -1,3 +1,4 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,7 +29,8 @@ vi.mock('../../../src/decision/heldout/d29-generator-ids.js', async original => 
   return { ...module, D29_PAID_GENERATOR_IDS: [...module.D29_PAID_GENERATOR_IDS, 'heldout-lamp/v1', 'heldout-lamp-splits/v1'] };
 });
 const dirs: string[] = [];
-afterEach(async () => { preflight.failSource = false; vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { preflight.failSource = false; vi.useRealTimers();
+  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('offline-fixture');
 async function setup(count = 2) {
   const root = await mkdtemp(join(tmpdir(), 'heldout-test-')); dirs.push(root); preflight.canonical = root;
@@ -198,6 +200,54 @@ describe('held-out collector dispatch and durable accounting', () => {
     await expect(c.run(transport)).rejects.toThrow('baseline-changed');
     expect(transport).toHaveBeenCalledOnce();
   });
+  // Regression for an intermittent CI failure (observed under load as this exact test returning
+  // `{ reason: 'served-model', completedRows: 0 }` instead of `{ reason: 'budget-exhausted',
+  // completedRows: 1 }`). Root cause: `jev.ts` independently re-parsed the identical response bytes
+  // twice (once for its wire-level observer, once for the main answer) under a wall-clock parse timer
+  // (since removed), so one parse could fail under host contention while the other succeeded. The fix parses each response
+  // body exactly once in `jev.ts` (`observeParsed`) and derives both the observer's metadata and the
+  // typed answer from that single parse, so the two can no longer disagree about one response: a
+  // parse failure is a failure for both, and a successful parse is identical for both. This group
+  // proves the symptom cannot occur by construction (there is only one parse left to fail on), and
+  // separately proves an unknown model is never treated as success or as a model mismatch.
+  it('a one-time unparseable response retries clean and is never classified as served-model', async () => {
+    const c = await setup(1);
+    // The first body fails the single bounded parse (truncated JSON); the retry is valid.
+    let calls = 0;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => ++calls === 1
+      ? new Response('{"model": "jev-1.13.0", "answers": {', { headers: { 'content-type': 'application/json' } })
+      : reply(init));
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'complete', reason: null, completedRows: 1, reservedUsdMicros: 152 });
+    // Retried as a new physical dispatch (collector-level retry), not absorbed inside one jev.ts call.
+    expect(transport).toHaveBeenCalledTimes(2);
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(2);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'retryable', reason: 'invalid-output', inputTokens: null, outputTokens: null });
+    expect(events[0].attempt.result?.reason).not.toBe('served-model');
+    expect(events[1].attempt.result).toMatchObject({ disposition: 'success', reason: 'ok' });
+  });
+  it('a response with no model field at all is reported unknown, not success and not served-model', async () => {
+    const c = await setup(1);
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { model: undefined }));
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'stopped', reason: 'model-unknown', completedRows: 0, reservedUsdMicros: 76 });
+    expect(transport).toHaveBeenCalledOnce();
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(1);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'stop', reason: 'model-unknown', servedModel: null });
+  });
+  it('an approved output-token bound still stops a response over it, with the reservation retained', async () => {
+    const c = await setup(1);
+    c.bundle.approval.priceBound.outputTokenBound = 100;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 101 } }));
+    const result = await c.run(transport);
+    expect(result).toMatchObject({ status: 'stopped', reason: 'output-bound', completedRows: 0, reservedUsdMicros: 76 });
+    expect(transport).toHaveBeenCalledOnce();
+    const events = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result);
+    expect(events).toHaveLength(1);
+    expect(events[0].attempt.result).toMatchObject({ disposition: 'stop', reason: 'output-bound', outputTokens: 101 });
+  });
   it('AC3 cancellation and timeout keep the stopping reservation without retry or undefined hashing', async () => {
     for (const kind of ['cancel', 'timeout']) {
       const c = await setup(2); const controller = new AbortController();
@@ -350,8 +400,8 @@ describe('held-out recorded evidence and study interface', () => {
     await expect(real.assertContextLiveSource(process.cwd(), '0'.repeat(40))).rejects.toThrow();
     expect(await readdir(c.root)).toEqual([]);
     const bin = join(c.root, 'bin'); await mkdir(bin);
-    await writeFile(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n', { mode: 0o700 });
-    await writeFile(join(bin, 'npm'), '#!/usr/bin/env node\nprocess.exit(99);\n', { mode: 0o700 });
+    await writeExecutable(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n');
+    await writeExecutable(join(bin, 'npm'), '#!/usr/bin/env node\nprocess.exit(99);\n');
     const prepared = spawnSync(process.execPath, [cli, '--prepare', resolve('agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs'), 'cli-seed', join(c.root, 'prepared')],
       { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
     expect(prepared.status, prepared.stderr).toBe(0);
@@ -780,8 +830,8 @@ describe('held-out calibration scope and two-phase approval', () => {
     expect(estimate).toMatchObject({ calibration: { mode: 'staged', phase: 'calibration' }, rowsInScope: ['row_0', 'row_1'],
       maximumAttempts: 4, reservedUsdMicros: 304, fitsBeforeStop: true, providerCalls: 0 });
     const bin = join(c.root, 'bin'); await mkdir(bin);
-    await writeFile(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n', { mode: 0o700 });
-    await writeFile(join(bin, 'git'), '#!/usr/bin/env node\nif (process.argv[2] === "rev-parse") process.stdout.write("a".repeat(40)); else if (process.argv[2] !== "status") process.exit(2);\n', { mode: 0o700 });
+    await writeExecutable(join(bin, 'aiwg'), '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(JSON.stringify({ artifact_root: c.root })) + ');\n');
+    await writeExecutable(join(bin, 'git'), '#!/usr/bin/env node\nif (process.argv[2] === "rev-parse") process.stdout.write("a".repeat(40)); else if (process.argv[2] !== "status") process.exit(2);\n');
     const path = join(c.root, 'bundle.json'); await writeFile(path, JSON.stringify(c.bundle));
     const dry = spawnSync(process.execPath, [resolve('tools/decision/heldout-study.mjs'), '--dry-run', path, heldoutDigest(c.bundle.approval), c.root],
       { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: bin + ':' + process.env.PATH } });

@@ -4,7 +4,7 @@
  * @source @src/smiths/agentsmith/generator.ts
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AgentGenerator } from '../../../../src/smiths/agentsmith/generator.js';
 import type { AgentOptions } from '../../../../src/smiths/agentsmith/types.js';
 import * as os from 'os';
@@ -18,6 +18,11 @@ describe('AgentGenerator', () => {
   beforeEach(async () => {
     generator = new AgentGenerator();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentsmith-test-'));
+  });
+
+  // tempDir was never removed (#3018), leaking one directory per test.
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('generateAgent', () => {

@@ -189,20 +189,16 @@ Event-type table (verbatim):
 "`end` is always the last event." `end.stopReason` values (verbatim):
 `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, `cancelled`.
 
-**This is why the pre-existing `src/providers/grok-build-headless.ts`
-transport is a DIFFERENT, separate path from this direct-shell profile**:
-that file's `isTerminal`/`isError` checks assume a `type: "message"` /
-`type: "result"` event shape, which matches **neither** `json` (a single
-object with `text`/`stopReason`/...) **nor** `streaming-json` (the ACP
-vocabulary above) as documented here. This profile's
-`grok-build-adapter.mjs` (`observeHealthEvent`, `parseDirectFinal`) only
-ever interprets `streaming-json`/ACP events; it never changes the legacy
-transport, its tests, `tools/providers/grok-build-native-smoke.mjs`, or the
-generic `grok-build` branch in `tools/ralph-external/lib/worker-health.mjs`
-(which still serves that legacy shape for its own consumers), and the
-`test/fixtures/providers/grok-build/health/` fixtures used by that generic
-branch were left/restored unchanged. The direct-shell profile's own ACP
-fixtures live separately under `test/fixtures/providers/grok-build/direct-health/`.
+**Legacy transport alignment (#2994):** `src/providers/grok-build-headless.ts`,
+the shared `grok-build` health observer and the native smoke now interpret this
+same ACP vocabulary. JSON mode validates the single result object's
+`stopReason`; streaming mode requires `end_turn` on `end`, latches failed tool
+calls and errors, and rejects events after a terminal event. The unsupported
+`--no-auto-update` flag was removed from legacy headless/smoke argv. Their
+synthetic fixtures under `test/fixtures/providers/grok-build/health/` mirror
+these documented events. The merged direct adapter and its approved module
+digest remain unchanged. This alignment is documentation-backed only: no live
+capture or account/timing qualification was performed for #2994.
 
 ## 5. Authentication
 

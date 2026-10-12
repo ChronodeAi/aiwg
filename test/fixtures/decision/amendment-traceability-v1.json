@@ -9,10 +9,12 @@
   "amendments": [
     {
       "id": "M01",
-      "title": "Endpoint normalization, redirect/DNS/private-address policy, authorization-header non-forwarding, bounded response parsing",
+      "title": "Endpoint normalization, redirect/DNS/private-address policy, authorization-header non-forwarding, structurally bounded response parsing",
       "gate": "G2",
-      "issues": ["#2593", "#2597"],
+      "issues": ["#2593", "#2597", "#3016"],
       "status": "offline-covered",
+      "decisionRecord": "docs/decision/jev-json-parse.md",
+      "notes": "SEC-RESPONSE-PARSE-TIME retains the control that hostile provider JSON cannot consume unbounded parse time. #3016 replaces the 50 ms wall-clock VM watchdog with a 1 MiB UTF-8 byte cap and 64-container depth cap enforced before the full JSON.parse, a single-pass linear scanner, and duplicate-key rejection in every response object (not only answers). Evidence measures each worst admissible 1 MiB shape, including the maximum 132441 unique keys, within a generous 500 ms process.cpuUsage CPU budget per parse. This CPU regression budget is not a runtime timeout. See decisionRecord for cost, grammar/structure evidence and compatibility audit.",
       "evidence": [
         { "testId": "SEC-DNS:", "file": "test/unit/decision/jev-transport.test.ts" },
         { "testId": "SEC-DNS-PRIVATE", "file": "test/unit/decision/jev-transport.test.ts" },

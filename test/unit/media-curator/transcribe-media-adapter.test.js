@@ -1,5 +1,6 @@
+import { writeExecutableSync } from '../../helpers/write-executable.js';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -28,7 +29,7 @@ function createFakeWhisperx(dir) {
   writeFileSync(join(dir, 'media.wav'), 'fixture-media-bytes', 'utf8');
   writeFileSync(join(dir, 'marker'), '', 'utf8');
   rmSync(join(dir, 'marker'), { force: true });
-  writeFileSync(script, `#!/usr/bin/env bash
+  writeExecutableSync(script, `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$@" > "${dir}/argv.log"
 media="$1"
@@ -52,8 +53,7 @@ cat > "$out_dir/$(basename "$media" .wav).json" <<'JSON'
 }
 JSON
 exit "$\{FAKE_WHISPERX_EXIT:-0}"
-`, 'utf8');
-  chmodSync(script, 0o755);
+`);
   return {
     binDir,
     mediaPath: join(dir, 'media.wav'),

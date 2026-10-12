@@ -1084,13 +1084,18 @@ export function resolveWorkerGroupInstallation(
 /** Validate current model restrictions and group references before any write.
  * Disabled/unbound projects retain their existing config-only edit behavior.
  * This is shared validation, not Tier 1 coherent activation.
+ *
+ * `options.aiwgHome`, when provided, is passed through to `ConfigLoader`
+ * unchanged — it never reads or writes `process.env.AIWG_HOME`. Omitting it
+ * keeps `ConfigLoader`'s own default precedence (`AIWG_HOME` env, else the
+ * user-home install).
  */
-export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig): Promise<void> {
+export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig, options?: { aiwgHome?: string }): Promise<void> {
   const errors = validateParallelismConfig(config.parallelism);
   if (errors.length) throw new Error(errors.join('; '));
   if (!config.parallelism?.worker_dispatch) return;
   const { ConfigLoader } = await import('../models/config-loader.js');
-  await new ConfigLoader(projectDir).load(config.parallelism);
+  await new ConfigLoader(projectDir, options).load(config.parallelism);
 }
 
 /** Hash canonical JSON, treating absent optional model files as null. */
@@ -1920,10 +1925,17 @@ export function getProjectDir(
 }
 
 /**
- * Read .aiwg/aiwg.config.
+ * Read and independently validate .aiwg/aiwg.config EXCEPT for the
+ * worker-model defaults step (`validateWorkerConfigCandidate`), which needs
+ * its own `aiwgHome` resolution and can fail solely because the bundled
+ * model defaults are unreachable. Callers that want to degrade gracefully
+ * on that one failure mode (e.g. generated-context rendering) read the
+ * candidate here, then call `validateWorkerConfigCandidate` themselves and
+ * handle its failure explicitly. `readAiwgConfig` below is the composition
+ * of both steps for callers that want the original all-or-nothing contract.
  * Returns null if the file does not exist.
  */
-export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | null> {
+export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgConfig | null> {
   const localPath = getConfigPath(projectDir);
   const artifactPath = projectAiwgPath(projectDir, CONFIG_FILENAME);
   let filePath = localPath;
@@ -1991,8 +2003,22 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     console.warn(`Invalid gates section in .aiwg/aiwg.config (ignored):\n${gatesErrors.join('\n')}`);
   }
 
-  await validateWorkerConfigCandidate(projectDir, parsed);
+  return parsed;
+}
 
+/**
+ * Read .aiwg/aiwg.config, including worker-model default validation.
+ * Returns null if the file does not exist.
+ *
+ * `aiwgHome` (optional) resolves the bundled AIWG model-defaults location
+ * passed through to `validateWorkerConfigCandidate` / `ConfigLoader`,
+ * without ever reading or writing `process.env.AIWG_HOME`. Omit it to keep
+ * the default precedence (`AIWG_HOME` env, else the user-home install).
+ */
+export async function readAiwgConfig(projectDir: string, options?: { aiwgHome?: string }): Promise<AiwgConfig | null> {
+  const parsed = await readAiwgConfigCandidate(projectDir);
+  if (!parsed) return null;
+  await validateWorkerConfigCandidate(projectDir, parsed, options);
   return parsed;
 }
 

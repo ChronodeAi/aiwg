@@ -26,7 +26,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   ensureDir,
   listMdFiles,
-  listSkillDirs,
   deploySkillDir,
   deploySkillsWithKernelRouting,
   isKernelSkill,
@@ -466,7 +465,7 @@ export async function deploy(opts) {
   if ((shouldDeploySkills || skillsOnly) && !opts.commandsOnly && !opts.rulesOnly) {
     const allSkillDirs = [];
 
-    // Addon skills (aiwg-utils, ralph, etc.)
+    // Addon skills, including a direct addon source (#2873, #3035).
     allSkillDirs.push(...getAddonSkillDirs(srcRoot));
 
     // Framework skills
@@ -665,7 +664,11 @@ export function updateBundledManifest(kernelSkillNames, opts) {
  */
 export function migrateLegacySkillPath(opts) {
   const { dryRun, quiet } = opts;
-  const legacyPath = path.join(os.homedir(), '.hermes', '.aiwg', 'skills');
+  // Resolve through the same HERMES_HOME contract as every other path in
+  // this provider (env var first, platform default otherwise): with
+  // HERMES_HOME set, the legacy tree lives under that root — never under
+  // the process home directory.
+  const legacyPath = path.join(getHermesHome(), '.aiwg', 'skills');
   const newPath = paths.skills;
 
   let legacyExists = false;

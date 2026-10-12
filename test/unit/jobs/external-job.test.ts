@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { writeExecutable } from '../../helpers/write-executable.js';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -89,7 +90,7 @@ describe('Codex single-shot executor', () => {
     const { root, flow } = await fixture();
     const executable = path.join(root, 'fake-codex.mjs');
     const captured = path.join(root, 'captured-stdin.txt');
-    await writeFile(executable, `#!/usr/bin/env node
+    await writeExecutable(executable, `#!/usr/bin/env node
 import fs from 'node:fs';
 const args = process.argv.slice(2);
 const output = args[args.indexOf('--output-last-message') + 1];
@@ -100,7 +101,6 @@ const key = JSON.parse(input.slice(input.indexOf('{'))).aiwgJob.idempotencyKey;
 fs.writeFileSync(output, JSON.stringify({idempotencyKey:key,externalResultUrl:'https://social.example.test/posts/1',account:'brand',verification:'fixture-private-value',attachmentPaths:[]}));
 console.log('token fixture-private-value');
 `);
-    await chmod(executable, 0o700);
     flow.spec.executor.binary = executable;
     const runDirectory = path.join(root, 'run');
     await mkdir(runDirectory);

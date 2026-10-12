@@ -1592,8 +1592,34 @@
           "enum": [
             "closed",
             "brief-text",
-            "brief-json"
+            "brief-json",
+            "adapter-frame"
           ]
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+              },
+              "content": {
+                "type": "string",
+                "maxLength": 1048576
+              },
+              "location": {
+                "const": "run-directory"
+              }
+            },
+            "required": [
+              "name",
+              "content"
+            ]
+          }
         },
         "briefPath": {
           "type": "string",

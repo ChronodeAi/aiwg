@@ -11,11 +11,12 @@ import { hasProvider as hasInstalledProvider } from '../../../../src/models/work
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
+import { recordedWorkerStdinBytes } from '../../../../src/serve/worker-stdin-frame.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function productionFixture() {
+async function productionFixture(adapterFrame = false) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-production-worker-')); roots.push(root);
   const cwd = path.join(root, 'project');
@@ -37,6 +38,7 @@ async function productionFixture() {
   const binding = f.snapshot.installations.codex;
   const profile = adapter.invocationProfiles![binding.profile];
   profile.envAllowlist = []; adapter.invocation.envAllowlist = []; adapter.invocation.stdin = 'closed';
+  if (adapterFrame) adapter.invocation.stdin = 'adapter-frame';
   delete f.snapshot.registry.providers.codex.workerAdapter;
   f.snapshot.registry.workerAdapters = { [id]: adapter };
   f.snapshot.installations = { [id]: binding };
@@ -68,7 +70,8 @@ async function productionFixture() {
   adapter.invocation.versionArgv = [cli, '--qualification-version'];
   const args = (input: any, _profile: any, permissions: any) => [cli, '--model', input.selected.model, '--effort', input.selected.effort.value,
     '--sandbox', permissions.sandbox, '--approval', permissions.approval, '--final-output', input.finalPath];
-  const source = `export const interfaceVersion = 1; export function register(factory) { const cli = ${JSON.stringify(cli)}; factory(${JSON.stringify(id)}, () => ({ getName: () => ${JSON.stringify(id)}, buildWorkerArgs: ${args.toString()} })); }`;
+  const frameHook = adapterFrame ? ', buildWorkerStdinFrame: brief => JSON.stringify({ message: brief.toString() })' : '';
+  const source = `export const interfaceVersion = 1; export function register(factory) { const cli = ${JSON.stringify(cli)}; factory(${JSON.stringify(id)}, () => ({ getName: () => ${JSON.stringify(id)}, buildWorkerArgs: ${args.toString()}${frameHook} })); }`;
   await writeFile(path.join(installed, 'driver.mjs'), source, { mode: 0o644 });
   await writeFile(path.join(installed, 'package.json'), JSON.stringify({ name: id, version: '1.0.0', type: 'module' }), { mode: 0o644 });
   class Owner extends ProviderAdapter { getName() { return id; } buildWorkerArgs = args; }
@@ -98,6 +101,34 @@ async function productionFixture() {
 }
 
 describe('models resolve production installation loading', () => {
+  it('frames from the bound host store and policy despite worker cwd config changes, rejecting changed bindings', async () => {
+    const f = await productionFixture(true);
+    const storePath = path.join(f.configDir, 'worker-installations.json');
+    const storeBytes = JSON.stringify({ version: 1, registrations: [f.record] });
+    await writeFile(storePath, storeBytes, { mode: 0o600 });
+    const resolved = await f.call();
+    expect(resolved.result.exitCode, resolved.output).toBe(0);
+    const invocation = resolved.plan.invocation;
+    const storeDigest = `sha256:${createHash('sha256').update(storeBytes).digest('hex')}`;
+    expect(invocation.shellCommand).toContain(storePath);
+    expect(invocation.shellCommand).toContain(storeDigest);
+    await mkdir(path.join(invocation.cwd, '.aiwg'));
+    await writeFile(path.join(invocation.cwd, '.aiwg/aiwg.config'), '{broken worker config');
+    await writeFile(path.join(invocation.cwd, 'models.json'), '{broken worker model config');
+    const input = { filename: invocation.briefPath, workspace: invocation.cwd, cli: invocation.selected.cli,
+      adapterId: f.record.adapter.id, scopeDigest: invocation.selected.qualificationDigest,
+      briefDigest: invocation.briefDigest, storePath, storeDigest, policy: f.record.installation.policy };
+    vi.stubEnv('AIWG_CONFIG', invocation.cwd);
+    expect((await recordedWorkerStdinBytes(input))!.toString()).toBe(JSON.stringify({ message: await readFile(invocation.briefPath, 'utf8') }));
+    await expect(recordedWorkerStdinBytes({ ...input, policy: {} })).rejects.toThrow(/qualification/);
+    await expect(recordedWorkerStdinBytes({ ...input, adapterId: 'changed' })).rejects.toThrow(/binding changed/);
+    await expect(recordedWorkerStdinBytes({ ...input, scopeDigest: qualificationDigest('changed') })).rejects.toThrow(/binding changed/);
+    await writeFile(invocation.briefPath, 'changed brief');
+    await expect(recordedWorkerStdinBytes(input)).rejects.toThrow(/brief changed/);
+    await writeFile(invocation.briefPath, 'Do the synthetic task.');
+    await writeFile(storePath, storeBytes + '\n');
+    await expect(recordedWorkerStdinBytes(input)).rejects.toThrow(/qualification/);
+  });
   it('renders a qualified installed fake CLI through the production handler', async () => {
     const f = await productionFixture();
     await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });

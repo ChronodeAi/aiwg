@@ -1,6 +1,7 @@
 {
   "T-OG-03": [
-    "test/conformance/orchestration-v1/hermes-direct.test.ts"
+    "test/conformance/orchestration-v1/hermes-direct.test.ts",
+    "test/unit/cli/handlers/use-hermes-addon.test.ts"
   ],
   "T-OG-15": [
     "test/conformance/orchestration-v1/hermes-direct.test.ts"

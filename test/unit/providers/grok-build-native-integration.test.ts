@@ -1,5 +1,6 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -109,14 +110,13 @@ describe('Grok Build native MCP adapter (#2576)', () => {
     await writeFile(config, '# operator comment\n[theme]\nname = "keep"\n');
     await manageGrokBuildMcp(config, [{ name: 'aiwg', type: 'stdio', command: 'aiwg', args: ['mcp', 'serve'] }], { root });
     const binary = join(root, 'grok');
-    await writeFile(binary, `#!/usr/bin/env node
+    await writeExecutable(binary, `#!/usr/bin/env node
 const args = process.argv.slice(2).join(' ');
 if (args === 'inspect --json') console.log(JSON.stringify({ mcpServers: [{ name: 'aiwg', origin: '.grok/config.toml' }] }));
 else if (args === 'mcp list --json') console.log(JSON.stringify([{ name: 'aiwg', enabled: true }]));
 else if (args === 'mcp doctor aiwg --json') console.log(JSON.stringify({ name: 'aiwg', healthy: true }));
 else process.exit(2);
 `);
-    await chmod(binary, 0o755);
     const result = await inspectGrokBuildNative({ projectDir: root, configPath: config, binary });
     expect(result).toMatchObject({ mcp: 'configured', servers: ['aiwg'], diagnostics: [] });
     const configText = await readFile(config, 'utf8');

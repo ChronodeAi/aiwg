@@ -29,6 +29,11 @@ import {
 
 const POLICY_PROVIDER_MIGRATION = 'policy-provider-identity:v2';
 const EVENT_ORIGIN_INTENT_MIGRATION = 'event-origin-intent:v1';
+const VISIBLE_SESSION_PREDICATE = `s.lifecycle != 'tombstoned' AND EXISTS (
+  SELECT 1 FROM session_events e
+  JOIN import_runs r ON r.import_run_id=e.import_run_id
+  WHERE e.session_id=s.session_id AND r.status='committed'
+)`;
 
 interface SqliteStatement {
   run(...params: unknown[]): { changes: number };
@@ -1068,16 +1073,61 @@ export class SessionRepository {
   getSession(id: string, workspaceId?: string): Session | null {
     const row = this.db.prepare(
       `SELECT s.data FROM sessions s
-       WHERE s.session_id=? AND s.lifecycle != ?
-       ${workspaceId ? 'AND s.workspace_id=?' : ''}
-       AND EXISTS (
-         SELECT 1 FROM session_events e
-         JOIN import_runs r ON r.import_run_id=e.import_run_id
-         WHERE e.session_id=s.session_id AND r.status='committed'
-       )`,
+       WHERE s.session_id=? AND ${VISIBLE_SESSION_PREDICATE}
+       ${workspaceId ? 'AND s.workspace_id=?' : ''}`,
     )
-      .get(...(workspaceId ? [id, 'tombstoned', workspaceId] : [id, 'tombstoned']));
+      .get(...(workspaceId ? [id, workspaceId] : [id]));
     return row ? JSON.parse(String(row.data)) as Session : null;
+  }
+
+  findSessionsByReference(reference: string, workspaceId?: string): Session[] {
+    const internal = this.getSession(reference, workspaceId);
+    if (internal) return [internal];
+    const query = (predicate: string) => this.db.prepare(
+      `SELECT s.data FROM sessions s
+       WHERE ${workspaceId ? 's.workspace_id=? AND' : ''} ${VISIBLE_SESSION_PREDICATE} AND (${predicate})
+       ORDER BY s.session_id`,
+    ).all(...(workspaceId ? [workspaceId, reference] : [reference]))
+      .map((row) => JSON.parse(String(row.data)) as Session);
+    const exact = query('s.native_session_id=?');
+    if (exact.length === 1) return exact;
+    if (exact.length > 1) {
+      // Artifact IDs are redacted by native-extension sanitization. The
+      // adapter's boolean subagent flag survives. Only prefer a parent when
+      // every other match is a proven Claude subagent in the same workspace.
+      if (exact.every((session) => session.provider === 'claude'
+        && session.workspaceId === exact[0].workspaceId)) {
+        const classified = exact.map((session) => {
+          const flags = this.db.prepare(`SELECT
+            MAX(json_extract(e.data, '$.extensions."native.claude".transcriptFamily.subagent')=0) AS parent,
+            MAX(json_extract(e.data, '$.extensions."native.claude".transcriptFamily.subagent')=1) AS subagent
+            FROM session_events e JOIN import_runs r ON r.import_run_id=e.import_run_id
+            WHERE e.session_id=? AND r.status='committed'`).get(session.sessionId)!;
+          return { session, parent: flags.parent === 1, subagent: flags.subagent === 1 };
+        });
+        const parents = classified.filter((item) => item.parent && !item.subagent);
+        if (parents.length === 1 && classified.every((item) => item === parents[0]
+          || (item.subagent && !item.parent))) return [parents[0].session];
+      }
+      return exact;
+    }
+    // substr treats %, _ and other characters literally rather than as LIKE patterns.
+    return this.db.prepare(
+      `SELECT s.data FROM sessions s
+       WHERE ${workspaceId ? 's.workspace_id=? AND' : ''} ${VISIBLE_SESSION_PREDICATE}
+       AND (substr(s.native_session_id, 1, length(?))=?
+         OR substr(s.session_id, 1, length(?))=?)
+       ORDER BY s.session_id`,
+    ).all(...(workspaceId ? [workspaceId, reference, reference, reference, reference]
+      : [reference, reference, reference, reference]))
+      .map((row) => JSON.parse(String(row.data)) as Session);
+  }
+
+  listWorkspaceSessionCounts(): Array<{ workspaceId: string; count: number }> {
+    return this.db.prepare(
+      `SELECT s.workspace_id, COUNT(*) AS count FROM sessions s
+       WHERE ${VISIBLE_SESSION_PREDICATE} GROUP BY s.workspace_id ORDER BY s.workspace_id`,
+    ).all().map((row) => ({ workspaceId: String(row.workspace_id), count: Number(row.count) }));
   }
 
   listSources(): SessionSource[] {
@@ -1157,11 +1207,7 @@ export class SessionRepository {
   }
 
   listSessions(options: SessionListOptions): SessionListResult {
-    const where = [`s.lifecycle != 'tombstoned'`, `EXISTS (
-      SELECT 1 FROM session_events e
-      JOIN import_runs r ON r.import_run_id=e.import_run_id
-      WHERE e.session_id=s.session_id AND r.status='committed'
-    )`];
+    const where = [VISIBLE_SESSION_PREDICATE];
     const scopeDigest = sessionListScopeDigest(options);
     const cursor = decodeSessionListCursor(options.cursor);
     if (cursor && cursor.scopeDigest !== scopeDigest) {
