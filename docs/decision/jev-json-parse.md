@@ -11,7 +11,7 @@ M01 in `test/fixtures/decision/amendment-traceability-v1.json` registers
 consume unbounded parse time**. This decision changes the enforcement mechanism,
 preserving the control, ID, G2 gate, and executable evidence. The evidence adds a
 generous **500 ms per-thread CPU budget per parse**, measured with
-`process.cpuUsage()` (user plus system CPU), for worst admissible 1 MiB bodies.
+`process.threadCpuUsage()` (user plus system CPU of the test thread), for worst admissible 1 MiB bodies.
 This is a regression assertion, not a runtime timer or a universal latency SLA.
 
 | Option | Disposition |
