@@ -249,15 +249,40 @@ describe('held-out collector dispatch and durable accounting', () => {
     expect(events[0].attempt.result).toMatchObject({ disposition: 'stop', reason: 'output-bound', outputTokens: 101 });
   });
   it('AC3 cancellation and timeout keep the stopping reservation without retry or undefined hashing', async () => {
+    // `requestTimeoutMs` schedules a REAL setTimeout in the collector
+    // (session-launcher's sibling, collector.ts's own per-attempt `timer`)
+    // and a REAL `AbortSignal.timeout()` deadline inside the jev adapter --
+    // neither is driven by the fixture's fake `now()`/`sleep()` clock, and
+    // vi.useFakeTimers({toFake:['setTimeout','clearTimeout']}) (used below
+    // only for the 'timeout' case) does not patch `AbortSignal.timeout`
+    // either. A value of 25 left the *first* (unconditionally successful)
+    // row's real dispatch -- credential resolution, endpoint
+    // authorization, privacy scanning, hashing -- racing its own 25ms
+    // deadline on anything but an idle host: under load this real timer
+    // could fire before the first row's result was ever recorded (or even
+    // before its request was dispatched at all), misclassifying a
+    // successful first row as 'cancelled'/'timeout' and leaking the whole
+    // run into completedRows:0/reservedUsdMicros:76 (one reservation, zero
+    // completions) instead of the intended completedRows:1/152 (#3015-class
+    // CI flake). Raising it to a value no real CI host should ever
+    // approach for a fully mocked pipeline removes that race; the pacing
+    // budget check (`pairBound` against `sessionLimitMs`) has orders of
+    // magnitude of headroom at this value, so collection behaviour is
+    // otherwise unchanged. Neither sub-case's *intended* cancellation
+    // actually depends on this timer: 'cancel' aborts the caller's own
+    // AbortController directly from the mock, and 'timeout' explicitly
+    // advances the (correctly faked) setTimeout/clearTimeout pair past the
+    // same threshold -- both are therefore still fully deterministic.
+    const requestTimeoutMs = 5000;
     for (const kind of ['cancel', 'timeout']) {
       const c = await setup(2); const controller = new AbortController();
       if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      c.bundle.preregistration.requestTimeoutMs = 25;
+      c.bundle.preregistration.requestTimeoutMs = requestTimeoutMs;
       let n = 0;
       const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
         if (++n === 1) return reply(init);
         if (kind === 'cancel') controller.abort();
-        if (kind === 'timeout') await vi.advanceTimersByTimeAsync(26);
+        if (kind === 'timeout') await vi.advanceTimersByTimeAsync(requestTimeoutMs + 1);
         return new Promise<Response>((_resolve, reject) => {
           if (init?.signal?.aborted) reject(new Error('aborted'));
           else init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
