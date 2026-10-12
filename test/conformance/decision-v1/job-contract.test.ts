@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assertJobTransition, DecisionJobContractError, ITEM_STATES, validateDecisionJob, type DecisionJob, type ItemState } from '../../../src/decision/job-contract.js';
 const digest = `sha256:${'a'.repeat(64)}` as const;
 function fixture(state: ItemState = 'queued'): DecisionJob {
@@ -71,5 +71,30 @@ describe('JOB offline contract (dispatch disabled)', () => {
     expect(() => validateDecisionJob(job)).toThrow(DecisionJobContractError);
     const injected = { ...fixture(), providerAsyncEndpoint: 'execute-action' };
     expect(() => validateDecisionJob(injected)).toThrow(DecisionJobContractError);
+  });
+
+  // #3047: a valid job must not be denied admission because the host was
+  // busy. `validateDecisionJob` calls `admitEntry`, whose internal time
+  // budget (entry.ts) measures CPU time, not wall-clock elapsed time -- a
+  // wall-clock budget would be tripped by scheduling contention (a busy
+  // neighbor preempts this thread between visits) and surface here as the
+  // generic 'job admission denied' (job-crash-boundaries.test.ts observed
+  // this exact error on a fully valid restart-time job read, under load).
+  // Simulating a wall clock that leaps far past the 1s budget on every read
+  // reproduces that host-contention shape without needing real host load.
+  it('JOB-008 does not deny admission to a valid job when the wall clock alone has leapt (host-load tolerant)', () => {
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      const job = fixture();
+      expect(() => validateDecisionJob(job)).not.toThrow();
+      const before = fixture(); const after = fixture();
+      after.state = 'running'; after.items[0]!.state = 'running';
+      after.summary.queued = 0; after.summary.running = 1;
+      expect(() => assertJobTransition(before, after)).not.toThrow();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

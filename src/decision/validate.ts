@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { canonicalJson } from '../security/artifact-trust.js';
-import { admitEntry, EntryAdmissionError } from './entry.js';
+import { admissionClockStart, admitEntry, elapsedAdmissionMs, EntryAdmissionError } from './entry.js';
 import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
 import type {
   ArtifactPin,
@@ -100,10 +100,13 @@ export function preprocessingLineageSchemaErrors(value: unknown): string | null 
 }
 
 export function artifactDigest(value: unknown): ArtifactPin['digest'] {
-  const started = performance.now();
+  // Per-thread CPU time, not wall-clock: see entry.ts `admissionClockStart`
+  // for why a `performance.now()` budget here would be tripped by host
+  // scheduling contention rather than actual digesting cost.
+  const started = admissionClockStart();
   admitEntry(value);
   const canonical = canonicalJson(value);
-  if (performance.now() - started > 1000) {
+  if (elapsedAdmissionMs(started) > 1000) {
     throw new EntryAdmissionError('time-budget', { bytes: Buffer.byteLength(canonical), entries: 0 });
   }
   return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
