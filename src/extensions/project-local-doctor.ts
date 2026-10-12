@@ -55,8 +55,8 @@ interface BuildOptions {
  * null on read errors (e.g., file missing — caller treats as
  * deploy-not-present).
  *
- * Source files are recorded via the same normalization in
- * `hashBundleArtifacts()`, so the equivalence relation is symmetric.
+ * Deploy-time hashes use the same managed-marker normalization, so the
+ * equivalence relation is symmetric while still reflecting provider output.
  *
  * @implements #1086
  */
@@ -200,6 +200,10 @@ export async function buildProjectLocalDoctorSection(
       }
       for (const provider of Object.keys(entry.deployedTo)) {
         const hashes = artifactHashesForProvider(entry, provider);
+        if (Object.keys(hashes).length === 0) {
+          unhashedSeen = true;
+          continue;
+        }
         for (const [sourceRel, expectedHash] of Object.entries(hashes)) {
           let actualHash: { raw: string; normalized: string } | null = null;
           for (const deployedAbs of candidateDeployedPaths(projectDir, provider, sourceRel)) {

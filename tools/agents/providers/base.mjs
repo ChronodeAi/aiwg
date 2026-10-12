@@ -1318,6 +1318,23 @@ export function artifactStem(name) {
 }
 
 /**
+ * Provider projection name for a non-primary `RULES-INDEX.md`. Several
+ * frameworks/addons ship their own index; providers that deploy rules as
+ * individual files (OMP) keep the primary as `RULES-INDEX.md` and project the
+ * rest as `RULES-INDEX-<owner>.md`. Shared with the prune desired set so the
+ * projected names are never pruned as stale.
+ *
+ * @param {string} src absolute path of a `rules/RULES-INDEX.md` source
+ * @returns {string} projected basename
+ */
+export function rulesIndexProjectionName(src) {
+  const parts = src.split(path.sep);
+  const at = parts.lastIndexOf('frameworks');
+  const owner = at >= 0 && parts[at + 1] ? parts[at + 1] : path.basename(path.dirname(path.dirname(src)));
+  return `RULES-INDEX-${owner}.md`;
+}
+
+/**
  * Compute the global set of source-basename stems AIWG ships for a flat
  * artifact type, across ALL frameworks and addons (mode-independent).
  *
@@ -1358,18 +1375,23 @@ export function computeAllArtifactBasenames(srcRoot, type) {
     recursiveCommands: true,
   });
 
+  // Addon artifacts always count here. --no-addon-sweep narrows what one deploy
+  // writes, never what the prune treats as live source; otherwise a lean deploy
+  // would mark another bundle's addon files stale.
   if (type === 'agents') {
     add(frameworkArtifacts.agents);
     // Soul companions live alongside agents and are deployed with them —
     // keep their stems in the desired set so the prune never removes them.
     add(frameworkArtifacts.souls || []);
-    add(getAddonAgentFiles(aiwgRoot, [], { includeExplicit: true }));
+    add(getAddonAgentFiles(aiwgRoot, [], { sweep: true, includeExplicit: true }));
   } else if (type === 'commands') {
     add(frameworkArtifacts.commands);
-    add(getAddonCommandFiles(aiwgRoot, [], { includeExplicit: true }));
+    add(getAddonCommandFiles(aiwgRoot, [], { sweep: true, includeExplicit: true }));
   } else if (type === 'rules') {
-    add(frameworkArtifacts.rules);
-    add(getAddonRuleFiles(aiwgRoot, [], { includeExplicit: true }));
+    const rules = [...frameworkArtifacts.rules, ...getAddonRuleFiles(aiwgRoot, [], { sweep: true, includeExplicit: true })];
+    add(rules);
+    // Projected names of per-bundle rules indexes (see rulesIndexProjectionName).
+    add(rules.filter(f => path.basename(f) === 'RULES-INDEX.md').map(rulesIndexProjectionName));
   }
 
   return stems;
@@ -2306,13 +2328,39 @@ export function discoverAddons(srcRoot, { includeExplicit = false } = {}) {
 }
 
 /**
+ * Which addons mode-based deploys (`general`, `sdlc`, `both`, `all`) pull in next
+ * to the framework: `true` for every addon (the default), `false` for none, or
+ * the names of the addons to keep. Every provider enumerates addons through the
+ * getAddon* helpers below, so this one switch covers them all. `aiwg use
+ * <framework>` narrows it to the addons it deploys anyway
+ * (`deploy-agents.mjs --sweep-addons aiwg-utils`, or `--no-addon-sweep`): several
+ * providers only receive aiwg-utils agents and rules through this sweep, not
+ * through a `--source` addon run.
+ *
+ * Only deploy-time collection honors it. The prune safety set
+ * (computeAllArtifactBasenames) always passes `sweep: true, includeExplicit: true`.
+ */
+let implicitAddonSweep = true;
+
+export function setImplicitAddonSweep(sweep) {
+  implicitAddonSweep = Array.isArray(sweep) ? [...sweep] : sweep !== false;
+}
+
+function sweptAddons(srcRoot, sweep, includeExplicit = false) {
+  const addons = discoverAddons(srcRoot, { includeExplicit });
+  if (Array.isArray(sweep)) return addons.filter(addon => sweep.includes(addon.name));
+  return sweep ? addons : [];
+}
+
+/**
  * Get all agent files from all addons
  * @param {string} srcRoot - Source root directory
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
+ * @param {{sweep?: boolean|string[], includeExplicit?: boolean}} [options] - sweep: false returns nothing, names keep only those addons (default: the switch above); includeExplicit also returns explicitInstall addons
  * @returns {string[]} - Array of agent file paths
  */
-export function getAddonAgentFiles(srcRoot, excludeAddons = [], options = {}) {
-  const addons = discoverAddons(srcRoot, options);
+export function getAddonAgentFiles(srcRoot, excludeAddons = [], { sweep = implicitAddonSweep, includeExplicit = false } = {}) {
+  const addons = sweptAddons(srcRoot, sweep, includeExplicit);
   const files = [];
 
   for (const addon of addons) {
@@ -2331,10 +2379,11 @@ export function getAddonAgentFiles(srcRoot, excludeAddons = [], options = {}) {
  * Get all command files from all addons
  * @param {string} srcRoot - Source root directory
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
+ * @param {{sweep?: boolean|string[], includeExplicit?: boolean}} [options] - sweep: false returns nothing, names keep only those addons (default: the switch above); includeExplicit also returns explicitInstall addons
  * @returns {string[]} - Array of command file paths
  */
-export function getAddonCommandFiles(srcRoot, excludeAddons = [], options = {}) {
-  const addons = discoverAddons(srcRoot, options);
+export function getAddonCommandFiles(srcRoot, excludeAddons = [], { sweep = implicitAddonSweep, includeExplicit = false } = {}) {
+  const addons = sweptAddons(srcRoot, sweep, includeExplicit);
   const files = [];
 
   for (const addon of addons) {
@@ -2353,10 +2402,11 @@ export function getAddonCommandFiles(srcRoot, excludeAddons = [], options = {}) 
  * Get all skill directories from all addons
  * @param {string} srcRoot - Source root directory
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
+ * @param {{sweep?: boolean|string[]}} [options] - sweep: false returns nothing, names keep only those addons (default: the switch above)
  * @returns {string[]} - Array of skill directory paths
  */
-export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
-  const addons = discoverAddons(srcRoot);
+export function getAddonSkillDirs(srcRoot, excludeAddons = [], { sweep = implicitAddonSweep } = {}) {
+  const addons = sweptAddons(srcRoot, sweep);
   const dirs = [];
 
   for (const addon of addons) {
@@ -2654,8 +2704,15 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
   return names.length + demotedNames.length;
 }
 
-export function getAddonRuleFiles(srcRoot, excludeAddons = [], options = {}) {
-  const addons = discoverAddons(srcRoot, options);
+/**
+ * Get all always-on rule files from all addons
+ * @param {string} srcRoot - Source root directory
+ * @param {string[]} excludeAddons - Addon names to exclude (default: none)
+ * @param {{sweep?: boolean|string[], includeExplicit?: boolean}} [options] - sweep: false returns nothing, names keep only those addons (default: the switch above); includeExplicit also returns explicitInstall addons
+ * @returns {string[]} - Array of rule file paths
+ */
+export function getAddonRuleFiles(srcRoot, excludeAddons = [], { sweep = implicitAddonSweep, includeExplicit = false } = {}) {
+  const addons = sweptAddons(srcRoot, sweep, includeExplicit);
   const files = [];
 
   for (const addon of addons) {

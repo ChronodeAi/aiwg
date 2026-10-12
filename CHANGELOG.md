@@ -43,11 +43,57 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   files are never read. A truncated cache window is imported as `provisional`,
   and re-imports add only newer entries.
 
+- **Film Production framework (`film-production`)** - A provider-neutral
+  framework for reference-driven films, animated shorts, and episodes across
+  develop → design → previs → generate → finish → deliver: one kernel
+  `film-production-quickref` plus 14 operational skills, 6 agents, 9 rules,
+  8 flows, and 9 templates. Editing routes to DaVinci Resolve (verified Resolve
+  MCP or scripting) and Mirage Tesseract (`tesseract-video` /
+  `tesseract-motion` skills with the `tsrct` CLI). The framework installs no
+  media software and grants no spend or publication authority. Docs:
+  `docs/frameworks/film-production/`.
+- **Film production lock-gate state checker** -
+  `scripts/validate-film-state.mjs` validates schema v2 production state:
+  coverage lock (FP-G03) before any paid motion generation, picture lock
+  (FP-G05a) with accepted playback review of every cut, sound lock (FP-G05b)
+  after picture lock with measured audio, and delivery acceptance (FP-G06). It
+  checks recorded evidence only; v1 state files must be migrated to v2.
+- **`aiwg use film-production`** - The framework is registered with the CLI,
+  help output, and setup wizard, and the kernel inventory is now 28 skills with
+  12 quickrefs.
+- **PMOS addon (`pm-os`)** - The product-management operating system addon
+  (workflows, reviewers, frameworks and provider adapters) from the Chronode
+  fork is now on main, adding the `pm-os-quickref` kernel skill.
+
 ### Changed
 
 - npm package keywords now cover decision support (`decision-engine`,
   `decision-support`, `decision-offload`, `jev`, `token-optimization`), session
   history search, and the newer providers, so the package is easier to find.
+
+- **Film production gates from a production retrospective** - The film state
+  checker now binds a locked coverage lock to the current `storyboard` animatic
+  hash and, at picture lock, requires every on-timeline `dialogue_cues` entry to
+  be lip-synced when its mouth is visible, mouth-hidden otherwise, and never
+  lip-synced for internal, off-screen, or narration speech. New
+  `film-storyboard` and `film-reference-footage` skills, `film-reference-sourcing`
+  and `film-revision-rounds` rules, and a `film-storyboard` template; provider
+  preflight, delivery (loudness, true peak, black, stream list, frame count,
+  hashes, captions) and edit-conform gates name the failures that production found.
+
+- **PMOS addon (`pm-os`) is explicit-install** - `aiwg use all` and the deployer's
+  mode sweeps no longer include it; deploy it by name with `aiwg use pm-os`. Its
+  `pm-os-quickref` leaves the bulk kernel, so the canonical kernel inventory is
+  27 skills with 11 quickrefs, down from 28 and 12.
+
+### Removed
+
+- **Ring Governance addon (`ring-governance`)** - The fork-only addon is removed
+  with its `governance-skeptic` agent, 5 rules, 3 skills, 5 templates, unit test,
+  `governance-skeptic` premium-model allowlist entry, and the 6 runtime behaviors
+  that enforced it (`evaluator-drift-watch`, `evolution-adapter-watch`,
+  `governance-boundary-sentinel`, `memory-proof-guard`, `provider-bridge-watch`,
+  `verdict-binding-check`). The shipped-component discovery count is now 64.
 
 ### Fixed
 
@@ -178,6 +224,21 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `scope-incomplete`. A stale runtime gets a remediation and never triggers an
   automatic upgrade or installation switch. The session-explore acquisition
   recipe now requires this preflight before a completion claim.
+
+- **`aiwg use <framework>` no longer deploys the whole addon pack** - A named
+  framework (`sdlc`, `marketing`, `film-production`, `ops`, ...) now deploys the
+  framework, `aiwg-utils` unless `--no-utils`, and any addon its manifest lists
+  under `dependencies.required`. It no longer sweeps every other addon and every
+  extension, or registers their CLI namespaces, which `aiwg refresh` replayed on
+  each run. On omp, `film-production` drops from 62 agents, 38 rules, 75 prompts
+  and 13 addon CLI namespaces to 16, 29, 47 and none. `sdlc` is covered too:
+  `deploy-agents.mjs` gains `--sweep-addons <list>` and `--no-addon-sweep` to
+  narrow the all-addons sweep its `sdlc`, `general`, `both` and `all` modes add
+  in every provider, and `aiwg use sdlc --no-utils` now really deploys no addon
+  (the sweep used to bring aiwg-utils back). `aiwg use all`, `writing`,
+  `general` and `aiwg use <addon>` are unchanged. Extensions deploy by name
+  (`aiwg use sys`) or through `all`.
+
 
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 

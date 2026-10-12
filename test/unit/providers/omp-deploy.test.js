@@ -42,7 +42,12 @@ describe('OMP native deployment', () => {
     deploySkills([skill], target, { copyStandardSkills: true }); expect(fs.existsSync(path.join(target, '.agents/skills/skill/SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(target, '.omp/skills/skill'))).toBe(false);
     const collision = path.join(root, 'other/skill'); fs.mkdirSync(collision, { recursive: true }); fs.copyFileSync(path.join(skill, 'SKILL.md'), path.join(collision, 'SKILL.md'));
-    expect(() => deploySkills([skill, collision], target, { dryRun: true })).toThrow('collision');
+    // Lazy standard skills are never written, so a shared basename across frameworks is not a collision.
+    expect(() => deploySkills([skill, collision], target, { dryRun: true })).not.toThrow();
+    expect(() => deploySkills([skill, collision], target, { dryRun: true, copyStandardSkills: true })).toThrow('collision');
+    const kernelA = path.join(root, 'k1/kskill'); const kernelB = path.join(root, 'k2/kskill');
+    for (const dir of [kernelA, kernelB]) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: kskill\ndescription: kernel\nkernel: true\n---\nWork.'); }
+    expect(() => deploySkills([kernelA, kernelB], target, { dryRun: true })).toThrow('collision');
   });
   it('reconciles full-copy standard skills while preserving modified, unowned and Pi-owned files', () => {
     const skill = path.join(root, 'source/standard'); fs.mkdirSync(path.join(skill, 'references'), { recursive: true });

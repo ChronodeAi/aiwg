@@ -170,12 +170,30 @@ export async function hashDeployedBundleArtifacts(
   return deployed;
 }
 
-/** Resolve current provider hashes while preserving old registry entries. */
+function stringHashMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, hash]) => typeof hash === 'string'),
+  ) as Record<string, string>;
+}
+
+/**
+ * Resolve current provider hashes while preserving both upstream's legacy
+ * flat source inventory and Chronode's legacy provider-nested deployed hashes.
+ */
 export function artifactHashesForProvider(
   entry: InstalledEntry,
   provider: string,
 ): Record<string, string> {
-  return entry.deployedArtifactHashes?.[provider] ?? entry.artifactHashes ?? {};
+  const deployed = entry.deployedArtifactHashes?.[provider];
+  if (deployed) return deployed;
+
+  const raw = entry.artifactHashes as unknown as Record<string, unknown> | undefined;
+  if (!raw) return {};
+
+  const nested = stringHashMap(raw[provider]);
+  return Object.keys(nested).length > 0 ? nested : stringHashMap(raw);
 }
 
 /** Resolve a recorded source-relative artifact through the canonical provider
@@ -266,6 +284,38 @@ async function classify(
   return 'mutated';
 }
 
+type RemovalArtifactHashes = Record<string, string | undefined>;
+
+/**
+ * Read the current provider-scoped hash map while safely recognizing the
+ * legacy flat `Record<sourceRel, hash>` registry shape.
+ *
+ * Legacy values describe source artifacts, not provider-transformed deploys,
+ * so expose their keys with an undefined expected hash. Removal will classify
+ * them as `unhashed` and require confirmation or `--force` instead of silently
+ * trusting a potentially inapplicable hash.
+ */
+function removalHashesForProvider(
+  entry: InstalledEntry,
+  provider: string,
+): RemovalArtifactHashes {
+  const deployed = entry.deployedArtifactHashes?.[provider];
+  if (deployed) return deployed;
+
+  const raw = entry.artifactHashes as unknown as Record<string, unknown> | undefined;
+  if (!raw) return {};
+
+  const nested = stringHashMap(raw[provider]);
+  if (Object.keys(nested).length > 0) return nested;
+
+  // A flat map without provider-deployed hashes is a source inventory from an
+  // older registry. Preserve its keys, but do not trust source hashes as proof
+  // that a transformed provider artifact is pristine.
+  return Object.fromEntries(
+    Object.keys(stringHashMap(raw)).map(sourceRel => [sourceRel, undefined]),
+  );
+}
+
 /**
  * Look up which other installed bundle (if any) records this deployed-path
  * in its own registry entry. If found, the file belongs to another bundle —
@@ -329,10 +379,23 @@ export async function removeProjectLocalBundle(
   const partialProviders: string[] = [];
 
   for (const provider of providers) {
-    const artifactHashes = artifactHashesForProvider(installedEntry, provider);
     let providerHadSkip = false;
+    const providerHashes = removalHashesForProvider(installedEntry, provider);
+    const sourceRels = Object.keys(providerHashes);
 
-    for (const sourceRel of Object.keys(artifactHashes)) {
+    if (sourceRels.length === 0) {
+      providerHadSkip = true;
+      outcomes.push({
+        provider,
+        artifactPath: '(unknown)',
+        deployedAbsPath: '(unknown)',
+        case: 'unhashed',
+        reverted: false,
+        message: 'no per-provider artifact inventory — registry preserved for retry',
+      });
+    }
+
+    for (const sourceRel of sourceRels) {
       const owner = resolveOwnership(config, bundleId, provider, sourceRel);
       if (owner) {
         providerHadSkip = true;
@@ -359,7 +422,7 @@ export async function removeProjectLocalBundle(
       let resolvedAbs: string | null = null;
       let detectedCase: RemoveCase = 'missing';
       for (const c of candidates) {
-        const k = await classify(artifactHashes[sourceRel], c);
+        const k = await classify(providerHashes[sourceRel], c);
         if (k !== 'missing') {
           resolvedAbs = c;
           detectedCase = k;

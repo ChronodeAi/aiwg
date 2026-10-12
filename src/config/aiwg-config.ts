@@ -2169,7 +2169,25 @@ export function updateInstalled(
     existing.localPath = opts.localPath;
     existing.localType = opts.localType;
     if (opts.manifestVersion) existing.manifestVersion = opts.manifestVersion;
-    if (opts.artifactHashes) existing.artifactHashes = opts.artifactHashes;
+    if (opts.artifactHashes) {
+      // Chronode forks written before #1998 stored post-transform hashes in
+      // `artifactHashes[provider]`. Migrate every provider map before replacing
+      // that legacy field with the canonical flat source inventory.
+      const legacy = existing.artifactHashes as unknown as Record<string, unknown> | undefined;
+      if (legacy) {
+        for (const [legacyProvider, value] of Object.entries(legacy)) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+          const hashes = Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+              .filter(([, hash]) => typeof hash === 'string'),
+          ) as Record<string, string>;
+          if (Object.keys(hashes).length === 0) continue;
+          existing.deployedArtifactHashes ??= {};
+          existing.deployedArtifactHashes[legacyProvider] ??= hashes;
+        }
+      }
+      existing.artifactHashes = opts.artifactHashes;
+    }
     if (opts.deployedArtifactHashes) {
       existing.deployedArtifactHashes ??= {};
       existing.deployedArtifactHashes[provider] = opts.deployedArtifactHashes;

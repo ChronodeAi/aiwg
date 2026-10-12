@@ -23,7 +23,7 @@ import {
   resetStorage,
   initStorage,
 } from '../../../src/storage/index.js';
-import type { AiwgConfig } from '../../../src/config/aiwg-config.js';
+import { updateInstalled, type AiwgConfig } from '../../../src/config/aiwg-config.js';
 
 function tmp(): string {
   const d = mkdtempSync(join(tmpdir(), 'aiwg-plr-'));
@@ -66,6 +66,7 @@ function makeConfig(bundleId: string, hashes: Record<string, string>): AiwgConfi
         localType: 'extension',
         manifestVersion: '1',
         artifactHashes: hashes,
+        deployedArtifactHashes: { claude: hashes },
       },
     },
     scripts: {},
@@ -302,7 +303,7 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
       localPath: '.aiwg/extensions/other/',
       localType: 'extension',
       manifestVersion: '1',
-      artifactHashes: { 'rules/r1.md': 'differenthash' },
+      artifactHashes: { claude: { 'rules/r1.md': 'differenthash' } } as unknown as Record<string, string>,
     };
 
     const result = await removeProjectLocalBundle(config, projectDir, 'foo');
@@ -323,7 +324,7 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
       version: '1.0.0', source: 'project-local', installedAt: new Date().toISOString(),
       deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
       localPath: '.aiwg/extensions/other/', localType: 'extension', manifestVersion: '1',
-      artifactHashes: { 'rules/r1.md': 'x' },
+      artifactHashes: { claude: { 'rules/r1.md': 'x' } } as unknown as Record<string, string>,
     };
 
     const result = await removeProjectLocalBundle(config, projectDir, 'foo', { force: true });
@@ -348,6 +349,92 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
     expect(existsSync(join(projectDir, '.claude', 'rules', 'r1.md'))).toBe(false);
     // Registry entry removed (source was already gone — nothing to preserve there)
     expect(config.installed['foo']).toBeUndefined();
+  });
+
+  it('legacy flat hashes are treated as unhashed and preserve registry by default', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const hashes = await hashBundleArtifacts(dir);
+    const config = makeConfig('foo', hashes);
+    config.installed['foo'].artifactHashes = hashes as unknown as NonNullable<
+      AiwgConfig['installed'][string]['artifactHashes']
+    >;
+    delete config.installed['foo'].deployedArtifactHashes;
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual(['claude']);
+    expect(result.outcomes.some(outcome => outcome.case === 'unhashed')).toBe(true);
+    expect(existsSync(join(projectDir, '.claude', 'rules', 'r1.md'))).toBe(true);
+    expect(config.installed['foo']).toBeDefined();
+  });
+
+  it('uses Chronode legacy provider-nested hashes as deployed hashes', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const hashes = await hashBundleArtifacts(dir);
+    const config = makeConfig('foo', hashes);
+    delete config.installed.foo.deployedArtifactHashes;
+    config.installed.foo.artifactHashes = { claude: hashes } as unknown as Record<string, string>;
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual([]);
+    expect(result.revertedProviders).toEqual(['claude']);
+    expect(config.installed.foo).toBeUndefined();
+  });
+
+  it('migrates all Chronode nested provider hashes before writing the split registry shape', () => {
+    const sourceHashes = { 'rules/r1.md': 'source' };
+    const claudeHashes = { 'rules/r1.md': 'claude-deployed' };
+    const factoryHashes = { 'rules/r1.md': 'factory-deployed' };
+    const codexHashes = { 'rules/r1.md': 'codex-deployed' };
+    const config = makeConfig('foo', sourceHashes);
+    delete config.installed.foo.deployedArtifactHashes;
+    config.installed.foo.artifactHashes = {
+      claude: claudeHashes,
+      factory: factoryHashes,
+    } as unknown as Record<string, string>;
+
+    updateInstalled(
+      config,
+      'foo',
+      'codex',
+      { agents: 0, commands: 0, skills: 0, rules: 1 },
+      {
+        version: '1.0.0',
+        source: 'project-local',
+        localPath: '.aiwg/extensions/foo/',
+        localType: 'extension',
+        manifestVersion: '1',
+        artifactHashes: sourceHashes,
+        deployedArtifactHashes: codexHashes,
+      },
+    );
+
+    expect(config.installed.foo.artifactHashes).toEqual(sourceHashes);
+    expect(config.installed.foo.deployedArtifactHashes).toEqual({
+      claude: claudeHashes,
+      factory: factoryHashes,
+      codex: codexHashes,
+    });
+  });
+
+  it('missing or empty provider hashes preserve the registry for retry', async () => {
+    writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const config = makeConfig('foo', {});
+
+    const emptyResult = await removeProjectLocalBundle(config, projectDir, 'foo');
+    expect(emptyResult.partialProviders).toEqual(['claude']);
+    expect(emptyResult.outcomes[0]?.case).toBe('unhashed');
+    expect(config.installed['foo']).toBeDefined();
+
+    delete config.installed['foo'].artifactHashes;
+    const missingResult = await removeProjectLocalBundle(config, projectDir, 'foo');
+    expect(missingResult.partialProviders).toEqual(['claude']);
+    expect(missingResult.outcomes[0]?.message).toContain('registry preserved');
+    expect(config.installed['foo']).toBeDefined();
   });
 
   it('--dry-run: prints plan, no filesystem or registry changes', async () => {

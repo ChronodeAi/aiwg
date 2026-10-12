@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "defaults": {
+    "tier": "economy"
+  },
+  "tiers": {
+    "economy": {
+      "description": "Bounded routine authoring and inspection.",
+      "roleMapping": {
+        "efficiency": "efficiency",
+        "coding": "coding",
+        "reasoning": "reasoning"
+      }
+    },
+    "standard": {
+      "description": "Story synthesis and independent review when justified.",
+      "roleMapping": {
+        "efficiency": "efficiency",
+        "coding": "coding",
+        "reasoning": "reasoning"
+      }
+    }
+  },
+  "providers": {},
+  "agentOverrides": {}
+}

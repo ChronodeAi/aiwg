@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { resolveOmpPaths } from '../../../src/providers/omp-paths.mjs';
-import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
+import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot, rulesIndexProjectionName } from './base.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -113,10 +113,22 @@ function writeOwned(dest, content, source, opts = {}, transformation = 'identity
 export function deploySkillSupportAsset(source, destination, opts = {}) {
   return writeOwned(destination, fs.readFileSync(source), source, opts, 'omp-skill');
 }
-function deployType(files, target, opts, type, transform) {
+function assignRuleNames(files) {
+  const indexes = files.filter(src => path.basename(src) === 'RULES-INDEX.md');
+  const preferred = indexes.find(src => rulesIndexProjectionName(src) === 'RULES-INDEX-sdlc-complete.md') ?? indexes[0];
+  const names = new Map(); const used = new Set();
+  for (const src of files) {
+    const original = path.basename(src);
+    const name = original === 'RULES-INDEX.md' && src !== preferred ? rulesIndexProjectionName(src) : original;
+    if (used.has(name)) throw new Error(`OMP rules collision: ${name}`);
+    used.add(name); names.set(src, name);
+  }
+  return names;
+}
+function deployType(files, target, opts, type, transform, nameFor = src => path.basename(src)) {
   let count = 0; const seen = new Set();
   for (const src of files) {
-    const basename = path.basename(src);
+    const basename = nameFor(src);
     if (seen.has(basename)) throw new Error(`OMP ${type} collision: ${basename}`);
     seen.add(basename);
     const diagnostics = [];
@@ -128,18 +140,30 @@ function deployType(files, target, opts, type, transform) {
 }
 export const deployAgents = (files, target, opts = {}) => deployType(files, target, opts, 'agents', transformAgent);
 export const deployCommands = (files, target, opts = {}) => deployType(files, target, opts, 'prompts', transformCommand);
-export const deployRules = (files, target, opts = {}) => deployType(files, target, opts, 'rules', transformRule);
+export function deployRules(files, target, opts = {}) {
+  const names = assignRuleNames(files);
+  for (const [src, name] of names) if (name !== path.basename(src)) diagnostic(opts, `preserved distinct rules index ${src} as ${name}`);
+  return deployType(files, target, opts, 'rules', transformRule, src => names.get(src));
+}
 export function deploySkills(dirs, target, opts = {}) {
-  let count = 0; const seen = new Map(); const root = roots(target, opts);
-  for (const dir of [...new Set(dirs)]) {
-    const base = path.basename(dir); const previous = seen.get(base);
+  let count = 0; const written = new Map(); const root = roots(target, opts);
+  const unique = [...new Set(dirs)];
+  const willWrite = dir => isKernelSkill(dir) || Boolean(opts.copyStandardSkills);
+  for (const dir of unique) {
+    if (!willWrite(dir)) continue;
+    const base = path.basename(dir); const previous = written.get(base);
     if (previous && previous !== dir) throw new Error(`OMP skill collision: ${base} (${previous}, ${dir})`);
-    seen.set(base, dir);
-    if (!isKernelSkill(dir) && !opts.copyStandardSkills) {
+    written.set(base, dir);
+  }
+  for (const dir of unique) {
+    const base = path.basename(dir);
+    if (!willWrite(dir)) {
+      if (written.has(base)) continue;
       const removed = removeStandardSkillCopy(path.join(root.kernel, base), opts);
       if (removed && !opts.quiet) console.log(`OMP: ${opts.dryRun ? 'would remove' : 'removed'} ${removed} unchanged standard skill files for ${base}`);
       continue;
     }
+    if (written.get(base) !== dir) continue;
     // Exactly one native level, sharing kernel directory for both modes avoids double discovery.
     const dest = path.join(root.kernel, base);
     function copy(current, relative = '') {

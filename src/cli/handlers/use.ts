@@ -120,7 +120,7 @@ import { createResourceCredentialProvider } from '../../auth/resource-credential
 /**
  * Valid framework identifiers
  */
-const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
+const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'film-production', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
 type Framework = typeof VALID_FRAMEWORKS[number];
 
 function providerReceiptWebReleaseOptions(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
@@ -194,6 +194,7 @@ const MODE_MAP: Record<Framework, string> = {
   sdlc: 'sdlc',
   marketing: 'marketing',
   'media-curator': 'media-curator',
+  'film-production': 'film-production',
   research: 'research',
   forensics: 'forensics',
   dfir: 'dfir',
@@ -318,6 +319,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
   sdlc: 'sdlc-complete',
   marketing: 'media-marketing-kit',
   'media-curator': 'media-curator',
+  'film-production': 'film-production',
   research: 'research-complete',
   forensics: 'forensics-complete',
   dfir: 'forensics-complete',
@@ -539,6 +541,90 @@ export async function resolveRequiredAddonActivationOrder(
 
   await visit(selectedAddon, []);
   return order;
+}
+
+/** The addon every framework deploy brings along unless --no-utils. */
+const FRAMEWORK_BASE_ADDON = 'aiwg-utils';
+
+/**
+ * Addons a framework manifest lists in `dependencies.required`, the same
+ * declaration addon manifests use. No shipped framework declares any today.
+ */
+async function readFrameworkRequiredAddons(frameworkRoot: string, framework: string): Promise<string[]> {
+  const frameworkDir = resolveFrameworkDir(framework);
+  if (!frameworkDir) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(
+      path.join(frameworkRoot, 'agentic/code/frameworks', frameworkDir, 'manifest.json'),
+      'utf8',
+    ));
+  } catch {
+    return [];
+  }
+  const manifest = (parsed && typeof parsed === 'object' ? parsed : {}) as { dependencies?: { required?: unknown } };
+  const required = manifest.dependencies?.required ?? [];
+  if (!Array.isArray(required) || required.some(item => typeof item !== 'string')) {
+    throw new Error(`Framework '${framework}' has an invalid dependencies.required declaration`);
+  }
+  return required as string[];
+}
+
+/** Addons and extensions that deploy alongside a `use` target. */
+export interface CompanionBundles {
+  /** Addon directory names, dependency-first. */
+  addons: string[];
+  /** Extension directory names. */
+  extensions: string[];
+  /**
+   * True for targets that sweep addons by design (`all`, plus the framework-less
+   * `writing` and `general` modes), false for a named framework. The deployer's
+   * own sdlc/general/both/all mode sweep has to stay off for a named framework or
+   * it would pull every addon back in.
+   */
+  bundleMode: boolean;
+}
+
+/**
+ * Pick the addons and extensions that ride along with a `use` target.
+ *
+ * `all` and the framework-less `writing`/`general` modes sweep every
+ * non-explicit addon and every extension. A named framework (anything with a
+ * backing framework directory) brings aiwg-utils unless --no-utils, plus the
+ * addons its manifests require, and no extensions: those deploy by name
+ * (`aiwg use sys`) or through `all`. `--no-utils` drops the whole sweep of a
+ * bundle mode, and only aiwg-utils for a framework.
+ */
+export async function resolveCompanionBundles(opts: {
+  frameworkRoot: string;
+  framework: string;
+  skipUtils: boolean;
+}): Promise<CompanionBundles> {
+  const { frameworkRoot, framework, skipUtils } = opts;
+
+  // FRAMEWORK_DIR_MAP maps `all` onto sdlc-complete for manifest purposes, so
+  // name it explicitly. `writing` and `general` have no framework directory.
+  const bundleMode = framework === 'all' || resolveFrameworkDir(framework) === undefined;
+  if (bundleMode) {
+    if (skipUtils) return { addons: [], extensions: [], bundleMode };
+    return {
+      addons: await getAllAddons(frameworkRoot),
+      extensions: await getAllExtensions(frameworkRoot),
+      bundleMode,
+    };
+  }
+
+  const roots: string[] = [];
+  if (!skipUtils && await isValidAddon(frameworkRoot, FRAMEWORK_BASE_ADDON)) roots.push(FRAMEWORK_BASE_ADDON);
+  roots.push(...await readFrameworkRequiredAddons(frameworkRoot, framework));
+
+  const addons: string[] = [];
+  for (const root of roots) {
+    for (const name of await resolveRequiredAddonActivationOrder(frameworkRoot, root)) {
+      if (!addons.includes(name)) addons.push(name);
+    }
+  }
+  return { addons, extensions: [], bundleMode };
 }
 
 async function registerSourceCliCommands(opts: {
@@ -1471,9 +1557,10 @@ async function deployOneProjectLocalBundle(opts: {
   dryRun: boolean;
   verbose: boolean;
   quiet: boolean;
+  force?: boolean;
   modelArgs: string[];
 }): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
-  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, modelArgs } = opts;
+  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs } = opts;
   const sourceCounts = await countBundleSourceArtifacts(bundle.artifactPath);
   const artifactTotal = sourceCounts.agents + sourceCounts.commands + sourceCounts.skills + sourceCounts.rules;
   let cliCommandCount = 0;
@@ -1528,8 +1615,7 @@ async function deployOneProjectLocalBundle(opts: {
     args.push(...collectUseScopeDeployArgs(ctx.args));
     if (dryRun) args.push('--dry-run');
     if (verbose) args.push('--verbose');
-    // Fork patch: propagate --force so redeploys bypass sidecar skip-on-match.
-    if (ctx.args.includes('--force')) args.push('--force');
+    if (force) args.push('--force');
     if (quiet && !verbose) args.push('--quiet');
     // Project-local bundles are addon-shaped — never trigger the legacy commands
     // migration prompt (which is only relevant for full-framework deploys).
@@ -1604,10 +1690,12 @@ async function deployProjectLocalBundles(opts: {
   modelArgs?: string[];
   /** When set, restrict to the bundle whose id matches. */
   onlyBundleId?: string;
+  /** Bypass sidecar skip-on-match for project-local bundles. */
+  force?: boolean;
 }): Promise<{ deployed: number; failed: number; bundles: ProjectLocalBundle[] }> {
   const {
     ctx, frameworkRoot, projectDir, provider, target, dryRun, verbose, quiet,
-    onlyBundleId, modelArgs = [],
+    onlyBundleId, force, modelArgs = [],
   } = opts;
 
   const discovery = await discoverProjectLocalBundles(projectDir);
@@ -1693,7 +1781,7 @@ async function deployProjectLocalBundles(opts: {
     }
 
     const result = await deployOneProjectLocalBundle({
-      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, modelArgs,
+      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs,
     });
 
     if (result.exitCode !== 0) {
@@ -2583,7 +2671,8 @@ Deploy an AIWG framework, addon, or extension into the current project.
 
 Bundles:
   all                       Kernel surface only (kernel skills, rules, behaviors)
-  sdlc | research | ops | forensics | marketing | media-curator | ...
+  sdlc | research | ops | forensics | marketing | media-curator |
+  film-production | ...
                             Full framework surface (agents, commands, skills, rules)
   <addon> | <extension>     Any installed addon or extension name
 
@@ -3011,7 +3100,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);
@@ -3142,6 +3231,7 @@ export class UseHandler implements CommandHandler {
             dryRun,
             verbose,
             quiet: machineReadableUseDepth > 0 || (!verbose && !dryRun),
+            force,
             modelArgs: modelDeployArgs,
           });
           if (plResult.failed > 0) {
@@ -3216,6 +3306,7 @@ export class UseHandler implements CommandHandler {
         const explicitProvider = providerIdx >= 0 && remainingArgs[providerIdx + 1] ? remainingArgs[providerIdx + 1] : null;
         const dryRunSingle = remainingArgs.includes('--dry-run');
         const verboseSingle = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
+        const forceSingle = remainingArgs.includes('--force');
         const targetIdxSingle = remainingArgs.findIndex(a => a === '--target');
         const targetSingle = targetIdxSingle >= 0 && remainingArgs[targetIdxSingle + 1] ? remainingArgs[targetIdxSingle + 1] : projectDir;
         let scopeSingle: 'project' | 'user';
@@ -3274,6 +3365,7 @@ export class UseHandler implements CommandHandler {
             ctx, frameworkRoot, projectDir, provider: p, target: targetSingle,
             dryRun: dryRunSingle, verbose: verboseSingle, quiet: !verboseSingle && !dryRunSingle,
             onlyBundleId: framework,
+            force: forceSingle,
             modelArgs: modelDeployArgs,
           });
           totalDeployed += r.deployed;
@@ -3705,6 +3797,24 @@ export class UseHandler implements CommandHandler {
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');
+    // Pick what rides along with this target before any file is written, so an
+    // invalid dependency declaration stops the run instead of half-deploying.
+    let companions: CompanionBundles;
+    try {
+      companions = await resolveCompanionBundles({ frameworkRoot, framework, skipUtils });
+    } catch (error) {
+      return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    // A named framework deploys itself plus those companions. The deployer's own
+    // sdlc/general/both/all mode sweep would pull every addon in again, so narrow
+    // it to the companions. It cannot simply be switched off: some providers only
+    // receive aiwg-utils agents and rules through that sweep, not through the
+    // `--source` addon run below.
+    if (!companions.bundleMode) {
+      providerDeployArgs.push(...(companions.addons.length > 0
+        ? ['--sweep-addons', companions.addons.join(',')]
+        : ['--no-addon-sweep']));
+    }
     const targetIdx = remainingArgs.findIndex(a => a === '--target');
     const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
 
@@ -3844,65 +3954,62 @@ export class UseHandler implements CommandHandler {
       addonBaseArgs.push('--copy-all');
     }
 
-    // Deploy all addons (excluding disallow list) unless --no-utils
-    if (!skipUtils) {
-      const allAddons = await getAllAddons(frameworkRoot);
-      for (const addon of allAddons) {
-        if (verbose) {
-          console.log('');
-          console.log(`Deploying ${addon} addon...`);
-        }
-        const source = addonPath(frameworkRoot, addon);
-        const addonArgs = quiet
-          ? ['--quiet', '--source', source, ...addonBaseArgs]
-          : ['--source', source, ...addonBaseArgs];
-        const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
-        }
-        try {
-          await registerSourceCliCommands({
-            source,
-            target,
-            provider,
-            dryRun,
-            fallbackDescription: `${addon} addon commands`,
-          });
-        } catch (error) {
-          ui.warn(`Failed to register CLI commands for '${addon}': ${(error as Error).message}`);
-        }
+    // Deploy the companions picked above: everything for a bundle mode, or for a
+    // named framework just aiwg-utils (unless --no-utils) and the addons its
+    // manifests require.
+    for (const addon of companions.addons) {
+      if (verbose) {
+        console.log('');
+        console.log(`Deploying ${addon} addon...`);
       }
+      const source = addonPath(frameworkRoot, addon);
+      const addonArgs = quiet
+        ? ['--quiet', '--source', source, ...addonBaseArgs]
+        : ['--source', source, ...addonBaseArgs];
+      const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
+      if (result.exitCode !== 0) {
+        return result;
+      }
+      try {
+        await registerSourceCliCommands({
+          source,
+          target,
+          provider,
+          dryRun,
+          fallbackDescription: `${addon} addon commands`,
+        });
+      } catch (error) {
+        ui.warn(`Failed to register CLI commands for '${addon}': ${(error as Error).message}`);
+      }
+    }
 
-      // Deploy all extensions from agentic/code/extensions/* (#1222).
-      // Extensions are addon-shaped bundles (manifest type: "addon") that live
-      // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
-      // `aiwg use all` was previously silent about them, leaving 6 extension
-      // bundles undeployed even when the user explicitly asked for everything.
-      const allExtensions = await getAllExtensions(frameworkRoot);
-      for (const ext of allExtensions) {
-        if (verbose) {
-          console.log('');
-          console.log(`Deploying ${ext} extension...`);
-        }
-        const source = extensionPath(frameworkRoot, ext);
-        const extArgs = quiet
-          ? ['--quiet', '--source', source, ...addonBaseArgs]
-          : ['--source', source, ...addonBaseArgs];
-        const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
-        }
-        try {
-          await registerSourceCliCommands({
-            source,
-            target,
-            provider,
-            dryRun,
-            fallbackDescription: `${ext} extension commands`,
-          });
-        } catch (error) {
-          ui.warn(`Failed to register CLI commands for '${ext}': ${(error as Error).message}`);
-        }
+    // Deploy extensions from agentic/code/extensions/* (#1222) — `all` only.
+    // Extensions are addon-shaped bundles (manifest type: "addon") that live
+    // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
+    // Frameworks no longer sweep them in; they deploy by name (`aiwg use sys`).
+    for (const ext of companions.extensions) {
+      if (verbose) {
+        console.log('');
+        console.log(`Deploying ${ext} extension...`);
+      }
+      const source = extensionPath(frameworkRoot, ext);
+      const extArgs = quiet
+        ? ['--quiet', '--source', source, ...addonBaseArgs]
+        : ['--source', source, ...addonBaseArgs];
+      const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
+      if (result.exitCode !== 0) {
+        return result;
+      }
+      try {
+        await registerSourceCliCommands({
+          source,
+          target,
+          provider,
+          dryRun,
+          fallbackDescription: `${ext} extension commands`,
+        });
+      } catch (error) {
+        ui.warn(`Failed to register CLI commands for '${ext}': ${(error as Error).message}`);
       }
     }
 
@@ -3919,6 +4026,7 @@ export class UseHandler implements CommandHandler {
         dryRun,
         verbose,
         quiet,
+        force,
         modelArgs: modelDeployArgs,
       });
       if (plResult.deployed > 0 && quiet) {

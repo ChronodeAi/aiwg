@@ -1,0 +1,27 @@
+{
+  "id": "film-production",
+  "type": "framework",
+  "name": "Film Production",
+  "version": "2026.9.0",
+  "description": "Reference-driven AI film production: story, continuity, generation, sound, editorial and verified delivery.",
+  "manifestVersion": "1",
+  "platforms": {
+    "codex": "full",
+    "claude": "full",
+    "generic": "partial"
+  },
+  "keywords": [
+    "film",
+    "filmmaking",
+    "ai-video",
+    "animation",
+    "storyboard",
+    "continuity",
+    "voiceover",
+    "post-production"
+  ],
+  "deployment": {
+    "pathTemplate": ".{platform}/skills/{id}.md"
+  },
+  "frameworkConfig": {}
+}

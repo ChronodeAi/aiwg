@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1",
+  "sourceAuthority": "plugins/pm-os",
+  "sourceSkills": 230,
+  "kernelSkills": 1,
+  "packagedSkills": 231,
+  "agents": 12,
+  "invocationSurfaces": {
+    "total": 26,
+    "core": 15,
+    "workflows": 11,
+    "representation": "skill-backed"
+  },
+  "rules": 1,
+  "hookScripts": 3,
+  "mcpServers": 6
+}

@@ -87,19 +87,23 @@ function writeQuickref(projectDir: string): void {
   }, null, 2));
 }
 
-function makeConfig(bundleId: string, hashes: Record<string, string>): AiwgConfig {
+function makeConfig(
+  bundleId: string,
+  hashes: Record<string, string>,
+  provider = 'claude',
+): AiwgConfig {
   return {
-    version: '1', providers: ['claude'],
+    version: '1', providers: [provider],
     installed: {
       [bundleId]: {
         version: '1.0.0',
         source: 'project-local',
         installedAt: new Date().toISOString(),
-        deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
+        deployedTo: { [provider]: { agents: 0, commands: 0, skills: 0, rules: 1 } },
         localPath: `.aiwg/extensions/${bundleId}/`,
         localType: 'extension',
         manifestVersion: '1',
-        artifactHashes: hashes,
+        artifactHashes: { [provider]: hashes },
       },
     },
     scripts: {},
@@ -358,6 +362,20 @@ describe('project-local-doctor (DC-1)', () => {
     });
     expect(r.driftCount).toBe(1);
     expect(r.hasFailures).toBe(true);
+  });
+
+  it('detects drift through provider-translated artifact paths', async () => {
+    writeBundle(projectDir, 'foo');
+    mkdirSync(join(projectDir, '.cursor', 'rules'), { recursive: true });
+    writeFileSync(join(projectDir, '.cursor', 'rules', 'r1.mdc'), 'mutated cursor rule');
+    const config = makeConfig('foo', { 'rules/r1.md': sha256('rule body') }, 'cursor');
+
+    const r = await buildProjectLocalDoctorSection({
+      projectDir, frameworkRoot, config,
+    });
+
+    expect(r.driftCount).toBe(1);
+    expect(r.output).toContain('foo :: rules/r1.md @ cursor');
   });
 
   it('quiet mode suppresses informational subsections but keeps failures', async () => {

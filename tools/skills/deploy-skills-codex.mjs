@@ -37,7 +37,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import os from 'os';
-import { getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
+import { discoverAddons, getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
 
 const CODEX_SKILLS_DIR = path.join(os.homedir(), '.codex', 'skills');
 const MAX_NAME_LENGTH = 100;
@@ -451,16 +451,12 @@ function getSkillDirectories(srcRoot, mode) {
 
   // Addon skills
   if (mode === 'addons' || mode === 'all') {
-    const addonsRoot = path.join(srcRoot, 'agentic', 'code', 'addons');
-    if (fs.existsSync(addonsRoot)) {
-      const addonDirs = fs.readdirSync(addonsRoot, { withFileTypes: true })
-        .filter(e => e.isDirectory())
-        .map(e => path.join(addonsRoot, e.name, 'skills'));
-
-      for (const addonSkillsDir of addonDirs) {
-        if (fs.existsSync(addonSkillsDir)) {
-          dirs.push({ dir: addonSkillsDir, label: path.basename(path.dirname(addonSkillsDir)) });
-        }
+    // Bulk deploys skip devOnly and explicitInstall addons (#2641), as every
+    // other provider does through discoverAddons().
+    for (const addon of discoverAddons(srcRoot)) {
+      const addonSkillsDir = path.join(addon.path, 'skills');
+      if (fs.existsSync(addonSkillsDir)) {
+        dirs.push({ dir: addonSkillsDir, label: addon.name });
       }
     }
   }

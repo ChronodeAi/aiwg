@@ -1,0 +1,192 @@
+[
+  {
+    "workflow_id": "assumption-mapping",
+    "command": "assumptions",
+    "canonical_file": "skills/assumptions/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/product-assumptions/SKILL.md",
+      "skills/risky-assumptions/SKILL.md",
+      "skills/work-backwards/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "core-strategy-development",
+    "command": "strategy",
+    "canonical_file": "skills/strategy/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/find-the-strategic-crux/SKILL.md",
+      "skills/netmba-competitor-analysis/SKILL.md",
+      "skills/product-strategy/SKILL.md",
+      "skills/limit-strategy/SKILL.md",
+      "skills/value-chain/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "make-great-decisions",
+    "command": "decisions",
+    "canonical_file": "skills/decisions/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/causal-tree/SKILL.md",
+      "skills/two-way-door/SKILL.md",
+      "skills/decision-journal/SKILL.md",
+      "skills/mece-tree/SKILL.md",
+      "skills/structure-problem/SKILL.md",
+      "skills/davci/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "measure-what-matters",
+    "command": "measure",
+    "canonical_file": "skills/measure/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/clarification-chain/SKILL.md",
+      "skills/fermi-decomposition/SKILL.md",
+      "skills/value-of-information/SKILL.md",
+      "skills/rule-of-five/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "meeting-mastery",
+    "command": "meeting",
+    "canonical_file": "skills/meeting/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/hidden-agendas/SKILL.md",
+      "skills/cialdini/SKILL.md",
+      "skills/meeting-summary/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "multi-perspective-review",
+    "command": "review",
+    "canonical_file": "skills/pm-review/SKILL.md",
+    "output_destination": "project_or_reviews",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [
+      "engineering-reviewer",
+      "design-reviewer",
+      "executive-reviewer",
+      "legal-risk-reviewer",
+      "ux-research-reviewer",
+      "devils-advocate-reviewer",
+      "customer-voice-reviewer"
+    ],
+    "skills": [
+      "skills/good-pm-bad-pm/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "opportunity-mapping",
+    "command": "opportunity",
+    "canonical_file": "skills/opportunity/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/ost-intake/SKILL.md",
+      "skills/ost/SKILL.md",
+      "skills/mece-tree/SKILL.md",
+      "skills/ost-prioritize/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "pm-coaching",
+    "command": "coaching",
+    "canonical_file": "skills/coaching/SKILL.md",
+    "output_destination": "coaching",
+    "memory_preflight": "not_applicable",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/situation-retrospective/SKILL.md",
+      "skills/team-perspective-reveal/SKILL.md",
+      "skills/adversarial-roleplay/SKILL.md",
+      "skills/decision-audit/SKILL.md",
+      "skills/blind-spot-scan/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "research-to-feature",
+    "command": "research",
+    "canonical_file": "skills/research/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/transcript-cleanup/SKILL.md",
+      "skills/interview-insights/SKILL.md",
+      "skills/jtbd-forces/SKILL.md",
+      "skills/product-hypothesis/SKILL.md",
+      "skills/experiment-design/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "stakeholder-copilot",
+    "command": "stakeholder",
+    "canonical_file": "skills/stakeholder/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [],
+    "skills": [
+      "skills/power-map/SKILL.md",
+      "skills/stakeholder-map/SKILL.md",
+      "skills/stakeholder-risk/SKILL.md",
+      "skills/comms-plan/SKILL.md",
+      "skills/meeting-prep/SKILL.md",
+      "skills/difficult-conversation/SKILL.md",
+      "skills/exec-update-review/SKILL.md"
+    ]
+  },
+  {
+    "workflow_id": "prd-construction",
+    "command": "prd",
+    "canonical_file": "skills/prd/SKILL.md",
+    "output_destination": "project",
+    "memory_preflight": "required",
+    "checkpoint_policy": "linear_no_resume_yet",
+    "subagents": [
+      "prd-strengths-reviewer",
+      "prd-flaws-reviewer",
+      "engineering-reviewer",
+      "design-reviewer",
+      "executive-reviewer",
+      "legal-risk-reviewer",
+      "ux-research-reviewer",
+      "devils-advocate-reviewer",
+      "customer-voice-reviewer"
+    ],
+    "skills": [
+      "skills/requirements-from-talk/SKILL.md",
+      "skills/requirements-from-design/SKILL.md",
+      "skills/requirements-reconcile/SKILL.md",
+      "skills/use-cases/SKILL.md",
+      "skills/user-stories/SKILL.md",
+      "skills/gherkin-stories/SKILL.md",
+      "skills/ui-acceptance-criteria/SKILL.md",
+      "skills/prd-draft/SKILL.md"
+    ]
+  }
+]

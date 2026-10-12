@@ -1,15 +1,16 @@
 /**
  * Unit tests for use.ts — addon discovery and disallow list logic
  *
- * Tests the three exported utility functions:
+ * Tests the exported utility functions:
  *   - getAllAddons()  — discovers addon dirs, applies disallow list
  *   - getAllExtensions() — discovers deployable extension dirs
  *   - isValidAddon() — validates a name against fs + disallow list
  *   - addonPath()    — constructs source path, handles ring alias
+ *   - resolveCompanionBundles() — picks the addons/extensions that ride along with a use target
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -26,7 +27,22 @@ import {
   deployOpenHumanHarnessAgents,
   parseOpenHumanHarnessAgentSelector,
   resolveOpenHumanHarnessAgentSelectors,
+  resolveCompanionBundles,
 } from '../../../../src/cli/handlers/use.js';
+
+const runnerState = vi.hoisted(() => ({
+  run: vi.fn(async () => ({ exitCode: 0, message: '' })),
+}));
+
+// `aiwg use` is judged by which bundles it hands to tools/agents/deploy-agents.mjs,
+// so capture those invocations instead of spawning the deployer.
+vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
+  createScriptRunner: vi.fn(() => ({ run: runnerState.run })),
+}));
+
+vi.mock('../../../../src/cli/project-isolation/index.js', () => ({
+  maybeWarnProjectIsolation: vi.fn(async () => ({ cancelled: false })),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -535,5 +551,205 @@ Write tests.
       selectors: ['missing-agent'],
       scope: 'project',
     })).rejects.toThrow("Unknown AIWG agent 'missing-agent'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCompanionBundles()
+// ---------------------------------------------------------------------------
+
+describe('resolveCompanionBundles()', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'aiwg-use-companions-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeBundle(
+    kind: 'addons' | 'extensions' | 'frameworks',
+    name: string,
+    manifest: Record<string, unknown> = { id: name },
+  ) {
+    const dir = path.join(tmpDir, 'agentic', 'code', kind, name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+  }
+
+  async function writeSourceTree() {
+    for (const addon of ['aiwg-utils', 'rlm', 'daemon']) await writeBundle('addons', addon);
+    await writeBundle('addons', 'opt-in', { id: 'opt-in', explicitInstall: true });
+    await writeBundle('extensions', 'sys');
+    await writeBundle('frameworks', 'sdlc-complete', { name: 'sdlc-complete' });
+  }
+
+  it('gives a named framework aiwg-utils and nothing else', async () => {
+    await writeSourceTree();
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: false }))
+      .resolves.toEqual({ addons: ['aiwg-utils'], extensions: [], bundleMode: false });
+  });
+
+  it('drops aiwg-utils for a framework under --no-utils', async () => {
+    await writeSourceTree();
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: true }))
+      .resolves.toEqual({ addons: [], extensions: [], bundleMode: false });
+  });
+
+  it('skips aiwg-utils quietly when the source tree has none', async () => {
+    await writeBundle('addons', 'rlm');
+    await writeBundle('frameworks', 'sdlc-complete', { name: 'sdlc-complete' });
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: false }))
+      .resolves.toMatchObject({ addons: [] });
+  });
+
+  it('deploys the addons that aiwg-utils and the framework manifest require, dependency-first', async () => {
+    await writeBundle('addons', 'base-lib');
+    await writeBundle('addons', 'extra');
+    await writeBundle('addons', 'rlm');
+    await writeBundle('addons', 'aiwg-utils', { id: 'aiwg-utils', dependencies: { required: ['base-lib'] } });
+    await writeBundle('frameworks', 'sdlc-complete', {
+      name: 'sdlc-complete',
+      dependencies: { required: ['extra', 'aiwg-utils'] },
+    });
+    const result = await resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: false });
+    expect(result.addons).toEqual(['base-lib', 'aiwg-utils', 'extra']);
+  });
+
+  it('still deploys what the framework requires when --no-utils drops aiwg-utils', async () => {
+    await writeBundle('addons', 'aiwg-utils');
+    await writeBundle('addons', 'extra');
+    await writeBundle('frameworks', 'sdlc-complete', {
+      name: 'sdlc-complete',
+      dependencies: { required: ['extra'] },
+    });
+    const result = await resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: true });
+    expect(result.addons).toEqual(['extra']);
+  });
+
+  it('refuses an unavailable or malformed required addon before anything deploys', async () => {
+    await writeBundle('addons', 'aiwg-utils');
+    await writeBundle('frameworks', 'sdlc-complete', {
+      name: 'sdlc-complete',
+      dependencies: { required: ['missing-addon'] },
+    });
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: false }))
+      .rejects.toThrow("Cannot load required addon 'missing-addon'");
+
+    await writeBundle('frameworks', 'sdlc-complete', {
+      name: 'sdlc-complete',
+      dependencies: { required: 'aiwg-utils' },
+    });
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: 'sdlc', skipUtils: false }))
+      .rejects.toThrow("Framework 'sdlc' has an invalid dependencies.required declaration");
+  });
+
+  it.each(['all', 'writing', 'general'])('sweeps every non-explicit addon and every extension for %s', async (target) => {
+    await writeSourceTree();
+    const result = await resolveCompanionBundles({ frameworkRoot: tmpDir, framework: target, skipUtils: false });
+    expect(result.bundleMode).toBe(true);
+    expect([...result.addons].sort()).toEqual(['aiwg-utils', 'daemon', 'rlm']);
+    expect(result.extensions).toEqual(['sys']);
+  });
+
+  it.each(['all', 'writing', 'general'])('keeps --no-utils meaning "no sweep" for %s', async (target) => {
+    await writeSourceTree();
+    await expect(resolveCompanionBundles({ frameworkRoot: tmpDir, framework: target, skipUtils: true }))
+      .resolves.toEqual({ addons: [], extensions: [], bundleMode: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// aiwg use — which bundles reach the deployer
+// ---------------------------------------------------------------------------
+
+describe('aiwg use addon scope', () => {
+  const repoRoot = path.resolve(import.meta.dirname, '../../../..');
+  let target: string;
+
+  beforeEach(async () => {
+    runnerState.run.mockClear();
+    target = await mkdtemp(path.join(os.tmpdir(), 'aiwg-use-scope-'));
+  });
+
+  afterEach(async () => {
+    await rm(target, { recursive: true, force: true });
+  });
+
+  /**
+   * Dry-run `aiwg use` and report which addons the deployer's own mode sweep may
+   * add ('all', or the allowed names) plus the bundle sources deployed after it.
+   */
+  async function previewUse(framework: string, flags: string[] = [], frameworkRoot = repoRoot) {
+    const args = [
+      framework, '--provider', 'codex', '--target', target,
+      '--dry-run', '--no-project-local', '--no-context-files', ...flags,
+    ];
+    const result = await useHandler.execute({ args, rawArgs: ['use', ...args], cwd: target, frameworkRoot });
+    expect(result.exitCode, result.message).toBe(0);
+    const [frameworkRun, ...bundleRuns] = (runnerState.run.mock.calls as unknown as Array<[string, string[]]>)
+      .filter(([script]) => script === 'tools/agents/deploy-agents.mjs')
+      .map(([, runArgs]) => runArgs);
+    const allowIndex = frameworkRun.indexOf('--sweep-addons');
+    let sweep: 'all' | string[] = 'all';
+    if (frameworkRun.includes('--no-addon-sweep')) sweep = [];
+    else if (allowIndex >= 0) sweep = frameworkRun[allowIndex + 1].split(',');
+    return {
+      sweep,
+      bundles: bundleRuns.map(runArgs => path.relative(path.join(frameworkRoot, 'agentic/code'), runArgs[runArgs.indexOf('--source') + 1])),
+    };
+  }
+
+  it.each(['film-production', 'sdlc', 'marketing', 'ops'])('deploys %s with only aiwg-utils alongside it', async (framework) => {
+    const { sweep, bundles } = await previewUse(framework);
+    expect(sweep).toEqual(['aiwg-utils']);
+    expect(bundles).toEqual(['addons/aiwg-utils']);
+  });
+
+  it('deploys no addon under --no-utils, and the deployer sweep stays off', async () => {
+    const { sweep, bundles } = await previewUse('sdlc', ['--no-utils']);
+    expect(sweep).toEqual([]);
+    expect(bundles).toEqual([]);
+  });
+
+  it('still sweeps every non-explicit addon and every extension for all', async () => {
+    const { sweep, bundles } = await previewUse('all');
+    expect(sweep).toBe('all');
+    expect(bundles).toEqual([
+      ...(await getAllAddons(repoRoot)).map(name => `addons/${name}`),
+      ...(await getAllExtensions(repoRoot)).map(name => `extensions/${name}`),
+    ]);
+    expect(bundles).not.toContain('addons/decision-engine');
+    expect(bundles).not.toContain('addons/aiwg-dev');
+  });
+
+  it.each(['writing', 'general'])('leaves the framework-less %s mode on its addon sweep', async (mode) => {
+    const { sweep, bundles } = await previewUse(mode);
+    expect(sweep).toBe('all');
+    expect(bundles).toEqual(expect.arrayContaining(['addons/aiwg-utils', 'addons/writing-quality']));
+  });
+
+  it('deploys the addons a framework manifest requires alongside aiwg-utils', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-use-scope-root-'));
+    try {
+      const bundles: Array<[string, string, Record<string, unknown>]> = [
+        ['addons', 'base-lib', { id: 'base-lib' }],
+        ['addons', 'extra', { id: 'extra' }],
+        ['addons', 'unrelated', { id: 'unrelated' }],
+        ['addons', 'aiwg-utils', { id: 'aiwg-utils', dependencies: { required: ['base-lib'] } }],
+        ['frameworks', 'sdlc-complete', { name: 'sdlc-complete', dependencies: { required: ['extra'] } }],
+      ];
+      for (const [kind, name, manifest] of bundles) {
+        await mkdir(path.join(root, 'agentic/code', kind, name), { recursive: true });
+        await writeFile(path.join(root, 'agentic/code', kind, name, 'manifest.json'), JSON.stringify(manifest));
+      }
+      const preview = await previewUse('sdlc', [], root);
+      expect(preview.sweep).toEqual(['base-lib', 'aiwg-utils', 'extra']);
+      expect(preview.bundles).toEqual(['addons/base-lib', 'addons/aiwg-utils', 'addons/extra']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
