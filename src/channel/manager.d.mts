@@ -1,4 +1,12 @@
 export function getPackageRoot(): string;
+export function resolveEffectiveInstallationRoot(
+  packageRoot: string,
+  config: { devMode?: boolean; edgePath?: string } | null | undefined,
+): string;
+export function resolveMcpServerEntrypointPath(
+  packageRoot: string,
+  config: { devMode?: boolean; edgePath?: string } | null | undefined,
+): string;
 export function loadConfig(options?: Record<string, unknown>): Promise<any>;
 export function saveConfig(config: any, options?: Record<string, unknown>): Promise<void>;
 export function getChannel(): Promise<string>;

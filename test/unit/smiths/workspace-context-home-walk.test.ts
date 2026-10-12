@@ -24,6 +24,8 @@ async function project(): Promise<string> {
 afterEach(async () => {
   vi.doUnmock('node:os');
   vi.resetModules();
+  delete process.env.AIWG_CONTEXT_WALK_MAX_DEPTH;
+  delete process.env.AIWG_CONTEXT_WALK_MAX_DIRECTORIES;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -86,5 +88,76 @@ describe('workspace context graph: $HOME walk bound (#277)', () => {
     const audit = await auditWorkspaceContext(root);
     expect(audit.plan.nestedSources).toContain('packages/one/AGENTS.md');
     expect(audit.contextWalkTruncated).toBe(false);
+  });
+
+  // #277 fix-round — exercise both numeric bounds directly with small
+  // injected limits instead of building a 20,000-directory fixture tree.
+  // Root here is NOT $HOME (mocked to somewhere else) so the full bounded
+  // walk (not the home depth-1 restriction) is what is under test.
+  describe('numeric bounds (small injected limits)', () => {
+    it('depth bound: AIWG_CONTEXT_WALK_MAX_DEPTH stops descent past the injected depth and reports truncated', async () => {
+      const root = await project();
+      // depth 1 = root, 2 = packages, 3 = one -> AGENTS.md lives at depth 3
+      // (one level past an injected max depth of 2).
+      await mkdir(join(root, 'packages', 'one'), { recursive: true });
+      await writeFile(join(root, 'packages', 'one', 'AGENTS.md'), 'Too deep to find.\n');
+      await mkdir(join(root, 'packages'), { recursive: true });
+      await writeFile(join(root, 'packages', 'AGENTS.md'), 'At the injected depth boundary.\n');
+
+      process.env.AIWG_CONTEXT_WALK_MAX_DEPTH = '2';
+      vi.doMock('node:os', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('node:os')>();
+        return { ...actual, homedir: () => '/not/this/root' };
+      });
+      vi.resetModules();
+
+      const { auditWorkspaceContext } = await import('../../../src/smiths/context-pipeline/workspace-context.js');
+      const audit = await auditWorkspaceContext(root);
+      expect(audit.plan.nestedSources).toContain('packages/AGENTS.md');
+      expect(audit.plan.nestedSources).not.toContain('packages/one/AGENTS.md');
+      expect(audit.contextWalkTruncated).toBe(true);
+    });
+
+    it('directory-count bound: AIWG_CONTEXT_WALK_MAX_DIRECTORIES stops the walk after the injected count and reports truncated', async () => {
+      const root = await project();
+      // Five sibling subdirectories, each with its own AGENTS.md. With a
+      // directory budget of 3 (root + 2 children), not every sibling's file
+      // can be reached — regardless of filesystem readdir ordering.
+      for (let i = 0; i < 5; i += 1) {
+        await mkdir(join(root, `sibling-${i}`), { recursive: true });
+        await writeFile(join(root, `sibling-${i}`, 'AGENTS.md'), `Sibling ${i} instructions.\n`);
+      }
+
+      process.env.AIWG_CONTEXT_WALK_MAX_DIRECTORIES = '3';
+      vi.doMock('node:os', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('node:os')>();
+        return { ...actual, homedir: () => '/not/this/root' };
+      });
+      vi.resetModules();
+
+      const { auditWorkspaceContext } = await import('../../../src/smiths/context-pipeline/workspace-context.js');
+      const audit = await auditWorkspaceContext(root);
+      expect(audit.plan.nestedSources.length).toBeLessThan(5);
+      expect(audit.contextWalkTruncated).toBe(true);
+    });
+
+    it('with limits restored to defaults, all five siblings are found and nothing is truncated', async () => {
+      const root = await project();
+      for (let i = 0; i < 5; i += 1) {
+        await mkdir(join(root, `sibling-${i}`), { recursive: true });
+        await writeFile(join(root, `sibling-${i}`, 'AGENTS.md'), `Sibling ${i} instructions.\n`);
+      }
+
+      vi.doMock('node:os', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('node:os')>();
+        return { ...actual, homedir: () => '/not/this/root' };
+      });
+      vi.resetModules();
+
+      const { auditWorkspaceContext } = await import('../../../src/smiths/context-pipeline/workspace-context.js');
+      const audit = await auditWorkspaceContext(root);
+      expect(audit.plan.nestedSources.length).toBe(5);
+      expect(audit.contextWalkTruncated).toBe(false);
+    });
   });
 });

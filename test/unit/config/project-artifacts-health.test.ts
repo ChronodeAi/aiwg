@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -130,19 +130,34 @@ describe('auditProjectArtifactHealth', () => {
       }
     });
 
-    it('still succeeds when a local payload file is unreadable', () => {
+    // `chmod 000` is not a portable way to prove "this file is never read" —
+    // it is a no-op for the root user and is not reliably enforced on every
+    // platform/filesystem. Use a sentinel instead: make reading one specific
+    // payload file throw unconditionally (regardless of OS permission
+    // semantics, and regardless of which user runs the test), and assert
+    // the audit still succeeds because it never attempts that read at all
+    // in local mode.
+    it('still succeeds when a local payload file would throw if ever read (portable sentinel, not chmod)', () => {
       const project = mkdtempSync(join(tmpdir(), 'aiwg-artifact-health-local-unreadable-'));
       roots.push(project);
       controls(join(project, '.aiwg'));
       mkdirSync(join(project, '.aiwg', 'requirements'), { recursive: true });
-      const unreadable = join(project, '.aiwg', 'requirements', 'UC-1.md');
-      writeFileSync(unreadable, '# Local only\n');
-      chmodSync(unreadable, 0o000);
+      const sentinel = join(project, '.aiwg', 'requirements', 'UC-1.md');
+      writeFileSync(sentinel, '# Local only\n');
+
+      const realReadFileSync = fs.readFileSync.bind(fs);
+      const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+        if (String(args[0]) === sentinel) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${sentinel}'`), { code: 'EACCES' });
+        }
+        return realReadFileSync(...args);
+      }) as typeof fs.readFileSync);
+
       try {
         expect(() => auditProjectArtifactHealth(project, {})).not.toThrow();
         expect(auditProjectArtifactHealth(project, {}).classification).toBe('local');
       } finally {
-        chmodSync(unreadable, 0o644);
+        readSpy.mockRestore();
       }
     });
   });

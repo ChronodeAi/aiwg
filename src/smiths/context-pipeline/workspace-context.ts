@@ -733,28 +733,83 @@ function sensitiveEvidence(content: string): string[] {
   return findings;
 }
 
-// Directory names the context-graph walk never descends into: VCS/build
-// output plus the package/cache/vendor trees that can dwarf a project when
-// the walk runs from a directory that also holds them (most commonly
-// $HOME) (#277). Project-relevant dot-directories (`.aiwg`, `.claude`,
-// `.codex`) are intentionally NOT in this set — only their own heavy,
-// non-instructional subtrees are (`.tmp` covers `.codex/.tmp/...`).
-const CONTEXT_WALK_IGNORED_DIR_NAMES = new Set([
+// Directory names the context-graph walk always skips, regardless of where
+// the walk root is: VCS/build output that is never hand-authored project
+// content (#277, pre-existing) plus two reserved, self-identifying names
+// that are never legitimately a real project directory.
+const CONTEXT_WALK_ALWAYS_IGNORED_DIR_NAMES = new Set([
   '.git', 'node_modules', 'dist', 'build', 'coverage', '.aiwg',
-  '.cache', '.cargo', '.rustup', '.npm', '.nvm', '.pnpm-store',
-  '.gradle', '.m2', '.venv', 'venv', 'target', '__pycache__',
-  '.local', '.tmp', 'Caches', 'Trash', '.Trash',
 ]);
 
-/** Walk depth/entry bounds for the context-graph walk (#277). A hit sets
- * `truncated: true` on the result instead of silently stopping. */
-const CONTEXT_WALK_MAX_DEPTH = 10;
-const CONTEXT_WALK_MAX_DIRECTORIES = 20_000;
+// Cache/registry directory names that are only skipped when the walk root
+// is the home directory itself (#277 fix-round). A project subtree that
+// happens to be named `.cache`, `target`, `.gradle`, etc. is NOT generated
+// data and must still be scanned — these names are only reliably "cache,
+// not project" when they sit directly under $HOME. `Library/Caches` and
+// `.local/share` are two-segment (parent + name) patterns, handled
+// separately below.
+const HOME_LEVEL_CACHE_DIR_NAMES = new Set([
+  '.cache', '.cargo', '.rustup', '.npm', '.nvm', '.pnpm-store',
+  '.gradle', '.m2', 'Trash',
+]);
 
-function hasProjectMarkers(projectPath: string): boolean {
-  const markers: string[] = ['.git', '.aiwg', 'package.json', 'WORKSPACE.md', ...LEGACY_ROOT_FILES];
-  return markers.some((marker) => existsSync(path.join(projectPath, marker)));
+/** True when `dirPath` contains `markerFile` — a cheap, synchronous, read-only check. */
+function hasMarkerFile(dirPath: string, markerFile: string): boolean {
+  return existsSync(path.join(dirPath, markerFile));
 }
+
+/** A `target` directory is Cargo/build output only when it carries the
+ * standard `CACHEDIR.TAG` marker, or sits next to a `Cargo.toml` — not
+ * merely because it is named `target` (#277 fix-round). */
+function isGeneratedTargetDir(dirPath: string): boolean {
+  if (hasMarkerFile(dirPath, 'CACHEDIR.TAG')) return true;
+  return existsSync(path.join(path.dirname(dirPath), 'Cargo.toml'));
+}
+
+/** A `venv`/`.venv` directory is a Python virtualenv only when it carries
+ * `pyvenv.cfg` — not merely because of its name (#277 fix-round). */
+function isPythonVenvDir(dirPath: string): boolean {
+  return hasMarkerFile(dirPath, 'pyvenv.cfg');
+}
+
+/**
+ * Whether the context-graph walk should skip `entryName` (a directory
+ * directly under `directory`) without descending into it.
+ *
+ * `isHomeRoot` gates the home-level cache list and the `Library/Caches` /
+ * `.local/share` two-segment patterns — they apply only when the overall
+ * walk root is $HOME, never for an arbitrary project subtree that happens
+ * to share one of those names (#277 fix-round).
+ */
+export function shouldSkipContextWalkDir(directory: string, entryName: string, isHomeRoot: boolean): boolean {
+  if (CONTEXT_WALK_ALWAYS_IGNORED_DIR_NAMES.has(entryName)) return true;
+  if (entryName.startsWith('.context-migration-')) return true;
+  const childPath = path.join(directory, entryName);
+  if (entryName === 'target' && isGeneratedTargetDir(childPath)) return true;
+  if ((entryName === 'venv' || entryName === '.venv') && isPythonVenvDir(childPath)) return true;
+  // Codex's own plugin/temp scratch — a known, specific noise source named
+  // in the original report, not a broad `.tmp` exclusion (#277 fix-round).
+  if (entryName === '.tmp' && path.basename(directory) === '.codex') return true;
+  if (isHomeRoot) {
+    if (HOME_LEVEL_CACHE_DIR_NAMES.has(entryName)) return true;
+    if (entryName === 'Caches' && path.basename(directory) === 'Library') return true;
+    if (entryName === 'share' && path.basename(directory) === '.local') return true;
+  }
+  return false;
+}
+
+/** Walk depth/entry bounds for the context-graph walk (#277). A hit sets
+ * `truncated: true` on the result instead of silently stopping. Overridable
+ * via environment for tests that need to exercise the bound without
+ * building a correspondingly large fixture tree. */
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+const CONTEXT_WALK_MAX_DEPTH = readPositiveIntEnv('AIWG_CONTEXT_WALK_MAX_DEPTH', 10);
+const CONTEXT_WALK_MAX_DIRECTORIES = readPositiveIntEnv('AIWG_CONTEXT_WALK_MAX_DIRECTORIES', 20_000);
 
 interface NestedInstructionFilesResult {
   files: string[];
@@ -764,11 +819,14 @@ interface NestedInstructionFilesResult {
 async function nestedInstructionFiles(projectPath: string): Promise<NestedInstructionFilesResult> {
   const found: string[] = [];
   const artifactRoot = path.resolve(resolveProjectAiwgDir(projectPath));
-  // Running from $HOME (or from a directory with no recognizable project
-  // marker) is the exact shape of #277: bound the walk to the top level
-  // instead of recursing into every cache/registry/venv underneath it.
+  // Running from $HOME is the exact shape of #277: bound the walk to the
+  // top level and apply the home-level cache exclusions instead of
+  // recursing into every cache/registry/venv underneath it. A markerless
+  // but otherwise ordinary (non-home) project root keeps the full bounded
+  // walk — "no project marker" is not evidence the directory is generated
+  // data (#277 fix-round).
   const isHomeDirectory = path.resolve(projectPath) === path.resolve(homedir());
-  const maxDepth = isHomeDirectory || !hasProjectMarkers(projectPath) ? 1 : CONTEXT_WALK_MAX_DEPTH;
+  const maxDepth = isHomeDirectory ? 1 : CONTEXT_WALK_MAX_DEPTH;
   let visitedDirectories = 0;
   let truncated = false;
   async function walk(directory: string, depth: number): Promise<void> {
@@ -786,8 +844,7 @@ async function nestedInstructionFiles(projectPath: string): Promise<NestedInstru
       if (entry.isDirectory()) {
         const child = path.join(directory, entry.name);
         if (
-          !CONTEXT_WALK_IGNORED_DIR_NAMES.has(entry.name)
-          && !entry.name.startsWith('.context-migration-')
+          !shouldSkipContextWalkDir(directory, entry.name, isHomeDirectory)
           && path.resolve(child) !== artifactRoot
         ) await walk(child, depth + 1);
       } else if (['AGENTS.md', 'CLAUDE.md', 'WARP.md'].includes(entry.name)) {

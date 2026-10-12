@@ -20,7 +20,7 @@ import { scanStartupContext,
 } from '../lint/claude-context-inventory.mjs';
 import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
-const { getFrameworkRoot, getPackageRoot, getVersionInfo } = await importImpl(
+const { getFrameworkRoot, getPackageRoot, getVersionInfo, loadConfig, resolveMcpServerEntrypointPath } = await importImpl(
   import.meta.url,
   'channel/manager.mjs'
 );
@@ -1384,18 +1384,20 @@ async function runDoctor() {
     check('Node.js', 'error', `${nodeVersion} (requires >= 18.0.0)`);
   }
 
-  // 8. Check MCP server — published npm installs only ship dist/src/ (no
-  // src/), so check both the compiled and source layouts (#276).
-  const mcpServerCandidates = [
-    path.join(AIWG_ROOT, 'dist/src/mcp/server.mjs'),
-    path.join(AIWG_ROOT, 'src/mcp/server.mjs'),
-  ];
-  const mcpServerChecks = await Promise.all(mcpServerCandidates.map(fileExists));
-  const hasMcp = mcpServerChecks.some(Boolean);
+  // 8. Check MCP server — resolve the exact compiled entrypoint the
+  // production launcher loads (bin/aiwg.mjs's resolveRouterPath always
+  // dispatches to the compiled dist/src/ tree; the MCP handler's import
+  // chain is always dist/src/mcp/server.mjs, never src/). Checking "either
+  // file exists" previously reported OK for a layout where the compiled
+  // server was missing but the uncompiled source happened to survive —
+  // `aiwg mcp serve` would still fail in that layout (#276).
+  const mcpConfig = await loadConfig();
+  const mcpServer = resolveMcpServerEntrypointPath(getPackageRoot(), mcpConfig);
+  const hasMcp = await fileExists(mcpServer);
   if (hasMcp) {
     check('MCP Server', 'ok', 'Available (run: aiwg mcp serve)');
   } else {
-    check('MCP Server', 'warn', 'Not found');
+    check('MCP Server', 'warn', `Not found at ${mcpServer}`);
   }
 
   // 8b. Check CLI runtime integrity — catches older published packages that

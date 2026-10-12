@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { promises as fsPromises } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -20,6 +19,7 @@ import {
   migrateWorkspaceContext,
   providerContextContract,
   rollbackWorkspaceContext,
+  shouldSkipContextWalkDir,
   workspaceLinkedFiles,
 } from '../../../src/smiths/context-pipeline/workspace-context.js';
 import { listProviderDefinitions } from '../../../src/providers/provider-definitions.js';
@@ -621,42 +621,157 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     expect(index.entries).toHaveProperty('AIWG.md');
   });
 
-  // #277 — the context-graph walk must never descend into cache/registry/venv
-  // trees, even when they are reachable from the project root (not just $HOME).
-  it('never descends into cache/registry/venv directories during the nested-instruction-file walk', async () => {
+  // #277 fix-round — exclusions are contextual, not blanket by-name. A
+  // non-home project root is NOT subject to the home-level cache list at
+  // all: a real project subtree merely named `.cache`, `.cargo`, or `Trash`
+  // must still be scanned. `target`/`venv` are only skipped when they carry
+  // their tool's marker file; `node_modules` is always skipped.
+  it('always skips node_modules, but scans generically-named directories that lack a real project root marker (non-home root)', async () => {
     const root = await project();
     await writeFile(join(root, 'AGENTS.md'), 'Root instructions.\n');
 
-    // Sentinel AGENTS.md files buried inside directories that must be ignored
-    // by name. If the walk ever descends into them, these would be found.
-    const heavyDirs = [
+    // node_modules is always skipped, regardless of markers.
+    await mkdir(join(root, 'node_modules', 'some-pkg', 'nested'), { recursive: true });
+    await writeFile(join(root, 'node_modules', 'some-pkg', 'nested', 'AGENTS.md'), 'Should never be found.\n');
+
+    // These names are only skipped at $HOME (see workspace-context-home-walk
+    // test for that case) — on an ordinary project root they are real
+    // directories and must be scanned.
+    const scannableDirs = [
       ['.cache', 'act', 'deep'],
       ['.cargo', 'registry', 'src'],
-      ['node_modules', 'some-pkg', 'nested'],
       ['Trash', 'deleted-project'],
-      ['repo', '.venv', 'lib', 'site-packages'],
     ];
-    for (const segments of heavyDirs) {
+    for (const segments of scannableDirs) {
       await mkdir(join(root, ...segments), { recursive: true });
-      await writeFile(join(root, ...segments, 'AGENTS.md'), 'Should never be found.\n');
+      await writeFile(join(root, ...segments, 'AGENTS.md'), 'Should be found.\n');
     }
 
-    const readdirSpy = vi.spyOn(fsPromises, 'readdir');
     const audit = await auditWorkspaceContext(root);
+    const foundPaths = audit.sources.map((source) => source.path);
+    expect(foundPaths).not.toContain('node_modules/some-pkg/nested/AGENTS.md');
+    expect(foundPaths).toContain('.cache/act/deep/AGENTS.md');
+    expect(foundPaths).toContain('.cargo/registry/src/AGENTS.md');
+    expect(foundPaths).toContain('Trash/deleted-project/AGENTS.md');
+  });
 
-    // None of the sentinel files were discovered.
-    expect(audit.sources.some((source) => source.path !== 'AGENTS.md' && source.operatorContent.includes('Should never be found.'))).toBe(false);
-    expect(audit.plan.nestedSources).toHaveLength(0);
+  it('skips target/ only when it carries a Cargo/CACHEDIR marker, not merely by name', async () => {
+    const root = await project();
+    await writeFile(join(root, 'AGENTS.md'), 'Root instructions.\n');
 
-    // The walk never even attempted to read inside the ignored directories.
-    const readDirectories = readdirSpy.mock.calls.map((call) => String(call[0]));
-    for (const directory of readDirectories) {
-      expect(directory).not.toMatch(/[\\/]\.cache([\\/]|$)/);
-      expect(directory).not.toMatch(/[\\/]\.cargo([\\/]|$)/);
-      expect(directory).not.toMatch(/[\\/]node_modules([\\/]|$)/);
-      expect(directory).not.toMatch(/[\\/]Trash([\\/]|$)/);
-      expect(directory).not.toMatch(/[\\/]\.venv([\\/]|$)/);
+    // A real project directory named `target` with no Cargo/CACHEDIR marker
+    // must still be scanned.
+    await mkdir(join(root, 'target', 'docs'), { recursive: true });
+    await writeFile(join(root, 'target', 'docs', 'AGENTS.md'), 'Should be found.\n');
+
+    // A genuine Cargo build-output `target/` (sibling Cargo.toml) must be skipped.
+    await mkdir(join(root, 'crate', 'target', 'debug'), { recursive: true });
+    await writeFile(join(root, 'crate', 'Cargo.toml'), '[package]\nname = "x"\n');
+    await writeFile(join(root, 'crate', 'target', 'debug', 'AGENTS.md'), 'Should never be found.\n');
+
+    // A CACHEDIR.TAG-marked target/ must also be skipped even with no Cargo.toml.
+    await mkdir(join(root, 'other', 'target', 'deep'), { recursive: true });
+    await writeFile(join(root, 'other', 'target', 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n');
+    await writeFile(join(root, 'other', 'target', 'deep', 'AGENTS.md'), 'Should never be found.\n');
+
+    const audit = await auditWorkspaceContext(root);
+    const foundPaths = audit.sources.map((source) => source.path);
+    expect(foundPaths).toContain('target/docs/AGENTS.md');
+    expect(foundPaths).not.toContain('crate/target/debug/AGENTS.md');
+    expect(foundPaths).not.toContain('other/target/deep/AGENTS.md');
+  });
+
+  it('skips venv//.venv only when it carries pyvenv.cfg, not merely by name', async () => {
+    const root = await project();
+    await writeFile(join(root, 'AGENTS.md'), 'Root instructions.\n');
+
+    // A real project directory named `venv` with no pyvenv.cfg must still be scanned.
+    await mkdir(join(root, 'venv', 'docs'), { recursive: true });
+    await writeFile(join(root, 'venv', 'docs', 'AGENTS.md'), 'Should be found.\n');
+
+    // A genuine Python virtualenv (pyvenv.cfg present) must be skipped.
+    await mkdir(join(root, 'repo', '.venv', 'lib', 'site-packages'), { recursive: true });
+    await writeFile(join(root, 'repo', '.venv', 'pyvenv.cfg'), 'home = /usr/bin\n');
+    await writeFile(join(root, 'repo', '.venv', 'lib', 'site-packages', 'AGENTS.md'), 'Should never be found.\n');
+
+    const audit = await auditWorkspaceContext(root);
+    const foundPaths = audit.sources.map((source) => source.path);
+    expect(foundPaths).toContain('venv/docs/AGENTS.md');
+    expect(foundPaths).not.toContain('repo/.venv/lib/site-packages/AGENTS.md');
+  });
+
+  it('scans a markerless (no .git/.aiwg-config/package.json) monorepo root with the full bounded walk, not depth 1', async () => {
+    const root = await project(); // project() only creates an empty .aiwg/ dir — no aiwg.config, no package.json, no .git
+    await mkdir(join(root, 'packages', 'one', 'deeply', 'nested'), { recursive: true });
+    await writeFile(join(root, 'packages', 'one', 'deeply', 'nested', 'AGENTS.md'), 'Nested package instructions.\n');
+
+    const audit = await auditWorkspaceContext(root);
+    expect(audit.plan.nestedSources).toContain('packages/one/deeply/nested/AGENTS.md');
+    expect(audit.contextWalkTruncated).toBe(false);
+  });
+
+  it('does not follow a directory symlink out of the project root', async () => {
+    const root = await project();
+    const outside = await mkdtemp(join(tmpdir(), 'aiwg-workspace-context-outside-'));
+    try {
+      await mkdir(join(outside, 'escaped'), { recursive: true });
+      await writeFile(join(outside, 'escaped', 'AGENTS.md'), 'Should never be found — outside the project root.\n');
+      await symlink(outside, join(root, 'linked-outside'), 'dir');
+
+      const audit = await auditWorkspaceContext(root);
+      const foundPaths = audit.sources.map((source) => source.path);
+      expect(foundPaths.some((p) => p.includes('linked-outside'))).toBe(false);
+      expect(foundPaths.some((p) => p.includes('escaped'))).toBe(false);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
     }
-    readdirSpy.mockRestore();
+  });
+});
+
+// #277 fix-round — direct unit coverage of the exported exclusion predicate.
+// This is the exact function the walk calls per directory entry; testing it
+// directly (rather than only through black-box walk behavior) lets us prove
+// the home-level gate independently of the depth-1 bound that would
+// otherwise make "excluded by name" and "excluded by depth" indistinguishable
+// from the outside at $HOME.
+describe('shouldSkipContextWalkDir (#277 fix-round — contextual exclusions)', () => {
+  it('always skips .git and node_modules, regardless of home-root context', () => {
+    expect(shouldSkipContextWalkDir('/anywhere', '.git', false)).toBe(true);
+    expect(shouldSkipContextWalkDir('/anywhere', '.git', true)).toBe(true);
+    expect(shouldSkipContextWalkDir('/anywhere', 'node_modules', false)).toBe(true);
+    expect(shouldSkipContextWalkDir('/anywhere', 'node_modules', true)).toBe(true);
+  });
+
+  it('does not skip home-level cache names when the walk root is not $HOME', () => {
+    for (const name of ['.cache', '.cargo', '.rustup', '.npm', '.nvm', '.pnpm-store', '.gradle', '.m2', 'Trash']) {
+      expect(shouldSkipContextWalkDir('/project', name, false)).toBe(false);
+    }
+  });
+
+  it('skips the same home-level cache names only when the walk root is $HOME', () => {
+    for (const name of ['.cache', '.cargo', '.rustup', '.npm', '.nvm', '.pnpm-store', '.gradle', '.m2', 'Trash']) {
+      expect(shouldSkipContextWalkDir('/home/user', name, true)).toBe(true);
+    }
+  });
+
+  it('skips the two-segment Library/Caches pattern only at $HOME', () => {
+    expect(shouldSkipContextWalkDir('/home/user/Library', 'Caches', true)).toBe(true);
+    expect(shouldSkipContextWalkDir('/home/user/Library', 'Caches', false)).toBe(false);
+    // A directory named "Caches" that isn't under "Library" is never skipped by this rule.
+    expect(shouldSkipContextWalkDir('/home/user/elsewhere', 'Caches', true)).toBe(false);
+  });
+
+  it('skips the two-segment .local/share pattern only at $HOME', () => {
+    expect(shouldSkipContextWalkDir('/home/user/.local', 'share', true)).toBe(true);
+    expect(shouldSkipContextWalkDir('/home/user/.local', 'share', false)).toBe(false);
+    // Other .local subdirectories (bin, state, ...) are never skipped by this rule.
+    expect(shouldSkipContextWalkDir('/home/user/.local', 'bin', true)).toBe(false);
+  });
+
+  it('skips .codex/.tmp specifically, regardless of home-root context, but not a bare .tmp elsewhere', () => {
+    expect(shouldSkipContextWalkDir('/project/.codex', '.tmp', false)).toBe(true);
+    expect(shouldSkipContextWalkDir('/project/.codex', '.tmp', true)).toBe(true);
+    expect(shouldSkipContextWalkDir('/project', '.tmp', false)).toBe(false);
+    expect(shouldSkipContextWalkDir('/project/other', '.tmp', false)).toBe(false);
   });
 });
