@@ -466,6 +466,17 @@ export async function deploy(opts) {
   if ((shouldDeploySkills || skillsOnly) && !opts.commandsOnly && !opts.rulesOnly) {
     const allSkillDirs = [];
 
+    // Addon-style source (direct skills/ subdir): `aiwg use <addon>` invokes
+    // this deployer with --source pointing at the addon directory itself, so
+    // the repo-root-anchored discovery below resolves to nothing (#2873).
+    // Mirrors the isAddonSource branch in claude/codex/cursor/factory/warp.
+    // The repo root carries no top-level skills/, so this never fires for
+    // framework/mode deploys.
+    const addonSkillsDir = path.join(srcRoot, 'skills');
+    if (fs.existsSync(addonSkillsDir)) {
+      allSkillDirs.push(...listSkillDirs(addonSkillsDir));
+    }
+
     // Addon skills (aiwg-utils, ralph, etc.)
     allSkillDirs.push(...getAddonSkillDirs(srcRoot));
 
@@ -665,7 +676,11 @@ export function updateBundledManifest(kernelSkillNames, opts) {
  */
 export function migrateLegacySkillPath(opts) {
   const { dryRun, quiet } = opts;
-  const legacyPath = path.join(os.homedir(), '.hermes', '.aiwg', 'skills');
+  // Resolve through the same HERMES_HOME contract as every other path in
+  // this provider (env var first, platform default otherwise): with
+  // HERMES_HOME set, the legacy tree lives under that root — never under
+  // the process home directory.
+  const legacyPath = path.join(getHermesHome(), '.aiwg', 'skills');
   const newPath = paths.skills;
 
   let legacyExists = false;
