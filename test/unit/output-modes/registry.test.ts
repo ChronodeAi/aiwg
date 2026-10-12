@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -12,9 +12,11 @@ async function root(): Promise<string> {
   return value;
 }
 
-afterEach(() => {
+afterEach(async () => {
   delete process.env.AIWG_SESSION_ID;
   delete process.env.AIWG_CONFIG;
+  // `roots` was tracked but never actually removed (#3018), leaking a directory per call.
+  await Promise.all(roots.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
 describe('output mode registry', () => {

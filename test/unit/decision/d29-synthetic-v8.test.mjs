@@ -22,18 +22,22 @@ import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle } from '..
 import { D29_PAID_GENERATOR_IDS } from '../../../src/decision/heldout/d29-generator-ids.js';
 import { shortcutAuditV8, surfaceFeaturesV8, SHORTCUT_AUDIT_V8_PARAMETERS } from '../../../tools/decision/studies/d29-shortcuts-v8.mjs';
 import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v7.mjs';
-import { prepare, prepareV7, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
+import { prepare, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
   d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID,
   definitions, definitionsV8, LABELING_CONVENTIONS, LABELING_CONVENTIONS_V8 } from '../../../tools/decision/studies/d29.mjs';
-import { freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT, MULTI_AUDIT_TIMEOUT } from './d29-test-support.mjs';
+import { freezeAdmissionClock, preparedOnce, preparedOnceMissCount, PREPARE_HOOK_TIMEOUT, MULTI_AUDIT_TIMEOUT } from './d29-test-support.mjs';
 
 freezeAdmissionClock();
+
+/** `preparedOnce` key for the v7 generator pinned to its own public seed; shared between this
+ * hook and V8-10's identical (generator, seed) call so the second one reuses this run. */
+const V7_PUBLIC_SEED_KEY = 'd29-synthetic/v7:d29-study-v7';
 
 let prepared, dry, v7;
 beforeAll(async () => {
   prepared = await prepare(D29_V8_SEED);
   dry = await dryRun(prepared);
-  v7 = await prepareV7('d29-study-v7');
+  v7 = await preparedOnce(V7_PUBLIC_SEED_KEY, () => prepareWithGenerator('d29-synthetic/v7', 'd29-study-v7'));
 }, PREPARE_HOOK_TIMEOUT);
 
 const words = text => new Set((text.toLowerCase().match(/[a-z]+/g) ?? []).filter(word => word.length > 2));
@@ -376,7 +380,12 @@ describe('D29 generator routing', () => {
     expect(fresh.corpus.provenance).toMatchObject({ seed: 'fresh-private-seed', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID) });
     expect(fresh.analysis.native.planId).toBe('d29-synthetic-v8');
     expect(fresh.preregistration.frozenAt).toBe(V8_DATASET_FROZEN_AT);
-    const viaModule = await studyModule(null).prepare('fresh-private-seed');
+    // Regression guard for the repeated-work this case used to do (#3033): `studyModule(null).prepare`
+    // is literally the same exported `prepare` function (see studyModule below), so this second entry
+    // path shares the `preparedOnce` cache instead of repeating the ~2000-row generation + shortcut audit.
+    const missesBeforeViaModule = preparedOnceMissCount();
+    const viaModule = await preparedOnce('fresh-private-seed', () => studyModule(null).prepare('fresh-private-seed'));
+    expect(preparedOnceMissCount(), 'studyModule(null).prepare must reuse the cached fresh-private-seed preparation').toBe(missesBeforeViaModule);
     expect(heldoutDigest(viaModule.corpus)).toBe(heldoutDigest(fresh.corpus));
     // Score regenerates with the generator the corpus rows record: a fresh v8 test-phase corpus
     // passes the frozen-corpus check and reaches the calibration-context refusal.
@@ -389,8 +398,11 @@ describe('D29 generator routing', () => {
     expect(() => d29CorpusGeneratorId(mixed)).toThrow('corpus-generator');
     expect(() => d29CorpusGeneratorId({ rows: [{ provenance: { generatorId: 'd29-synthetic/v5' } }] })).toThrow('corpus-generator');
     await expect(prepareWithGenerator('d29-synthetic/v9', 'fresh-private-seed')).rejects.toThrow('generator');
-    // An explicitly selected older generator still reproduces its own frozen output.
-    const older = await prepareWithGenerator('d29-synthetic/v7', 'd29-study-v7');
+    // An explicitly selected older generator still reproduces its own frozen output, and (same guard
+    // as above) reuses the beforeAll hook's identical (generator, seed) preparation rather than redoing it.
+    const missesBeforeOlder = preparedOnceMissCount();
+    const older = await preparedOnce(V7_PUBLIC_SEED_KEY, () => prepareWithGenerator('d29-synthetic/v7', 'd29-study-v7'));
+    expect(preparedOnceMissCount(), 'prepareWithGenerator(v7, d29-study-v7) must reuse the beforeAll hook\'s cached preparation').toBe(missesBeforeOlder);
     expect(heldoutDigest(older.corpus)).toBe(heldoutDigest(v7.corpus));
   }, 120_000);
 

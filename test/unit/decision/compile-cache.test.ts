@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +18,18 @@ import {
   DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION, type DecisionLifecycleHold, type DecisionLifecyclePolicy,
   type DecisionLifecycleRule, type DecisionLifecycleTombstone,
 } from '../../../src/decision/lifecycle.js';
+
+// None of this file's temp dirs were ever removed (#3018); track and clean up after each test
+// (module-level so it also covers `crossProcessFill()`, called from within an `it`).
+const tmpRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(tmpRoots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+async function tmpDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  tmpRoots.push(dir);
+  return dir;
+}
 
 const executeFile = promisify(execFile);
 const digest = (character: string) => `sha256:${character.repeat(64)}` as `sha256:${string}`;
@@ -218,7 +230,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-011 executes paired offline compile runs with observed disk size and no invented provider economics', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-benchmark-'));
+    const directory = await tmpDir('decision-compile-cache-benchmark-');
     const store = new FileCompileCache<{ artifact: string }>(directory, lifecycle());
     let compilations = 0;
     const compile = async () => {
@@ -270,7 +282,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-005 never publishes a malformed filesystem fill and recovers on retry', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-malformed-'));
+    const directory = await tmpDir('decision-compile-cache-malformed-');
     const store = new FileCompileCache<number>(directory, lifecycle());
     await expect(store.getOrCompile(identity(), context(), 1_000, async () => Number.NaN))
       .rejects.toThrow('non-finite');
@@ -279,7 +291,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-004 coordinates cold fills across independent filesystem cache instances', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-lock-'));
+    const directory = await tmpDir('decision-compile-cache-lock-');
     const first = new FileCompileCache<string>(directory, { ...lifecycle(), lockPollMs: 1, lockTimeoutMs: 1_000 });
     const second = new FileCompileCache<string>(directory, { ...lifecycle(), lockPollMs: 1, lockTimeoutMs: 1_000 });
     let calls = 0; let release!: () => void;
@@ -303,7 +315,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-D11 emits verified cross-process locking qualification evidence', async () => {
-    const artifactRoot = await mkdtemp(join(tmpdir(), 'decision-compile-cache-qualification-'));
+    const artifactRoot = await tmpDir('decision-compile-cache-qualification-');
     const run = await executeQualificationPlan({
       artifactRoot,
       manifest: { schemaVersion: 'decision-qualification-run/v1', mode: 'offline', runId: 'd30-compile-cache-v1',
@@ -325,7 +337,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-004 does not steal a newly created lock with incomplete owner metadata', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-partial-lock-'));
+    const directory = await tmpDir('decision-compile-cache-partial-lock-');
     const key = compileCacheKey(identity()).slice('sha256:'.length);
     const path = join(directory, `${key}.lock`);
     await writeFile(path, '{}');
@@ -340,7 +352,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-004 reclaims a dead fill owner and never publishes a failed fill', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-stale-lock-'));
+    const directory = await tmpDir('decision-compile-cache-stale-lock-');
     const key = compileCacheKey(identity()).slice('sha256:'.length);
     await writeFile(join(directory, `${key}.lock`), JSON.stringify({
       version: 1, pid: 2_147_483_647, token: 'stale-owner', createdAtEpochMs: 1,
@@ -354,7 +366,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-007 refreshes only an authenticated expired filesystem entry, never stale evidence', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-expiry-'));
+    const directory = await tmpDir('decision-compile-cache-expiry-');
     const store = new FileCompileCache<string>(directory, lifecycle());
     let calls = 0;
     const compile = async () => `artifact-${++calls}`;
@@ -375,7 +387,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-008 persists isolated entries and enforces lifecycle integrity across store restarts', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-'));
+    const directory = await tmpDir('decision-compile-cache-');
     const first = new FileCompileCache<{ stable: boolean }>(directory, lifecycle());
     const filled = await first.getOrCompile(identity(), context(), 1_000, async () => ({ stable: true }));
     const restarted = new FileCompileCache<{ stable: boolean }>(directory, lifecycle());
@@ -388,7 +400,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-008 enforces tombstone, hold, deletion and backup/restore across filesystem restarts', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-lifecycle-'));
+    const directory = await tmpDir('decision-compile-cache-lifecycle-');
     const store = new FileCompileCache<string>(directory, lifecycle());
     const filled = await store.getOrCompile(identity(), context(), 1_000, async () => 'artifact');
     const backup = await store.backup(identity(), context(101));
@@ -414,7 +426,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-008 tombstones erase the value and every identifier from disk', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-erasure-'));
+    const directory = await tmpDir('decision-compile-cache-erasure-');
     const store = new FileCompileCache<{ body: string }>(directory, lifecycle());
     const canary = 'synthetic-compile-cache-canary-2674';
     const pins = identity({ featureFlags: { marker: 'identity-canary-2674' } });
@@ -439,7 +451,7 @@ describe('decision compile and provider-prefix cache', () => {
   });
 
   it('CCP-008 consults an independent D10 tombstone journal before restoring', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-compile-cache-journal-'));
+    const directory = await tmpDir('decision-compile-cache-journal-');
     const journaled: DecisionLifecycleTombstone[] = [];
     const lifecycleJournal = {
       tombstone: async (value: DecisionLifecycleTombstone) => { journaled.push(value); },
@@ -450,7 +462,7 @@ describe('decision compile and provider-prefix cache', () => {
     expect(await store.delete(identity(), context(101))).toBe(true);
     expect(journaled).toHaveLength(1);
     // Even if the local tombstone is lost (for example a directory restored from media), the journal refuses the backup.
-    const restoredMedia = await mkdtemp(join(tmpdir(), 'decision-compile-cache-journal-media-'));
+    const restoredMedia = await tmpDir('decision-compile-cache-journal-media-');
     const fresh = new FileCompileCache<string>(restoredMedia, { ...lifecycle(), lifecycleJournal });
     await expect(fresh.restore(filled.entry, context(102))).rejects.toThrow('unavailable');
     const unjournaled = new FileCompileCache<string>(restoredMedia, lifecycle());
@@ -469,7 +481,7 @@ describe('decision compile and provider-prefix cache', () => {
       try { return { value: await run() }; }
       catch (error) { return { error: `${(error as Error).name}:${(error as Error).message}` }; }
     };
-    const fileStore = async () => new FileCompileCache<string>(await mkdtemp(join(tmpdir(), 'decision-compile-cache-oracle-')), lifecycle());
+    const fileStore = async () => new FileCompileCache<string>(await tmpDir('decision-compile-cache-oracle-'), lifecycle());
     for (const [storeName, make] of [['memory', async () => new MemoryCompileCache<string>(lifecycle())], ['file', fileStore]] as const) {
       const present = await make();
       await present.getOrCompile(identity(), context(), 1_000, async () => 'present');
@@ -552,7 +564,7 @@ describe('decision compile and provider-prefix cache', () => {
 });
 
 async function crossProcessFill(): Promise<{ compilations: number; outcomes: string[]; values: string[] }> {
-  const root = await mkdtemp(join(tmpdir(), 'decision-compile-cache-processes-'));
+  const root = await tmpDir('decision-compile-cache-processes-');
   const directory = join(root, 'cache');
   const counter = join(root, 'compilations.log');
   const worker = join(process.cwd(), 'test/fixtures/decision/compile-cache-worker.ts');

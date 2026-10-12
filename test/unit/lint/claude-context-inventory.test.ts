@@ -89,7 +89,13 @@ Review code.
     await write(root, '.claude/rules/one.md', 'c'.repeat(40000));
     await write(root, '.claude/rules/two.md', 'd'.repeat(40000));
 
-    const result = await scanStartupContext({ rootDir: root });
+    // This test measures only the synthetic root's own content, not ancestors (a separate
+    // test below covers ancestor inclusion) — `includeAncestors` otherwise climbs all the way
+    // to the real filesystem root, so the exact expected token count would depend on whether
+    // TMPDIR happens to resolve under a real ancestor that itself carries a CLAUDE.md/rules
+    // deployment (for example the operator's home directory) instead of only this file's own
+    // synthetic fixtures (#3017).
+    const result = await scanStartupContext({ rootDir: root, includeAncestors: false });
 
     expect(result.budgetTokens).toBe(STANDARD_SONNET_BUDGET_TOKENS);
     // Rules dominate (80k chars / 4 = 20k tokens) over memory files.
@@ -108,7 +114,11 @@ Review code.
     await mkdir(project, { recursive: true });
     await write(project, '.claude/rules/project-rule.md', 'p'.repeat(40000));
 
-    const result = await scanStartupContext({ rootDir: project });
+    // Bound the ancestor walk at `workspace` (this test's own synthetic top level), or it would
+    // keep climbing past it into whatever REAL ancestor directories TMPDIR resolves under (for
+    // example the operator's home directory, which carries its own real CLAUDE.md/rules) and
+    // inflate the totals the assertions below pin exactly (#3017).
+    const result = await scanStartupContext({ rootDir: project, ancestorStopAt: workspace });
     const labels = result.components.map((c) => c.label);
     expect(labels).toContain('.claude/rules/*.md');
     expect(labels).toContain('../../.claude/rules/*.md');
@@ -127,7 +137,7 @@ Review code.
     // ~210k tokens of rules — over the 200k standard window.
     await write(root, '.claude/rules/huge.md', 'x'.repeat(840000));
 
-    const result = await scanStartupContext({ rootDir: root });
+    const result = await scanStartupContext({ rootDir: root, includeAncestors: false });
 
     expect(result.status).toBe('over');
     expect(result.totalTokens).toBeGreaterThan(STANDARD_SONNET_BUDGET_TOKENS);

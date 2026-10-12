@@ -33,8 +33,16 @@ import { createAgentsMd as openhumanAgentsMd } from '../../../tools/agents/provi
 const REPO_ROOT = resolve(__dirname, '../../..');
 const levelOf = (f: string): string | null => ruleEnforcementLevel(readFileSync(f, 'utf8'));
 
+// `tmpFile()`'s directories were never removed (#3018), leaking one per call; module-level so
+// it covers every describe block in this file, not just the ones that already track their own.
+const fileRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(fileRoots.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+
 async function tmpFile(name: string, content: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'aiwg-tier-'));
+  fileRoots.push(dir);
   const p = join(dir, name);
   await writeFile(p, content);
   return p;
@@ -71,6 +79,7 @@ describe('rule tier deployment (#1673)', () => {
   describe('writeOnDemandRuleIndex', () => {
     it('writes a managed index listing the on-demand rules with fetch hints', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'aiwg-od-'));
+      fileRoots.push(dir);
       await mkdir(dir, { recursive: true });
       const n = writeOnDemandRuleIndex(dir, [join('x', 'diagram-generation.md'), join('y', 'activity-log.md')], {});
       expect(n).toBe(2);
@@ -83,6 +92,7 @@ describe('rule tier deployment (#1673)', () => {
 
     it('removes a stale index when there are no on-demand rules', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'aiwg-od-'));
+      fileRoots.push(dir);
       await writeFile(join(dir, 'RULES-ONDEMAND.md'), 'stale');
       const n = writeOnDemandRuleIndex(dir, [], {});
       expect(n).toBe(0);

@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { allHandlers } from '../../../../src/cli/handlers/index.js';
 import { gatesHandler } from '../../../../src/cli/handlers/gates.js';
 import { getCommandDefinition, getCommandIds, searchCommandsByKeyword } from '../../../../src/extensions/commands/definitions.js';
@@ -24,6 +24,17 @@ function writeJson(dir: string, name: string, value: unknown): string {
   const file = path.join(dir, name);
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
   return file;
+}
+
+// Temp dirs below were never removed (#3018); track and clean them up after each test.
+const tmpRoots: string[] = [];
+afterEach(() => {
+  for (const root of tmpRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+function tmpGatesDir(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
+  tmpRoots.push(dir);
+  return dir;
 }
 
 // `--pack-dir` file loads are always project: packs, so CLI fixtures bind a
@@ -70,7 +81,7 @@ describe('gatesHandler', () => {
   });
 
   it('validates packs, bindings and reports offline', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
+    const dir = tmpGatesDir();
     const { packPath, bindingPath } = offlineFiles(dir);
     const report = evaluateFixture();
     const reportPath = writeJson(dir, 'report.json', report);
@@ -100,7 +111,7 @@ describe('gatesHandler', () => {
   });
 
   it('evaluates a passing binding to PROMOTE and refuses to promote breached thresholds', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
+    const dir = tmpGatesDir();
     const passing = offlineFiles(dir);
     const ok = await gatesHandler.execute(ctx(evaluateArgs(passing), dir));
     expect(ok.exitCode).toBe(0);
@@ -143,7 +154,7 @@ describe('gatesHandler', () => {
   });
 
   it('never upgrades an upstream HOLD or ROLLBACK and refuses forged seals', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
+    const dir = tmpGatesDir();
     for (const upstream of ['hold', 'rollback'] as const) {
       const files = offlineFiles(dir, { upstream });
       const result = await gatesHandler.execute(ctx(evaluateArgs({ ...files, upstreamPath: files.upstreamPath as string }), dir));
@@ -166,7 +177,7 @@ describe('gatesHandler', () => {
   });
 
   it('fails closed without throwing on missing files, bad digests and bad clocks', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
+    const dir = tmpGatesDir();
     const files = offlineFiles(dir);
     const missing = await gatesHandler.execute(ctx(
       evaluateArgs({ ...files, bindingPath: path.join(dir, 'missing.json') }), dir));

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'fs/promises';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import {
@@ -10,8 +10,17 @@ import {
 } from '../../../src/cli/skill-usage.js';
 import { emptyConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
 
+// Every test creates one or more fresh temp roots and none of them were ever removed (#3018),
+// leaking a directory per call on every run. Track and remove them all after each test instead.
+const tmpRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(tmpRoots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
 async function tmpProject(): Promise<string> {
-  return mkdtemp(path.join(os.tmpdir(), 'aiwg-skill-usage-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-skill-usage-'));
+  tmpRoots.push(root);
+  return root;
 }
 
 async function append(projectDir: string, overrides: Partial<Parameters<typeof maybeAppendSkillUsage>[0]> = {}) {

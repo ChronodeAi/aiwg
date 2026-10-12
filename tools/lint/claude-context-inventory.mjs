@@ -179,6 +179,14 @@ export async function scanStartupContext(options = {}) {
   const budgetTokens = options.budgetTokens ?? STANDARD_SONNET_BUDGET_TOKENS;
   const warnRatio = options.warnRatio ?? DEFAULT_STARTUP_WARN_RATIO;
   const includeAncestors = options.includeAncestors ?? true;
+  // The walk otherwise climbs to the real filesystem root, so a caller that
+  // wants a bounded ancestor chain (for example a test building a synthetic
+  // workspace/project pair under the OS temp directory, which is itself
+  // nested under whatever real ancestors TMPDIR happens to resolve under —
+  // the user's home directory carries its own real CLAUDE.md/.claude/rules)
+  // can cap it at `ancestorStopAt`, inclusive, instead of picking up
+  // unrelated real ancestor content.
+  const ancestorStopAt = options.ancestorStopAt ? path.resolve(options.ancestorStopAt) : null;
   const components = [];
 
   // Claude Code walks up from the working directory and inlines every
@@ -221,6 +229,7 @@ export async function scanStartupContext(options = {}) {
           }
         }
       }
+      if (ancestorStopAt && current === ancestorStopAt) break;
     }
   }
 
