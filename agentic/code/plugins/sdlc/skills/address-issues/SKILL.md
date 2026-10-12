@@ -187,7 +187,16 @@ Before dispatching the cycle, detect the provider with `aiwg runtime-info` or th
 
 Other providers continue with the AIWG AL CYCLE flow below. External/background loops remain out of scope for `/goal` and route to `agent-loop-ext` only when explicitly requested.
 
-For each issue, execute the 3-step cycle protocol:
+For each issue, execute the 3-step cycle protocol. Throughout the cycle, offload bounded decisions to Jev first (see below); on `fallback`, decide normally.
+
+#### Bounded decisions: Jev first, LLM fallback
+
+Before spending reasoning on any of these, call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback` (including Jev not set up), decide normally — fallback never stops the run. Never send secrets in the question or context. See the `decision-offload` skill for the exact command shape.
+
+- **Worker/model/effort pick per dispatch** — `--choices` built from the deployed model-worker wrappers or the configured catalog; write each choice as `id=what it means` with no commas in the description.
+- **Environmental vs real failure** — `--yes-no` with the log excerpt as context when a test or CI failure lands.
+- **Review verdict follow-up** — re-review needed, yes or no.
+- **Reviewer minors** — fix now vs defer, per finding.
 
 #### Step 1: Do Work
 

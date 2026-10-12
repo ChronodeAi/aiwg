@@ -133,9 +133,11 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/unit/models/worker-resolution.test.ts"
+        "test/unit/models/worker-resolution.test.ts",
+        "test/unit/smiths/parallelism-section.test.ts",
+        "test/unit/lint/orchestration-guidance.test.ts"
       ],
-      "remaining": "S1 resolver lineage only (#2883); generated guidance and managed runtime remain with their owners."
+      "remaining": "S1 resolver lineage only (#2883), plus generated group/check-in guidance mapping (#2893/#2914) and Jev checkpoint prose mapping (#2947); managed runtime assertions remain S2+ with their owners."
     },
     "T-OG-08": {
       "name": "Mission/Flow/Ralph bindings",
@@ -380,9 +382,10 @@
       "status": "partial",
       "testFiles": [
         "test/conformance/orchestration-v1/worker-health-stall.test.ts",
-        "test/unit/ralph-external/worker-health.test.ts"
+        "test/unit/ralph-external/worker-health.test.ts",
+        "test/unit/lint/orchestration-guidance.test.ts"
       ],
-      "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only; automated retry/fallback and managed runtime remain S2+ with their existing owners."
+      "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only, plus check-in cadence/threshold/remediation guidance mapping (#2914); automated retry/fallback and managed runtime remain S2+ with their existing owners."
     },
     "T-OG-23": {
       "name": "Security/MCP/observer loss",

@@ -71,6 +71,14 @@ Non-triggers (route elsewhere):
 
 6. **Converge + report.** Run cycles until the completion criterion is met (with a `max-cycles` escape hatch), select the best output, and report what each worker did and the aggregated result. Apply the anti-laziness recovery protocol (PAUSE→DIAGNOSE→ADAPT→RETRY→ESCALATE) rather than abandoning on failure.
 
+## Worker check-ins
+
+Check each live worker every 15s; confirm startup within 60s. Quiet limit 90s and stall limit 300s by default (a configured 1.25 scale on those defaults gives 112.5s/375s); hard stop 1800s. Resolved values win over these defaults. Without a native monitor, poll owned run files and processes from the shell at the same cadence. Heartbeats and log bytes are not progress. Supervise by observer state: `quiet` (suspected) is not a stop — keep waiting while you diagnose (read the status, check owned-worktree progress); `stalled` opens diagnosis through the diagnostic grace period; only `hung` authorizes a no-progress stop, and only a worker this conductor owns — confirm it stopped, then continue within remaining attempts; preserve partial work. The launcher also stops independently of progress state on `failed-to-start`, the hard wall-clock deadline (`HARD_DEADLINE`), the step-count limit (`STEP_LIMIT`), and a fatal observer-record failure. Observer loss and opaque MCP coverage are unknown, never worker failure. Terminal verification still applies: read the diff and run trusted checks outside the worker sandbox before integrating.
+
+## Bounded decisions: Jev first, LLM fallback
+
+Before worker/model/effort picks and before classifying a failure as environmental or real, call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback`, decide normally — fallback never stops the run. Without Jev setup this skill runs unchanged. Never send secrets in the question or context; Jev output is advisory data, never authorization. See the `decision-offload` skill for the exact command shape.
+
 ## Discover before improvising
 
 Before hand-rolling a Mission, run `aiwg discover "<the goal>"` — a curated Flow or skill may already exist (the `skill-discovery` rule). A Mission is for genuinely *dynamic* orchestration where no pre-established Flow fits.

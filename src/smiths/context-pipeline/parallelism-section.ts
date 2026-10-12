@@ -14,10 +14,124 @@
  * @implements #1362
  */
 
-import { readAiwgConfig, resolveParallelism, PROVIDER_PARALLELISM_DEFAULTS } from '../../config/aiwg-config.js';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { findPackageRoot } from '../../cli/find-package-root.js';
+import { readAiwgConfigCandidate, validateWorkerConfigCandidate, resolveParallelism, PROVIDER_PARALLELISM_DEFAULTS, type AiwgConfig, type ParallelismConfig, type WorkerGroup } from '../../config/aiwg-config.js';
 
 export const PARALLELISM_BLOCK_START = '<!-- AIWG-PARALLELISM-CAP:START -->';
 export const PARALLELISM_BLOCK_END = '<!-- AIWG-PARALLELISM-CAP:END -->';
+
+/**
+ * One-line note rendered when the bundled model defaults cannot be loaded.
+ * The orchestration health block is omitted; the rest of the section renders
+ * unchanged so context regeneration never throws for a missing home install.
+ */
+export const PARALLELISM_HEALTH_UNRESOLVED_NOTE =
+  'Health values could not be resolved from the bundled defaults, so the orchestration health block is omitted.';
+
+/** Injectable loaders for `buildParallelismSection` (tests inject failures). */
+export interface ParallelismSectionDeps {
+  /** The project config, independently validated except for worker-model defaults. */
+  readConfig?: (projectPath: string) => Promise<AiwgConfig | null>;
+  /** Worker-model defaults validation; only called when `worker_dispatch` is true. */
+  validateWorkerConfig?: (projectPath: string, config: AiwgConfig) => Promise<void>;
+}
+
+/**
+ * Locate this package's bundled AIWG defaults (`models-v2.json` under
+ * `agentic/...`) from the running code, whether it runs from a source
+ * checkout or an installed package. Uses the canonical package-root walk
+ * shared with the rest of src/ (`findPackageRoot`), never a hand-rolled
+ * relative path and never the user's home install.
+ */
+function resolveBundledAiwgHome(): string | undefined {
+  try {
+    return findPackageRoot(dirname(fileURLToPath(import.meta.url))) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the AIWG home to pass to `ConfigLoader` for this generator's own
+ * read: an explicit, non-empty `AIWG_HOME` always wins; otherwise fall back
+ * to this package's own bundled defaults so regeneration does not depend on
+ * what (if anything) is installed at the user's home. This function only
+ * ever READS `process.env.AIWG_HOME` — it never sets or deletes it, so
+ * concurrent callers and any spawned children never observe a value this
+ * generator did not itself receive from the real environment.
+ */
+function resolveAiwgHome(): string | undefined {
+  return process.env.AIWG_HOME || resolveBundledAiwgHome();
+}
+
+function isBundledDefaultsFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Failed to load AIWG default config');
+}
+
+function oneLine(value: string, maxLen: number): string {
+  return value.replace(/[\r\n|]+/g, ' ').trim().slice(0, maxLen);
+}
+
+/** At most this many group summaries render; the rest collapse to "+N more". */
+export const MAX_SHOWN_GROUPS = 8;
+
+/**
+ * Config-level member exclusions for one group, mirroring the static gates
+ * in `resolveWorkerPlan()` (`src/models/resolver.ts`): a member or its CLI
+ * installation flagged `enabled: false` is statically excluded. This is
+ * NOT the live eligibility verdict — `resolveWorkerPlan()` resolves
+ * eligibility per (group, member, effort) tuple against the current
+ * catalog and request, so a member excluded nowhere here can still be
+ * excluded for a specific role/task/effort, and vice versa is never true
+ * (a statically excluded member is always excluded live too). Only the
+ * per-member reasons render; the group itself is never labeled
+ * "eligible"/"not eligible" — see the request-scoped resolve guidance
+ * below the group list.
+ *
+ * A `requiredRoles` entry with no enabled covering member is a config
+ * error `validateParallelismConfig()` (and `resolveParallelism()` /
+ * `ConfigLoader.load()`, both called earlier in `buildParallelismSection()`)
+ * already rejects outright — a config reaching this function can never
+ * have one, so that case is not re-rendered here.
+ */
+function excludedMembers(parallelism: ParallelismConfig | undefined, group: WorkerGroup): string[] {
+  const excluded: string[] = [];
+  for (const member of group.members) {
+    if (member.enabled === false) excluded.push(`${member.id} (member disabled)`);
+    else if (parallelism?.clis?.[member.cli]?.enabled === false) excluded.push(`${member.id} (installation ${member.cli} disabled)`);
+  }
+  return excluded;
+}
+
+function groupSummaries(entries: Array<[string, WorkerGroup]>, parallelism: ParallelismConfig | undefined): string[] {
+  return entries.map(([id, group]) => {
+    const roles = [...new Set(group.members.flatMap(m => m.roles ?? []))].join('/');
+    const clis = [...new Set(group.members.map(m => m.cli))].join('/');
+    const parts = [`${oneLine(id, 64)} (members: ${group.members.length}`];
+    if (clis) parts.push(`clis: ${oneLine(clis, 96)}`);
+    if (roles) parts.push(`roles: ${oneLine(roles, 96)}`);
+    if (group.maxParallel !== undefined) parts.push(`maxParallel: ${group.maxParallel}`);
+    if (group.requiredRoles?.length) parts.push(`requiredRoles: ${group.requiredRoles.join('/')}`);
+    parts.push('configured');
+    const excluded = excludedMembers(parallelism, group);
+    if (excluded.length) parts.push(`excluded members: ${oneLine(excluded.join(', '), 160)}`);
+    return parts.join('; ') + ')';
+  });
+}
+
+/**
+ * One configured health window with its origin. The origin mirrors
+ * `resolveWorkerEffectiveHealth()` (`src/serve/worker-invocation.ts`): a
+ * field the project config leaves unset resolves from the built-in defaults.
+ */
+function healthValue(health: ParallelismConfig['health'],
+  field: 'checkSeconds' | 'startupSeconds' | 'quietSeconds' | 'stallSeconds' | 'hardTimeoutSeconds',
+  fallback: number): { value: number; origin: string } {
+  const value = health?.[field] ?? fallback;
+  return { value, origin: health?.[field] === undefined ? 'default' : 'project config' };
+}
 
 function delegationSupport(provider: string | undefined): string {
   switch (provider) {
@@ -49,11 +163,30 @@ function delegationSupport(provider: string | undefined): string {
  *   - `AIWG_HIDE_PARALLELISM_IN_CONTEXT=1` is set
  *   - No `.aiwg/aiwg.config` exists at the project path
  */
-export async function buildParallelismSection(projectPath: string): Promise<string> {
+export async function buildParallelismSection(projectPath: string, deps: ParallelismSectionDeps = {}): Promise<string> {
   if (process.env.AIWG_HIDE_PARALLELISM_IN_CONTEXT === '1') return '';
 
-  const cfg = await readAiwgConfig(projectPath);
+  // Step 1: the project config, independently validated except for the
+  // worker-model defaults (never throws solely because bundled defaults are
+  // unreachable — any error here is a genuine config problem and stays fatal).
+  const cfg: AiwgConfig | null = deps.readConfig
+    ? await deps.readConfig(projectPath)
+    : await readAiwgConfigCandidate(projectPath);
   if (!cfg) return '';
+
+  // Step 2: worker-model defaults validation, attempted only when dispatch
+  // is enabled. A bundled-defaults failure degrades (health/group details
+  // are omitted below with a one-line note); every other error stays fatal.
+  let healthUnresolved = false;
+  if (cfg.parallelism?.worker_dispatch === true) {
+    try {
+      if (deps.validateWorkerConfig) await deps.validateWorkerConfig(projectPath, cfg);
+      else await validateWorkerConfigCandidate(projectPath, cfg, { aiwgHome: resolveAiwgHome() });
+    } catch (error) {
+      if (!isBundledDefaultsFailure(error)) throw error;
+      healthUnresolved = true;
+    }
+  }
 
   const primary = cfg.providers[0];
   const resolved = resolveParallelism(cfg.parallelism, primary);
@@ -101,6 +234,43 @@ export async function buildParallelismSection(projectPath: string): Promise<stri
   lines.push('');
   lines.push(delegationSupport(primary));
   lines.push('');
+  // Group dispatch disabled (worker_dispatch unset/false): the resolver reports
+  // `disabled`, so no group block renders — the native-delegation rubric above
+  // applies unchanged and the output stays byte-identical to the pre-dispatch
+  // rendering.
+  if (cfg.parallelism?.worker_dispatch === true && healthUnresolved) {
+    lines.push(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
+    lines.push('');
+  } else if (cfg.parallelism?.worker_dispatch === true) {
+    const health = cfg.parallelism?.health;
+    const check = healthValue(health, 'checkSeconds', 15);
+    const startup = healthValue(health, 'startupSeconds', 60);
+    const quiet = healthValue(health, 'quietSeconds', 90);
+    const stall = healthValue(health, 'stallSeconds', 300);
+    const hard = healthValue(health, 'hardTimeoutSeconds', 1800);
+    lines.push('### Orchestration groups (group dispatch enabled)');
+    lines.push('');
+    const entries = Object.entries(cfg.parallelism?.groups ?? {});
+    if (entries.length > 0) {
+      // Slice before summarizing so at most MAX_SHOWN_GROUPS summaries are built.
+      const shown = groupSummaries(entries.slice(0, MAX_SHOWN_GROUPS), cfg.parallelism).join(' | ');
+      const hidden = entries.length - MAX_SHOWN_GROUPS;
+      lines.push(`Configured groups: ${shown}${hidden > 0 ? ` (+${hidden} more)` : ''}`);
+    } else {
+      lines.push('Configured groups: none — group dispatch is enabled but no groups are configured; the native delegation rubric above applies unchanged.');
+    }
+    lines.push('');
+    lines.push('A group above shown as configured, with excluded members or an uncovered required role listed, is a static config read — not a live eligibility verdict. Eligibility is resolved per (group, member, effort) tuple against the current catalog and request; see `aiwg models resolve` below to check a specific role/task/group.');
+    lines.push('');
+    lines.push('Tier 0 direct handoff is the default: use your own shell or a qualified MCP worker tool. No Mission/MC session, scheduler, daemon, or activation marker is needed. Self-count active native + CLI + MCP workers, take the minimum of the project, group, CLI, model, and context caps, and launch each writing task once.');
+    lines.push('');
+    lines.push('Resolve each bounded brief with `aiwg models resolve --role <role> --task <class> --group <group> --brief <file> --workdir <tree> --final-output <file> --transport shell --format shell`. Copy the exact rendered command or the MCP server/tool/arguments byte-for-byte; never assemble vendor flags from memory. Re-resolve after any brief, profile, model, or workspace change. `--format shell` prints only the launch command: to see the resolved health windows for an attempt, use `--format json` (the default) and read `invocation.health` with its per-field `origins`.');
+    lines.push('');
+    lines.push(`Configured health windows (each followed by its origin — \`default\` or \`project config\`): check every ${check.value}s (${check.origin}); confirm startup within ${startup.value}s (${startup.origin}); quiet limit ${quiet.value}s (${quiet.origin}); stall limit ${stall.value}s (${stall.origin}); hard stop ${hard.value}s (${hard.origin}). Per-attempt windows scale quiet and stall by the single largest applicable role/effort/model factor, never their product (for example, reasoning at \`xhigh\` effort resolves 180s/600s from the 90s/300s defaults; an effective 1.25 scale gives 112.5s/375s). Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings; startup, quiet, and stall keep their configured or scaled values, and \`truncatedWindows\` instead records when one of them would exceed that capped deadline (\`resolveWorkerEffectiveHealth()\` in \`src/serve/worker-invocation.ts\`). Resolved values win over these configured values.`);
+    lines.push('');
+    lines.push('Supervise by observer state, never by suspicion. `quiet` (no observed activity for the quiet window, reported with confidence `suspected`) is not a stop: read the status (`aiwg ralph-external --status --workers --runs-root <dir> --json` is read-only and never kills or retries), check owned-worktree progress, and keep waiting — the observer’s `shouldStop()` stays false. `stalled` (no progress for the stall window) opens diagnosis through the diagnostic grace period; only `hung` (still no progress after grace, with the process live and connected) authorizes a no-progress stop — and only a worker this conductor owns. The launcher also stops independently of progress state on `failed-to-start`, the hard wall-clock deadline (`HARD_DEADLINE`), the step-count limit (`STEP_LIMIT`), and a fatal observer-record failure (`tools/ralph-external/session-launcher.mjs`). Confirm the stop (a sent signal, lease expiry, or final-file presence is not proof — only a confirmed exit is), preserve partial work for independent verification, then re-resolve within remaining attempts and budgets. Observer loss (`OBSERVER_GAP`, `DISCONNECTED`, degraded or unobserved coverage, opaque MCP output) is unknown, never worker failure: keep polling owned run files and processes from the shell at the same cadence. Heartbeats and log bytes are not progress. On correlated failure across workers sharing one account, quota, or host, pause further launches there and report cause and scope.');
+    lines.push('');
+  }
   lines.push(PARALLELISM_BLOCK_END);
   lines.push('');
 
