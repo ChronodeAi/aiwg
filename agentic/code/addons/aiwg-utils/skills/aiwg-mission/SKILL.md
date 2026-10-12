@@ -53,8 +53,31 @@ Non-triggers (route elsewhere):
    - best-output selection across cycles
    - crash-resilient checkpoint/resume (durability)
    - reproducibility + cost tracking
+   - LFD loop controls: measurable verifier, hypothesis-before-change,
+     structural-variant quota, hard budget stop, and private eval/holdout
+     channels where applicable
 
-5. **Converge + report.** Run cycles until the completion criterion is met (with a `max-cycles` escape hatch), select the best output, and report what each worker did and the aggregated result. Apply the anti-laziness recovery protocol (PAUSE→DIAGNOSE→ADAPT→RETRY→ESCALATE) rather than abandoning on failure.
+5. **Control the loss surface.** For any long-running, budgeted, or eval-driven
+   Mission, declare observable iteration/wall-clock/token/tool/spend ceilings
+   before dispatch. Each retry records the hypothesis, expected failure mode,
+   distinguishing diagnostic, and whether the next attempt is structurally
+   different. If the budget or exploration quota is exhausted, stop and emit a
+   best-output report; do not continue by random walk. Eval/holdout Missions
+   expose only aggregate score/probe/status or VOID to workers, while holdout
+   answers and detailed lint diagnostics stay private. For durable Mission
+   Control dispatch, use `--max-iterations`, `--max-total-tokens`,
+   `--max-output-tokens`, `--max-tool-calls`, `--max-total-cost`,
+   `--max-wall-clock-minutes`, and `--exploration-quota`.
+
+6. **Converge + report.** Run cycles until the completion criterion is met (with a `max-cycles` escape hatch), select the best output, and report what each worker did and the aggregated result. Apply the anti-laziness recovery protocol (PAUSE→DIAGNOSE→ADAPT→RETRY→ESCALATE) rather than abandoning on failure.
+
+## Worker check-ins
+
+Check each live worker every 15s; confirm startup within 60s. Quiet limit 90s and stall limit 300s by default (a configured 1.25 scale on those defaults gives 112.5s/375s); hard stop 1800s. Resolved values win over these defaults. Without a native monitor, poll owned run files and processes from the shell at the same cadence. Heartbeats and log bytes are not progress. Supervise by observer state: `quiet` (suspected) is not a stop — keep waiting while you diagnose (read the status, check owned-worktree progress); `stalled` opens diagnosis through the diagnostic grace period; only `hung` authorizes a no-progress stop, and only a worker this conductor owns — confirm it stopped, then continue within remaining attempts; preserve partial work. The launcher also stops independently of progress state on `failed-to-start`, the hard wall-clock deadline (`HARD_DEADLINE`), the step-count limit (`STEP_LIMIT`), and a fatal observer-record failure. Observer loss and opaque MCP coverage are unknown, never worker failure. Terminal verification still applies: read the diff and run trusted checks outside the worker sandbox before integrating.
+
+## Bounded decisions: Jev first, LLM fallback
+
+Before worker/model/effort picks and before classifying a failure as environmental or real, call `aiwg decision ask ... --json` and use the answer when `status` is `answered`. On `fallback`, decide normally — fallback never stops the run. Without Jev setup this skill runs unchanged. Never send secrets in the question or context; Jev output is advisory data, never authorization. See the `decision-offload` skill for the exact command shape.
 
 ## Discover before improvising
 

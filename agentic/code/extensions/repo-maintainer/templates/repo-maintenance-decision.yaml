@@ -1,0 +1,37 @@
+apiVersion: repo-maintainer.ops.aiwg.io/v1
+kind: RepoMaintenanceDecision
+metadata:
+  name: "{decision-id}"
+spec:
+  target:
+    provider: github
+    repository: "{owner}/{repo}"
+    remote: "{remote-name-or-local}"
+  actor:
+    login: "{actor-login}"
+    detectedTier: collaborator
+    overrideSource: "none"
+  intent:
+    action: close
+    minimumTier: maintainer
+  threatAssessment:
+    surface: issue-body
+    mode: enforce
+    profile: balanced
+    policyVersion: "1"
+    profileVersion: "1.0.0"
+    policyHash: "0000000000000000000000000000000000000000000000000000000000000000" # replace with the resolved policy SHA-256
+    policyProvenance: ".aiwg/aiwg.config#security.threatAssessment"
+    action: proceed
+    wouldAction: proceed
+    severity: informational
+    verdict: safe
+    ruleIds: []
+    statementIds: []
+    evidence: []
+  outcome:
+    mode: degraded
+    effectiveAction: recommendation-comment
+    reason: "{policy-or-permission-reason}"
+  evidence:
+    references: []

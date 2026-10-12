@@ -8,11 +8,13 @@ commandHint:
   allowedTools: Read, Write, Bash, Glob, Grep
   model: sonnet
   category: research-validation
+  modelRole: coding
+  modelTier: standard
 ---
 
 # Research Lint
 
-Run the research corpus lint ruleset against `.aiwg/research/` to detect structural and referential integrity issues.
+Run the research corpus lint ruleset against the configured corpus to detect structural and referential integrity issues.
 
 ## Triggers
 
@@ -26,7 +28,12 @@ Run the research corpus lint ruleset against `.aiwg/research/` to detect structu
 ## Parameters
 
 ### `[target]` (optional)
-Path to lint. Defaults to `.aiwg/research/`.
+Path to lint. When omitted, resolve the target in this order:
+
+1. `<AIWG_CORPUS_ROOT>/documentation/references/` when `AIWG_CORPUS_ROOT` is set.
+2. `<research.corpusRoot>/documentation/references/` when `.aiwg/aiwg.config` configures a corpus root.
+3. `documentation/references/` when the canonical warehouse layout exists in the project.
+4. `.aiwg/research/` for legacy project-local corpora.
 
 ### `--fix` (optional)
 Attempt auto-fixes for fixable issues (add missing frontmatter defaults, correct formatting).
@@ -44,10 +51,10 @@ Severity threshold for failure: `error` (default), `warn`, or `info`.
 
 ### Phase 1: Run Lint
 
-Execute the lint runner against the research corpus:
+Resolve the default target as described above, then execute the lint runner against the research corpus:
 
 ```bash
-aiwg lint .aiwg/research/ --ruleset research --format full
+aiwg lint <resolved-target> --ruleset research --format full
 ```
 
 This checks all 11 rules in the research ruleset:
@@ -57,13 +64,14 @@ This checks all 11 rules in the research ruleset:
 | `ref-frontmatter` | error | Required frontmatter fields present |
 | `ref-id-unique` | error | No duplicate REF-XXX identifiers |
 | `ref-id-format` | warn | REF identifiers follow `REF-NNN` naming |
-| `citation-resolves` | error | REF-XXX references point to existing notes |
+| `citation-resolves` | error | Whole REF IDs point to exact or slugged notes anywhere in the lint target, unless the reference sits beside an explicit absence marker (unallocated, not in corpus, skipped, retired, withdrawn, deliberately absent, never allocated, deduplication) |
 | `grade-present` | warn | GRADE quality assessment in frontmatter |
 | `provenance-present` | warn | Provenance metadata present |
 | `cross-ref-bidirectional` | info | Related refs linked both ways |
 | `orphan-detection` | info | Notes with no inbound references |
 | `frontmatter-date-format` | warn | Dates follow ISO 8601 |
 | `source-file-exists` | error | Referenced source files exist |
+| `uncertainty-registered` | warn | A stated unperformed check against a verification target names an obstacle or records a dated outcome. A struck span followed by a dated outcome on the same line — `~~<limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>` — is a completed retraction at any struck-text length |
 
 ### Phase 2: Report Results
 

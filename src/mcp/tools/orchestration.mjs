@@ -215,6 +215,7 @@ export function registerFlowToolset(server) {
 }
 
 export function registerMissionToolset(server) {
+  registerWorkerResolveTool(server);
   server.registerTool('mission-guide', {
     title: 'Show AIWG Mission Primitive',
     description: 'Fetch the aiwg-mission kernel skill. This is the AIWG-owned Mission primitive; it is distinct from the lower-level mc-* Mission Control toolset.',
@@ -235,11 +236,33 @@ export function registerMissionToolset(server) {
       session_id: z.string().describe('Existing Mission Control session id from mc-start / mc-list'),
       objective: z.string().describe('Mission objective'),
       completion: z.string().describe('Measurable completion criterion'),
+      max_iterations: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
+      max_total_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
+      max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
+      max_tool_calls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
+      max_total_cost: z.number().positive().finite().optional().describe('Hard cumulative provider-reported spend ceiling'),
+      max_wall_clock_minutes: z.number().positive().finite().optional().describe('Hard cumulative runtime ceiling'),
+      exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
+      budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
       project_dir: z.string().optional().describe('Project directory for CLI dispatch'),
       confirmed: z.boolean().default(false).describe('Required for durable/long-running mission dispatch'),
     },
     annotations: { destructiveHint: true, openWorldHint: true },
-  }, async ({ session_id, objective, completion, project_dir, confirmed }) => {
+  }, async ({
+    session_id,
+    objective,
+    completion,
+    max_iterations,
+    max_total_tokens,
+    max_output_tokens,
+    max_tool_calls,
+    max_total_cost,
+    max_wall_clock_minutes,
+    exploration_quota,
+    budget_stop_policy,
+    project_dir,
+    confirmed,
+  }) => {
     if (!confirmed) {
       return mcpError(
         'mission-dispatch requires confirmed=true because Missions can launch long-running worker cycles.',
@@ -247,8 +270,17 @@ export function registerMissionToolset(server) {
       );
     }
     try {
+      const cliArgs = ['mc', 'dispatch', session_id, objective, '--completion', completion];
+      if (max_iterations) cliArgs.push('--max-iterations', String(max_iterations));
+      if (max_total_tokens) cliArgs.push('--max-total-tokens', String(max_total_tokens));
+      if (max_output_tokens) cliArgs.push('--max-output-tokens', String(max_output_tokens));
+      if (max_tool_calls) cliArgs.push('--max-tool-calls', String(max_tool_calls));
+      if (max_total_cost) cliArgs.push('--max-total-cost', String(max_total_cost));
+      if (max_wall_clock_minutes) cliArgs.push('--max-wall-clock-minutes', String(max_wall_clock_minutes));
+      if (exploration_quota) cliArgs.push('--exploration-quota', String(exploration_quota));
+      if (budget_stop_policy) cliArgs.push('--budget-stop-policy', budget_stop_policy);
       const { stdout, stderr, code } = await runAiwgCli(
-        ['mc', 'dispatch', session_id, objective, '--completion', completion],
+        cliArgs,
         { cwd: project_dir, timeoutMs: 30_000 },
       );
       return mcpJson({
@@ -285,5 +317,42 @@ export function registerMissionToolset(server) {
     } catch (err) {
       return mcpError(`mission-status: ${err.message}`);
     }
+  });
+}
+
+/** Frozen B-OG-33/35 read-only surface; the CLI and MCP share the typed renderer. */
+export function registerWorkerResolveTool(server) {
+  server.registerTool('worker-resolve', {
+    title: 'Resolve Worker Invocation',
+    description: 'Resolve a nonlaunching qualified worker plan without Mission or MC state.',
+    inputSchema: z.object({
+      role: z.enum(['efficiency', 'coding', 'reasoning']),
+      task: z.string().min(1),
+      group: z.string().min(1).regex(/^[a-z][a-z0-9-]{0,62}$/),
+      brief: z.string().min(1),
+      workdir: z.string().min(1),
+      final_output: z.string().min(1),
+      transport: z.enum(['shell', 'mcp']).default('shell'),
+      format: z.enum(['shell', 'json']).optional(),
+      project_dir: z.string().min(1).optional(),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  }, async input => {
+    try {
+      const args = ['models', 'resolve'];
+      for (const [key, value] of Object.entries(input)) {
+        if (key === 'project_dir' || key === 'format') continue;
+        args.push(`--${key === 'final_output' ? 'final-output' : key}=${value}`);
+      }
+      const format = input.format ?? 'json';
+      args.push(`--format=${format}`);
+      const { stdout, stderr, code } = await runAiwgCli(args, { cwd: input.project_dir, timeoutMs: 30000 });
+      if (format === 'shell') {
+        return { ...mcpJson(stdout || stderr), ...(code === 0 ? {} : { isError: true }) };
+      }
+      let plan;
+      try { plan = JSON.parse(stdout); } catch { return mcpError(`worker-resolve failed (exit ${code}): ${stderr}`); }
+      return { ...mcpJson(plan), ...(code === 0 ? {} : { isError: true }) };
+    } catch (error) { return mcpError(`worker-resolve: ${error.message}`); }
   });
 }

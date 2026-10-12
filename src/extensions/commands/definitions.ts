@@ -73,6 +73,25 @@ export const versionCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const authCommand: Extension = {
+  id: 'auth',
+  type: 'command',
+  name: 'Authentication',
+  description: 'Log in, inspect access, and log out of paid AIWG web resources',
+  version: '1.0.0',
+  capabilities: ['cli', 'authentication', 'resources'],
+  keywords: ['auth', 'login', 'logout', 'status', 'releases'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<login|status|logout> [--device] [--json] [--all]',
+    allowedTools: ['Bash'],
+  } satisfies CommandMetadata,
+};
+
 export const doctorCommand: Extension = {
   id: 'doctor',
   type: 'skill',
@@ -93,6 +112,28 @@ export const doctorCommand: Extension = {
   metadata: {
     type: 'skill',
     triggerPhrases: ['doctor', 'check health', 'diagnose', 'troubleshoot installation'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[--deployment] [--provider <p>] [--bundle <id>] [--scope project|user] [--json]',
+      allowedTools: ['Read', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const contextFirewallCommand: Extension = {
+  id: 'context-firewall',
+  type: 'skill',
+  name: 'Context Firewall',
+  description: 'Audit provider context and manage its reviewed digest baseline',
+  version: '1.0.0',
+  capabilities: ['cli', 'diagnostics', 'security', 'context-budget', 'memory-review'],
+  keywords: ['context', 'memory', 'firewall', 'baseline', 'poisoning', 'budget', 'trust'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['audit context', 'context firewall', 'review memory baseline', 'context budget'],
     commandHint: {
       template: 'utility',
       allowedTools: ['Read', 'Bash'],
@@ -132,6 +173,63 @@ export const updateCommand: Extension = {
       ],
     },
   } satisfies SkillMetadata,
+};
+
+export const installationCommand: Extension = {
+  id: 'installation',
+  type: 'command',
+  name: 'Installation Identity',
+  description: 'Inspect, adopt, or deliberately switch the canonical global AIWG installation',
+  version: '1.0.0',
+  capabilities: ['cli', 'installation', 'update', 'diagnostics', 'recovery'],
+  keywords: ['installation', 'canonical', 'adopt', 'switch', 'package-manager', 'drift'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<show|adopt|switch> [--root <path>] [--method <npm|web|source>] [--manager <absolute-path>] [--json]',
+    allowedTools: ['Read', 'Write'],
+  } satisfies CommandMetadata,
+};
+
+export const decisionCommand: Extension = {
+  id: 'decision',
+  type: 'command',
+  name: 'Decision Driver',
+  description: 'Inspect, validate and run governed decision classification workflows',
+  version: '1.0.0',
+  capabilities: ['cli', 'decision', 'classification', 'mcp', 'validation'],
+  keywords: ['decision', 'classification', 'patterns', 'mcp', 'evaluate', 'validate'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<capabilities|patterns|validate|evaluate|setup> [options]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
+export const gatesCommand: Extension = {
+  id: 'gates',
+  type: 'command',
+  name: 'Gates',
+  description: 'Validate, evaluate and inspect declarative gate packs offline',
+  version: '1.0.0',
+  capabilities: ['cli', 'gates', 'validation', 'evaluation'],
+  keywords: ['gates', 'gate pack', 'validate', 'evaluate', 'promotion', 'hold', 'rollback'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<validate|evaluate|show|list> [options]',
+    allowedTools: ['Read'],
+  } satisfies CommandMetadata,
 };
 
 // Renamed from `refreshCommand` as part of #694 (avoid collision with git sync
@@ -174,16 +272,16 @@ export const refreshCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-// #1266 — Regenerate cross-provider context files (AIWG.md + AGENTS.md) without
+// #1266/#1811 — Regenerate the canonical graph and provider adapters without
 // redeploying frameworks. Narrower than refresh; faster for context-drift fixes.
 export const regenerateCommand: Extension = {
   id: 'regenerate',
   type: 'skill',
   name: 'Regenerate Context Files',
-  description: 'Regenerate AIWG.md + AGENTS.md without redeploying frameworks (context-only)',
+  description: 'Regenerate or transactionally adopt WORKSPACE.md, AIWG.md, and provider adapters without redeploying frameworks',
   version: '1.0.0',
   capabilities: ['cli', 'regenerate', 'context', 'maintenance', 'self-maintenance'],
-  keywords: ['regenerate', 'context', 'aiwg.md', 'agents.md', 'redeploy-context'],
+  keywords: ['regenerate', 'context', 'workspace.md', 'aiwg.md', 'agents.md', 'existing-project', 'redeploy-context'],
   category: 'maintenance',
   platforms: {
     claude: 'full',
@@ -195,17 +293,46 @@ export const regenerateCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['regenerate context', 'rewrite AIWG.md', 'rewrite AGENTS.md', 'fix context files'],
+    triggerPhrases: ['regenerate context', 'extract existing project context', 'refresh WORKSPACE.md', 'rewrite AIWG.md', 'fix context files'],
     commandHint: {
       template: 'utility',
       allowedTools: ['Bash', 'Read', 'Write'],
-      argumentHint: '[--provider <name>] [--dry-run] [--force] [--no-aiwg-md] [--no-agents-md]',
+      argumentHint: '[--workspace|--existing-project|--full-inject] [--provider <name>] [--dry-run|--apply] [--force]',
       executionSteps: [
         'Detect active provider (or accept --provider override)',
+        'Select canonical refresh, transactional existing-project extraction, or legacy inline compatibility',
         'Discover deployed artifacts under provider paths',
-        'Regenerate AIWG.md from CLAUDE.md template (or stub if absent)',
-        'Regenerate AGENTS.md link-index sections',
+        'Refresh the managed WORKSPACE.md graph while preserving its operator region',
+        'Regenerate AIWG.md and minimal provider startup adapters',
         'Report which files were written, skipped, or backed up',
+      ],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const workspaceContextCommand: Extension = {
+  id: 'workspace-context',
+  type: 'skill',
+  name: 'Workspace Context',
+  description: 'Audit, migrate, diagnose, and roll back canonical WORKSPACE.md context',
+  version: '1.0.0',
+  capabilities: ['cli', 'context', 'audit', 'migration', 'rollback'],
+  keywords: ['workspace.md', 'context', 'migration', 'provider', 'doctor'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['audit workspace context', 'migrate context to WORKSPACE.md', 'rollback context migration'],
+    commandHint: {
+      template: 'utility',
+      allowedTools: ['Read', 'Write', 'Bash'],
+      argumentHint: 'audit|migrate|rollback|doctor [--dry-run] [--apply] [--json]',
+      executionSteps: [
+        'Audit provider and nested context sources',
+        'Preview deterministic migration output',
+        'Apply only when explicitly requested and retain transaction preimages',
+        'Run context graph diagnostics or rollback a transaction',
       ],
     },
   } satisfies SkillMetadata,
@@ -240,17 +367,56 @@ export const useCommand: Extension = {
     triggerPhrases: ['use framework', 'deploy framework', 'install framework', 'use sdlc', 'use addon'],
     commandHint: {
       template: 'orchestration',
-      argumentHint: '<framework|addon> [--provider <p>] [--prefix <dir>] [--profile <name>] [--harness-agents <list>]',
+      argumentHint: '<framework|addon> [--provider <p>] [--scope project|user] [--dry-run] [--json]',
       allowedTools: ['Read', 'Write', 'Bash', 'Glob'],
       executionSteps: [
         'Validate framework name',
         'Check dependencies',
         'Deploy framework files',
-        'Register in framework registry',
-        'Deploy platform-specific adaptations',
+        'Register installed state and deploy platform-specific adaptations',
+        'Refresh the applicable capability index and canonical context',
+        'Verify required invariants and report readiness or repair findings',
       ],
     },
   } satisfies SkillMetadata,
+};
+
+export const modelsCommand: Extension = {
+  id: 'models',
+  type: 'command',
+  name: 'Models',
+  description: 'Audit, resolve, validate, migrate, and safely update model policy',
+  version: '1.0.0',
+  capabilities: ['cli', 'models', 'audit', 'configuration'],
+  keywords: ['models', 'model policy', 'tier', 'audit', 'resolve', 'migrate'],
+  category: 'catalog',
+  platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<audit|list|resolve|set-default|set|validate|migrate> [options]',
+    allowedTools: ['Read', 'Write', 'Glob'],
+  } satisfies CommandMetadata,
+};
+
+export const jobCommand: Extension = {
+  id: 'job',
+  type: 'command',
+  name: 'External Job',
+  description: 'Validate, render, or run one externally triggered provider job',
+  version: '1.0.0',
+  capabilities: ['cli', 'jobs', 'external-trigger', 'orchestration'],
+  keywords: ['job', 'cron', 'systemd', 'gitea actions', 'codex exec', 'single shot'],
+  category: 'orchestration',
+  platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'orchestration',
+    argumentHint: '<validate|render-cron|run> <flow> [--format cron|systemd|gitea-actions] [--once]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
 };
 
 export const cockpitCommand: Extension = {
@@ -347,7 +513,7 @@ export const newBundleCommand: Extension = {
   id: 'new-bundle',
   type: 'skill',
   name: 'New Bundle',
-  description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
+  description: 'Scaffold a project-local bundle under the configured AIWG artifact root',
   version: '1.0.0',
   capabilities: ['cli', 'scaffolding', 'project-local'],
   keywords: ['new', 'bundle', 'scaffold', 'project-local', 'extension', 'addon', 'framework', 'plugin', 'provider'],
@@ -366,6 +532,28 @@ export const newBundleCommand: Extension = {
     commandHint: {
       template: 'utility',
       argumentHint: '<name> [--type extension|addon|framework|plugin|provider] [--starter skill|rule|agent|minimal] [--description "..."]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const quickrefCommand: Extension = {
+  id: 'quickref',
+  type: 'skill',
+  name: 'Project Quickref',
+  description: 'Generate and deploy an always-visible project quickref from the configured AIWG artifact root',
+  version: '1.0.0',
+  capabilities: ['cli', 'project-local', 'quickref', 'kernel'],
+  keywords: ['project', 'quickref', 'orientation', 'kernel', 'generate', 'deploy'],
+  category: 'project',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['generate project quickref', 'deploy project quickref'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'generate|deploy --project [--provider <id>] [--dry-run]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
@@ -549,14 +737,14 @@ export const setupCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-export const issueCommand: Extension = {
-  id: 'issue',
+export const setupGenerateCommand: Extension = {
+  id: 'setup-generate',
   type: 'skill',
-  name: 'Issue',
-  description: 'Manage local project issues under .aiwg/issues/',
+  name: 'Setup Generate',
+  description: 'Generate starter setup.aiwg.io/v1 SetupManifest assets for agentic installer automation',
   version: '1.0.0',
-  capabilities: ['cli', 'project', 'issues', 'local-provider'],
-  keywords: ['issue', 'issues', 'local', 'tracker', 'tickets'],
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'generation', 'automation'],
+  keywords: ['setup-generate', 'setup generate', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'manifest generation', 'starter manifest'],
   category: 'project',
   platforms: {
     claude: 'full',
@@ -568,10 +756,109 @@ export const issueCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['local issues', 'issue init', 'issue list', 'issue create'],
+    triggerPhrases: [
+      'generate setup manifest',
+      'create setup.manifest.yaml',
+      'setup-generate',
+      'scaffold installer manifest',
+    ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<init|new|list|show|comment|close|index> [--provider local]',
+      argumentHint: '[--output <path>] [--name <name>] [--type user|developer|ci] [--platform <os>] [--force] [--json]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupValidateCommand: Extension = {
+  id: 'setup-validate',
+  type: 'skill',
+  name: 'Setup Validate',
+  description: 'Validate setup.aiwg.io/v1 SetupManifest files against the canonical schema and installer consistency checks',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'validation', 'schema'],
+  keywords: ['setup-validate', 'setup validate', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'manifest validation', 'schema validation', 'installer consistency'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'validate setup manifest',
+      'check setup.manifest.yaml',
+      'setup-validate',
+      'lint installer manifest',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[manifest-path] [--manifest <path>] [--strict] [--fix] [--json]',
+      allowedTools: ['Read', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupRunCommand: Extension = {
+  id: 'setup-run',
+  type: 'skill',
+  name: 'Setup Run',
+  description: 'Validate and execute setup.aiwg.io/v1 SetupManifest files with installer safety gates',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'installer', 'dry-run'],
+  keywords: ['setup-run', 'setup run', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'installer runner', 'dry run', 'recovery', 'params'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'run setup manifest',
+      'execute installer manifest',
+      'setup-run',
+      'run dev setup',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[manifest-path] [--manifest <path>] [--dry-run] [--platform <os>] [--params-file <path>] [--param KEY=VALUE] [--step <id>] [--skip <ids>] [--yes]',
+      allowedTools: ['Read', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const issueCommand: Extension = {
+  id: 'issue',
+  type: 'skill',
+  name: 'Issue',
+  description: 'Policy-plan and manage local project issues under .aiwg/issues/',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'issues', 'local-provider'],
+  keywords: ['issue', 'issues', 'local', 'tracker', 'tickets', 'policy', 'segmentation'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['local issues', 'issue init', 'issue list', 'issue create', 'plan issue draft'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<init|plan|new|list|show|comment|close|index> [--provider local]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
@@ -722,7 +1009,7 @@ export const serveCommand: Extension = {
     triggerPhrases: ['serve dashboard', 'start server', 'open dashboard', 'aiwg serve'],
     commandHint: {
       template: 'utility',
-      argumentHint: '[--port <n>] [--bind <host>] [--no-open] [--read-only]',
+      argumentHint: '[--port <n>] [--bind <host>] [--no-open] [--read-only] [--a2a-protocol <0.3|1.0|auto>] [--a2a-protocol-fallback] [--no-a2a-legacy-executor-fallback]',
       allowedTools: ['Bash'],
     },
   } satisfies SkillMetadata,
@@ -876,6 +1163,131 @@ export const sessionCommand: Extension = {
     commandHint: {
       template: 'utility',
       argumentHint: '[mcp] [--provider P] [--no-repair] [--profile name]',
+      allowedTools: ['Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const writingCommand: Extension = {
+  id: 'writing', type: 'command', name: 'Writing',
+  description: 'Prepare grounded writing plans and apply authorized proofreading corrections with canonical receipts',
+  version: '1.0.0', capabilities: ['cli', 'voice', 'writing', 'proofread'],
+  keywords: ['writing', 'brief', 'proofread', 'author', 'receipt'],
+  category: 'project', platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '<plan|proofread> --brief <file> --profile <id> [--output <new-file>]', allowedTools: ['Read', 'Write', 'Bash'] } satisfies CommandMetadata,
+};
+
+export const writerProfileCommand: Extension = {
+  id: 'writer-profile', type: 'command', name: 'Writer Profiles',
+  description: 'Import, inspect, export, version, compile, revoke, and delete author-controlled writer sidecars',
+  version: '1.0.0', capabilities: ['cli', 'voice', 'writer-profile'],
+  keywords: ['writer-profile', 'author', 'voice', 'sample', 'provenance'],
+  category: 'project', platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command', template: 'utility',
+    argumentHint: '<list|import|inspect|export|version|compile|revoke|delete> [id] [--scope project|user]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
+export const botHandoffCommand: Extension = {
+  id: 'bot-handoff', type: 'command', name: 'Bot Handoff',
+  description: 'Generate operator-reviewed routine, teammate, connector and memory drafts; no native installation',
+  version: '1.0.0', capabilities: ['cli', 'providers', 'handoff'],
+  keywords: ['provider', 'handoff', 'routines', 'teammates', 'connectors', 'memory'],
+  category: 'utility', platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '--input <proposal.json> [--provider <id>] [--dry-run]', allowedTools: ['Read'] } satisfies CommandMetadata,
+};
+
+export const buildVerifyCommand: Extension = {
+  id: 'build-verify', type: 'command', name: 'Build Verification',
+  description: 'Verify AIWG deployment and supported native discovery before any provider runs a build or CI task',
+  version: '1.0.0', capabilities: ['cli', 'providers', 'verification'],
+  keywords: ['provider', 'inspect', 'ci', 'verification'],
+  category: 'utility', platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '[--provider <id>]', allowedTools: ['Read', 'Bash'] } satisfies CommandMetadata,
+};
+
+export const outputModeCommand: Extension = {
+  id: 'output-mode',
+  type: 'command',
+  name: 'Output Modes',
+  description: 'List, inspect, enable, disable, clear, and report composable output modes',
+  version: '1.0.0',
+  capabilities: ['cli', 'voice', 'output-mode', 'controlled-language', 'presentation'],
+  keywords: ['output-mode', 'output-mask', 'voice', 'style', 'syntax', 'wittgenstein', 'asd-ste', 'engineering-language', 'controlled-language', 'presentation'],
+  category: 'project',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<list|show|enable|disable|clear|status> [id] [--scope invocation|session|project]',
+    allowedTools: ['Read', 'Write'],
+  } satisfies CommandMetadata,
+};
+
+export const schemaCommand: Extension = {
+  id: 'schema',
+  type: 'command',
+  name: 'Schema Control Plane',
+  description: 'Discover, validate, compare, and verify governed schema artifacts',
+  version: '1.0.0',
+  capabilities: ['cli', 'schema', 'catalog', 'validation', 'compatibility', 'projections'],
+  keywords: ['schema', 'catalog', 'validate', 'lint', 'references', 'compatibility', 'projection', 'policy'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<list|show|graph|policy|validate|lint|check-refs|diff|compatibility|generate|verify-projections> [options]',
+    allowedTools: ['Read', 'Write'],
+  } satisfies CommandMetadata,
+};
+
+export const datasetCommand: Extension = {
+  id: 'dataset', type: 'command', name: 'Dataset Intelligence', description: 'Register, preview, plan, ingest, verify, query, and trace governed datasets', version: '1.0.0',
+  capabilities: ['cli', 'dataset', 'ingest', 'index', 'traceability', 'provenance'], keywords: ['dataset', 'source', 'preview', 'plan', 'ingest', 'verify', 'query', 'lineage', 'export'], category: 'index',
+  platforms: { claude: 'full', generic: 'full' }, deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '<source|check|preview|plan|ingest|status|show|verify|query|lineage|export|cancel|retry> [options]', allowedTools: ['Read', 'Write'] } satisfies CommandMetadata,
+};
+
+// Session Catalog Command (#1903)
+
+export const sessionsCommand: Extension = {
+  id: 'sessions',
+  type: 'skill',
+  name: 'Sessions',
+  description: 'Manage the normalized session catalog, analytics, and authorized forensic evidence with versioned JSON',
+  version: '1.0.0',
+  capabilities: [
+    'cli', 'session-catalog', 'session-import', 'session-lifecycle',
+    'session-analytics', 'session-forensics', 'doctor',
+  ],
+  keywords: [
+    'sessions', 'catalog', 'import', 'source', 'tag', 'reindex', 'delete',
+    'analytics', 'forensics', 'timeline', 'indicators',
+  ],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['list sessions', 'import sessions', 'session catalog', 'sessions doctor'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<sources|import|list|show|analytics|forensics|tag|relocate|reindex|delete|doctor> [--json] [--dry-run]',
       allowedTools: ['Bash'],
     },
   } satisfies SkillMetadata,
@@ -1142,15 +1554,14 @@ export const indexCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-// Research-corpus tools — radar/freshness subsystem (#1498)
-export const corpusCommand: Extension = {
-  id: 'corpus',
+export const artifactsCommand: Extension = {
+  id: 'artifacts',
   type: 'skill',
-  name: 'Research Corpus Tools',
-  description: 'Research-corpus tools (radar-init, radar-status, radar-report)',
+  name: 'Project Artifacts',
+  description: 'Move or inspect the configured project AIWG artifact root',
   version: '1.0.0',
-  capabilities: ['cli', 'research', 'corpus', 'radar', 'freshness', 'profiles', 'discovery'],
-  keywords: ['corpus', 'radar', 'freshness', 'staleness', 'radar-init', 'radar-status', 'radar-report', 'profile-status', 'profile-generate', 'profile-metrics', 'profile-temporal', 'profile-communities', 'h-index', 'PageRank', 'CD-index', 'centrality', 'community detection', 'hot streak', 'funder-network', 'funder analytics', 'co-funding', 'novelty bias', 'curator-status', 'curator-init', 'discovery-log', 'PROF-S', 'source tracking', 'discovery provenance', 'stale profiles', 'hub authors', 'refresh cadence', 'GRADE trajectory'],
+  capabilities: ['cli', 'artifacts', 'relocation', 'repair', 'configuration', 'index'],
+  keywords: ['artifacts', 'aiwg artifacts', 'move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'repair artifact root', 'external corpus', 'split root', 'artifact root', 'AIWG_ARTIFACTS_PATH'],
   category: 'index',
   platforms: {
     claude: 'full',
@@ -1162,10 +1573,67 @@ export const corpusCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['radar', 'radar status', 'radar report', 'scaffold radar', 'stale radars', 'corpus freshness', 'stale profiles', 'profile status', 'curator yield', 'discovery source', 'log discovery'],
+    triggerPhrases: ['move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'move aiwg artifacts', 'repair external corpus', 'externalize corpus', 'artifact root'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<radar-*|profile-*|curator-*|discovery-log|funder-network> [options]',
+      argumentHint: 'move|attach|repair [--to <path>] [--dry-run|--apply]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const effectCommand: Extension = {
+  id: 'effect',
+  type: 'skill',
+  name: 'Effect Ledger',
+  description: 'Record, look up, reconcile and verify side effects in the signed effect ledger',
+  version: '1.0.0',
+  capabilities: ['cli', 'effects', 'idempotency', 'verification', 'signing', 'provenance'],
+  keywords: ['effect', 'aiwg effect', 'effect ledger', 'record an effect', 'sign an effect', 'reconcile effect', 'did this PR merge', 'idempotent side effect', 'effect id', 'stale ledger lock'],
+  category: 'utility',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['record an effect', 'sign an effect', 'reconcile effect', 'did this PR merge', 'effect ledger', 'idempotent side effect', 'look up an effect', 'verify the effect ledger'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'id|intent|record|lookup|reconcile|verify|checkpoint|kinds|keys|recover-lock [options]',
+      allowedTools: ['Read', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+// Research-corpus tools — radar/freshness subsystem (#1498)
+export const corpusCommand: Extension = {
+  id: 'corpus',
+  type: 'skill',
+  name: 'Research Corpus Tools',
+  description: 'Research-corpus tools for freshness, profiles, provenance, and retrieval benchmarks',
+  version: '1.1.0',
+  capabilities: ['cli', 'research', 'corpus', 'radar', 'freshness', 'profiles', 'discovery', 'retrieval-benchmark'],
+  keywords: ['corpus', 'radar', 'freshness', 'staleness', 'radar-init', 'radar-status', 'radar-report', 'profile-status', 'profile-generate', 'profile-metrics', 'profile-temporal', 'profile-communities', 'h-index', 'PageRank', 'CD-index', 'centrality', 'community detection', 'hot streak', 'funder-network', 'funder analytics', 'co-funding', 'novelty bias', 'curator-status', 'curator-init', 'discovery-log', 'PROF-S', 'source tracking', 'discovery provenance', 'stale profiles', 'hub authors', 'refresh cadence', 'GRADE trajectory', 'retrieval-lab', 'BM25', 'vector retrieval', 'concept graph', 'PPR', 'RRF', 'source selection'],
+  category: 'index',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['radar', 'radar status', 'radar report', 'scaffold radar', 'stale radars', 'corpus freshness', 'stale profiles', 'profile status', 'curator yield', 'discovery source', 'log discovery', 'benchmark corpus retrieval', 'hybrid retrieval lab'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<radar-*|profile-*|curator-*|discovery-log|funder-network|retrieval-lab> [options]',
       allowedTools: ['Read', 'Glob', 'Grep', 'Write'],
     },
   } satisfies SkillMetadata,
@@ -1211,7 +1679,7 @@ export const discoverCommand: Extension = {
   id: 'discover',
   type: 'skill',
   name: 'Discover',
-  description: 'Find AIWG skills, agents, commands, and rules by capability — index-driven on-demand discovery',
+  description: 'Find AIWG operational assets by capability — index-driven on-demand discovery',
   version: '1.0.0',
   capabilities: ['cli', 'discovery', 'search', 'capability', 'skills'],
   keywords: ['discover', 'find skill', 'capability', 'search skills', 'what skill does', 'skill for'],
@@ -1236,7 +1704,7 @@ export const discoverCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json]',
+      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,
@@ -1274,8 +1742,42 @@ export const showCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<type> <name> [--json] [--first]   # type: skill | agent | command | rule',
+      argumentHint: '<type> <name> [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
       allowedTools: ['Read'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const versionsCommand: Extension = {
+  id: 'versions',
+  type: 'skill',
+  name: 'Resource Versions',
+  description: 'Browse and resolve signed AIWG web resource releases',
+  version: '1.0.0',
+  capabilities: ['cli', 'resources', 'versions', 'release', 'integrity', 'cache'],
+  keywords: ['versions', 'resource versions', 'aiwg version', 'release manifest', 'web resources', 'stable channel'],
+  category: 'index',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'aiwg versions',
+      'resource versions',
+      'resolve aiwg version',
+      'show release manifest',
+      'list AIWG resource channels',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'list|resolve|show [version|range|digest|channel] [--json] [--pretty] [--offline] [--channels stable,latest]',
+      allowedTools: ['Read', 'Bash'],
     },
   } satisfies SkillMetadata,
 };
@@ -1289,7 +1791,7 @@ export const featuresCommand: Extension = {
   description: 'List, inspect, and (eventually) install AIWG\'s optional runtime features',
   version: '1.0.0',
   capabilities: ['cli', 'maintenance', 'install', 'optional-deps'],
-  keywords: ['features', 'optional', 'install', 'embeddings', 'sqlite', 'pty', 'webserver'],
+  keywords: ['features', 'optional', 'install', 'embeddings', 'sqlite', 'pty', 'webserver', 'graph', 'terminal'],
   category: 'maintenance',
   platforms: {
     claude: 'full',
@@ -1374,6 +1876,25 @@ export const agentcardCommand: Extension = {
       allowedTools: ['Read', 'Bash'],
     },
   } satisfies SkillMetadata,
+};
+
+export const uhpCommand: Extension = {
+  id: 'uhp',
+  type: 'command',
+  name: 'Unified Harness Protocol',
+  description: 'Inspect discovery and run smoke tasks through an explicit experimental UHP endpoint profile',
+  version: '1.0.0',
+  capabilities: ['cli', 'uhp', 'remote-harness', 'transport'],
+  keywords: ['uhp', 'unified harness protocol', 'remote harness', 'responses'],
+  category: 'toolsmith',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<discover|harnesses|models|run> --profile <name> [--harness <id>] [--model <id>] [--input <text>] [--stream]',
+    allowedTools: ['Read', 'Bash'],
+  } satisfies CommandMetadata,
 };
 
 // Utility Commands
@@ -2115,6 +2636,25 @@ export const mcCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const missionCommand: Extension = {
+  id: 'mission',
+  type: 'command',
+  name: 'Mission Protocol',
+  description: 'Preview, apply, verify, resume, and roll back versioned Mission workspace migrations',
+  version: '1.0.0',
+  capabilities: ['cli', 'orchestration', 'mission-protocol', 'migration', 'rollback'],
+  keywords: ['mission', 'migrate', 'migration', 'preview', 'resume', 'rollback'],
+  category: 'orchestration',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'orchestration',
+    allowedTools: ['Bash', 'Read', 'Write'],
+    argumentHint: 'migrate [--dry-run|--apply|--verify|--resume|--rollback]',
+  } satisfies CommandMetadata,
+};
+
 // Steward Commands
 
 export const stewardCommand: Extension = {
@@ -2162,7 +2702,7 @@ export const repoAccessCommand: Extension = {
   id: 'repo-access',
   type: 'skill',
   name: 'Repo Access',
-  description: 'Validate repo access manifest authorization before reading, writing, committing, pushing, or commenting across repos',
+  description: 'Resolve workspace members and validate deny-by-default authorization before cross-repo operations',
   version: '1.0.0',
   capabilities: ['cli', 'policy', 'repo-access', 'authorization', 'preflight'],
   keywords: ['repo', 'access', 'manifest', 'authorization', 'permissions', 'preflight', 'handoff'],
@@ -2187,11 +2727,12 @@ export const repoAccessCommand: Extension = {
     commandHint: {
       template: 'utility',
       allowedTools: ['Bash', 'Read'],
-      argumentHint: 'list | explain --path <repo> | check --path <repo> --action <action>',
+      argumentHint: 'list | status | explain --path <repo> | check --path <repo> --action <action>',
       executionSteps: [
-        'Load .aiwg/ops/security/repo-access.manifest.yaml',
+        'Load .aiwg/aiwg.config workspace + repos, with legacy YAML fallback',
         'Resolve the requested repo/path against manifest entries',
-        'Return ALLOW/DENY with the matching repo entry and reason',
+        'Load the matched member config for delivery, remotes, actor, and signing',
+        'Return member status or ALLOW/DENY with the matching repo and reason',
       ],
     },
   } satisfies SkillMetadata,
@@ -2235,14 +2776,14 @@ export const teamCommand: Extension = {
 
 // Cost & Metrics Commands
 
-export const costReportCommand: Extension = {
-  id: 'cost-report',
+export const evidenceCommand: Extension = {
+  id: 'evidence',
   type: 'skill',
-  name: 'Cost Report',
-  description: 'Generate token cost and spending report for workflows',
+  name: 'Evidence',
+  description: 'Export and verify portable evaluation evidence bundles',
   version: '1.0.0',
-  capabilities: ['cli', 'metrics', 'cost-tracking', 'reporting'],
-  keywords: ['cost', 'report', 'tokens', 'spending', 'budget', 'metrics'],
+  capabilities: ['cli', 'evidence', 'provenance', 'verification', 'evaluation'],
+  keywords: ['evidence', 'bundle', 'provenance', 'verify', 'evaluation', 'activity-export'],
   category: 'metrics',
   platforms: {
     claude: 'full',
@@ -2254,11 +2795,59 @@ export const costReportCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['cost report', 'show costs', 'token spending', 'cost summary', 'budget report'],
+    triggerPhrases: ['evidence bundle', 'export evidence', 'verify evidence', 'evaluation provenance'],
     commandHint: {
       template: 'utility',
       allowedTools: ['Read', 'Bash'],
-      cliDisabled: true,
+      argumentHint: '<export|verify> [options]',
+      cliDisabled: false,
+    },
+  } satisfies SkillMetadata,
+};
+
+export const artifactVerifyCommand: Extension = {
+  id: 'verify',
+  type: 'command',
+  name: 'Artifact Verification',
+  description: 'Verify cross-asset DSSE provenance and manage versioned trust roots',
+  version: '1.0.0',
+  capabilities: ['cli', 'security', 'dsse', 'sigstore', 'provenance', 'trust-policy'],
+  keywords: ['verify', 'artifact', 'attestation', 'dsse', 'sigstore', 'trust-root', 'revocation'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<artifact> --attestation <path> --policy <root.json> [--offline] [--json] | trust <bootstrap|update|status>',
+    allowedTools: ['Read', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
+export const costReportCommand: Extension = {
+  id: 'cost-report',
+  type: 'skill',
+  name: 'Cost Report',
+  description: 'Generate session or OpenRouter fleet cost and spending reports',
+  version: '1.1.0',
+  capabilities: ['cli', 'metrics', 'cost-tracking', 'reporting', 'fleet', 'openrouter'],
+  keywords: ['cost', 'report', 'tokens', 'spending', 'budget', 'metrics', 'fleet', 'openrouter'],
+  category: 'metrics',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: false,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['cost report', 'show costs', 'token spending', 'cost summary', 'budget report', 'fleet spend'],
+    commandHint: {
+      template: 'utility',
+      allowedTools: ['Read', 'Bash'],
+      cliDisabled: false,
     },
   } satisfies SkillMetadata,
 };
@@ -2928,10 +3517,10 @@ export const memoryCommand: Extension = {
   id: 'memory',
   type: 'skill',
   name: 'Memory',
-  description: 'Storage operations on the AIWG memory subsystem — resolve paths, list, get, put, delete, append JSONL events through the configured backend',
+  description: 'Storage operations on the AIWG memory subsystem, plus user-level project memory registry commands under ~/.aiwg/projects',
   version: '1.0.0',
-  capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm'],
-  keywords: ['memory', 'semantic-memory', 'reflections', 'pages'],
+  capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm', 'project-memory', 'user-registry'],
+  keywords: ['memory', 'semantic-memory', 'project-memory', 'registry', 'reflections', 'pages'],
   category: 'utility',
   platforms: {
     claude: 'full',
@@ -2943,15 +3532,15 @@ export const memoryCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['where is memory', 'memory path', 'list memory', 'aiwg memory'],
+    triggerPhrases: ['where is memory', 'memory path', 'list memory', 'project memory', 'aiwg memory'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<path|list|get|put|delete|append-log> [options]',
+      argumentHint: '<path|list|get|put|delete|append-log|project> [options]',
       allowedTools: ['Bash', 'Read'],
       executionSteps: [
         'Parse subcommand and arguments',
         'Resolve storage adapter for memory subsystem',
-        'Read/write/list/delete/append-log via the adapter',
+        'Read/write/list/delete/append-log via the adapter or manage project-memory mappings',
         'Print result',
       ],
     },
@@ -3057,6 +3646,41 @@ export const commandLogCommand: Extension = {
       executionSteps: [
         'Read project and/or global command-log JSONL stores',
         'Summarize command frequency, failures, and recent invocations',
+        'Print a human report or JSON for automation',
+      ],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const skillUsageCommand: Extension = {
+  id: 'skill-usage',
+  type: 'skill',
+  name: 'Skill Usage',
+  description: 'Report opt-in local skill, agent, and command utilization with project/global scope summaries and JSON output',
+  version: '1.0.0',
+  capabilities: ['cli', 'skill-usage', 'telemetry', 'analysis', 'self-maintenance'],
+  keywords: ['skill', 'agent', 'usage', 'telemetry', 'analysis', 'heatmap', 'invocation'],
+  category: 'utility',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['skill usage', 'show skill usage', 'agent usage analysis', 'which aiwg skills are used'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[--json] [--scope project|global|all] [--limit N] [--suggest-for "query"] | ingest-transcript <path> --provider claude-code [--project-root <path>] [--dry-run] [--json]',
+      allowedTools: ['Bash', 'Read'],
+      executionSteps: [
+        'Read project and/or global skill-usage JSONL stores',
+        'Optionally parse a targeted Claude Code JSONL transcript for structural skill/agent invocations',
+        'Summarize artifact frequency, recency heatmap, cold spots, failures, actions, and recent usage',
+        'Suggest relevant under-used skills when --suggest-for is provided',
         'Print a human report or JSON for automation',
       ],
     },
@@ -3330,21 +3954,30 @@ export const rlmCacheCommand: Extension = {
  * - Agentic Tools (5): chunk, fanout, rlm-prep, rlm-search, rlm-status
  */
 export const commandDefinitions: Extension[] = [
-  // Maintenance (6)
+  // Maintenance (7)
   helpCommand,
   versionCommand,
+  authCommand,
   doctorCommand,
+  contextFirewallCommand,
   updateCommand,
+  installationCommand,
+  decisionCommand,
+  gatesCommand,
   refreshCommand,
   regenerateCommand,
+  workspaceContextCommand,
 
   // Framework (6)
   useCommand,
+  modelsCommand,
+  jobCommand,
   cockpitCommand,
   listCommand,
   removeCommand,
   promoteCommand,
   newBundleCommand,
+  quickrefCommand,
   installCommand,
   packagesCommand,
   marketplaceCommand,
@@ -3353,6 +3986,9 @@ export const commandDefinitions: Extension[] = [
   newCommand,
   initCommand,
   setupCommand,
+  setupGenerateCommand,
+  setupValidateCommand,
+  setupRunCommand,
   issueCommand,
   issueAuditCommand,
   addressIssuesCommand,
@@ -3377,6 +4013,7 @@ export const commandDefinitions: Extension[] = [
   // Toolsmith (1)
   runtimeInfoCommand,
   agentcardCommand,
+  uhpCommand,
 
   // Utility (5)
   prefillCardsCommand,
@@ -3414,6 +4051,7 @@ export const commandDefinitions: Extension[] = [
 
   // Mission Control (1)
   mcCommand,
+  missionCommand,
 
   // Steward (1)
   stewardCommand,
@@ -3421,7 +4059,9 @@ export const commandDefinitions: Extension[] = [
   // Agent Teams (1)
   teamCommand,
 
-  // Metrics (3)
+  // Metrics (4)
+  evidenceCommand,
+  artifactVerifyCommand,
   costReportCommand,
   costHistoryCommand,
   metricsTokensCommand,
@@ -3442,12 +4082,15 @@ export const commandDefinitions: Extension[] = [
   // Research Validation (1)
   bestPracticesAuditCommand,
 
-  // Index + Discovery (3)
+  // Index + Discovery
   indexCommand,
+  artifactsCommand,
+  effectCommand,
   corpusCommand,
   researchQueryCommand,
   discoverCommand,
   showCommand,
+  versionsCommand,
 
   // Optional Features (1)
   featuresCommand,
@@ -3475,6 +4118,7 @@ export const commandDefinitions: Extension[] = [
   // Activity Log (1)
   activityLogCommand,
   commandLogCommand,
+  skillUsageCommand,
 
   // Knowledge Base (1)
   kbCommand,
@@ -3510,6 +4154,14 @@ export const commandDefinitions: Extension[] = [
 
   // Session (#884)
   sessionCommand,
+  sessionsCommand,
+  outputModeCommand,
+  writerProfileCommand,
+  botHandoffCommand,
+  buildVerifyCommand,
+  writingCommand,
+  schemaCommand,
+  datasetCommand,
 ];
 
 // ============================================

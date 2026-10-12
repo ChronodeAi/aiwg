@@ -7,7 +7,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import http from 'node:http';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +42,41 @@ describe('Workspace CLI Commands', () => {
       } finally {
         console.log = originalLog;
       }
+    });
+
+    it('should resolve an external workspace through .aiwg-location', async () => {
+      const externalAiwg = path.join(testDir, '..', 'workspace-test-private', '.aiwg');
+      await fs.mkdir(path.join(externalAiwg, 'frameworks'), { recursive: true });
+      await fs.writeFile(path.join(testDir, '.aiwg-location'), '../workspace-test-private/.aiwg\n');
+      await fs.writeFile(
+        path.join(externalAiwg, 'frameworks', 'registry.json'),
+        JSON.stringify({ frameworks: { sdlc: { id: 'sdlc', version: '1.0.0', health: 'healthy' } } }),
+      );
+
+      const { buildWorkspaceStatus } = await import('../../../tools/cli/workspace-status.mjs');
+      try {
+        const output = await buildWorkspaceStatus(testDir);
+        expect(output.workspace.exists).toBe(true);
+        expect(output.workspace.path).toBe(externalAiwg);
+        expect(output.frameworks[0].id).toBe('sdlc');
+      } finally {
+        await fs.rm(path.dirname(externalAiwg), { recursive: true, force: true });
+      }
+    });
+
+    it('reports external control-plane health in the verification probe', async () => {
+      const externalAiwg = path.join(testDir, 'external', '.aiwg');
+      await fs.mkdir(path.join(externalAiwg, 'frameworks'), { recursive: true });
+      await fs.writeFile(path.join(testDir, '.aiwg-location'), 'external/.aiwg\n');
+      await fs.writeFile(path.join(externalAiwg, 'AIWG.md'), '# AIWG\n');
+      await fs.writeFile(path.join(externalAiwg, 'aiwg.config'), '{}\n');
+      await fs.writeFile(path.join(externalAiwg, 'frameworks', 'registry.json'), '{"frameworks":{}}\n');
+
+      const { buildVerificationProbe } = await import('../../../tools/cli/workspace-status.mjs');
+      const output = await buildVerificationProbe(testDir);
+      expect(output.status).toBe('needs-repair');
+      expect(output.checks.artifact_health).toBe('legacy-missing-control-plane');
+      expect(output.verification.next_command).toBe('aiwg artifacts repair --dry-run');
     });
 
     it('should detect legacy workspace structure', async () => {
@@ -323,22 +359,48 @@ describe('Workspace CLI Commands', () => {
         console.log = originalLog;
       }
     });
+
+    it('should restore a manifestless legacy internal backup', async () => {
+      const migrationId = 'migration-123-legacy';
+      const backupDir = path.join(aiwgDir, 'backups', migrationId);
+      await fs.mkdir(path.join(backupDir, 'intake'), { recursive: true });
+      await fs.writeFile(path.join(backupDir, 'intake', 'test.md'), '# Original');
+      await fs.mkdir(path.join(aiwgDir, 'intake'), { recursive: true });
+      await fs.writeFile(path.join(aiwgDir, 'intake', 'test.md'), '# Modified');
+
+      const { rollbackWorkspace } = await import('../../../tools/cli/workspace-rollback.mjs');
+      const logs: string[] = [];
+      const originalLog = console.log;
+      console.log = (...args) => logs.push(args.join(' '));
+
+      try {
+        await rollbackWorkspace(['--yes', testDir]);
+        expect(await fs.readFile(path.join(aiwgDir, 'intake', 'test.md'), 'utf8'))
+          .toBe('# Original');
+        expect(logs.join('\n')).toContain('Rollback complete');
+        await expect(fs.access(path.join(aiwgDir, 'backups'))).rejects.toThrow();
+      } finally {
+        console.log = originalLog;
+      }
+    });
   });
 
   describe('deploy-agents framework initialization', () => {
-    it('should create framework-scoped directories for sdlc mode', async () => {
-      // Import the function dynamically
-      const deployAgents = await import('../../../tools/agents/deploy-agents.mjs');
+    it('should be import-safe without executing a deployment', async () => {
+      const deployScript = path.resolve(__dirname, '../../../tools/agents/deploy-agents.mjs');
+      const moduleUrl = pathToFileURL(deployScript).href;
+      const probe = [
+        `const deployed = await import(${JSON.stringify(moduleUrl)});`,
+        "if (typeof deployed.main !== 'function') process.exit(2);",
+        'await new Promise(resolve => setTimeout(resolve, 750));',
+      ].join('\n');
 
-      // Check if the aiwg directory gets created
-      // This tests the initializeFrameworkWorkspace function indirectly
-      const aiwgPath = path.join(testDir, '.aiwg');
-      const frameworksPath = path.join(aiwgPath, 'frameworks');
-      const sdlcPath = path.join(frameworksPath, 'sdlc-complete');
+      execFileSync(process.execPath, ['--input-type=module', '--eval', probe], { timeout: 60_000,
+        cwd: testDir,
+        stdio: 'pipe',
+      });
 
-      // Run deploy with dry-run to see what would be created
-      // Note: Full integration test would require mocking more of the filesystem
-      expect(true).toBe(true); // Placeholder - full test requires integration setup
+      await expect(fs.access(path.join(testDir, 'AIWG.md'))).rejects.toThrow();
     });
 
     it('should create marketing directories for marketing mode', async () => {

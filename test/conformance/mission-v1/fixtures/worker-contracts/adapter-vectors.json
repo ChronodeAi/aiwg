@@ -1,0 +1,345 @@
+[
+  {
+    "id": "adapter-http-shape",
+    "definition": "workerAdapter",
+    "value": {
+      "version": 1,
+      "id": "fixture",
+      "provider": "local",
+      "adapterVersion": "1.0.0",
+      "supportedVersions": "1.x",
+      "runtimeDriver": "installed:fixture-driver",
+      "catalogAdapter": {
+        "kind": "file",
+        "locator": "fixture:catalog",
+        "parser": "fixture-v1"
+      },
+      "invocation": {
+        "kind": "http",
+        "protocol": "ollama",
+        "healthPath": "/health",
+        "modelsPath": "/models",
+        "generatePath": "/generate"
+      },
+      "capabilities": {
+        "output": "text",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "read-only"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "fixture-shell": {
+          "transport": "shell",
+          "supportedVersions": "1.x",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "sandbox": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "approval": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "workdir": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "finalOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stdin": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "structuredOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stepCap": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "trust": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "children": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "fallback": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            }
+          },
+          "envAllowlist": [
+            "PATH"
+          ],
+          "pitfalls": [
+            "Synthetic fixture; no live qualification"
+          ]
+        }
+      }
+    },
+    "valid": true,
+    "pack": "T-OG-03"
+  },
+  {
+    "id": "adapter-mcp-shape",
+    "definition": "workerAdapter",
+    "value": {
+      "version": 1,
+      "id": "fixture",
+      "provider": "local",
+      "adapterVersion": "1.0.0",
+      "supportedVersions": "1.x",
+      "runtimeDriver": "installed:fixture-driver",
+      "catalogAdapter": {
+        "kind": "file",
+        "locator": "fixture:catalog",
+        "parser": "fixture-v1"
+      },
+      "invocation": {
+        "kind": "process",
+        "executable": "fixture-worker",
+        "argv": [
+          "${brief}"
+        ],
+        "stdin": "closed",
+        "cwd": "${workspace}",
+        "envAllowlist": [
+          "PATH"
+        ],
+        "versionArgv": [
+          "--version"
+        ]
+      },
+      "capabilities": {
+        "output": "text",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "read-only"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "fixture-shell": {
+          "transport": "mcp",
+          "supportedVersions": "1.x",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "sandbox": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "approval": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "workdir": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "finalOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stdin": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "structuredOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stepCap": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "trust": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "children": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "fallback": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            }
+          },
+          "envAllowlist": [
+            "PATH"
+          ],
+          "pitfalls": [
+            "Synthetic fixture; no live qualification"
+          ],
+          "mcp": {
+            "serverRef": "registered-fixture",
+            "tool": "worker",
+            "inputSchemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "outputSchemaDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "sessionIsolation": "per-call",
+            "cancel": "uncertain"
+          }
+        }
+      }
+    },
+    "valid": true,
+    "pack": "T-OG-17"
+  },
+  {
+    "id": "mcp-missing-schema-pin",
+    "definition": "workerAdapter",
+    "base": "adapter-mcp-shape",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/invocationProfiles/fixture-shell/mcp/inputSchemaDigest"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "mcp-unknown-isolation",
+    "definition": "workerAdapter",
+    "base": "adapter-mcp-shape",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/invocationProfiles/fixture-shell/mcp/sessionIsolation",
+        "value": "global"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "mcp-missing-descriptor",
+    "definition": "workerAdapter",
+    "base": "adapter-mcp-shape",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/invocationProfiles/fixture-shell/mcp"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "profile-missing-control",
+    "definition": "workerAdapter",
+    "base": "adapter-mcp-shape",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/invocationProfiles/fixture-shell/controls/fallback"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "profile-unknown-field",
+    "definition": "workerAdapter",
+    "base": "adapter-mcp-shape",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/invocationProfiles/fixture-shell/launchAny",
+        "value": true
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "unknown-adapter-version",
+    "definition": "workerAdapter",
+    "base": "adapter-http-shape",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": 2
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  },
+  {
+    "id": "qualified-without-evidence",
+    "definition": "workerAdapter",
+    "base": "adapter-http-shape",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/qualification/status",
+        "value": "qualified"
+      }
+    ],
+    "valid": false,
+    "pack": "T-OG-03/17"
+  }
+]

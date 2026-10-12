@@ -538,7 +538,7 @@ Based on REF-089 benchmarks:
 - #325 — Cost tracking and budgets
 
 **Related Addons**:
-- `agentic/code/addons/ralph/` — Iterative refinement loops
+- `agentic/code/addons/agent-loop/` — Iterative refinement loops
 - `agentic/code/addons/aiwg-utils/` — Development utilities
 - `agentic/code/frameworks/sdlc-complete/` — SDLC agent workflows
 

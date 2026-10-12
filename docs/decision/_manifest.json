@@ -1,0 +1,13 @@
+{
+  "title": "Decision Support",
+  "summary": "Offload bounded decisions to Jev and get typed answers with confidence",
+  "collapsed": true,
+  "order": [
+    "jev-quickstart",
+    "README",
+    "cli-mcp-driver",
+    "jev-transport",
+    "architecture",
+    "specification"
+  ]
+}

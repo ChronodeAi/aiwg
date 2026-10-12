@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "dag-live-preregistration/v1",
+  "issue": "#2686",
+  "workloadDigest": "sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b",
+  "definitionsDigest": "sha256:f9d8b3dd768eabcb32c364e8e67ecd4811edf75980eb7ad6970ff3ea2aa1aede",
+  "tasksPerPattern": 100,
+  "arms": {
+    "baseline": "flat-single-call-flowgraph/v1",
+    "candidate": "decision-graph-template/v1"
+  },
+  "analysis": {
+    "qualityMetric": "exact-match-accuracy",
+    "pairing": "task-id",
+    "armOrder": "alternating-by-task-index",
+    "nonInferiority": {
+      "method": "newcombe-10",
+      "levelBps": 9000,
+      "marginBps": -1000
+    },
+    "economics": {
+      "maxCallRatio": 3,
+      "maxP95LatencyRatio": 4,
+      "maxExtraTokensPerTaskUpper": 8000,
+      "bootstrap": {
+        "levelBps": 9000,
+        "seed": 9862,
+        "resamples": 20000
+      }
+    },
+    "stopRules": {
+      "maxPatternCallRatio": 3,
+      "callRatioBasis": "first-attempt-calls-of-usable-pairs",
+      "budgetStopFraction": 0.8,
+      "speculativeAction": "stop-run"
+    },
+    "providerFailurePolicy": {
+      "retriesPerCall": 1,
+      "retryCharged": true,
+      "retryableOutcomes": [
+        "provider-invalid-output",
+        "provider-timeout",
+        "provider-network-transient",
+        "provider-rate-limited",
+        "provider-overloaded",
+        "provider-service-error",
+        "unknown-usage"
+      ],
+      "measurementFailure": "task-excluded-from-both-arms",
+      "maxMeasurementFailureFractionPerPattern": 0.05,
+      "beyondTolerance": "pattern-insufficient-evidence",
+      "immediateStops": [
+        "served-model-mismatch",
+        "usage-exceeded-reservation",
+        "missing-request-id",
+        "budget",
+        "credential-or-authorization",
+        "data-boundary-denied",
+        "invalid-request",
+        "adapter-exception",
+        "any-other-provider-outcome"
+      ]
+    },
+    "perCallTokenBound": 4000,
+    "concurrency": 1
+  },
+  "promotionOwner": "roctinam",
+  "automaticPromotion": false
+}

@@ -3,6 +3,7 @@
  *
  * Tests the three exported utility functions:
  *   - getAllAddons()  — discovers addon dirs, applies disallow list
+ *   - getAllExtensions() — discovers deployable extension dirs
  *   - isValidAddon() — validates a name against fs + disallow list
  *   - addonPath()    — constructs source path, handles ring alias
  */
@@ -14,8 +15,11 @@ import path from 'path';
 import os from 'os';
 import {
   getAllAddons,
+  getAllExtensions,
   isValidAddon,
   addonPath,
+  resolveRequiredAddonActivationOrder,
+  extensionPath,
   USE_ALL_DISALLOW,
   useHandler,
   nextStepsFor,
@@ -35,6 +39,17 @@ async function createFakeAddonTree(root: string, addonNames: string[]) {
     await mkdir(path.join(addonsDir, name), { recursive: true });
   }
   return addonsDir;
+}
+
+async function createFakeExtensionTree(root: string, extensionNames: string[]) {
+  const extensionsDir = path.join(root, 'agentic', 'code', 'extensions');
+  await mkdir(extensionsDir, { recursive: true });
+  for (const name of extensionNames) {
+    const dir = path.join(extensionsDir, name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ id: name }));
+  }
+  return extensionsDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +76,7 @@ describe('nextStepsFor()', () => {
 
     expect(output).toContain('Open platform');
     expect(output).toContain('Ask the steward');
-    expect(output).toContain('aiwg-regenerate');
+    expect(output).toContain('/aiwg-regenerate');
     expect(output).toContain('aiwg doctor');
     expect(output).toContain('docs/agentic-install-runbook.md');
     expect(output).not.toContain('aiwg discover');
@@ -73,9 +88,15 @@ describe('nextStepsFor()', () => {
 
     expect(output).toContain('Open Codex');
     expect(output).toContain('Ask the steward');
-    expect(output).toContain('aiwg-regenerate');
+    expect(output).toContain('$aiwg-regenerate');
+    expect(output).not.toContain('/aiwg-regenerate');
     expect(output).not.toContain('aiwg discover');
     expect(output).not.toContain('aiwg sdlc-accelerate');
+  });
+
+  it('uses Codex skill syntax for framework fallbacks and its openai alias', () => {
+    expect(nextStepsFor('marketing', 'codex').join('\n')).toContain('$aiwg-regenerate');
+    expect(nextStepsFor('sdlc', 'openai').join('\n')).toContain('$aiwg-regenerate');
   });
 });
 
@@ -104,6 +125,68 @@ describe('addonPath()', () => {
     for (const name of names) {
       expect(addonPath('/root', name)).toBe(`/root/agentic/code/addons/${name}`);
     }
+  });
+});
+
+describe('resolveRequiredAddonActivationOrder()', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = path.join(os.tmpdir(), `aiwg-addon-deps-${Date.now()}-${Math.random()}`);
+    await mkdir(path.join(tmpDir, 'agentic/code/addons'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (existsSync(tmpDir)) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function addon(id: string, required: string[] = []): Promise<void> {
+    const dir = path.join(tmpDir, 'agentic/code/addons', id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+      id,
+      dependencies: { required },
+    }));
+  }
+
+  it('returns transitive dependencies once in dependency-first order', async () => {
+    await addon('aiwg-utils');
+    await addon('semantic-memory', ['aiwg-utils']);
+    await addon('llm-wiki', ['semantic-memory']);
+    await addon('line-memory');
+    await addon('compound-memory', ['line-memory', 'llm-wiki']);
+
+    await expect(resolveRequiredAddonActivationOrder(tmpDir, 'compound-memory'))
+      .resolves.toEqual(['line-memory', 'aiwg-utils', 'semantic-memory', 'llm-wiki', 'compound-memory']);
+  });
+
+  it('rejects missing dependencies and dependency cycles before deployment', async () => {
+    await addon('missing-root', ['not-installed']);
+    await expect(resolveRequiredAddonActivationOrder(tmpDir, 'missing-root'))
+      .rejects.toThrow("requires unavailable addon 'not-installed'");
+
+    await addon('cycle-a', ['cycle-b']);
+    await addon('cycle-b', ['cycle-a']);
+    await expect(resolveRequiredAddonActivationOrder(tmpDir, 'cycle-a'))
+      .rejects.toThrow('cycle-a -> cycle-b -> cycle-a');
+  });
+
+  it('rejects malformed required dependency declarations', async () => {
+    const dir = path.join(tmpDir, 'agentic/code/addons', 'malformed');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+      id: 'malformed', dependencies: { required: 'line-memory' },
+    }));
+
+    await expect(resolveRequiredAddonActivationOrder(tmpDir, 'malformed'))
+      .rejects.toThrow('invalid dependencies.required');
+  });
+});
+
+describe('extensionPath()', () => {
+  it('constructs path from framework root and extension name', () => {
+    const result = extensionPath('/some/root', 'repo-maintainer');
+    expect(result).toBe('/some/root/agentic/code/extensions/repo-maintainer');
   });
 });
 
@@ -146,6 +229,25 @@ describe('getAllAddons()', () => {
     }
   });
 
+  it('excludes addons whose manifest sets explicitInstall or devOnly (#2641)', async () => {
+    const addonsDir = await createFakeAddonTree(tmpDir, ['aiwg-utils', 'opt-in', 'contributor', 'plain']);
+    await writeFile(path.join(addonsDir, 'opt-in', 'manifest.json'), JSON.stringify({ explicitInstall: true, autoInstall: false }));
+    await writeFile(path.join(addonsDir, 'contributor', 'manifest.json'), JSON.stringify({ devOnly: true }));
+    await writeFile(path.join(addonsDir, 'plain', 'manifest.json'), JSON.stringify({ autoInstall: false }));
+    await writeFile(path.join(addonsDir, 'aiwg-utils', 'manifest.json'), '{ not json');
+    const addons = await getAllAddons(tmpDir);
+    expect(addons.sort()).toEqual(['aiwg-utils', 'plain']);
+  });
+
+  it('keeps deploying autoInstall:false addons from the real tree except explicit-install ones (#2641)', async () => {
+    const root = path.resolve(import.meta.dirname, '../../../..');
+    const addons = await getAllAddons(root);
+    expect(addons).not.toContain('decision-engine');
+    expect(addons).not.toContain('aiwg-dev');
+    // Both declare autoInstall:false and must stay part of `aiwg use all`.
+    expect(addons).toEqual(expect.arrayContaining(['composition-engine', 'testing-quality']));
+  });
+
   it('returns an empty array when no addons exist', async () => {
     await mkdir(path.join(tmpDir, 'agentic', 'code', 'addons'), { recursive: true });
     const addons = await getAllAddons(tmpDir);
@@ -179,6 +281,41 @@ describe('getAllAddons()', () => {
 
     // Must find more than the old hardcoded 4
     expect(addons.length).toBeGreaterThan(4);
+  });
+});
+
+describe('getAllExtensions()', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = path.join(os.tmpdir(), `aiwg-use-ext-test-${Date.now()}`);
+    await mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (existsSync(tmpDir)) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns deployable extension directories that have a manifest', async () => {
+    await createFakeExtensionTree(tmpDir, ['sys', 'repo-maintainer']);
+    const extensions = await getAllExtensions(tmpDir);
+    expect(extensions).toContain('sys');
+    expect(extensions).toContain('repo-maintainer');
+  });
+
+  it('skips extension directories without a manifest', async () => {
+    const extensionsDir = await createFakeExtensionTree(tmpDir, ['repo-maintainer']);
+    await mkdir(path.join(extensionsDir, 'scratch'), { recursive: true });
+
+    const extensions = await getAllExtensions(tmpDir);
+    expect(extensions).toContain('repo-maintainer');
+    expect(extensions).not.toContain('scratch');
+  });
+
+  it('discovers repo-maintainer from the real agentic tree', async () => {
+    const repoRoot = path.resolve(__dirname, '../../../..');
+    const extensions = await getAllExtensions(repoRoot);
+    expect(extensions).toContain('repo-maintainer');
   });
 });
 
@@ -304,10 +441,9 @@ describe('OpenHuman native harness stubs (#1559)', () => {
     ]);
   });
 
-  it('resolves curated OpenHuman harness defaults unless disabled or explicitly selected', () => {
+  it('keeps native harness emission opt-in unless explicitly selected', () => {
     const defaults = resolveOpenHumanHarnessAgentSelectors(['--provider', 'openhuman']);
-    expect(defaults).toContain('software-implementer');
-    expect(defaults).toContain('test-engineer');
+    expect(defaults).toEqual([]);
     expect(resolveOpenHumanHarnessAgentSelectors(['--provider', 'openhuman', '--no-harness-agents'])).toEqual([]);
     expect(resolveOpenHumanHarnessAgentSelectors(['--harness-agents=security-auditor'])).toEqual(['security-auditor']);
   });

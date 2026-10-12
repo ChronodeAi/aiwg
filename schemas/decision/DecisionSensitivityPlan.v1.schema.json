@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionSensitivityPlan.v1.schema.json",
+  "title": "Decision Sensitivity Plan",
+  "description": "D23 bounded counterfactual sensitivity plan. Default-off reviewer analysis only; it cannot authorize actions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "id", "version", "mode", "tenantId", "workspaceId", "projectId", "actor", "purpose",
+    "sourceSubject", "source", "analysisKind", "allowedPaths", "pathDomains", "variants", "budgets",
+    "privacy", "retention", "baselineStability", "unchangedVariant", "authorization", "probeControl",
+    "requestedMetrics", "comparisonBaseline"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "decision-sensitivity-plan/v1" },
+    "id": { "$ref": "#/$defs/name" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "mode": { "enum": ["disabled", "shadow"] },
+    "tenantId": { "$ref": "#/$defs/name" },
+    "workspaceId": { "$ref": "#/$defs/name" },
+    "projectId": { "$ref": "#/$defs/name" },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principalId", "authenticatedAt"],
+      "properties": {
+        "principalId": { "$ref": "#/$defs/name" },
+        "authenticatedAt": { "$ref": "#/$defs/dateTime" }
+      }
+    },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "sourceSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "workspaceId", "projectId", "subjectRef"],
+      "properties": {
+        "tenantId": { "$ref": "#/$defs/name" },
+        "workspaceId": { "$ref": "#/$defs/name" },
+        "projectId": { "$ref": "#/$defs/name" },
+        "subjectRef": { "$ref": "#/$defs/name" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleset", "binding", "result", "evidencePins", "policyPins"],
+      "properties": {
+        "ruleset": { "$ref": "#/$defs/pin" },
+        "binding": { "$ref": "#/$defs/pin" },
+        "result": { "$ref": "#/$defs/pin" },
+        "evidencePins": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/pin" } },
+        "policyPins": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/pin" } }
+      }
+    },
+    "analysisKind": { "enum": ["policy-replay", "input-reevaluation"] },
+    "allowedPaths": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/pointer" } },
+    "pathDomains": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "values", "sensitivity"],
+        "properties": {
+          "path": { "$ref": "#/$defs/pointer" },
+          "values": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/json" } },
+          "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] }
+        }
+      }
+    },
+    "variants": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/variant" } },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxVariants", "maxBackendCalls", "maxTokens", "maxCostMicros", "concurrency", "deadlineMs"],
+      "properties": {
+        "maxVariants": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "maxBackendCalls": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "maxTokens": { "type": "integer", "minimum": 0 },
+        "maxCostMicros": { "type": "integer", "minimum": 0 },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "deadlineMs": { "type": "integer", "minimum": 1, "maximum": 3600000 }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["egress", "redaction", "summaryPrecisionBps", "differencing"],
+      "properties": {
+        "egress": { "enum": ["metadata-only", "no-external-egress"] },
+        "redaction": { "enum": ["hash-values", "opaque-ids"] },
+        "summaryPrecisionBps": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "differencing": { "enum": ["deny", "coarsen"] }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "deleteAfterEpochMs", "legalHold"],
+      "properties": {
+        "class": { "enum": ["ephemeral", "review-evidence"] },
+        "deleteAfterEpochMs": { "type": "integer", "minimum": 0 },
+        "legalHold": { "type": "boolean" }
+      }
+    },
+    "baselineStability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "repeats"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "repeats": { "type": "integer", "minimum": 0, "maximum": 32 }
+      }
+    },
+    "unchangedVariant": { "enum": ["deduplicate", "retain-control"] },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorizedLabels", "authorizedActions", "approvedAt", "expiresAt"],
+      "properties": {
+        "authorizedLabels": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+        "authorizedActions": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+        "approvedAt": { "$ref": "#/$defs/dateTime" },
+        "expiresAt": { "$ref": "#/$defs/dateTime" }
+      }
+    },
+    "probeControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windowId", "maxPerPrincipalSubjectPath", "maxReportsPerWindow", "prohibitMembershipQueries"],
+      "properties": {
+        "windowId": { "$ref": "#/$defs/name" },
+        "maxPerPrincipalSubjectPath": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "maxReportsPerWindow": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "prohibitMembershipQueries": { "type": "boolean" }
+      }
+    },
+    "requestedMetrics": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["outcome-change", "acceptance-change", "rule-change", "distribution-distance", "minimum-threshold-change", "stability-repeat"] }
+    },
+    "comparisonBaseline": { "enum": ["source-result", "stability-control"] }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "dateTime": { "type": "string", "format": "date-time" },
+    "pointer": { "type": "string", "pattern": "^(|/(?:[^/~]|~0|~1)*)+$" },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "json": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string", "maxLength": 2048 },
+        { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/json" } },
+        { "type": "object", "maxProperties": 64, "additionalProperties": { "$ref": "#/$defs/json" } }
+      ]
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "value"],
+      "properties": {
+        "path": { "$ref": "#/$defs/pointer" },
+        "value": { "$ref": "#/$defs/json" }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "changes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" },
+        "changes": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/change" } }
+      }
+    }
+  }
+}

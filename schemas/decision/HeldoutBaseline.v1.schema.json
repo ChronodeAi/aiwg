@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutBaseline.v1.schema.json",
+  "title": "HeldoutBaseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scope",
+    "usdMicros",
+    "approvalDigest",
+    "counterGenesisDigest",
+    "budget"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-baseline/v1"
+    },
+    "scope": {
+      "enum": [
+        "portfolio",
+        "D17",
+        "D29"
+      ]
+    },
+    "usdMicros": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 48000000
+    },
+    "approvalDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "counterGenesisDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "budget": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "tokens",
+        "usd"
+      ],
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "usd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "scope": {
+        "const": "portfolio"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "budget": {
+        "type": "null"
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "budget": {
+        "type": "object"
+      }
+    }
+  }
+}

@@ -16,6 +16,10 @@ import {
   getFortemiCoreSyncStatus,
   syncFortemiCoreIndex,
 } from "../../../src/artifacts/fortemi-core-sync.js";
+import {
+  loadFortemiCoreExport,
+  loadFortemiCoreMetadataEntries,
+} from "../../../src/artifacts/fortemi-core-query-adapter.js";
 import type {
   ArtifactIndex,
   DependencyGraph,
@@ -154,6 +158,221 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
   function sha256(text: string): string {
     return createHash("sha256").update(text).digest("hex");
   }
+
+  it.each(['absent', 'stale', 'corrupt'])(
+    'keeps a pre-existing bundle discoverable and showable with a %s project cache (#2155)',
+    async (cacheState) => {
+      const skillPath = '.aiwg/extensions/fortemi-roadmap/skills/fortemi-roadmap-skill/SKILL.md';
+      fs.mkdirSync(path.dirname(path.join(tmp, skillPath)), { recursive: true });
+      fs.writeFileSync(path.join(tmp, skillPath), [
+        '---', 'name: fortemi-roadmap-skill',
+        'description: Advance the project roadmap',
+        'triggers:', '  - "advance roadmap"', '---',
+        '# Project Roadmap', '', 'Follow the required project roadmap procedure.',
+      ].join('\n'));
+      // An existing workspace has a local index, without going through new-bundle.
+      await buildIndex(tmp, { graph: 'project', quiet: true });
+      if (cacheState !== 'absent') {
+        syncFortemiCoreIndex(tmp, { graph: 'project' });
+        const status = getFortemiCoreSyncStatus(tmp, 'project');
+        if (cacheState === 'corrupt') {
+          fs.writeFileSync(status.exportPath, '{broken');
+        } else {
+          const metadataPath = path.join(getGraphIndexDir(tmp, 'project'), 'metadata.json');
+          const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+          metadata.builtAt = new Date(Date.now() + 60_000).toISOString();
+          fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+        }
+        expect(getFortemiCoreSyncStatus(tmp, 'project').stale).toBe(true);
+      } else {
+        expect(getFortemiCoreSyncStatus(tmp, 'project').optedIn).toBe(false);
+      }
+      // A healthy framework export used to mask the missing project graph.
+      writeProjectGraph(tmp, [entry({
+        path: 'agentic/code/addons/roadmap/skills/packaged-roadmap/SKILL.md',
+        name: 'packaged-roadmap', title: 'Packaged Roadmap',
+      })], undefined, 'framework');
+      syncFortemiCoreIndex(tmp, { graph: 'framework' });
+      consoleSpy.mockClear();
+      consoleErrorSpy.mockClear();
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tmp);
+      try {
+        await indexCliMain(['discover', 'advance roadmap', '--json']);
+        const found = readConsoleJson();
+        expect(found.results[0].name).toBe('fortemi-roadmap-skill');
+        expect(found.results[0].provenance).toEqual({ graph: 'project', scope: 'project' });
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('using the local project index'));
+        for (const name of ['fortemi-roadmap-skill', found.results[0].id]) {
+          consoleSpy.mockClear();
+          consoleErrorSpy.mockClear();
+          await indexCliMain(['show', 'skill', name, '--json']);
+          expect(readConsoleJson().content).toContain('Follow the required project roadmap procedure.');
+          expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        cwdSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['missing', 'empty'])('warns when the project cache is absent and its index is %s', async (state) => {
+    fs.mkdirSync(path.join(tmp, '.aiwg/extensions/existing/skills'), { recursive: true });
+    if (state === 'empty') writeProjectGraph(tmp, []);
+    writeProjectGraph(tmp, [entry({
+      path: 'agentic/code/addons/intake/skills/intake-wizard/SKILL.md',
+    })], undefined, 'framework');
+    syncFortemiCoreIndex(tmp, { graph: 'framework' });
+    consoleSpy.mockClear();
+    consoleErrorSpy.mockClear();
+    await discoverCapability(tmp, { phrase: 'intake', json: true });
+    expect(readConsoleJson().results[0].name).toBe('intake-wizard');
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('aiwg index build --graph project'));
+    consoleSpy.mockClear();
+    consoleErrorSpy.mockClear();
+    await showArtifact(tmp, { name: 'intake-wizard', json: true, backend: 'fortemi-core' });
+    expect(readConsoleJson().content).toContain('Intake Wizard');
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the project Fortemi Core cache after index build", async () => {
+    const skillDir = path.join(tmp, ".aiwg", "addons", "schema-registry", "skills", "schema-registry");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: schema-registry",
+        "description: Maintain schema registry artifacts",
+        "---",
+        "# Schema Registry",
+        "",
+        "Maintain schema registry artifacts for project-local bundles.",
+        "",
+      ].join("\n"),
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    try {
+      await indexCliMain(["build", "--graph", "project"]);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const status = getFortemiCoreSyncStatus(tmp, "project");
+    expect(status.built).toBe(true);
+    expect(status.stale).toBe(false);
+    expect(status.itemCount).toBeGreaterThan(0);
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["skill"],
+      name: "schema-registry",
+      json: true,
+      graph: "project",
+      backend: "fortemi-core",
+    });
+    const shown = readConsoleJson();
+    expect(shown.path).toContain("schema-registry");
+    expect(shown.content).toContain("# Schema Registry");
+  });
+
+  it("refreshes the framework Fortemi Core cache after a framework graph build", async () => {
+    writeProjectGraph(tmp, [], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
+    const skillDir = path.join(tmp, "agentic", "code", "frameworks", "kairos", "skills", "kairos-probe");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: kairos-probe",
+        "description: Probe a Kairos node",
+        "triggers:",
+        '  - "kairos conformance probe"',
+        "---",
+        "# Kairos Probe",
+        "",
+        "Probe a Kairos node for conformance.",
+        "",
+      ].join("\n"),
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    try {
+      await indexCliMain(["build", "--graph", "framework"]);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const status = getFortemiCoreSyncStatus(tmp, "framework");
+    expect(status.built).toBe(true);
+    expect(status.stale).toBe(false);
+    consoleSpy.mockClear();
+
+    await discoverCapability(tmp, {
+      phrase: "kairos conformance probe",
+      json: true,
+      backend: "fortemi-core",
+    });
+    expect(readConsoleJson().results[0].name).toBe("kairos-probe");
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["skill"],
+      name: "kairos-probe",
+      json: true,
+      backend: "fortemi-core",
+    });
+    expect(readConsoleJson().content).toContain("# Kairos Probe");
+  });
+
+  it("reports a stale shared framework cache even with a healthy project cache", async () => {
+    writeProjectGraph(tmp, [entry({
+      path: "agentic/code/frameworks/kairos/skills/kairos-probe/SKILL.md",
+      name: "kairos-probe",
+      title: "Kairos Probe",
+    })], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
+
+    const metadataPath = path.join(getGraphIndexDir(tmp, "framework"), "metadata.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.builtAt = new Date(Date.now() + 60_000).toISOString();
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+
+    const loaded = loadFortemiCoreExport(tmp, "framework");
+    expect(loaded.exported).toBeUndefined();
+    expect(loaded.reason).toContain("source index is newer");
+    expect(loaded.reason).toContain("aiwg index sync --graph framework");
+    writeProjectGraph(tmp, [entry({})]);
+    syncFortemiCoreIndex(tmp, { graph: "project" });
+    consoleSpy.mockClear();
+    await discoverCapability(tmp, { phrase: "intake", json: true });
+    expect(readConsoleJson().results.length).toBeGreaterThan(0);
+    expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
+    consoleSpy.mockClear();
+    consoleErrorSpy.mockClear();
+    await showArtifact(tmp, { name: "intake-wizard", json: true, backend: "fortemi-core" });
+    expect(readConsoleJson().content).toContain("Intake Wizard");
+    expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
+  });
+
+  it("points plain-text Fortemi no-match output to index sync", async () => {
+    writeProjectGraph(tmp, [], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
+
+    await discoverCapability(tmp, {
+      phrase: "missing framework phrase",
+      graph: "framework",
+      backend: "fortemi-core",
+    });
+
+    const output = consoleSpy.mock.calls.map((call) => call[0]).join("\n");
+    expect(output).toContain("No discovery matches");
+    expect(output).toContain("aiwg index sync --graph framework");
+    expect(output).not.toContain("aiwg index build");
+  });
 
   it("returns parity-ranked discover results from the Fortemi Core cache", async () => {
     const entries = [
@@ -352,6 +571,142 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       expect(text).not.toContain(frameworkSkill.path);
     } finally {
       cwdSpy.mockRestore();
+    }
+  });
+
+  it("discovers and shows operational behavior, template, flow, and runbook assets from Fortemi Core", async () => {
+    const behavior = entry({
+      path: ".aiwg/addons/fleet/behaviors/quiet-bot/BEHAVIOR.md",
+      type: "behavior",
+      title: "Quiet Bot",
+      name: "quiet-bot",
+      tags: ["chat", "fleet"],
+      summary: "Mention-only group chat behavior for budget-sensitive bot fleets.",
+      triggers: ["quiet bot", "mention only bot"],
+      capability: "Respond only when mentioned in shared bot channels.",
+    });
+    const template = entry({
+      path: ".aiwg/templates/codex/config.toml.aiwg-template",
+      type: "template",
+      title: "Codex Config Template",
+      name: "config.toml",
+      tags: ["codex", "template"],
+      summary: "Codex config toml provider template for agent runtime setup.",
+      triggers: ["codex config toml"],
+      capability: "Seed Codex runtime config from a project template.",
+    });
+    const flow = entry({
+      path: ".aiwg/flows/flow-release.playbook.yaml",
+      type: "flow",
+      title: "Release Flow",
+      name: "flow-release",
+      tags: ["release"],
+      summary: "Run the release gate sequence and publish artifacts.",
+      triggers: ["release flow"],
+      capability: "Coordinate release verification and publishing.",
+    });
+    const runbook = entry({
+      path: ".aiwg/runbooks/certificate-rotation.md",
+      type: "runbook",
+      kind: "Runbook",
+      sourceType: "template",
+      title: "Certificate Rotation Runbook",
+      name: "certificate-rotation",
+      tags: ["pki", "operations"],
+      summary: "Rotate expiring service certificates without interrupting clients.",
+      capability: "Rotate and verify service certificates with a tested rollback.",
+      searchTerms: ["issue replacement certificate", "verify served serial", "restore prior certificate"],
+    });
+    writeProjectGraph(tmp, [behavior, template, flow, runbook], undefined, "project");
+    syncFortemiCoreIndex(tmp, {
+      graph: "project",
+      generatedAt: "2026-01-05T00:00:00.000Z",
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "quiet bot mention only",
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const broad = readConsoleJson();
+    consoleSpy.mockClear();
+    const behaviorHit = broad.results.find((result: any) => result.type === "behavior");
+    expect(behaviorHit?.name).toBe("quiet-bot");
+
+    await discoverCapability(tmp, {
+      phrase: "codex config toml",
+      typeFilter: ["template"],
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const focused = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(focused.results[0].type).toBe("template");
+    expect(focused.results[0].name).toBe("config.toml");
+
+    await discoverCapability(tmp, {
+      phrase: "restore prior certificate",
+      typeFilter: ["runbook"],
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const runbookFocused = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(runbookFocused.results[0].type).toBe("runbook");
+    expect(runbookFocused.results[0].name).toBe("certificate-rotation");
+    const roundTrippedRunbook = loadFortemiCoreMetadataEntries(tmp, "project").entries
+      .find((item) => item.type === "runbook");
+    expect(roundTrippedRunbook).toMatchObject({
+      kind: "Runbook",
+      sourceType: "template",
+      searchTerms: expect.arrayContaining(["restore prior certificate"]),
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "restore prior certificate",
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const broadRunbook = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(broadRunbook.results.some((result: any) => result.type === "runbook")).toBe(true);
+
+    await discoverCapability(tmp, {
+      phrase: "quiet bot",
+      graph: "project",
+      limit: 1,
+      backend: "fortemi-core",
+      includePaths: false,
+    });
+    const text = consoleSpy.mock.calls.map((call) => call[0]).join("\n");
+    consoleSpy.mockClear();
+    expect(text).toContain("show: aiwg show behavior");
+
+    for (const [type, name, expected] of [
+      ["behavior", "quiet-bot", "Mention-only group chat behavior"],
+      ["template", "config.toml", "Codex config toml provider template"],
+      ["flow", "flow-release", "Run the release gate sequence"],
+      ["runbook", "certificate-rotation", "Rotate expiring service certificates"],
+    ] as const) {
+      await showArtifact(tmp, {
+        typeFilter: [type],
+        name,
+        json: true,
+        graph: "project",
+        backend: "fortemi-core",
+      });
+      const shown = readConsoleJson();
+      consoleSpy.mockClear();
+      expect(shown.type).toBe(type);
+      expect(shown.content).toContain(expected);
     }
   });
 
@@ -722,6 +1077,8 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
   });
 
   it("fails explicitly when the Fortemi Core cache is unavailable", async () => {
+    // Explicit operator queries must not silently switch to this valid index.
+    writeProjectGraph(tmp, [entry({})]);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit");
     });
@@ -741,6 +1098,12 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
         "pass '--backend local' to use the legacy local index",
       );
       expect(exitSpy).toHaveBeenCalledWith(1);
+      consoleSpy.mockClear();
+      await expect(showArtifact(tmp, {
+        name: 'intake-wizard', typeFilter: ['skill'], graph: 'project',
+        json: true, backend: 'fortemi-core',
+      })).rejects.toThrow('process.exit');
+      expect(readConsoleJson().error).toContain('aiwg index sync');
     } finally {
       exitSpy.mockRestore();
     }
@@ -952,6 +1315,77 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(fulltext.mode).toBe("fulltext");
     expect(fulltext.results[0].path).toBe(".aiwg/architecture/search-adr.md");
     expect(fulltext.results[0].matched).toContain("browser-only");
+  });
+
+  it("discovers, filters, and shows indexed project-local rules on Fortemi Core", async () => {
+    const rule = entry({
+      path: ".aiwg/extensions/acme-rules/rules/acme-review.md",
+      type: "rule",
+      phase: "other",
+      title: "Acme Review Rule",
+      name: "acme-review",
+      tags: ["governance", "kernel-routing"],
+      summary: "Route kernel rule discovery through metadata filters.",
+      triggers: undefined,
+      capability: "Apply the Acme review rule during rule discovery.",
+    });
+    const skill = entry({
+      path: ".aiwg/extensions/acme-rules/skills/acme-review/SKILL.md",
+      type: "skill",
+      title: "Acme Review Skill",
+      name: "acme-review",
+      tags: ["governance"],
+      summary: "Skill with a similar name that must not satisfy rule filters.",
+      capability: "Run the Acme review workflow.",
+    });
+    writeProjectGraph(tmp, [rule, skill]);
+    syncFortemiCoreIndex(tmp, {
+      graph: "project",
+      generatedAt: "2026-01-05T00:00:00.000Z",
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "kernel rule discovery metadata filters",
+      typeFilter: ["rule"],
+      json: true,
+      backend: "fortemi-core",
+    });
+    const discovered = readConsoleJson();
+    expect(discovered.query.backend).toBe("fortemi-core");
+    expect(discovered.query.graph).toBe("capability-default");
+    expect(discovered.query.types).toEqual(["rule"]);
+    expect(discovered.results[0]).toMatchObject({
+      path: rule.path,
+      type: "rule",
+      name: "acme-review",
+    });
+    expect(discovered.results).not.toContainEqual(
+      expect.objectContaining({ path: skill.path }),
+    );
+    consoleSpy.mockClear();
+
+    await queryIndex(
+      tmp,
+      { text: "kernel rule discovery", type: "rule", tags: ["kernel-routing"] },
+      { graph: "project", json: true, backend: "fortemi-core" },
+    );
+    const filtered = readConsoleJson();
+    expect(filtered.query.backend).toBe("fortemi-core");
+    expect(filtered.results.map((result: any) => result.path)).toEqual([
+      rule.path,
+    ]);
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["rule"],
+      name: "acme-review",
+      json: true,
+      backend: "fortemi-core",
+    });
+    const shown = readConsoleJson();
+    expect(shown.path).toBe(path.join(tmp, rule.path));
+    expect(shown.type).toBe("rule");
+    expect(shown.content).toContain("# Acme Review Rule");
   });
 
   it("serves Fortemi fulltext from the static cache when source files are unavailable", async () => {
@@ -1627,7 +2061,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
         ]),
       ).rejects.toThrow("process.exit");
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "Error: --schema-version must be v1 or v2",
+        "Error: --schema-version requires a value",
       );
       expect(exitSpy).toHaveBeenCalledWith(1);
       consoleErrorSpy.mockClear();

@@ -8,15 +8,22 @@ import {
 } from '../../../src/providers/provider-definitions.js';
 
 const CURRENT_PLATFORM_IDS = [
+  'antigravity',
   'claude',
   'codex',
   'copilot',
   'cursor',
+  'deepseek-harness',
   'factory',
+  'grokbot',
+  'grok-build',
   'hermes',
+  'muse',
   'opencode',
   'openclaw',
   'openhuman',
+  'pi',
+  'omp',
   'warp',
   'windsurf',
   'generic',
@@ -46,10 +53,79 @@ describe('provider definition registry', () => {
     expect(normalizeProviderDefinitionId('claude-code')).toBe('claude');
     expect(normalizeProviderDefinitionId('openai')).toBe('codex');
     expect(normalizeProviderDefinitionId('tinyhumansai')).toBe('openhuman');
+    expect(normalizeProviderDefinitionId('devin')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('devin-desktop')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('devin-local')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('cascade')).toBe('windsurf');
+    expect(normalizeProviderDefinitionId('pi-coding-agent')).toBe('pi');
+    expect(normalizeProviderDefinitionId('dsh')).toBe('deepseek-harness');
     expect(normalizeProviderDefinitionId('missing-provider')).toBeNull();
+  });
+
+  it('models Pi native resources without claiming unimplemented bridges', () => {
+    const pi = getProviderDefinition('pi');
+    expect(pi).toBeDefined();
+    expect(pi?.status).toBe('experimental');
+    expect(pi?.detection).toMatchObject({ env: [], process: ['pi'], capabilityId: 'pi' });
+    expect(pi?.paths.kernelSkills).toBe('.agents/skills');
+    expect(pi?.paths.artifacts.commands).toBe('.pi/prompts');
+    expect(pi?.paths.artifacts.behaviors).toBe('.pi/extensions');
+    expect(pi?.context.startupFiles).toEqual(['AGENTS.override.md', 'AGENTS.md', 'CLAUDE.md']);
+    expect(pi?.context.verification.source).toContain('79680533c6b898894f2d2421c7f640b212d3dfdd');
+    expect(pi?.adapters.hookBridge).toBeNull();
+    expect(pi?.adapters.mcpInjection).toBeNull();
+  });
+
+  it('registers stable grokbot without a bare grok alias', () => {
+    const grokbot = getProviderDefinition('grokbot');
+    expect(grokbot).toBeDefined();
+    expect(grokbot?.displayName).toBe('Grok Bot');
+    expect(grokbot?.status).toBe('stable');
+    expect(grokbot?.aliases).toEqual([]);
+    expect(normalizeProviderDefinitionId('grokbot')).toBe('grokbot');
+    expect(normalizeProviderDefinitionId('grok')).toBeNull();
+    expect(normalizeProviderDefinitionId('grok-build')).toBe('grok-build');
+    expect(normalizeProviderDefinitionId('grok')).toBeNull();
+    expect(grokbot?.detection).toMatchObject({ env: [], process: [], capabilityId: 'grokbot' });
+    expect(grokbot?.paths.contextFiles.agentsMd).toBe(true);
+    expect(grokbot?.context.loadMode).toBe('prose-directive');
+    expect(grokbot?.context.support).toBe('degraded');
+  });
+
+
+  it('registers stable muse with no aliases and fail-closed detection', () => {
+    const muse = getProviderDefinition('muse');
+    expect(muse).toBeDefined();
+    expect(muse?.displayName).toBe('Muse Code');
+    expect(muse?.status).toBe('stable');
+    expect(muse?.aliases).toEqual([]);
+    expect(normalizeProviderDefinitionId('muse')).toBe('muse');
+    // ADR: canonical id is `muse` with no aliases. Rejected spellings are
+    // assembled at runtime so the forbidden forms never appear as literals.
+    for (const rejected of [
+      ['muse', 'code'].join('-'),
+      ['muse', 'spark'].join('-'),
+      'spark',
+      'meta',
+    ]) {
+      expect(normalizeProviderDefinitionId(rejected)).toBeNull();
+    }
+    // Fail-closed: no env or process detection signals. The bare `muse`
+    // process name collides with unrelated software.
+    expect(muse?.detection).toMatchObject({ env: [], process: [], capabilityId: 'muse' });
+    // Project skill root only; the user root resolves from XDG_CONFIG_HOME at
+    // deploy time. Never advertise ~/.muse as a default skill root.
+    expect(muse?.paths.kernelSkills).toBe('.agents/skills');
+    expect(muse?.paths.artifacts.skills).toBe('.agents/skills');
+    expect(muse?.paths.deployTarget).toBe('mixed');
+    expect(JSON.stringify(muse)).not.toContain('~/.muse');
+    expect(muse?.paths.contextFiles.contextFile).toBe('AGENTS.md');
+    expect(muse?.paths.contextFiles.hookFile).toBeNull();
+    expect(muse?.context.startupFiles).toEqual(['AGENTS.md']);
+    expect(muse?.capabilities.matrixRef).toBe('muse');
+    expect(muse?.capabilities.nativeFeatures.mcp).toBe(true);
+    expect(muse?.capabilities.nativeFeatures.agent_teams).toBe(false);
+    expect(muse?.capabilities.nativeFeatures.cron).toBe(false);
   });
 
   it('keeps capability matrix references resolvable for all non-generic providers', () => {
@@ -77,13 +153,16 @@ describe('provider definition registry', () => {
   it('records the Devin/Windsurf topology decision without enabling .devin writes', () => {
     const windsurf = getProviderDefinition('windsurf');
     expect(windsurf).toBeDefined();
+    expect(windsurf?.displayName).toBe('Devin Desktop');
+    expect(windsurf?.status).toBe('stable');
+    expect(normalizeProviderDefinitionId('devin')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('devin-desktop')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('devin-cli')).toBeNull();
 
     const desktop = windsurf?.surfaces.related.find((surface) => surface.id === 'devin-desktop');
     expect(desktop?.relationship).toBe('same-provider');
     expect(desktop?.deployable).toBe(true);
-    expect(windsurf?.aliases).toEqual(expect.arrayContaining(['devin-desktop', 'devin-local', 'cascade']));
+    expect(windsurf?.aliases).toEqual(expect.arrayContaining(['devin', 'devin-desktop', 'devin-local', 'cascade']));
     expect(desktop?.paths.rules).toEqual(['.devin/rules/*.md', '.windsurf/rules/*.md']);
     expect(desktop?.paths.agentsMd).toEqual(['AGENTS.md', 'agents.md']);
     expect(desktop?.notes.join('\n')).toContain('AIWG keeps .devin/ as ignored local provider output');

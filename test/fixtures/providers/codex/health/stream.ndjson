@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"fixture-session"}
+{"type":"turn.started","thread_id":"fixture-session"}
+{"type":"item.updated","item":{"id":"codex-item-1","type":"command_execution","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"codex-item-1","type":"command_execution","status":"completed","exit_code":0}}
+{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}

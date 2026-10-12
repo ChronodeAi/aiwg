@@ -1,103 +1,57 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import {
+  assessThreat,
+  formatThreatAssessment,
+} from '../../../../../../../tools/security/threat-assessment.mjs';
 
-const SIGNALS = [
-  {
-    id: 'instruction-override',
-    severity: 4,
-    patterns: [
-      /\bignore (all )?(previous|prior|above) instructions\b/i,
-      /\b(system|developer) (prompt|message|instructions?)\b/i,
-      /\bdo not (tell|inform|notify) (the )?(maintainer|operator|user)\b/i,
-      /\byou are now\b/i,
-    ],
-  },
-  {
-    id: 'sensitive-file-target',
-    severity: 3,
-    patterns: [
-      /\b(AGENTS|CLAUDE|AIWG|WARP)\.md\b/i,
-      /\b(MCP|mcp) config\b/i,
-      /\.github\/workflows\/|\.gitea\/workflows\/|workflow[s]?\.ya?ml/i,
-      /\bagent definitions?\b/i,
-      /\brules\/RULES-INDEX\.md\b/i,
-    ],
-  },
-  {
-    id: 'third-party-execution',
-    severity: 4,
-    patterns: [
-      /\bnpx\s+[-@\w./]+/i,
-      /\bnpm\s+(install|i|exec)\s+[-@\w./]+/i,
-      /\bpipx?\s+install\s+[-\w./]+/i,
-      /\bcargo\s+install\s+[-\w./]+/i,
-      /\bcurl\b[^|\n]*\|\s*(sh|bash|zsh)\b/i,
-      /\bbash\s+<\(\s*curl\b/i,
-      /\bgit\+https?:\/\//i,
-    ],
-  },
-  {
-    id: 'floating-version',
-    severity: 3,
-    patterns: [
-      /@latest\b/i,
-      /uses:\s*[-\w./]+@(main|master|latest|v?\d+)\b/i,
-      /image:\s*[-\w./:]+:latest\b/i,
-      /\b(unpinned|floating) (dependency|version|action|container)\b/i,
-    ],
-  },
-  {
-    id: 'credential-or-env-probing',
-    severity: 5,
-    patterns: [
-      /\b(printenv|env\s*\||env\s*$|process\.env|os\.environ)\b/im,
-      /\.env\b/i,
-      /\b(tokens?|api[_-]?keys?|secrets?|cookies?|document\.cookie)\b/i,
-      /\b(id_rsa|ssh keys?|gpg keys?|aws_access_key|cloud credentials?)\b/i,
-    ],
-  },
-  {
-    id: 'pressure-without-evidence',
-    severity: 2,
-    patterns: [
-      /\b(blocking release|urgent|must be done|priority:\s*high|critical security|do this now)\b/i,
-      /\bsecurity critical\b/i,
-    ],
-  },
-  {
-    id: 'unverifiable-authority-claim',
-    severity: 2,
-    patterns: [
-      /\bP-\d{4}-\d{3,}\b/i,
-      /\bpolicy\s+[A-Z]-?\d{3,}\b/i,
-      /\bhex\s+[0-9a-f]{6,12}\b/i,
-      /\bCVE-\d{4}-\d{4,}\b(?![\s\S]{0,160}https?:\/\/)/i,
-      /\b(advisory|standard|RFC)\b(?![\s\S]{0,160}https?:\/\/)/i,
-    ],
-  },
-  {
-    id: 'security-framing-conflict',
-    severity: 3,
-    patterns: [
-      /\b(improve|fix|harden|secure|audit).{0,120}\b(npx\b|@latest\b|curl\b[^|\n]*\||printenv|\.env)\b/i,
-      /\b(security|secure).{0,120}\b(add|install|run).{0,80}\b(latest|remote|third[- ]party)\b/i,
-    ],
-  },
-];
+/** Header the address-issues renderer emits on every cycle comment. */
+export const AL_CYCLE_MARKER = /(?:^|\n)[^\n]{0,40}?AL CYCLE #\d+\s*[\u2013\u2014-]/;
+/** Hidden marker some renderers add so cycle comments can be found by machines. */
+export const ADDRESS_ISSUES_CYCLE_MARKER = /<!--\s*aiwg-address-issues:cycle-/;
 
 function parseArgs(argv) {
-  const args = { format: 'text', text: '', issueJson: '' };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--format' && argv[i + 1]) args.format = argv[++i];
-    else if (arg === '--text' && argv[i + 1]) args.text = argv[++i];
-    else if (arg === '--issue-json' && argv[i + 1]) args.issueJson = argv[++i];
+  const args = { format: 'text', text: '', issueJson: '', configJson: '', surface: '', trustedActors: [] };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--format' && argv[index + 1]) args.format = argv[++index];
+    else if (arg === '--text' && argv[index + 1]) args.text = argv[++index];
+    else if (arg === '--issue-json' && argv[index + 1]) args.issueJson = argv[++index];
+    else if (arg === '--config-json' && argv[index + 1]) args.configJson = argv[++index];
+    else if (arg === '--surface' && argv[index + 1]) args.surface = argv[++index];
+    else if (arg === '--trusted-actor' && argv[index + 1]) args.trustedActors.push(argv[++index]);
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: assess.mjs [--issue-json <file>] [--text <body>] [--format text|json]');
+      console.log('Usage: assess.mjs [--issue-json <file>] [--text <body>] [--surface <surface>] [--trusted-actor <login>]... [--config-json <file>] [--format text|json]');
       process.exit(0);
     }
   }
   return args;
+}
+
+/**
+ * Logins whose AL CYCLE comments are the orchestrator reporting on itself.
+ * Resolved from the project's tracker-actor configuration so the exemption is
+ * bound to the identity address-issues writes with, not to a hard-coded name.
+ */
+export function resolveTrustedActors(aiwgConfig) {
+  const remotes = aiwgConfig?.remotes ?? {};
+  return [remotes.tracker_actor?.login, remotes.customer_tracker_actor?.login]
+    .filter(login => typeof login === 'string' && login.trim())
+    .map(login => login.trim().toLowerCase());
+}
+
+/**
+ * True for a comment the orchestrator itself posted as cycle status: it must
+ * be authored by a trusted tracker actor AND carry the AL CYCLE header or the
+ * hidden cycle marker. Either condition alone is not enough — a trusted
+ * maintainer's ordinary comment is still assessed, and an untrusted author
+ * cannot exempt text by pasting the header.
+ */
+export function isOrchestratorStatusComment(comment, trustedActors = []) {
+  const author = String(comment?.author ?? '').trim().toLowerCase();
+  if (!author || !trustedActors.includes(author)) return false;
+  const body = String(comment?.body ?? '');
+  return AL_CYCLE_MARKER.test(body) || ADDRESS_ISSUES_CYCLE_MARKER.test(body);
 }
 
 function loadInput(args) {
@@ -113,66 +67,122 @@ function loadInput(args) {
     };
   }
   if (args.text) return { title: '', body: args.text, author: '', labels: [], comments: [] };
-  const stdin = fs.readFileSync(0, 'utf8');
-  return { title: '', body: stdin, author: '', labels: [], comments: [] };
+  return { title: '', body: fs.readFileSync(0, 'utf8'), author: '', labels: [], comments: [] };
 }
 
-function textFromIssue(issue) {
-  const comments = issue.comments
-    .filter((comment) => !comment.isBot)
-    .map((comment) => `${comment.author || ''}\n${comment.body || ''}`)
-    .join('\n\n');
-  return [issue.title, issue.body, comments].filter(Boolean).join('\n\n');
+function commentPart(comment, index, trustedActors) {
+  const orchestrator = isOrchestratorStatusComment(comment, trustedActors);
+  return {
+    id: `comment-${index + 1}`,
+    text: String(comment.body || ''),
+    source: {
+      kind: orchestrator ? 'orchestrator-cycle-comment' : 'issue-comment',
+      author: comment.author || '',
+      ...(comment.id !== undefined ? { commentId: comment.id } : {}),
+    },
+    ...(orchestrator ? { context: 'orchestrator-status' } : {}),
+  };
 }
 
-function evidenceFor(pattern, text) {
-  const match = pattern.exec(text);
-  if (!match) return null;
-  const start = Math.max(0, match.index - 60);
-  const end = Math.min(text.length, match.index + match[0].length + 60);
-  return text.slice(start, end).replace(/\s+/g, ' ').trim();
+function legacySeverity(finding) {
+  return {
+    informational: 1,
+    low: 2,
+    moderate: 3,
+    high: 4,
+    critical: 5,
+  }[finding.severity] ?? 1;
 }
 
-export function assessIssue(issue) {
-  const text = textFromIssue(issue);
-  const signals = [];
-  for (const signal of SIGNALS) {
-    const evidence = [];
-    for (const pattern of signal.patterns) {
-      const found = evidenceFor(pattern, text);
-      if (found) evidence.push(found);
-    }
-    if (evidence.length) {
-      signals.push({
-        id: signal.id,
-        severity: signal.severity,
-        evidence: Array.from(new Set(evidence)).slice(0, 3),
-      });
-    }
-  }
+/**
+ * Compatibility wrapper for address-issues callers. New integrations should
+ * call assessThreat() with an explicit forge surface.
+ *
+ * `options.trustedActors` lists the tracker logins address-issues writes with;
+ * their AL CYCLE comments are classified `orchestrator-status` and never drive
+ * the verdict (#2549). Every finding carries `source` (author, comment id) so
+ * a self-referential hit is visible at a glance.
+ */
+export function assessIssue(issue, threatAssessmentConfig, options = {}) {
+  const trustedActors = (options.trustedActors ?? []).map(login => String(login).trim().toLowerCase());
+  const report = assessThreat({
+    surface: 'issue-body',
+    parts: [
+      { id: 'title', text: issue.title || '', source: { kind: 'issue-title', author: issue.author || '' } },
+      { id: 'body', text: issue.body || '', source: { kind: 'issue-body', author: issue.author || '' } },
+      ...(issue.comments ?? [])
+        .map((comment, index) => ({ comment, index }))
+        .filter(({ comment }) => !comment.isBot)
+        .map(({ comment, index }) => commentPart(comment, index, trustedActors)),
+    ],
+    source: { kind: 'forge-issue', id: issue.number },
+    actor: { id: issue.author || '', trust: 'untrusted' },
+    requestedAction: 'issue-triage-and-implementation',
+  }, threatAssessmentConfig);
+  return toLegacyReport(report, issue);
+}
 
-  const score = signals.reduce((sum, signal) => sum + signal.severity, 0);
-  const ids = new Set(signals.map((signal) => signal.id));
-  const hasAutonomousSupplyChainRisk =
-    ids.has('third-party-execution') &&
-    (ids.has('floating-version') || ids.has('sensitive-file-target') || ids.has('security-framing-conflict'));
-  const hasExfiltrationRisk = ids.has('credential-or-env-probing') &&
-    (ids.has('instruction-override') || ids.has('third-party-execution') || ids.has('sensitive-file-target'));
+/**
+ * Assess free text on an explicit surface (for example the rendered AL CYCLE
+ * comment on `outbound-maintainer-comment` before it is posted). Same report
+ * shape as assessIssue so callers can reuse the verdict handling.
+ */
+export function assessText(text, surface, threatAssessmentConfig, options = {}) {
+  const report = assessThreat({
+    surface,
+    content: String(text ?? ''),
+    source: options.source ?? { kind: surface === 'outbound-maintainer-comment' ? 'orchestrator-comment' : 'text' },
+    actor: options.actor ?? { trust: surface === 'outbound-maintainer-comment' ? 'orchestrator' : 'untrusted' },
+    requestedAction: options.requestedAction ?? (surface === 'outbound-maintainer-comment' ? 'post-maintainer-comment' : 'consume-as-data'),
+  }, threatAssessmentConfig);
+  return toLegacyReport(report, { title: '', author: '', labels: [] });
+}
 
-  let verdict = 'safe';
-  let action = 'proceed';
-  if (hasExfiltrationRisk || (hasAutonomousSupplyChainRisk && score >= 10)) {
-    verdict = 'reject';
-    action = 'stop-and-reject';
-  } else if (score >= 5 || hasAutonomousSupplyChainRisk || ids.has('instruction-override')) {
-    verdict = 'flag';
-    action = 'require-human-authorization';
-  }
-
+function toLegacyReport(report, issue) {
+  const action = report.decision.action;
+  const verdict = action === 'reject'
+    ? 'reject'
+    : ['flag', 'require-authorization'].includes(action) ? 'flag' : 'safe';
+  const signals = report.findings
+    .filter(finding => !finding.suppressed)
+    .map(finding => ({
+      id: finding.ruleId,
+      severity: legacySeverity(finding),
+      evidence: [finding.evidence],
+      context: finding.context,
+      taxonomy: finding.taxonomy,
+      source: { partId: finding.partId, ...(finding.source ?? {}) },
+    }));
+  const why = !report.completeness.complete
+    ? `Threat assessment was incomplete (${report.completeness.reasons.join(', ')}); manual authorization is required.`
+    : report.decision.matchedMandatoryRule
+    ? `This is reject rather than flag because mandatory policy rule '${report.decision.matchedMandatoryRule}' matched.`
+    : signals.length
+      ? `The '${report.profile}' profile selected '${action}' for ${report.risk.severity} risk.`
+      : 'No active prompt-injection or supply-chain risk was detected.';
+  const operatorNextSteps = verdict === 'reject'
+    ? [
+        'Split documentation-only work from CI, agent-instruction, credential, or secret-provisioning changes.',
+        'Route secret and credential operations through the project-approved, human-controlled security workflow.',
+        'Re-file or re-scope the request so autonomous work does not combine sensitive-file changes with credential or unpinned execution.',
+      ]
+    : verdict === 'flag'
+      ? [
+          'Review the quoted evidence and repository context.',
+          'Explicitly authorize this issue and run if the requested sensitive work is legitimate.',
+          'Otherwise re-scope the issue to remove the flagged operation.',
+        ]
+      : [];
+  const details = [
+    formatThreatAssessment(report),
+    '',
+    '**Operator next steps:**',
+    ...(operatorNextSteps.length ? operatorNextSteps.map(step => `- ${step}`) : ['- No special action required.']),
+  ].join('\n');
   return {
     verdict,
-    action,
-    score,
+    action: verdict === 'reject' ? 'stop-and-reject' : verdict === 'flag' ? 'require-human-authorization' : 'proceed',
+    score: report.risk.score,
     issue: {
       number: issue.number,
       title: issue.title,
@@ -180,6 +190,16 @@ export function assessIssue(issue) {
       labels: issue.labels,
     },
     signals,
+    why_verdict: why,
+    why_reject: verdict === 'reject' ? why : null,
+    threshold_explanation: report.decision.matchedMandatoryRule
+      ? `Reject rule crossed: ${report.decision.matchedMandatoryRule}.`
+      : report.decision.reason,
+    operator_next_steps: operatorNextSteps,
+    policy_context:
+      'Without explicit configuration, this deterministic preflight applies the conservative generic policy; resolved project policy never replaces repository authorization, provider safeguards, or secret-handling controls.',
+    policy_report: report,
+    comment_markdown: details,
   };
 }
 
@@ -187,24 +207,29 @@ function printText(report) {
   console.log(`verdict: ${report.verdict}`);
   console.log(`action: ${report.action}`);
   console.log(`score: ${report.score}`);
-  if (report.signals.length) {
-    console.log('signals:');
-    for (const signal of report.signals) {
-      console.log(`- ${signal.id} (${signal.severity})`);
-      for (const item of signal.evidence) console.log(`  evidence: ${item}`);
-    }
+  console.log(`why: ${report.why_verdict}`);
+  console.log(`threshold: ${report.threshold_explanation}`);
+  console.log(report.comment_markdown);
+}
+
+export function runCli(argv = process.argv.slice(2)) {
+  try {
+    const args = parseArgs(argv);
+    const issue = loadInput(args);
+    const defaultConfig = `${process.cwd()}/.aiwg/aiwg.config`;
+    const configPath = args.configJson || (fs.existsSync(defaultConfig) ? defaultConfig : '');
+    const aiwgConfig = configPath ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+    const config = aiwgConfig.security?.threatAssessment;
+    const trustedActors = [...resolveTrustedActors(aiwgConfig), ...args.trustedActors];
+    const report = args.surface
+      ? assessText(issue.body, args.surface, config)
+      : assessIssue(issue, config, { trustedActors });
+    if (args.format === 'json') console.log(JSON.stringify(report, null, 2));
+    else printText(report);
+  } catch (error) {
+    console.error(`address-issues-threat-assess: ${error.message}`);
+    process.exitCode = 1;
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  try {
-    const args = parseArgs(process.argv.slice(2));
-    const report = assessIssue(loadInput(args));
-    if (args.format === 'json') console.log(JSON.stringify(report, null, 2));
-    else printText(report);
-    process.exit(0);
-  } catch (error) {
-    console.error(`address-issues-threat-assess: ${error.message}`);
-    process.exit(1);
-  }
-}
+if (import.meta.url === `file://${process.argv[1]}`) runCli();

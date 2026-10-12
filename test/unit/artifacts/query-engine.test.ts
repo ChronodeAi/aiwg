@@ -9,9 +9,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { queryIndex, showArtifact } from '../../../src/artifacts/query-engine.js';
-import { INDEX_DIR } from '../../../src/artifacts/types.js';
+import { buildIndex } from '../../../src/artifacts/index-builder.js';
+import { discoverCapability, queryIndex, showArtifact } from '../../../src/artifacts/query-engine.js';
+import { INDEX_DIR, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { ArtifactIndex, MetadataEntry } from '../../../src/artifacts/types.js';
+import { PROJECT_AIWG_LOCATION_FILE } from '../../../src/config/project-artifacts.js';
 
 function createMockEntry(overrides: Partial<MetadataEntry> = {}): MetadataEntry {
   return {
@@ -30,13 +32,42 @@ function createMockEntry(overrides: Partial<MetadataEntry> = {}): MetadataEntry 
   };
 }
 
+const ARTIFACT_ENV_KEYS = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+] as const;
+
+function clearArtifactEnv(): Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined> {
+  const previous = Object.fromEntries(
+    ARTIFACT_ENV_KEYS.map((key) => [key, process.env[key]]),
+  ) as Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>;
+  for (const key of ARTIFACT_ENV_KEYS) delete process.env[key];
+  return previous;
+}
+
+function restoreArtifactEnv(previous: Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>): void {
+  for (const key of ARTIFACT_ENV_KEYS) {
+    const value = previous[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 describe('Artifact Query Engine', () => {
   let tmpDir: string;
   let consoleSpy: ReturnType<typeof vi.spyOn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let previousXdgDataHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-query-test-'));
+    // Resolution consults the USER-GLOBAL framework index as well as the fixture
+    // index below. Unsandboxed, a real `aiwg-steward` entry there changes which
+    // duplicate wins, so the outcome depends on whatever another test happened to
+    // leave in ~/.local/share/aiwg. Pin it per test (#2544).
+    previousXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg');
 
     // Create mock index
     const indexDir = path.join(tmpDir, INDEX_DIR);
@@ -81,10 +112,46 @@ describe('Artifact Query Engine', () => {
   });
 
   afterEach(() => {
+    if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
   });
+
+  it.each(['hermes', 'openhuman', 'antigravity', 'future-agent'])(
+    'discovers and reads every core artifact without native deployment for %s',
+    async (provider) => {
+      const previous = process.env.AIWG_PROVIDER;
+      process.env.AIWG_PROVIDER = provider;
+      try {
+        const entries: Record<string, MetadataEntry> = {};
+        for (const type of ['agent', 'command', 'skill', 'rule'] as const) {
+          const file = `.aiwg/${type}s/portable-${type}.md`;
+          fs.mkdirSync(path.dirname(path.join(tmpDir, file)), { recursive: true });
+          fs.writeFileSync(path.join(tmpDir, file), `---\nname: portable-${type}\nplatforms: [claude-code]\n---\n# Portable ${type} body\n`);
+          entries[file] = createMockEntry({ path: file, type, name: `portable-${type}`, title: `portable-${type}` });
+        }
+        fs.mkdirSync(getGraphIndexDir(tmpDir, 'project'), { recursive: true });
+        fs.writeFileSync(path.join(getGraphIndexDir(tmpDir, 'project'), 'metadata.json'), JSON.stringify({
+          version: '1.0.0', builtAt: new Date().toISOString(), buildTimeMs: 1, entries,
+        } satisfies ArtifactIndex));
+        for (const type of ['agent', 'command', 'skill', 'rule'] as const) {
+          consoleSpy.mockClear();
+          await discoverCapability(tmpDir, { phrase: `portable-${type}`, typeFilter: [type], graph: 'project', backend: 'local', json: true });
+          const found = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+          expect(found.results).toHaveLength(1);
+          consoleSpy.mockClear();
+          await showArtifact(tmpDir, { name: found.results[0].id, typeFilter: [type], graph: 'project', backend: 'local', json: true });
+          const shown = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+          expect(shown.content).toContain(`# Portable ${type} body`);
+        }
+      } finally {
+        if (previous === undefined) delete process.env.AIWG_PROVIDER;
+        else process.env.AIWG_PROVIDER = previous;
+      }
+    },
+  );
 
   it('should find entries by keyword in title', async () => {
     await queryIndex(tmpDir, { text: 'Login' }, { backend: 'local' });
@@ -236,6 +303,228 @@ describe('Artifact Query Engine', () => {
     } finally {
       if (prevRoot === undefined) delete process.env.AIWG_ROOT;
       else process.env.AIWG_ROOT = prevRoot;
+    }
+  });
+
+  it('resolves Windows-style framework index paths under AIWG_ROOT from a project cwd', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-project-'));
+    const aiwgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-root-'));
+    const xdgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-xdg-'));
+    const indexedPath = 'agentic\\code\\frameworks\\knowledge-base\\skills\\kb-ingest\\SKILL.md';
+    const nativePath = path.join(
+      aiwgRoot,
+      'agentic',
+      'code',
+      'frameworks',
+      'knowledge-base',
+      'skills',
+      'kb-ingest',
+      'SKILL.md',
+    );
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true });
+    fs.writeFileSync(nativePath, '# KB Ingest\n');
+
+    const prevRoot = process.env.AIWG_ROOT;
+    const prevXdg = process.env.XDG_DATA_HOME;
+    process.env.AIWG_ROOT = aiwgRoot;
+    process.env.XDG_DATA_HOME = xdgRoot;
+    try {
+      const frameworkIndexDir = getGraphIndexDir(projectRoot, 'framework');
+      fs.mkdirSync(frameworkIndexDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(frameworkIndexDir, 'metadata.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          builtAt: '2026-07-12T00:00:00Z',
+          buildTimeMs: 1,
+          entries: {
+            [indexedPath]: createMockEntry({
+              path: indexedPath,
+              type: 'skill',
+              name: 'kb-ingest',
+              title: 'KB Ingest',
+              summary: 'Ingest documents into the knowledge base.',
+            }),
+          },
+        } satisfies ArtifactIndex),
+      );
+
+      await showArtifact(projectRoot, {
+        typeFilter: ['skill'],
+        name: 'kb-ingest',
+        graph: 'framework',
+        backend: 'local',
+        json: true,
+      });
+      const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+      expect(parsed.path).toBe(nativePath);
+      expect(parsed.content).toContain('# KB Ingest');
+    } finally {
+      if (prevRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = prevRoot;
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      fs.rmSync(aiwgRoot, { recursive: true, force: true });
+      fs.rmSync(xdgRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('emits AIWG_ROOT-anchored discover paths for Windows-style framework entries', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-project-'));
+    const aiwgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-root-'));
+    const xdgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-xdg-'));
+    const indexedPath = 'agentic\\code\\frameworks\\knowledge-base\\skills\\kb-ingest\\SKILL.md';
+
+    const prevRoot = process.env.AIWG_ROOT;
+    const prevXdg = process.env.XDG_DATA_HOME;
+    process.env.AIWG_ROOT = aiwgRoot;
+    process.env.XDG_DATA_HOME = xdgRoot;
+    try {
+      const frameworkIndexDir = getGraphIndexDir(projectRoot, 'framework');
+      fs.mkdirSync(frameworkIndexDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(frameworkIndexDir, 'metadata.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          builtAt: '2026-07-12T00:00:00Z',
+          buildTimeMs: 1,
+          entries: {
+            [indexedPath]: createMockEntry({
+              path: indexedPath,
+              type: 'skill',
+              name: 'kb-ingest',
+              title: 'KB Ingest',
+              summary: 'Ingest documents into the knowledge base.',
+            }),
+          },
+        } satisfies ArtifactIndex),
+      );
+
+      await discoverCapability(projectRoot, {
+        phrase: 'kb-ingest',
+        graph: 'framework',
+        backend: 'local',
+        json: true,
+      });
+      const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+      expect(parsed.results[0].path).toBe(path.join(
+        aiwgRoot,
+        'agentic',
+        'code',
+        'frameworks',
+        'knowledge-base',
+        'skills',
+        'kb-ingest',
+        'SKILL.md',
+      ));
+    } finally {
+      if (prevRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = prevRoot;
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      fs.rmSync(aiwgRoot, { recursive: true, force: true });
+      fs.rmSync(xdgRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves Windows-style project-local index paths under the project cwd', async () => {
+    const indexedPath = '.aiwg\\skills\\local-status\\SKILL.md';
+    const nativePath = path.join(tmpDir, '.aiwg', 'skills', 'local-status', 'SKILL.md');
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true });
+    fs.writeFileSync(nativePath, '# Local Status\n');
+
+    const projectIndexDir = path.join(tmpDir, '.aiwg', '.index', 'project');
+    fs.mkdirSync(projectIndexDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectIndexDir, 'metadata.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        builtAt: '2026-07-12T00:00:00Z',
+        buildTimeMs: 1,
+        entries: {
+          [indexedPath]: createMockEntry({
+            path: indexedPath,
+            type: 'skill',
+            name: 'local-status',
+            title: 'Local Status',
+            summary: 'Project-local status skill.',
+          }),
+        },
+      } satisfies ArtifactIndex),
+    );
+
+    await showArtifact(tmpDir, {
+      typeFilter: ['skill'],
+      name: 'local-status',
+      graph: 'project',
+      backend: 'local',
+      json: true,
+    });
+    const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+    expect(parsed.path).toBe(nativePath);
+    expect(parsed.content).toContain('# Local Status');
+  });
+
+  it('builds, queries, and shows virtual .aiwg entries from a pointer-configured external store', async () => {
+    const previousEnv = clearArtifactEnv();
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-relocated-store-'));
+    const artifactRoot = path.join(externalRoot, 'renamed-aiwg-store');
+    const virtualPath = '.aiwg/skills/portable-status/SKILL.md';
+    const nativePath = path.join(artifactRoot, 'skills', 'portable-status', 'SKILL.md');
+
+    fs.writeFileSync(path.join(tmpDir, PROJECT_AIWG_LOCATION_FILE), `${artifactRoot}\n`, 'utf-8');
+    fs.mkdirSync(path.dirname(nativePath), { recursive: true });
+    fs.writeFileSync(
+      nativePath,
+      [
+        '---',
+        'name: portable-status',
+        'description: Verify relocated AIWG store portability.',
+        '---',
+        '',
+        '# Portable Status',
+        '',
+        'heliotrope portability marker proves full-text reads use configured storage.',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    try {
+      await buildIndex(tmpDir, { force: true, graph: 'project' });
+
+      const indexPath = path.join(artifactRoot, '.index', 'project', 'metadata.json');
+      expect(fs.existsSync(indexPath)).toBe(true);
+      const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as ArtifactIndex;
+      expect(index.entries[virtualPath]?.path).toBe(virtualPath);
+      expect(fs.existsSync(path.join(tmpDir, '.aiwg', 'skills', 'portable-status', 'SKILL.md'))).toBe(false);
+
+      consoleSpy.mockClear();
+      await queryIndex(
+        tmpDir,
+        { text: 'heliotrope portability marker', fulltext: true },
+        { json: true, graph: 'project', backend: 'local' },
+      );
+      const queryOutput = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+      expect(queryOutput.results[0].path).toBe(virtualPath);
+      expect(queryOutput.results[0].matched).toContain('heliotrope');
+
+      consoleSpy.mockClear();
+      await showArtifact(tmpDir, {
+        typeFilter: ['skill'],
+        name: 'portable-status',
+        graph: 'project',
+        backend: 'local',
+        json: true,
+      });
+      const showOutput = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+      expect(showOutput.path).toBe(nativePath);
+      expect(showOutput.content).toContain('# Portable Status');
+    } finally {
+      restoreArtifactEnv(previousEnv);
+      fs.rmSync(externalRoot, { recursive: true, force: true });
     }
   });
 

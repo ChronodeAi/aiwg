@@ -1,0 +1,15 @@
+{
+  "scenarioId": "T-OG-03-06-10-15-17-19-20-21-23-muse-direct",
+  "provider": "muse",
+  "cliVersion": "1.4.4-R5419.1",
+  "rawVersionBanner": "Muse Code 1.4.4 (1.4.4-R5419.1)",
+  "versionGate": "raw banner fails shared semver selection; short cliVersion is synthetic mechanics only",
+  "profile": "direct-shell",
+  "synthetic": true,
+  "qualification": "unqualified; fake and echo mechanics are separate from authorized live meta inference",
+  "fixture": "fake-muse.mjs",
+  "scenarios": ["success", "final-only", "no-handshake", "hang", "trust", "auth", "model", "eperm", "erofs", "stdin-wait", "malformed", "quota", "exit-zero-error", "missing-final", "double-final", "truncated-final"],
+  "expectedOutcome": "bounded mechanics and degraded activity-only health; no strict Muse final acceptance or automatic replay",
+  "sanitizedEvidence": "synthetic argv/cwd/stdin/env names/output paths and correlated session/run frames only",
+  "cleanup": "each test owns mkdtemp directories and bounded child handles; teardown removes only those directories"
+}

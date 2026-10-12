@@ -732,6 +732,15 @@ export interface CommandMetadata {
   model?: string;
 
   /**
+   * Provider-neutral model policy. `model` remains readable during migration,
+   * but new skills should declare role/tier intent instead of an exact ID.
+   */
+  modelRole?: 'reasoning' | 'coding' | 'efficiency';
+  modelTier?: 'economy' | 'standard' | 'premium';
+  modelEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  modelRationale?: string;
+
+  /**
    * Execution steps
    */
   executionSteps?: string[];
@@ -1247,7 +1256,7 @@ export interface AddonMetadata {
   cli_commands?: {
     namespace: string;
     description: string;
-    entry: string;
+    entry?: string;
     subcommands: Record<string, {
       file: string;
       description: string;

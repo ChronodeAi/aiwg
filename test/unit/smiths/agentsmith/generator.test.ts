@@ -4,7 +4,7 @@
  * @source @src/smiths/agentsmith/generator.ts
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AgentGenerator } from '../../../../src/smiths/agentsmith/generator.js';
 import type { AgentOptions } from '../../../../src/smiths/agentsmith/types.js';
 import * as os from 'os';
@@ -18,6 +18,11 @@ describe('AgentGenerator', () => {
   beforeEach(async () => {
     generator = new AgentGenerator();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentsmith-test-'));
+  });
+
+  // tempDir was never removed (#3018), leaking one directory per test.
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('generateAgent', () => {
@@ -366,7 +371,7 @@ describe('AgentGenerator', () => {
       expect(parsed.tools).toEqual(['read', 'write']); // Lowercase
     });
 
-    it('should transform to Codex format with agent_name', async () => {
+    it('should transform to Codex standalone TOML with compiled model policy', async () => {
       const options: AgentOptions = {
         name: 'codex-agent',
         description: 'Codex format test',
@@ -376,9 +381,12 @@ describe('AgentGenerator', () => {
 
       const agent = await generator.generateAgent(options);
 
-      expect(agent.content).toContain('agent_name: codex-agent');
-      expect(agent.content).toContain('capabilities:');
-      expect(agent.content).toContain('# System Instructions');
+      expect(agent.path).toBe(path.join(tempDir, '.codex/agents/codex-agent.toml'));
+      expect(agent.modelPolicy).toMatchObject({ role: 'efficiency', tier: 'economy' });
+      expect(agent.content).toContain('name = "codex-agent"');
+      expect(agent.content).toContain('model = "gpt-5.6-luna"');
+      expect(agent.content).toContain('model_reasoning_effort = "low"');
+      expect(agent.content).toContain('Canonical Model Policy');
     });
 
     it('should transform to Windsurf format without YAML', async () => {

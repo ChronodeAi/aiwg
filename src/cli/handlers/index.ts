@@ -15,6 +15,7 @@ export { createScriptRunner, DefaultScriptRunner } from './script-runner.js';
 // Import all handlers
 import { helpHandler } from './help.js';
 import { versionHandler } from './version.js';
+import { authHandler } from './auth.js';
 import { useHandler } from './use.js';
 import {
   statusHandler,
@@ -28,6 +29,7 @@ import {
   contributeStartHandler,
   validateMetadataHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   utilityHandlers,
 } from './utilities.js';
@@ -66,6 +68,7 @@ import {
   removeHandler,
   promoteHandler,
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
   installPluginHandler,
   uninstallPluginHandler,
@@ -103,7 +106,11 @@ import { bestPracticesAuditHandler } from './best-practices-audit.js';
 // (primary) and 'sync' (deprecated alias) to preserve backward compatibility.
 import { refreshHandler } from './refresh.js';
 import { regenerateHandler, regenerateHandlers } from './regenerate.js';
+import { workspaceContextHandler, workspaceContextHandlers } from './workspace-context.js';
+import { artifactsHandler, artifactsHandlers } from './artifacts.js';
+import { effectHandler, effectHandlers } from './effect.js';
 import { mcHandler, mcHandlers } from './mc.js';
+import { missionHandlers } from './mission.js';
 import { sdlcAccelerateHandler } from './sdlc-accelerate.js';
 import { teamHandler, teamHandlers } from './team.js';
 import { installHandler } from './install.js';
@@ -111,12 +118,14 @@ import { packagesHandler } from './packages.js';
 import { marketplaceHandler } from './marketplace.js';
 import { initHandler } from './init.js';
 import { setupHandler } from './setup.js';
+import { setupGenerateHandler, setupRunHandler, setupValidateHandler } from './setup-manifest.js';
 import { runHandler } from './run.js';
 import { stewardHandler, stewardHandlers } from './steward.js';
 import { serveHandler } from './serve.js';
 import { lintHandler } from './lint.js';
 import { feedbackHandler } from './feedback.js';
 import { sessionHandler } from './session.js';
+import { sessionsHandler } from './sessions.js';
 import { sandboxHandler, sandboxHandlers } from './sandbox.js';
 import { diagnoseHandler } from './diagnose.js';
 import { localExecutorHandler, localExecutorServeHandler } from './local-executor.js';
@@ -125,6 +134,24 @@ import { repoAccessHandler, repoAccessHandlers } from './repo-access.js';
 import { issueHandler, issueAuditHandler } from './issues.js';
 import { cockpitHandler } from './cockpit.js';
 import { commandLogHandler } from './command-log.js';
+import { skillUsageHandler } from './skill-usage.js';
+import { modelsHandler } from './models.js';
+import { versionsHandler } from './resource-versions.js';
+import { jobHandler } from './job.js';
+import { costReportHandler } from './cost-report.js';
+import { evidenceHandler } from './evidence.js';
+import { artifactVerifyHandler } from './artifact-verify.js';
+import { writingHandler } from './writing.js';
+import { writerProfileHandler } from './writer-profile.js';
+import { botHandoffHandler } from './bot-handoff.js';
+import { buildVerifyHandler } from './build-verify.js';
+import { outputModeHandler } from './output-mode.js';
+import { installationHandler } from './installation.js';
+import { uhpHandler } from './uhp.js';
+import { schemaHandler } from './schema.js';
+import { datasetHandler } from './dataset.js';
+import { decisionHandler } from './decision.js';
+import { gatesHandler } from './gates.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -133,10 +160,13 @@ export {
   // Maintenance
   helpHandler,
   versionHandler,
+  authHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   refreshHandler,
   regenerateHandler,
+  workspaceContextHandler,
 
   // Framework management
   useHandler,
@@ -148,13 +178,33 @@ export {
   marketplaceHandler,
   initHandler,
   setupHandler,
+  setupGenerateHandler,
+  setupRunHandler,
+  setupValidateHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
+  jobHandler,
+  costReportHandler,
+  evidenceHandler,
+  artifactVerifyHandler,
+  outputModeHandler,
+  writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
+  writingHandler,
+  schemaHandler,
+  datasetHandler,
+  decisionHandler,
+  gatesHandler,
+  installationHandler,
 
   // Project
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
+  sessionHandler,
+  sessionsHandler,
 
   // Workspace
   statusHandler,
@@ -165,7 +215,11 @@ export {
   // Subcommands
   mcpHandler,
   catalogHandler,
+  modelsHandler,
+  versionsHandler,
   indexHandler,
+  artifactsHandler,
+  effectHandler,
   corpusHandler,
   discoverHandler,
   showHandler,
@@ -176,6 +230,7 @@ export {
   storageHandler,
   activityLogHandler,
   commandLogHandler,
+  skillUsageHandler,
   kbHandler,
   memoryHandler,
   reflectionsHandler,
@@ -184,6 +239,7 @@ export {
   researchQueryHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Agentic Tools (RLM)
   chunkHandler,
@@ -275,9 +331,13 @@ export {
   ralphHandlers,
   subcommandHandlers,
   mcHandlers,
+  missionHandlers,
   teamHandlers,
   stewardHandlers,
   regenerateHandlers,
+  workspaceContextHandlers,
+  artifactsHandlers,
+  effectHandlers,
   daemonHandlers,
   sandboxHandlers,
   repoAccessHandlers,
@@ -292,10 +352,14 @@ export const allHandlers: CommandHandler[] = [
   // Maintenance (shown first in help)
   helpHandler,
   versionHandler,
+  authHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   refreshHandler,
+  installationHandler,
   regenerateHandler,
+  workspaceContextHandler,
 
   // Framework management
   useHandler,
@@ -308,12 +372,29 @@ export const allHandlers: CommandHandler[] = [
 
   // Project setup
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
   initHandler,
   setupHandler,
+  setupGenerateHandler,
+  setupRunHandler,
+  setupValidateHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
+  jobHandler,
+  costReportHandler,
+  evidenceHandler,
+  artifactVerifyHandler,
+  outputModeHandler,
+  writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
+  writingHandler,
+  schemaHandler,
+  datasetHandler,
+  decisionHandler,
+  gatesHandler,
 
   // Workspace management
   ...workspaceHandlers,
@@ -321,7 +402,11 @@ export const allHandlers: CommandHandler[] = [
   // Subcommand handlers (MCP, catalog, index, skills)
   mcpHandler,
   catalogHandler,
+  modelsHandler,
+  versionsHandler,
   indexHandler,
+  artifactsHandler,
+  effectHandler,
   corpusHandler,
   discoverHandler,
   showHandler,
@@ -329,6 +414,7 @@ export const allHandlers: CommandHandler[] = [
   skillsHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Utilities
   prefillCardsHandler,
@@ -352,6 +438,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Mission Control
   ...mcHandlers,
+  ...missionHandlers,
 
   // Agent Teams
   ...teamHandlers,
@@ -383,6 +470,9 @@ export const allHandlers: CommandHandler[] = [
 
   // Command invocation log (#1614)
   commandLogHandler,
+
+  // Skill usage telemetry (#1649)
+  skillUsageHandler,
 
   // Knowledge Base (#934, #965)
   kbHandler,
@@ -429,6 +519,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Session (#884)
   sessionHandler,
+  sessionsHandler,
 
   // Repo access policy (#1376)
   ...repoAccessHandlers,

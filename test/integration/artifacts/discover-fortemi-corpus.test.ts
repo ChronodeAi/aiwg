@@ -15,6 +15,7 @@ import path from 'path';
 import os from 'os';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability, showArtifact } from '../../../src/artifacts/query-engine.js';
+import { sessionsCommand } from '../../../src/extensions/commands/definitions.js';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
@@ -22,8 +23,30 @@ const MATRIX_PATH = path.join(REPO_ROOT, 'test/fixtures/artifacts/release-discov
 
 interface DiscoverResult {
   query: { backend?: string; graph?: string };
-  results: Array<{ path: string; type: string; title: string }>;
+  results: Array<{
+    path: string;
+    type: string;
+    name?: string;
+    title: string;
+    capability?: string;
+    ranking?: {
+      matches: Array<{
+        field: string;
+        match: string;
+        value?: string;
+        query_token_coverage?: number;
+      }>;
+      tie_breakers: { scope: string; scope_rank: number };
+    };
+  }>;
   total: number;
+  diagnostics?: {
+    facet_activations: Array<{
+      facet: string;
+      status: string;
+      reason?: string;
+    }>;
+  };
 }
 
 interface DiscoveryMatrixCase {
@@ -34,6 +57,7 @@ interface DiscoveryMatrixCase {
   type_filter?: string[];
   max_rank?: number;
   expected_top_path?: string;
+  use_default_graph?: boolean;
 }
 
 const MATRIX = JSON.parse(fs.readFileSync(MATRIX_PATH, 'utf-8')) as {
@@ -77,6 +101,82 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
         '',
       ].join('\n'),
     );
+    fs.mkdirSync(
+      path.join(
+        corpusRoot,
+        '.aiwg',
+        'addons',
+        'neuroframing-marketing',
+        'skills',
+        'custom-marketing-execution',
+      ),
+      { recursive: true },
+    );
+    fs.writeFileSync(
+      path.join(
+        corpusRoot,
+        '.aiwg',
+        'addons',
+        'neuroframing-marketing',
+        'skills',
+        'custom-marketing-execution',
+        'SKILL.md',
+      ),
+      [
+        '---',
+        'name: custom-marketing-execution',
+        'description: Convert a custom marketing execution request, buyer persona, audience persona, creative brief, or content assignment into a routed execution brief.',
+        'triggers:',
+        '  - "custom marketing execution"',
+        '  - "buyer persona marketing execution"',
+        '  - "audience persona content brief"',
+        '---',
+        '',
+        '# Custom Marketing Execution',
+        '',
+        'Route supplied buyer and audience context into marketing content execution.',
+        '',
+      ].join('\n'),
+    );
+    const projectLocalAssets: Array<[string, string]> = [
+      ['.aiwg/extensions/local-governance/rules/local-governance.md', [
+        '---', 'description: Enforce nebula project governance.', '---',
+        '# Local Governance', '', 'Apply nebula project governance.',
+      ].join('\n')],
+      ['.aiwg/addons/local-operations/agents/local-operator.md', [
+        '---', 'description: Coordinate zephyr project operations.', '---',
+        '# Local Operator',
+      ].join('\n')],
+      ['.aiwg/addons/local-operations/commands/local-inspect.md', [
+        '---', 'description: Inspect quasar project readiness.', '---',
+        '# Local Inspect',
+      ].join('\n')],
+      ['.aiwg/frameworks/local-delivery/behaviors/local-safety.md', [
+        '---', 'description: Preserve aurora project safety.', '---',
+        '# Local Safety',
+      ].join('\n')],
+      ['.aiwg/frameworks/local-delivery/templates/provider/config.toml',
+        '# Configure pulsar project provider template\nmode = "local"\n'],
+      ['.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md', [
+        '---', 'type: runbook', 'description: Recover the comet project service.', '---',
+        '# Recovery Runbook', '', '## Procedure', '', 'Restart the service.', '',
+        '## Verification', '', 'Confirm service health.',
+      ].join('\n')],
+      ['.aiwg/frameworks/local-delivery/flows/meteor-route.yaml', [
+        'apiVersion: flow.aiwg.io/v1', 'kind: FlowPlaybook', 'metadata:',
+        '  name: meteor-route', 'spec:', '  description: Orchestrate the meteor project.',
+        '  steps:', '    - id: verify', '      action: run-tests',
+      ].join('\n')],
+      ['.aiwg/plugins/local-tools/hooks/preflight.md', [
+        '---', 'description: Check eclipse project preflight.', '---',
+        '# Local Preflight Hook',
+      ].join('\n')],
+    ];
+    for (const [relativePath, content] of projectLocalAssets) {
+      const fullPath = path.join(corpusRoot, relativePath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, content);
+    }
 
     originalXdgDataHome = process.env.XDG_DATA_HOME;
     originalAiwgRoot = process.env.AIWG_ROOT;
@@ -118,6 +218,7 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
     phrase: string,
     backend: 'local' | 'fortemi-core',
     useDefaultGraph = false,
+    typeFilter?: string[],
   ): Promise<DiscoverResult> {
     const captured: string[] = [];
     const original = console.log;
@@ -128,7 +229,7 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
         ...(useDefaultGraph ? {} : { graph: 'framework' as const }),
         json: true,
         limit: 5,
-        typeFilter: MATRIX.cases.find((testCase) => testCase.phrase === phrase)?.type_filter,
+        typeFilter: typeFilter ?? MATRIX.cases.find((testCase) => testCase.phrase === phrase)?.type_filter,
         backend,
       });
     } finally {
@@ -160,7 +261,8 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
 
   for (const testCase of MATRIX.cases) {
     it(`matches local discovery for "${testCase.phrase}"`, async () => {
-      const local = await captureDiscover(testCase.phrase, 'local');
+      const useDefaultGraph = testCase.use_default_graph ?? false;
+      const local = await captureDiscover(testCase.phrase, 'local', useDefaultGraph);
       const fortemi = await captureDiscover(testCase.phrase, 'fortemi-core', true);
 
       expect(local.total, `${testCase.phrase} local result count`).toBeGreaterThan(0);
@@ -195,8 +297,49 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
         expect(local.results[0]?.path, `${testCase.phrase} local top result`).toContain(testCase.expected_top_path);
         expect(fortemi.results[0]?.path, `${testCase.phrase} Fortemi top result`).toContain(testCase.expected_top_path);
       }
-    });
+    }, 60_000);
   }
+
+  it('explains exact marketing-trigger dominance over generic persona identity routing (#1828)', async () => {
+    const result = await captureDiscover(
+      'custom marketing execution from buyer persona',
+      'fortemi-core',
+      true,
+    );
+    const top = result.results[0];
+
+    expect(top.path).toContain(
+      '.aiwg/addons/neuroframing-marketing/skills/custom-marketing-execution/SKILL.md',
+    );
+    expect(top.ranking?.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'trigger',
+        match: 'contained-phrase',
+        value: 'custom marketing execution',
+        query_token_coverage: 0.6,
+      }),
+    ]));
+    expect(top.ranking?.tie_breakers).toMatchObject({
+      scope: 'project',
+      scope_rank: 0,
+    });
+    expect(result.diagnostics?.facet_activations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        facet: 'persona-identity',
+        status: 'suppressed',
+        reason: expect.stringContaining('marketing audience context'),
+      }),
+    ]));
+    const customRank = result.results.findIndex(
+      (item) => item.name === 'custom-marketing-execution',
+    );
+    const genericPersonaRanks = result.results
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.type === 'agent' && item.name?.startsWith('aiwg-'))
+      .map(({ index }) => index);
+    expect(customRank).toBe(0);
+    expect(genericPersonaRanks.every((rank) => rank > customRank)).toBe(true);
+  });
 
   it('shows canonical framework skills from bare names on the Fortemi Core default graph', async () => {
     const docSync = await captureShow('doc-sync', ['skill']);
@@ -207,6 +350,90 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
     expect(flowRelease.path).toContain('agentic/code/frameworks/sdlc-complete/skills/flow-release/SKILL.md');
     expect(flowRelease.content).toContain('name: flow-release');
   });
+
+  it('discovers project-local lifecycle commands from the built Fortemi corpus (#1863)', async () => {
+    const exactCases = [
+      ['new-bundle', 'new-bundle'],
+      ['promote bundle', 'promote'],
+    ] as const;
+
+    for (const [phrase, expectedName] of exactCases) {
+      const result = await captureDiscover(phrase, 'fortemi-core', true);
+      const rank = result.results.findIndex((item) => item.name === expectedName) + 1;
+      expect(rank, `${phrase} expected rank`).toBeGreaterThan(0);
+      expect(rank, `${phrase} expected rank`).toBeLessThanOrEqual(3);
+      expect(result.results[rank - 1]?.path).toContain(
+        `agentic/code/addons/aiwg-utils/skills/${expectedName}/SKILL.md`,
+      );
+    }
+
+    const lifecycle = await captureDiscover('project-local bundle', 'fortemi-core', true);
+    const names = lifecycle.results.map((item) => item.name);
+    expect(names).toEqual(expect.arrayContaining(['new-bundle', 'promote']));
+    expect(lifecycle.results.find((item) => item.name === 'new-bundle')?.capability)
+      .toContain('Scaffold a project-local');
+    expect(lifecycle.results.find((item) => item.name === 'promote')?.capability)
+      .toContain('Promote or graduate');
+  }, 60_000);
+
+  it('ranks every sessions registry trigger first with and without a project graph (#2305)', async () => {
+    const phrases = (sessionsCommand.metadata as { triggerPhrases: string[] }).triggerPhrases;
+    expect(phrases).toEqual(['list sessions', 'import sessions', 'session catalog', 'sessions doctor']);
+    const emptyProject = path.join(tmpRoot, 'empty-project');
+    fs.mkdirSync(emptyProject, { recursive: true });
+    for (const cwd of [corpusRoot, emptyProject]) {
+      for (const backend of ['local', 'fortemi-core'] as const) {
+        for (const phrase of phrases) {
+          const captured = viSpyConsole('log');
+          const errors = viSpyConsole('error');
+          let output: DiscoverResult;
+          try {
+            await discoverCapability(cwd, { phrase, json: true, limit: 5, backend });
+            output = JSON.parse(captured.output.join(''));
+          } finally {
+            captured.restore();
+            errors.restore();
+          }
+          expect(output.results[0]?.name, `${backend}: ${cwd}: ${phrase}`).toBe('sessions');
+          expect(output.results[0]?.type).toBe('command');
+          expect(output.results[0]?.capability).toContain('aiwg sessions');
+        }
+      }
+    }
+    const shown = await captureShow('sessions', ['command']);
+    expect(shown.content).toContain('aiwg sessions <command> [options]');
+  }, 60_000);
+
+  it('discovers session exploration skills, analyst, and investigation flow', async () => {
+    const cases: Array<[string, string, string]> = [
+      ['session history', 'skill', 'session-explore'],
+      ['search past conversations', 'skill', 'session-explore'],
+      ['spelunk session data', 'skill', 'session-explore'],
+      ['trace session tool calls', 'skill', 'session-explore'],
+      ['compare provider sessions', 'skill', 'session-explore'],
+      ['harvest session decisions', 'skill', 'session-harvest'],
+      ['session-analyst', 'agent', 'session-analyst'],
+      ['session-investigation', 'flow', 'session-investigation'],
+    ];
+    for (const [phrase, type, name] of cases) {
+      const result = await captureDiscover(phrase, 'fortemi-core', true, [type]);
+      expect(result.results[0]?.name, phrase).toBe(name);
+      const shown = await captureShow(name, [type]);
+      expect(shown.content.length).toBeGreaterThan(100);
+    }
+  }, 90_000);
+
+  it('discovers the standalone plugin repository workflow (#1865)', async () => {
+    for (const phrase of ['standalone plugin repository', 'publish project-local plugin']) {
+      const result = await captureDiscover(phrase, 'fortemi-core', true);
+      const rank = result.results.findIndex((item) => item.name === 'package-plugin') + 1;
+      expect(rank, `${phrase} expected rank`).toBeGreaterThan(0);
+      expect(rank, `${phrase} expected rank`).toBeLessThanOrEqual(3);
+      expect(result.results[rank - 1]?.path).toContain(
+        'agentic/code/addons/aiwg-utils/skills/package-plugin/SKILL.md',
+      );
+    }
+  }, 45_000);
 
   it('discovers and shows project-local custom skills on the Fortemi Core default graph', async () => {
     const local = await captureDiscover('project custom review', 'local', true);
@@ -221,12 +448,40 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
     expect(shown.path).toContain('.aiwg/skills/project-custom-review/SKILL.md');
     expect(shown.content).toContain('name: project-custom-review');
   });
+
+  it('discovers and shows every project-local operational asset type on the default graph', async () => {
+    const cases = [
+      ['nebula project governance', 'rule', '.aiwg/extensions/local-governance/rules/local-governance.md'],
+      ['zephyr project operations', 'agent', '.aiwg/addons/local-operations/agents/local-operator.md'],
+      ['quasar project readiness', 'command', '.aiwg/addons/local-operations/commands/local-inspect.md'],
+      ['aurora project safety', 'behavior', '.aiwg/frameworks/local-delivery/behaviors/local-safety.md'],
+      ['pulsar project provider template', 'template', '.aiwg/frameworks/local-delivery/templates/provider/config.toml'],
+      ['comet project service', 'runbook', '.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md'],
+      ['meteor project', 'flow', '.aiwg/frameworks/local-delivery/flows/meteor-route.yaml'],
+      // Hooks are intentionally opt-in rather than part of broad discovery.
+      ['eclipse project preflight', 'hook', '.aiwg/plugins/local-tools/hooks/preflight.md'],
+    ] as const;
+
+    for (const [phrase, type, expectedPath] of cases) {
+      const local = await captureDiscover(phrase, 'local', true, [type]);
+      const fortemi = await captureDiscover(phrase, 'fortemi-core', true, [type]);
+      expect(local.results[0]?.path, `${type} local discovery`).toContain(expectedPath);
+      expect(fortemi.results[0]?.path, `${type} Fortemi discovery`).toContain(expectedPath);
+      expect(fortemi.results[0]?.type).toBe(type);
+      expect(normalizedPaths(fortemi)).toEqual(normalizedPaths(local));
+
+      const shown = await captureShow(path.basename(expectedPath).replace(/\.[^.]+$/, ''), [type]);
+      expect(shown.path, `${type} Fortemi show`).toContain(expectedPath);
+    }
+  }, 120_000);
 });
 
-function viSpyConsole(method: 'log' | 'error'): { restore: () => void } {
+function viSpyConsole(method: 'log' | 'error'): { output: string[]; restore: () => void } {
   const original = console[method];
-  console[method] = () => undefined;
+  const output: string[] = [];
+  console[method] = (...args: unknown[]) => { output.push(args.map(String).join(' ')); };
   return {
+    output,
     restore: () => {
       console[method] = original;
     },

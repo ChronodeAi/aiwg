@@ -5,16 +5,17 @@
  * Provides typed/attributed edges, BFS/DFS traversal, community detection,
  * and shortest-path algorithms.
  *
- * Install: npm install graphology graphology-types graphology-operators graphology-traversal
+ * Enable with: aiwg features install graph
  *
  * @implements #728
  * @source @src/artifacts/graph-backend.ts
  * @tests @test/unit/artifacts/graphology-backend.test.ts
  */
 
-import type { GraphBackend } from '../graph-backend.js';
+import { compareGraphIds, pageGraphIds, type GraphBackend, type GraphNodeFilters, type GraphNodePage } from '../graph-backend.js';
 import type { DependencyGraph, TypedEdge } from '../types.js';
 import { normalizeEdges } from '../types.js';
+import { loadFeaturePackage } from '../../features/runtime.js';
 
 /**
  * Graphology-backed graph with rich traversal and operator ecosystem.
@@ -37,13 +38,13 @@ export class GraphologyBackend implements GraphBackend {
    */
   static async create(): Promise<GraphologyBackend> {
     try {
-      const graphology = await import('graphology');
+      const graphology: any = await loadFeaturePackage('graphology');
       const Graph = graphology.default ?? graphology;
       const graph = new Graph({ type: 'directed', multi: true });
       return new GraphologyBackend(graph);
     } catch {
       throw new Error(
-        'graphology backend requires: npm install graphology graphology-types graphology-operators graphology-traversal'
+        'graphology backend is unavailable; run `aiwg features install graph`'
       );
     }
   }
@@ -82,7 +83,17 @@ export class GraphologyBackend implements GraphBackend {
   }
 
   nodes(): string[] {
-    return this.graph.nodes();
+    return this.graph.nodes().sort(compareGraphIds);
+  }
+
+  queryNodes(filters: GraphNodeFilters): string[] {
+    return this.graph.nodes()
+      .filter((id: string) => Object.entries(filters).every(([key, value]) => this.graph.getNodeAttribute(id, key) === value))
+      .sort(compareGraphIds);
+  }
+
+  pageNodes(limit: number, after?: string): GraphNodePage {
+    return pageGraphIds(this.graph.nodes(), limit, after);
   }
 
   // --- Traversal ---
@@ -107,7 +118,7 @@ export class GraphologyBackend implements GraphBackend {
       // Add the "other" node
       results.add(src === nodeId ? tgt : src);
     }
-    return [...results];
+    return [...results].sort(compareGraphIds);
   }
 
   // --- Set operations ---

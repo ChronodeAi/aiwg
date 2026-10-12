@@ -27,6 +27,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import { tmpdir } from 'os';
+import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
   ensureDir,
   listMdFiles,
@@ -48,6 +49,9 @@ import {
   getAddonRuleFiles,
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
+  readRuleBudgetSidecar,
+  reconcileInlineRuleBudget,
+  resolveRulesInlineBudgetTokens,
   assembleRulesIndex,
   normalizeDeploymentMode,
   collectFrameworkArtifacts,
@@ -120,14 +124,11 @@ export function replaceModelFrontmatter(content, models) {
 
   if (modelMatch) {
     const orig = modelMatch[1].trim();
-    const clean = orig.replace(/['"]/g, '');
-    let role = 'coding';
-    if (/^opus$/i.test(clean)) role = 'reasoning';
-    else if (/^haiku$/i.test(clean)) role = 'efficiency';
+    const role = classifyModelRole(orig);
 
     if (role === 'reasoning') newModel = models.reasoning;
     else if (role === 'efficiency') newModel = models.efficiency;
-    else newModel = models.coding;
+    else if (role === 'coding') newModel = models.coding;
   }
 
   if (!newModel) return content;
@@ -142,10 +143,11 @@ export function replaceModelFrontmatter(content, models) {
 export function mapModel(shorthand, modelCfg, modelsConfig) {
   // If overrides specified, use them
   if (modelCfg.reasoningModel || modelCfg.codingModel || modelCfg.efficiencyModel) {
-    const clean = (shorthand || 'sonnet').toLowerCase().replace(/['"]/g, '');
-    if (/opus/i.test(clean)) return modelCfg.reasoningModel || 'opus';
-    if (/haiku/i.test(clean)) return modelCfg.efficiencyModel || 'haiku';
-    return modelCfg.codingModel || 'sonnet';
+    return modelForRole(shorthand, {
+      reasoning: modelCfg.reasoningModel || 'opus',
+      coding: modelCfg.codingModel || 'sonnet',
+      efficiency: modelCfg.efficiencyModel || 'haiku',
+    }, { defaultRole: 'coding' }) ?? shorthand;
   }
 
   // No transformation needed for Claude - keep shorthand
@@ -163,7 +165,7 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 export function transformAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
-  // Only transform if model overrides specified
+  // Explicit overrides re-map every classified model, pinned or not.
   if (reasoningModel || codingModel || efficiencyModel) {
     const models = {
       reasoning: reasoningModel || 'opus',
@@ -173,7 +175,40 @@ export function transformAgent(srcPath, content, opts) {
     return replaceModelFrontmatter(content, models);
   }
 
-  return content;
+  // Default compilation (#2563): a bare alias in source frontmatter is
+  // provider-neutral intent, not a deployable pin. Deployed Claude agents get
+  // the pinned variant from the models.json `claude` tiers so subagent
+  // dispatch never inherits a 1M-context parent (#1442). Already-pinned
+  // values, `inherit`, and explicit `[1m]` opt-ins are left untouched.
+  const tiers = opts.modelsConfig?.claude;
+  if (!tiers) return content;
+  return pinBareModelAlias(content, {
+    reasoning: tiers.reasoning?.model,
+    coding: tiers.coding?.model,
+    efficiency: tiers.efficiency?.model,
+  });
+}
+
+const BARE_MODEL_ALIAS_ROLE = { opus: 'reasoning', sonnet: 'coding', haiku: 'efficiency' };
+
+/**
+ * Replace a bare `model: opus|sonnet|haiku` frontmatter alias with the pinned
+ * variant for its role. Anything else (pinned ids, `inherit`, `sonnet[1m]`,
+ * placeholders) is returned unchanged.
+ */
+export function pinBareModelAlias(content, pinned) {
+  if (!content.startsWith('---')) return content;
+  const fmEnd = content.indexOf('\n---', 3);
+  if (fmEnd === -1) return content;
+  const header = content.slice(0, fmEnd + 4);
+  const body = content.slice(fmEnd + 4);
+  const match = header.match(/^model:[ \t]*['"]?([A-Za-z]+)['"]?[ \t]*$/m);
+  if (!match) return content;
+  const alias = match[1].toLowerCase();
+  const role = BARE_MODEL_ALIAS_ROLE[alias];
+  const target = role ? pinned?.[role] : null;
+  if (!target || target === alias) return content;
+  return header.replace(match[0], `model: ${target}`) + body;
 }
 
 /**
@@ -283,9 +318,51 @@ export function deploySkills(skillDirs, targetDir, opts) {
   // index-driven discovery. The deploySkillsWithKernelRouting helper
   // does the actual partition + cleanup.
   // does the same priority resolution centrally.
-  deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, opts);
+  deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, {
+    ...opts,
+    transformSkillMd: transformSkillModelPolicy,
+  });
   // Remove legacy bare-named skills superseded by their aiwg- prefixed replacements
   cleanupLegacyBuiltinCollisions(standardDestDir, opts);
+}
+
+function resolveSkillModelPolicy(commandHint = {}) {
+  const legacy = String(commandHint.model || '').trim().toLowerCase();
+  const legacyRole = legacy === 'opus' ? 'reasoning'
+    : legacy === 'haiku' ? 'efficiency'
+      : legacy ? 'coding' : null;
+  const role = commandHint.modelRole || legacyRole;
+  if (!role) return null;
+  return {
+    model: role === 'reasoning' ? 'opus' : role === 'efficiency' ? 'haiku' : 'sonnet',
+    effort: commandHint.modelEffort,
+  };
+}
+
+/** Compile portable commandHint policy to Claude's native skill fields. */
+export function transformSkillModelPolicy(content) {
+  const { frontmatter: rawFrontmatter } = parseFrontmatter(content);
+  if (!rawFrontmatter) return content;
+  const hintBlock = rawFrontmatter.match(/^commandHint:\s*\n((?:[ \t]+[^\n]*\n?)*)/m)?.[1] || '';
+  const commandHint = {};
+  for (const line of hintBlock.split('\n')) {
+    const match = line.trim().match(/^(model|modelRole|modelTier|modelEffort):\s*(.+)$/);
+    if (match) commandHint[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, '');
+  }
+  const policy = resolveSkillModelPolicy(commandHint);
+  if (!policy) return content;
+  const match = content.match(/^([\s\S]*?---\n)([\s\S]*?)(\n---\n[\s\S]*)$/);
+  if (!match) return content;
+  let frontmatter = match[2]
+    .replace(/^model:\s*.*\n?/m, '')
+    .replace(/^effort:\s*.*\n?/m, '');
+  frontmatter += `\nmodel: ${policy.model}`;
+  if (policy.effort) {
+    const effort = policy.effort === 'medium' ? 2
+      : policy.effort === 'high' || policy.effort === 'xhigh' ? 3 : 1;
+    frontmatter += `\neffort: ${effort}`;
+  }
+  return `${match[1]}${frontmatter}${match[3]}`;
 }
 
 /**
@@ -469,7 +546,7 @@ export async function deploy(opts) {
   const agentFiles = [];
   const commandFiles = [];
   const skillDirs = [];
-  const ruleFiles = [];
+  let ruleFiles = [];
 
   // Check for addon-style directory structure (direct agents/, commands/, skills/, rules/ subdirs)
   // This handles deployment when --source points to an addon or project-local extension directory
@@ -588,7 +665,17 @@ export async function deploy(opts) {
     pruneStaleAiwgSkills(kernelDestDir, computeAllKernelNames(srcRoot), opts);
   }
 
+  const inlineBudgetTokens = resolveRulesInlineBudgetTokens();
+  let demotedRuleNames = [];
   if (shouldDeployRules || rulesOnly) {
+    // Inline budget (#2562): rules a previous pass already moved on demand are
+    // not re-inlined; the directory is reconciled against the budget after
+    // this pass deploys (see below).
+    const sidecar = readRuleBudgetSidecar(path.join(target, paths.rules));
+    if (sidecar && sidecar.budgetTokens === inlineBudgetTokens && sidecar.demoted.length > 0) {
+      const skip = new Set(sidecar.demoted);
+      ruleFiles = ruleFiles.filter((f) => !skip.has(path.basename(f).replace(/\.md$/, '')));
+    }
     // Try assembled rules index (combines all component indexes)
     const assembled = assembleRulesIndex(srcRoot);
     if (assembled) {
@@ -621,7 +708,17 @@ export async function deploy(opts) {
     // On-demand index (#1673): list the MEDIUM/LOW rules that were tier-gated
     // out of the always-on set so agents can fetch them via `aiwg show rule`.
     const rulesDestDir = path.join(target, paths.rules);
-    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), opts);
+    // Keep the always-on directory small enough that a subagent dispatch
+    // still fits (#2562). Demoted HIGH rules remain binding and are listed
+    // in RULES-ONDEMAND.md with their fetch hint.
+    const budget = reconcileInlineRuleBudget(rulesDestDir, inlineBudgetTokens, opts);
+    demotedRuleNames = budget.demoted;
+    if (budget.removed.length > 0 && !opts.quiet) {
+      console.log(`  Inline rule budget: ${budget.removed.length} HIGH rule(s) moved on demand to fit ${inlineBudgetTokens.toLocaleString()} tokens: ${budget.removed.join(', ')} (see RULES-ONDEMAND.md)`);
+    }
+    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), {
+      ...opts, demotedNames: demotedRuleNames, inlineBudgetTokens,
+    });
     if (verbose && onDemandCount > 0) {
       console.log(`  On-demand rules (not inlined): ${onDemandCount} → RULES-ONDEMAND.md`);
     }
@@ -660,6 +757,7 @@ export default {
   transformAgent,
   transformCommand,
   mapModel,
+  pinBareModelAlias,
   deployAgents,
   deployCommands,
   deploySkills,

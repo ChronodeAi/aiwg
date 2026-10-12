@@ -1,5 +1,11 @@
 ---
 enforcement: high
+triggers:
+  - "this test keeps failing"
+  - "can I skip this test"
+  - "should I delete this test"
+  - "the task is too hard"
+  - "is this done"
 ---
 
 # Anti-Laziness Rules

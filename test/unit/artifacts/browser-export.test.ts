@@ -158,8 +158,12 @@ describe("AIWG Fortemi browser index export", () => {
       privacy: "sanitized",
       generatedAt: "2026-01-05T00:00:00.000Z",
     });
+    const validate = loadFortemiExportSchemaValidator();
 
     expect(exported.schema_version).toBe("aiwg.fortemi.index.export.v1");
+    expect(validate(exported), JSON.stringify(validate.errors, null, 2)).toBe(
+      true,
+    );
     expect(exported.source).toEqual({
       repo: "roctinam/crm",
       privacy: "sanitized",
@@ -189,6 +193,9 @@ describe("AIWG Fortemi browser index export", () => {
       type: "depends-on",
       source_path: ".aiwg/design/ADR-001.md",
     });
+    expect(requirement?.relationships[0]).not.toHaveProperty("target_path");
+    expect(requirement?.relationships[0]).not.toHaveProperty("direction");
+    expect(requirement?.relationships[0]).not.toHaveProperty("metadata");
     expect(requirement?.provenance[0]).toMatchObject({
       source: "aiwg-index",
       confidence: "source",
@@ -212,6 +219,90 @@ describe("AIWG Fortemi browser index export", () => {
     );
   });
 
+  it("preserves operational live-state provenance in v2 and drops it from v1 compatibility", async () => {
+    const issuePath = ".aiwg/issues/AIWG-1827.md";
+    writeIndex(
+      {
+        [issuePath]: entry({
+          path: issuePath,
+          type: "issue",
+          phase: "planning",
+          title: "Operational provenance",
+          summary: "Track live-state provenance in operational memory.",
+          operationalState: {
+            source_repo: "roctinam/aiwg",
+            source_kind: "issue",
+            source_id: "aiwg#1827",
+            observed_state: "open",
+            observed_at: "2026-07-21T10:00:00.000Z",
+            source_updated_at: "2026-07-21T09:00:00.000Z",
+            evidence_url: "https://git.integrolabs.net/roctinam/aiwg/issues/1827",
+            observer: "gitea-mcp",
+            classification: "fresh",
+            confidence: "source",
+            current_action_selector: true,
+          },
+        }),
+      },
+      { [issuePath]: { upstream: [], downstream: [] } },
+    );
+
+    const exported = buildAiwgFortemiIndexExport(tmpDir, {
+      repo: "roctinam/aiwg",
+      privacy: "sanitized",
+      generatedAt: "2026-07-21T10:00:00.000Z",
+      schemaVersion: "v2",
+    });
+    const validate = loadFortemiExportSchemaValidator();
+    expect(validate(exported), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(exported.items[0]?.operational_state).toMatchObject({
+      source_id: "aiwg#1827",
+      observed_state: "open",
+      classification: "fresh",
+      current_action_selector: true,
+    });
+    const fortemi = await loadOptionalFortemiAiwgIndex();
+    if (fortemi?.validateAiwgFortemiIndexExport) {
+      const result = fortemi.validateAiwgFortemiIndexExport(exported);
+      expect(
+        fortemiValidationPassed(result),
+        JSON.stringify(result.errors, null, 2),
+      ).toBe(true);
+    }
+
+    const compat = buildAiwgFortemiV1CompatibilityExport(exported);
+    expect(validate(compat), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(compat.items[0]).not.toHaveProperty("operational_state");
+  });
+
+  it("keeps explicit state-transfer lifecycle separate from operational state", () => {
+    const artifactPath = ".aiwg/archive/retired.md";
+    writeIndex(
+      {
+        [artifactPath]: entry({
+          path: artifactPath,
+          stateTransfer: { deletedAt: "2026-07-20T12:30:00.000Z" },
+        }),
+      },
+      { [artifactPath]: { upstream: [], downstream: [] } },
+    );
+
+    const exported = buildAiwgFortemiIndexExport(tmpDir, {
+      generatedAt: "2026-07-21T10:00:00.000Z",
+      schemaVersion: "v2",
+    });
+    const validate = loadFortemiExportSchemaValidator();
+    expect(validate(exported), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(exported.items[0]?.state_transfer).toEqual({
+      deleted_at: "2026-07-20T12:30:00.000Z",
+    });
+    expect(exported.items[0]).not.toHaveProperty("operational_state");
+
+    const compat = buildAiwgFortemiV1CompatibilityExport(exported);
+    expect(validate(compat), JSON.stringify(validate.errors, null, 2)).toBe(true);
+    expect(compat.items[0]).not.toHaveProperty("state_transfer");
+  });
+
   it("emits deterministic v2 all-domain records validated by the latest Fortemi Core contract", async () => {
     writeIndex(
       {
@@ -225,6 +316,11 @@ describe("AIWG Fortemi browser index export", () => {
           triggers: ["doctor", "health check"],
           capability: "Diagnose the AIWG workspace.",
           kernel: true,
+          script: {
+            entrypoint: "scripts/doctor.mjs",
+            runtime: "node",
+            cwd: "project-root",
+          },
         }),
         ".opencode/agent/software-implementer.md": entry({
           path: ".opencode/agent/software-implementer.md",
@@ -384,7 +480,29 @@ describe("AIWG Fortemi browser index export", () => {
     fs.mkdirSync(path.dirname(skillSourcePath), { recursive: true });
     fs.writeFileSync(
       skillSourcePath,
-      "---\ntitle: AIWG Doctor\n---\n# AIWG Doctor\n\nSource-only body phrase for Fortemi chunks.\n",
+      [
+        "---",
+        "title: AIWG Doctor",
+        "skos:",
+        "  concepts:",
+        "    - id: aiwg-concept:diagnostics",
+        "      prefLabel: Diagnostics",
+        "      definition: Workspace health checks and repair guidance.",
+        "      scheme: aiwg-capabilities",
+        "      altLabels:",
+        "        - doctor",
+        "  relations:",
+        "    - type: broader",
+        "      source_id: aiwg-concept:diagnostics",
+        "      target_id: aiwg-concept:operations",
+        "      metadata:",
+        "        source: fixture",
+        "---",
+        "# AIWG Doctor",
+        "",
+        "Source-only body phrase for Fortemi chunks.",
+        "",
+      ].join("\n"),
     );
 
     const exported = buildAiwgFortemiIndexExport(tmpDir, {
@@ -443,6 +561,11 @@ describe("AIWG Fortemi browser index export", () => {
         capability: "Diagnose the AIWG workspace.",
         frontmatter: {
           kernel: true,
+          aiwg_script: {
+            entrypoint: "scripts/doctor.mjs",
+            runtime: "node",
+            cwd: "project-root",
+          },
         },
       },
       privacy: {
@@ -460,6 +583,39 @@ describe("AIWG Fortemi browser index export", () => {
     );
     expect(skill?.chunks?.[0].text).toBe(skill?.search?.body);
     expect(skill?.chunks?.[0].checksum).not.toBe("abcdef1234567890");
+    expect(skill?.skos_concepts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "aiwg-concept:diagnostics",
+          prefLabel: "Diagnostics",
+          scheme: "aiwg-capabilities",
+          altLabels: ["doctor"],
+        }),
+        expect.objectContaining({
+          id: "aiwg-tags:crm",
+          prefLabel: "crm",
+          scheme: "aiwg-tags",
+        }),
+      ]),
+    );
+    expect(skill?.concepts).toEqual(
+      expect.arrayContaining([
+        "aiwg-concept:diagnostics",
+        "aiwg-tags:crm",
+      ]),
+    );
+    expect(skill?.skos_relations).toEqual([
+      {
+        type: "broader",
+        source_id: "aiwg-concept:diagnostics",
+        target_id: "aiwg-concept:operations",
+        source_path:
+          "agentic/code/addons/aiwg-utils/skills/aiwg-doctor/SKILL.md",
+        metadata: {
+          source: "fixture",
+        },
+      },
+    ]);
     expect(synthesis?.relationships[0]).toMatchObject({
       type: "cites",
       target_id: ref?.id,
@@ -502,6 +658,79 @@ describe("AIWG Fortemi browser index export", () => {
       });
       expect(queried.rankedItems?.[0]?.rank).toBeGreaterThan(0);
     }
+  });
+
+  it("omits binary and oversized source bodies from v2 records while preserving searchable metadata", () => {
+    writeIndex(
+      {
+        "pdfs/full/REF-001-security.pdf": entry({
+          path: "pdfs/full/REF-001-security.pdf",
+          type: "research-ref",
+          phase: "research",
+          title: "Security PDF",
+          name: "REF-001",
+          summary: "A PDF reference that should stay metadata-only.",
+          tags: ["pdf"],
+        }),
+        ".aiwg/notes/large.md": entry({
+          path: ".aiwg/notes/large.md",
+          type: "document",
+          phase: "research",
+          title: "Large Note",
+          name: "large-note",
+          summary: "A text source over the source-body guard.",
+          tags: ["large"],
+        }),
+        ".aiwg/notes/small.md": entry({
+          path: ".aiwg/notes/small.md",
+          type: "document",
+          phase: "research",
+          title: "Small Note",
+          name: "small-note",
+          summary: "A text source under the source-body guard.",
+          tags: ["small"],
+        }),
+      },
+      {},
+    );
+    const pdfPath = path.join(tmpDir, "pdfs/full/REF-001-security.pdf");
+    const largePath = path.join(tmpDir, ".aiwg/notes/large.md");
+    const smallPath = path.join(tmpDir, ".aiwg/notes/small.md");
+    fs.mkdirSync(path.dirname(pdfPath), { recursive: true });
+    fs.mkdirSync(path.dirname(largePath), { recursive: true });
+    fs.writeFileSync(pdfPath, Buffer.from("%PDF-1.7\n\0binary body that must not enter search"));
+    fs.writeFileSync(largePath, "large body phrase\n".repeat(32));
+    fs.writeFileSync(smallPath, "---\ntitle: Small Note\n---\nsmall body phrase\n");
+
+    const exported = buildAiwgFortemiIndexExport(tmpDir, {
+      repo: "roctinam/aiwg",
+      privacy: "sanitized",
+      generatedAt: "2026-01-05T00:00:00.000Z",
+      schemaVersion: "v2",
+      maxSourceBodyBytes: 128,
+    });
+    const validate = loadFortemiExportSchemaValidator();
+
+    expect(validate(exported), JSON.stringify(validate.errors, null, 2)).toBe(
+      true,
+    );
+    const pdf = exported.items.find(
+      (item) => item.source.path === "pdfs/full/REF-001-security.pdf",
+    );
+    const large = exported.items.find(
+      (item) => item.source.path === ".aiwg/notes/large.md",
+    );
+    const small = exported.items.find(
+      (item) => item.source.path === ".aiwg/notes/small.md",
+    );
+
+    expect(pdf?.search?.body).toContain("Security PDF");
+    expect(pdf?.search?.body).not.toContain("%PDF");
+    expect(pdf?.search?.body).not.toContain("binary body");
+    expect(pdf?.chunks?.[0].text).toBe(pdf?.search?.body);
+    expect(large?.search?.body).toContain("Large Note");
+    expect(large?.search?.body).not.toContain("large body phrase");
+    expect(small?.search?.body).toContain("small body phrase");
   });
 
   it("keeps the legacy v2-to-v1 compatibility projection valid", async () => {

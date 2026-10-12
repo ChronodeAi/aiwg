@@ -31,7 +31,7 @@ describe.skipIf(SKIP_INTEGRATION)('MCPSmith Container Integration', () => {
   beforeAll(() => {
     // Check Docker is available
     try {
-      execSync('docker info', { stdio: 'pipe' });
+      execSync('docker info', { timeout: 60_000, stdio: 'pipe' });
     } catch {
       throw new Error('Docker is not running. Start Docker and try again.');
     }
@@ -115,7 +115,7 @@ CMD ["node", "index.mjs"]
 
     // Build the image
     console.log('Building test container...');
-    execSync(`docker build -t ${TEST_IMAGE_NAME} ${TEST_DIR}`, {
+    execSync(`docker build -t ${TEST_IMAGE_NAME} ${TEST_DIR}`, { timeout: 60_000,
       stdio: 'inherit',
     });
   });
@@ -123,7 +123,7 @@ CMD ["node", "index.mjs"]
   afterAll(() => {
     // Cleanup: remove test image
     try {
-      execSync(`docker rmi ${TEST_IMAGE_NAME}`, { stdio: 'pipe' });
+      execSync(`docker rmi ${TEST_IMAGE_NAME}`, { timeout: 60_000, stdio: 'pipe' });
     } catch {
       // Ignore if image doesn't exist
     }
@@ -135,7 +135,7 @@ CMD ["node", "index.mjs"]
   });
 
   it('should build a Docker image successfully', () => {
-    const result = execSync(`docker image ls ${TEST_IMAGE_NAME} --format '{{.Repository}}:{{.Tag}}'`, {
+    const result = execSync(`docker image ls ${TEST_IMAGE_NAME} --format '{{.Repository}}:{{.Tag}}'`, { timeout: 60_000,
       encoding: 'utf8',
     });
     expect(result.trim()).toBe(TEST_IMAGE_NAME);

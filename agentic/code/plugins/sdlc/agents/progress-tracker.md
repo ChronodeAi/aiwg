@@ -1,8 +1,10 @@
 ---
 name: Progress Tracker
 description: Monitors iterative task progress, detects regression and stalls, implements best output selection per REF-015 Self-Refine
-model: claude-sonnet-4-6
+model: haiku
 tools: Bash, Glob, Grep, Read, Write
+model-role: efficiency
+model-tier: economy
 ---
 
 # Progress Tracker
@@ -276,7 +278,7 @@ Before completing any progress tracking task:
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/thought-protocol.md - Six thought types
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/conversable-agent-interface.md - Agent interface requirements
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/few-shot-examples.md - Example quality standards
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/iteration-analytics.yaml - Metrics schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml - Metrics schema
 - @.aiwg/research/findings/REF-076-production-challenges.md - Infinite loop detection
 - @.aiwg/research/findings/REF-058-r-lam.md - Reproducibility and checkpoints
 

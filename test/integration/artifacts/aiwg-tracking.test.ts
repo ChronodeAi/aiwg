@@ -1,51 +1,49 @@
 /**
- * .aiwg/ Tracking and Distribution Integration Tests
+ * AIWG artifact root tracking and distribution integration tests
  *
- * Validates that .aiwg/ is properly tracked in git (except ephemeral content),
- * excluded from npm, and that the edge sparse checkout configuration works.
+ * Validates that AIWG's project artifact root can be private/configured while
+ * public git, npm packages, and edge checkouts exclude repo-local `.aiwg/`.
  *
  * @integration
  * @implements #423
  */
 
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect, inject } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import { resolveProjectAiwgDir } from '../../../src/config/project-artifacts.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
-const AIWG_DIR = path.join(REPO_ROOT, '.aiwg');
+const AIWG_DIR = resolveProjectAiwgDir(REPO_ROOT);
 
-describe('.aiwg/ Tracking and Distribution (integration)', () => {
+describe('AIWG artifact root tracking and distribution (integration)', () => {
 
   // ─────────────────────────────────────────────────────
   // .gitignore Configuration
   // ─────────────────────────────────────────────────────
 
   describe('.gitignore configuration', () => {
-    it('should NOT have a blanket .aiwg/ ignore rule', () => {
+    it('should ignore the public repo-local .aiwg/ directory', () => {
       const gitignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf-8');
       const lines = gitignore.split('\n').map(l => l.trim());
-      // Should not have ".aiwg/" or ".aiwg" as a standalone ignore line
-      const blanketIgnore = lines.filter(l =>
+      const blanketIgnore = lines.some(l =>
         l === '.aiwg/' || l === '.aiwg' || l === '/.aiwg/' || l === '/.aiwg'
       );
-      expect(blanketIgnore.length, '.aiwg/ should not be blanket-ignored').toBe(0);
+      expect(blanketIgnore, '.aiwg/ should be blanket-ignored in the public product repo').toBe(true);
     });
 
-    it('should exclude .aiwg/working/ (ephemeral)', () => {
-      const gitignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf-8');
-      expect(gitignore).toContain('.aiwg/working/');
+    it('should not track repo-local .aiwg/ artifacts', () => {
+      const tracked = execFileSync('git', ['ls-files', '.aiwg/**'], { timeout: 60_000,
+        cwd: REPO_ROOT,
+        encoding: 'utf-8',
+      }).trim();
+      expect(tracked, 'durable product artifacts belong outside the ignored .aiwg/ workspace').toBe('');
     });
 
-    it('should exclude .aiwg/.index/ (generated)', () => {
+    it('should ignore the local artifact-root pointer file', () => {
       const gitignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf-8');
-      expect(gitignore).toContain('.aiwg/.index/');
-    });
-
-    it('should exclude .aiwg/ralph/archive/ (session logs)', () => {
-      const gitignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf-8');
-      expect(gitignore).toContain('.aiwg/ralph/archive/');
+      expect(gitignore).toContain('.aiwg-location');
     });
 
     it('should still gitignore .claude/ (deployment target)', () => {
@@ -66,6 +64,15 @@ describe('.aiwg/ Tracking and Distribution (integration)', () => {
   // ─────────────────────────────────────────────────────
 
   describe('npm pack exclusion', () => {
+    let packedFiles: Set<string>;
+
+    beforeAll(() => {
+      const pack = [inject('basePackageManifest')];
+      packedFiles = new Set(
+        (pack?.[0]?.files ?? []).map((file: { path?: string }) => file.path ?? ''),
+      );
+    }, 120_000);
+
     it('should have a files allowlist in package.json', () => {
       const pkg = JSON.parse(
         fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf-8')
@@ -85,64 +92,36 @@ describe('.aiwg/ Tracking and Distribution (integration)', () => {
     });
 
     it('should exclude .aiwg/ from npm pack dry-run', () => {
-      const output = execSync('npm pack --dry-run --json', {
-        cwd: REPO_ROOT,
-        encoding: 'utf-8',
-        timeout: 120_000,
-      });
-      function parseNpmPackJson(stdout: string) {
-        try {
-          return JSON.parse(stdout);
-        } catch {
-          const start = stdout.lastIndexOf('\n[');
-          if (start >= 0) return JSON.parse(stdout.slice(start + 1));
-          const first = stdout.indexOf('[');
-          if (first >= 0) return JSON.parse(stdout.slice(first));
-          throw new Error('no JSON array found in npm pack output');
-        }
-      }
-      const pack = parseNpmPackJson(output);
-      const aiwgFiles = (pack?.[0]?.files ?? [])
-        .map((file: { path?: string }) => file.path ?? '')
-        .filter((filePath: string) => filePath === '.aiwg' || filePath.startsWith('.aiwg/'));
+      const aiwgFiles = [...packedFiles]
+        .filter((filePath) => filePath === '.aiwg' || filePath.startsWith('.aiwg/'));
       expect(aiwgFiles, 'npm pack should include 0 .aiwg/ files').toHaveLength(0);
     });
 
     it('should include doctor.mjs and its runtime lint import in npm pack dry-run', () => {
-      const output = execSync('npm pack --dry-run --json', {
-        cwd: REPO_ROOT,
-        encoding: 'utf-8',
-        timeout: 120_000,
-      });
-      function parseNpmPackJson(stdout: string) {
-        try {
-          return JSON.parse(stdout);
-        } catch {
-          const start = stdout.lastIndexOf('\n[');
-          if (start >= 0) return JSON.parse(stdout.slice(start + 1));
-          const first = stdout.indexOf('[');
-          if (first >= 0) return JSON.parse(stdout.slice(first));
-          throw new Error('no JSON array found in npm pack output');
-        }
-      }
-      const pack = parseNpmPackJson(output);
-      const files = new Set((pack?.[0]?.files ?? []).map((file: { path?: string }) => file.path ?? ''));
-
-      expect(files.has('tools/cli/doctor.mjs'), 'doctor.mjs must ship in npm package').toBe(true);
+      expect(packedFiles.has('tools/cli/doctor.mjs'), 'doctor.mjs must ship in npm package').toBe(true);
       expect(
-        files.has('tools/lint/claude-context-inventory.mjs'),
+        packedFiles.has('tools/lint/claude-context-inventory.mjs'),
         'doctor.mjs imports tools/lint/claude-context-inventory.mjs at runtime',
+      ).toBe(true);
+      expect(
+        packedFiles.has('tools/security/context-memory-firewall.mjs'),
+        'the public context-firewall command must ship its packaged engine',
+      ).toBe(true);
+      expect(
+        packedFiles.has('tools/security/threat-assessment.mjs'),
+        'the context-firewall engine imports threat-assessment.mjs at runtime',
       ).toBe(true);
     });
   });
 
   // ─────────────────────────────────────────────────────
-  // .aiwg/ Content Verification
+  // Configured artifact root content verification
   // ─────────────────────────────────────────────────────
 
-  describe('.aiwg/ content verification', () => {
-    it('should have .aiwg/ directory present on disk', () => {
-      expect(fs.existsSync(AIWG_DIR)).toBe(true);
+  describe('configured artifact root content verification', () => {
+    it('should allow public checkouts without a local artifact root', () => {
+      if (!fs.existsSync(AIWG_DIR)) return;
+      expect(fs.statSync(AIWG_DIR).isDirectory(), `${AIWG_DIR} should be a directory`).toBe(true);
     });
 
     it('should have key SDLC subdirectories', () => {
@@ -200,20 +179,17 @@ describe('.aiwg/ Tracking and Distribution (integration)', () => {
       }
 
       const issues = walkDir(AIWG_DIR);
-      expect(issues, `Found potential secrets in .aiwg/: ${issues.join(', ')}`).toHaveLength(0);
+      expect(issues, `Found potential secrets in configured AIWG artifact root: ${issues.join(', ')}`).toHaveLength(0);
     });
 
-    it('should not contain binary files', () => {
-      // Scope to git-tracked files only. This suite validates content
-      // "tracked in git" (see file header); the no-binary-blobs rule targets
-      // committed blobs. Untracked local scratch (e.g. .aiwg/working/*.png)
-      // is out of scope and must not fail the test on a dev working tree. #1629.
+    it('should not track .aiwg/ or .aiwg-location files in the public repository', () => {
       const binaryExts = ['.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz', '.png', '.jpg', '.jpeg'];
-      const tracked = execSync('git ls-files -z .aiwg', { cwd: REPO_ROOT })
+      const trackedAiwg = execSync('git ls-files -z .aiwg .aiwg-location', { timeout: 60_000, cwd: REPO_ROOT })
         .toString('utf-8')
         .split('\0')
         .filter(Boolean);
-      const binaries = tracked.filter((p) => binaryExts.includes(path.extname(p).toLowerCase()));
+      expect(trackedAiwg, 'public git should not track repo-local .aiwg or .aiwg-location').toHaveLength(0);
+      const binaries = trackedAiwg.filter((p) => binaryExts.includes(path.extname(p).toLowerCase()));
       expect(binaries, `Found tracked binary files: ${binaries.join(', ')}`).toHaveLength(0);
     });
   });

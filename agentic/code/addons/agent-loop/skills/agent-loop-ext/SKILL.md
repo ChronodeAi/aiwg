@@ -7,10 +7,12 @@ description: Crash-resilient external agent loop with state persistence and CI/C
 commandHint:
   argumentHint: "\"<objective>\" [--completion \"<criteria>\"] [--max-iterations N] [--timeout M] [--provider <p>] [--no-commit] [--branch <name>] [--quiet] [--auto-criteria | --no-infer-completion]"
   allowedTools: Bash, Read, Write
-  model: sonnet
+  model: haiku
   category: automation
   orchestration: true
   platforms: [claude-code, hermes, openclaw]
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -253,4 +255,4 @@ echo "Exit: $?"
 - @$AIWG_ROOT/tools/ralph-external/orchestrator.mjs — Loop orchestration engine
 - @$AIWG_ROOT/tools/ralph-external/state-manager.mjs — State persistence layer
 - @$AIWG_ROOT/tools/ralph-external/session-launcher.mjs — AI session launcher
-- @$AIWG_ROOT/agentic/code/addons/ralph/README.md — Al documentation
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/README.md — Al documentation

@@ -1,0 +1,316 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GatePack",
+  "metadata": {
+    "id": "aiwg:test-gates/conformance-v1",
+    "version": "1.0.0",
+    "description": "Conformance vectors exercising every v1alpha1 gate kind offline."
+  },
+  "spec": {
+    "parameters": {
+      "falseReadyMaxBps": {
+        "type": "bps",
+        "direction": "lower-is-stricter",
+        "default": 100
+      },
+      "coverageMinBps": {
+        "type": "bps",
+        "direction": "higher-is-stricter",
+        "default": 1500
+      },
+      "minTotalN": {
+        "type": "count",
+        "direction": "higher-is-stricter",
+        "default": 50
+      },
+      "maxBlockingEvents": {
+        "type": "count",
+        "direction": "lower-is-stricter",
+        "default": 0
+      },
+      "maxLatency": {
+        "type": "value",
+        "direction": "lower-is-stricter",
+        "default": 500
+      }
+    },
+    "metrics": {
+      "false-ready": {
+        "provider": "test.proportion/v1",
+        "kind": "proportion"
+      },
+      "coverage": {
+        "provider": "test.proportion/v1",
+        "kind": "proportion"
+      },
+      "contrast": {
+        "provider": "test.paired/v1",
+        "kind": "paired"
+      },
+      "measurement": {
+        "provider": "test.scalar/v1",
+        "kind": "scalar"
+      },
+      "delta": {
+        "provider": "test.scalar/v1",
+        "kind": "differences"
+      },
+      "attestations": {
+        "provider": "test.evidence/v1",
+        "kind": "evidence"
+      }
+    },
+    "gates": [
+      {
+        "id": "support-total",
+        "kind": "minimum-n",
+        "description": "Overall support floor.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "false-ready"
+        },
+        "minimumN": 50,
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "false-ready-upper",
+        "kind": "interval-bound",
+        "description": "Wilson upper bound on the false-ready rate.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "false-ready"
+        },
+        "statistic": {
+          "kind": "interval-bound",
+          "method": "wilson",
+          "bound": "upper",
+          "levelBps": 9500
+        },
+        "threshold": {
+          "op": "lte",
+          "param": "falseReadyMaxBps"
+        },
+        "minimumN": 50,
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "lower-is-stricter",
+        "floor": true,
+        "onFail": "HOLD"
+      },
+      {
+        "id": "false-ready-exact",
+        "kind": "interval-bound",
+        "description": "Exact Clopper-Pearson upper bound per slice.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "false-ready"
+        },
+        "statistic": {
+          "kind": "interval-bound",
+          "method": "clopper-pearson",
+          "bound": "upper",
+          "levelBps": 9500
+        },
+        "threshold": {
+          "op": "lte",
+          "value": 200
+        },
+        "scope": {
+          "mode": "each"
+        },
+        "direction": "lower-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "coverage-lower",
+        "kind": "interval-bound",
+        "description": "Wilson lower bound on coverage.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "coverage"
+        },
+        "statistic": {
+          "kind": "interval-bound",
+          "method": "wilson",
+          "bound": "lower",
+          "levelBps": 9500
+        },
+        "threshold": {
+          "op": "gte",
+          "param": "coverageMinBps"
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "contrast-ni",
+        "kind": "paired-difference",
+        "description": "Non-inferiority against the always-review reference contrast.",
+        "metric": {
+          "provider": "test.paired/v1",
+          "name": "contrast"
+        },
+        "statistic": {
+          "kind": "paired-difference",
+          "method": "newcombe",
+          "levelBps": 9500,
+          "mode": "non-inferiority",
+          "marginBps": -250,
+          "vs": "always-review"
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "ROLLBACK",
+        "onInsufficient": "HOLD"
+      },
+      {
+        "id": "delta-bootstrap",
+        "kind": "bootstrap-bound",
+        "description": "Seeded bootstrap lower bound on the mean paired delta.",
+        "metric": {
+          "provider": "test.scalar/v1",
+          "name": "delta"
+        },
+        "statistic": {
+          "kind": "bootstrap-bound",
+          "method": "bootstrap",
+          "bound": "lower",
+          "levelBps": 9500,
+          "seed": 7,
+          "resamples": 2000,
+          "bounds": [
+            -1,
+            1
+          ]
+        },
+        "threshold": {
+          "op": "gte",
+          "value": 50
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "blocking-events",
+        "kind": "count-max",
+        "description": "Zero false-ready events on the blocking slice.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "false-ready"
+        },
+        "threshold": {
+          "op": "lte",
+          "param": "maxBlockingEvents"
+        },
+        "scope": {
+          "mode": "listed",
+          "slices": [
+            "b"
+          ]
+        },
+        "direction": "lower-is-stricter",
+        "onFail": "ROLLBACK",
+        "onInsufficient": "HOLD"
+      },
+      {
+        "id": "coverage-events",
+        "kind": "count-min",
+        "description": "Minimum accepted coverage events overall.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "coverage"
+        },
+        "threshold": {
+          "op": "gte",
+          "value": 10
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "latency-cap",
+        "kind": "value-threshold",
+        "description": "Mean latency cap.",
+        "metric": {
+          "provider": "test.scalar/v1",
+          "name": "measurement"
+        },
+        "threshold": {
+          "op": "lte",
+          "param": "maxLatency"
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "lower-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "release-evidence",
+        "kind": "evidence",
+        "description": "Required human-review attestation.",
+        "metric": {
+          "provider": "test.evidence/v1",
+          "name": "attestations"
+        },
+        "evidence": {
+          "required": [
+            "review-passed"
+          ]
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "slices-registered",
+        "kind": "predicate",
+        "description": "Binding parameters are present in the evaluated document.",
+        "predicate": {
+          "op": "exists",
+          "left": {
+            "source": "input",
+            "pointer": "/parameters"
+          }
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      },
+      {
+        "id": "integrity-ceiling",
+        "kind": "upstream-ceiling",
+        "description": "Eval-integrity ceiling: allowlist problems hold, compromise rolls back through the ceiling.",
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "floor": true,
+        "onFail": "HOLD"
+      }
+    ],
+    "combine": {
+      "rule": "max-severity"
+    }
+  }
+}

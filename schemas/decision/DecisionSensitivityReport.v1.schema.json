@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionSensitivityReport.v1.schema.json",
+  "title": "Decision Sensitivity Report",
+  "description": "Immutable D23 counterfactual sensitivity report. It is associative reviewer evidence, not causal explanation, correctness proof, or action authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "id", "plan", "tenantId", "workspaceId", "projectId", "sourceSubject",
+    "analysisKind", "semantics", "actionAuthorization", "status", "generatedAt", "privacy",
+    "retention", "budget", "baseline", "rows", "summary", "warnings", "digest"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "decision-sensitivity-report/v1" },
+    "id": { "$ref": "#/$defs/name" },
+    "plan": { "$ref": "#/$defs/pin" },
+    "tenantId": { "$ref": "#/$defs/name" },
+    "workspaceId": { "$ref": "#/$defs/name" },
+    "projectId": { "$ref": "#/$defs/name" },
+    "sourceSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "workspaceId", "projectId", "subjectRef"],
+      "properties": {
+        "tenantId": { "$ref": "#/$defs/name" },
+        "workspaceId": { "$ref": "#/$defs/name" },
+        "projectId": { "$ref": "#/$defs/name" },
+        "subjectRef": { "$ref": "#/$defs/name" }
+      }
+    },
+    "analysisKind": { "enum": ["policy-replay", "input-reevaluation"] },
+    "semantics": { "const": "associative-sensitivity-not-causal" },
+    "actionAuthorization": { "const": "not-authorized" },
+    "status": { "enum": ["completed", "partial", "budget-exhausted", "rejected", "failed"] },
+    "generatedAt": { "$ref": "#/$defs/dateTime" },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["redaction", "summaryPrecisionBps"],
+      "properties": {
+        "redaction": { "enum": ["hash-values", "opaque-ids"] },
+        "summaryPrecisionBps": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "deleteAfterEpochMs", "legalHold"],
+      "properties": {
+        "class": { "enum": ["ephemeral", "review-evidence"] },
+        "deleteAfterEpochMs": { "type": "integer", "minimum": 0 },
+        "legalHold": { "type": "boolean" }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxVariants", "processedVariants", "backendCalls", "tokens", "costMicros", "exhausted"],
+      "properties": {
+        "maxVariants": { "type": "integer", "minimum": 1 },
+        "processedVariants": { "type": "integer", "minimum": 0 },
+        "backendCalls": { "type": "integer", "minimum": 0 },
+        "tokens": { "type": "integer", "minimum": 0 },
+        "costMicros": { "type": "integer", "minimum": 0 },
+        "exhausted": { "type": "boolean" }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resultRef", "outcomeDigest", "status", "reason"],
+      "properties": {
+        "resultRef": { "$ref": "#/$defs/pin" },
+        "outcomeDigest": { "$ref": "#/$defs/digest" },
+        "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "rows": { "type": "array", "items": { "$ref": "#/$defs/row" } },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["totalRows", "changedOutcomes", "changedAcceptance", "changedRules", "minimumThresholdChangeBps"],
+      "properties": {
+        "totalRows": { "type": "integer", "minimum": 0 },
+        "changedOutcomes": { "type": "integer", "minimum": 0 },
+        "changedAcceptance": { "type": "integer", "minimum": 0 },
+        "changedRules": { "type": "integer", "minimum": 0 },
+        "minimumThresholdChangeBps": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "warnings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "dateTime": { "type": "string", "format": "date-time" },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "redactedChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "valueDigest", "sensitivity"],
+      "properties": {
+        "path": { "type": "string", "minLength": 0, "maxLength": 512 },
+        "valueDigest": { "$ref": "#/$defs/digest" },
+        "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] }
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variantId", "kind", "changes", "inference", "sourceReceipt", "counterfactualReceipt",
+        "resultDigest", "freshInvocationId", "deltas", "resourceUse", "warnings"
+      ],
+      "properties": {
+        "variantId": { "$ref": "#/$defs/name" },
+        "kind": { "enum": ["variant", "unchanged-control", "baseline-stability"] },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/redactedChange" } },
+        "inference": { "enum": ["reused-stored-evidence", "new-invocation", "deduplicated-control", "unreplayable"] },
+        "sourceReceipt": { "$ref": "#/$defs/pin" },
+        "counterfactualReceipt": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/pin" }] },
+        "resultDigest": { "$ref": "#/$defs/digest" },
+        "freshInvocationId": { "type": ["string", "null"], "maxLength": 160 },
+        "deltas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcomeChanged", "acceptanceChanged", "ruleChanged", "firstChangedRule", "distributionDistanceBps", "status", "reason"],
+          "properties": {
+            "outcomeChanged": { "type": "boolean" },
+            "acceptanceChanged": { "type": "boolean" },
+            "ruleChanged": { "type": "boolean" },
+            "firstChangedRule": { "type": ["string", "null"], "maxLength": 160 },
+            "distributionDistanceBps": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+            "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 80 }
+          }
+        },
+        "resourceUse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["backendCalls", "tokens", "costMicros"],
+          "properties": {
+            "backendCalls": { "type": "integer", "minimum": 0 },
+            "tokens": { "type": "integer", "minimum": 0 },
+            "costMicros": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "warnings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } }
+      }
+    }
+  }
+}

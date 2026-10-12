@@ -22,6 +22,13 @@ import { homedir } from 'os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import { projectAiwgPath } from '../config/project-artifacts.js';
+import type { MissionA2ABinding } from './mission-hitl.js';
+import type {
+  A2AProtocolPolicy,
+  A2AProtocolVersion,
+  NormalizedAgentInterface,
+} from '../a2a/types.js';
 
 // ============================================================
 // Ajv bootstrap (transitive dep — zero new top-level deps)
@@ -135,6 +142,7 @@ export interface TransportEndpoints {
 
 /** One active mission tracked by aiwg serve. */
 export interface MissionRecord {
+  a2a?: MissionA2ABinding;
   missionId: string;
   executorId: string;
   state: MissionState;
@@ -176,6 +184,8 @@ export interface ExecutorRegistration {
   executorId: string;
   /** Optional default A2A sandbox instance id. May differ from executorId. */
   a2aInstanceId?: string;
+  /** Last negotiated A2A interface. Cleared when the executor re-registers. */
+  a2aProtocol?: A2AProtocolSelectionState;
   name: string;
   version: string;
   specVersion: string;
@@ -193,6 +203,14 @@ export interface ExecutorRegistration {
   wsConn?: WebSocketConn;
 }
 
+export interface A2AProtocolSelectionState {
+  policy: A2AProtocolPolicy;
+  selectedVersion: A2AProtocolVersion;
+  interface: NormalizedAgentInterface;
+  fallbackReason?: string;
+  selectedAt: string;
+}
+
 /** Minimal WS connection interface (duck-typed from the `ws` package). */
 export interface WebSocketConn {
   readyState: number; // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
@@ -204,6 +222,14 @@ export interface WebSocketConn {
 export interface ExecutorSummary {
   executor_id: string;
   a2a_instance_id?: string;
+  a2a_protocol?: {
+    policy: A2AProtocolPolicy;
+    selected_version: A2AProtocolVersion;
+    protocol_binding: string;
+    interface_url: string;
+    fallback_reason?: string;
+    selected_at: string;
+  };
   name: string;
   version: string;
   spec_version: string;
@@ -267,7 +293,7 @@ export function resolveExecutorIdentityStorePath(projectRootOverride?: string): 
   if (envOverride) return envOverride;
 
   const projectRoot = projectRootOverride ?? process.cwd();
-  const configPath = join(projectRoot, '.aiwg', 'storage.config');
+  const configPath = projectAiwgPath(projectRoot, 'storage.config');
   if (!existsSync(configPath)) return DEFAULT_EXECUTOR_IDENTITY_STORE_PATH;
 
   try {
@@ -373,6 +399,7 @@ export class ExecutorRegistry extends EventEmitter {
       // Upsert — preserve token and registeredAt
       existing.name = req.name;
       existing.a2aInstanceId = req.a2a_instance_id;
+      delete existing.a2aProtocol;
       existing.version = req.version;
       existing.specVersion = req.spec_version;
       existing.transportEndpoints = req.transport_endpoints;
@@ -766,6 +793,27 @@ export class ExecutorRegistry extends EventEmitter {
     return this.executors.get(executorId);
   }
 
+  /** Publish the negotiated interface used for the most recent A2A dispatch. */
+  recordA2AProtocolSelection(
+    executorId: string,
+    selection: Omit<A2AProtocolSelectionState, 'selectedAt'> & { selectedAt?: string }
+  ): boolean {
+    const executor = this.executors.get(executorId);
+    if (!executor) return false;
+    executor.a2aProtocol = {
+      ...selection,
+      selectedAt: selection.selectedAt ?? new Date().toISOString(),
+    };
+    this.emit('executor:a2a_protocol_selected', {
+      executorId,
+      selectedVersion: selection.selectedVersion,
+      protocolBinding: selection.interface.protocolBinding,
+      interfaceUrl: selection.interface.url,
+      ...(selection.fallbackReason ? { fallbackReason: selection.fallbackReason } : {}),
+    });
+    return true;
+  }
+
   /**
    * Pick the best executor matching the given filter.
    *
@@ -780,38 +828,26 @@ export class ExecutorRegistry extends EventEmitter {
     const candidates = [...this.executors.values()].filter((e) => e.connected);
     const rejected: Array<{ executorId: string; reason: string }> = [];
 
-    // If executor_id is pinned, target it directly
+    // A pin selects an identity; it cannot waive the same controls used by automatic routing.
+    const rejection = (executor: ExecutorRegistration): string | undefined => {
+      if (longRunning && !executor.capabilities.includes('resumable')) {
+        return 'long_running requires resumable capability';
+      }
+      const missing = (filter.capabilities ?? []).filter(capability => !executor.capabilities.includes(capability));
+      if (missing.length > 0) return `missing capabilities: ${missing.join(', ')}`;
+      return undefined;
+    };
     if (filter.executor_id) {
       const pinned = this.executors.get(filter.executor_id);
-      if (!pinned) {
-        return null;
-      }
-      if (!pinned.connected) {
-        return null;
-      }
-      if (longRunning && !pinned.capabilities.includes('resumable')) {
-        return null;
-      }
+      if (!pinned?.connected || rejection(pinned)) return null;
       return { executor: pinned, reason: 'pinned by executor_id', rejected: [] };
     }
 
-    // Filter by required capabilities
     const filtered: ExecutorRegistration[] = [];
     for (const executor of candidates) {
-      // Long-running requires resumable
-      if (longRunning && !executor.capabilities.includes('resumable')) {
-        rejected.push({ executorId: executor.executorId, reason: 'long_running requires resumable capability' });
-        continue;
-      }
-      // All requested capabilities must be present
-      if (filter.capabilities && filter.capabilities.length > 0) {
-        const missing = filter.capabilities.filter((c) => !executor.capabilities.includes(c));
-        if (missing.length > 0) {
-          rejected.push({ executorId: executor.executorId, reason: `missing capabilities: ${missing.join(', ')}` });
-          continue;
-        }
-      }
-      filtered.push(executor);
+      const reason = rejection(executor);
+      if (reason) rejected.push({ executorId: executor.executorId, reason });
+      else filtered.push(executor);
     }
 
     if (filtered.length === 0) return null;
@@ -866,6 +902,16 @@ function toSummary(e: ExecutorRegistration): ExecutorSummary {
     disconnected_at: e.disconnectedAt,
   };
   if (e.a2aInstanceId) summary.a2a_instance_id = e.a2aInstanceId;
+  if (e.a2aProtocol) {
+    summary.a2a_protocol = {
+      policy: e.a2aProtocol.policy,
+      selected_version: e.a2aProtocol.selectedVersion,
+      protocol_binding: e.a2aProtocol.interface.protocolBinding,
+      interface_url: e.a2aProtocol.interface.url,
+      selected_at: e.a2aProtocol.selectedAt,
+      ...(e.a2aProtocol.fallbackReason ? { fallback_reason: e.a2aProtocol.fallbackReason } : {}),
+    };
+  }
   return summary;
 }
 

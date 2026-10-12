@@ -12,6 +12,12 @@
 import path from 'path';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
+import { getPackageRoot } from '../../channel/manager.mjs';
+import { inspectInstallation } from '../../installation/manager.mjs';
+
+function isMissingRuntimeCatalogError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('No catalog found');
+}
 
 /**
  * Runtime info command handler
@@ -25,12 +31,12 @@ export const runtimeInfoHandler: CommandHandler = {
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
-      await handleRuntimeInfo(ctx.args);
+      await handleRuntimeInfo(ctx.args, ctx.cwd);
       return { exitCode: 0 };
     } catch (error) {
       const err = error as Error;
 
-      if (err.message.includes('No catalog found')) {
+      if (isMissingRuntimeCatalogError(err)) {
         console.log(`\nNo runtime catalog found.`);
         console.log(`Run 'aiwg runtime-info --discover' to create one.`);
         return { exitCode: 0 };
@@ -46,17 +52,77 @@ export const runtimeInfoHandler: CommandHandler = {
 /**
  * Handle runtime info command logic
  */
-async function handleRuntimeInfo(args: string[]): Promise<void> {
+async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<void> {
   const hasDiscover = args.includes('--discover');
   const hasVerify = args.includes('--verify');
   const hasJson = args.includes('--json');
   const checkIndex = args.indexOf('--check');
   const hasCheck = checkIndex >= 0;
   const hasCapabilities = args.includes('--capabilities');
+  const hasProviders = args.includes('--providers');
+  const hasTransports = args.includes('--transports');
   const featureIndex = args.indexOf('--feature');
   const hasFeature = featureIndex >= 0;
 
+  if (hasTransports) {
+    const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+    const config = await readAiwgConfig(cwd);
+    const profiles = Object.entries(config?.uhp?.profiles ?? {}).map(([name, profile]) => ({
+      name,
+      transport: 'uhp' as const,
+      protocolVersion: profile.version,
+      experimental: true,
+      configured: true,
+      enabled: config?.uhp?.enabled === true,
+      endpointOrigin: new URL(profile.endpoint).origin,
+      credentialSource: profile.credential.source,
+      credentialReference: profile.credential.name,
+    }));
+    const output = { providersAreTransports: false, transports: { uhp: { experimental: true, enabled: config?.uhp?.enabled === true, profiles } } };
+    if (hasJson) console.log(JSON.stringify(output, null, 2));
+    else {
+      console.log('\nTransport Inventory');
+      console.log('===================');
+      console.log('UHP is a remote execution transport, not an AIWG provider.');
+      if (!profiles.length) console.log('  UHP: not configured (experimental)');
+      for (const profile of profiles) console.log(`  UHP/${profile.name}: ${profile.enabled ? 'enabled' : 'disabled'}, ${profile.protocolVersion}, ${profile.endpointOrigin}`);
+    }
+    return;
+  }
+
   // --- Capability matrix queries (no RuntimeDiscovery needed) ---
+  if (hasProviders) {
+    const { collectProviderInventory } = await import('../../providers/provider-inventory.js');
+    const inventory = await collectProviderInventory(cwd);
+    const selected = args[args.indexOf('--provider') + 1];
+    const ompSelected = args.includes('--provider') && ['omp', 'oh-my-pi'].includes(selected);
+    const ompRuntime = ompSelected
+      ? await (await import('../../providers/omp-diagnostics.mjs')).diagnoseOmpRuntime({ cwd })
+      : undefined;
+    if (hasJson) {
+      console.log(JSON.stringify({ ...inventory, ...(ompRuntime ? { ompRuntime } : {}) }, null, 2));
+    } else {
+      console.log('\nProvider Inventory');
+      console.log('==================');
+      for (const provider of inventory.providers) {
+        const states = [
+          provider.configured ? 'configured' : null,
+          provider.deployed ? 'deployed' : null,
+          provider.detected ? 'detected' : null,
+          provider.available ? 'available' : 'unavailable',
+          provider.active ? 'active' : null,
+        ].filter(Boolean).join(', ');
+        console.log(`\n${provider.displayName} (${provider.id}): ${states}`);
+        for (const evidence of provider.evidence) {
+          console.log(`  evidence: ${evidence.kind}/${evidence.scope} — ${evidence.value}`);
+        }
+        for (const reason of provider.reasons) console.log(`  note: ${reason}`);
+      }
+      if (ompRuntime) console.log(`\nOMP runtime: ${JSON.stringify(ompRuntime, null, 2)}`);
+    }
+    return;
+  }
+
   if (hasCapabilities || hasFeature) {
     const {
       loadCapabilityMatrix,
@@ -121,7 +187,7 @@ async function handleRuntimeInfo(args: string[]): Promise<void> {
         console.log(`Aggregated output: ${caps.aggregated_output}`);
         console.log(`\nArtifact paths:`);
         for (const [type, path] of Object.entries(caps.artifact_paths)) {
-          console.log(`  ${type}: ${path ?? '(none)'}`);
+          console.log(`  ${type}: ${path || 'Indexed (aiwg discover / aiwg show)'}`);
         }
         console.log(`\nFeatures:`);
         for (const [feat, native] of Object.entries(caps.native_features)) {
@@ -207,10 +273,21 @@ async function handleRuntimeInfo(args: string[]): Promise<void> {
     }
   } else {
     // Show summary (default)
-    const summary = await discovery.getSummary();
+    let summary;
+    try {
+      summary = await discovery.getSummary();
+    } catch (error) {
+      if (!isMissingRuntimeCatalogError(error)) throw error;
+      if (!hasJson) {
+        console.log(`\nNo runtime catalog found; bootstrapping catalog...`);
+      }
+      await discovery.discover();
+      summary = await discovery.getSummary();
+    }
 
+    const installation = inspectInstallation({ actualRoot: getPackageRoot() });
     if (hasJson) {
-      console.log(JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify({ ...summary, installation }, null, 2));
     } else {
       console.log(`\nRuntime Environment Summary`);
       console.log(`===========================`);
@@ -229,10 +306,18 @@ async function handleRuntimeInfo(args: string[]): Promise<void> {
       console.log(`\nTotal: ${summary.totalTools} verified tools`);
       console.log(`\nLast Discovery: ${summary.lastDiscovery}`);
       console.log(`Catalog: ${summary.catalogPath}`);
+      console.log(`\nAIWG Installation:`);
+      console.log(`  Canonical: ${installation.identity?.method ?? 'unrecorded'} at ${installation.identity?.root ?? '(unrecorded)'}`);
+      console.log(`  Actual:    ${installation.actualMethod} at ${installation.actualRoot}`);
+      if (installation.launcher) {
+        console.log(`  Launcher:  ${installation.launcher.method} at ${installation.launcher.root} (edge redirect)`);
+      }
+      console.log(`  Run mode:  ${installation.identity?.runMode ?? '(unrecorded)'}`);
+      console.log(`  State:     ${installation.state}`);
 
       // Scheduler backend detection
       const { execSync } = await import('child_process');
-      let schedulerBackend = 'aiwg-cli (daemon)';
+      let schedulerBackend = 'external trigger required (system cron/systemd/CI)';
       let chronyInstalled = false;
 
       try {
@@ -250,7 +335,7 @@ async function handleRuntimeInfo(args: string[]): Promise<void> {
         process.env.ANTHROPIC_API_KEY !== undefined;
 
       if (isClaudeCodeContext) {
-        schedulerBackend = 'native-cron (CronCreate) / aiwg-cli fallback';
+        schedulerBackend = 'native-cron (CronCreate); external trigger outside agent sessions';
       }
 
       console.log(`\nScheduler:`);

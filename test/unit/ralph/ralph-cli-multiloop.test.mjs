@@ -33,6 +33,7 @@ function runCli(args, options = {}) {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
+      timeout: 60_000,
     });
     return { success: true, output };
   } catch (err) {
@@ -49,6 +50,7 @@ function runStatus(args = '', options = {}) {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
+      timeout: 60_000,
     });
     return { success: true, output };
   } catch (err) {
@@ -65,6 +67,7 @@ function runAbort(args = '', options = {}) {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
+      timeout: 60_000,
     });
     return { success: true, output };
   } catch (err) {
@@ -81,6 +84,7 @@ function runResume(args = '', options = {}) {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
+      timeout: 60_000,
     });
     return { success: true, output };
   } catch (err) {

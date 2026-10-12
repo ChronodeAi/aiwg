@@ -7,7 +7,7 @@
  * @see https://modelcontextprotocol.io/specification/2025-11-25
  * @architecture @.aiwg/architecture/software-architecture-doc.md - Section 2.1 CLI Layer
  * @reference @docs/references/REF-066-mcp-specification-2025.md
- * @cli @docs/CLI_USAGE.md - mcp serve command
+ * @cli @docs/cli/agent-usage.md - mcp serve command
  * @frameworks @agentic/code/frameworks/sdlc-complete/
  * @frameworks @agentic/code/frameworks/media-marketing-kit/
  */
@@ -18,11 +18,12 @@ import { z } from 'zod';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { registerWriterProfileResources } from './tools/writer-profiles.mjs';
 import { registerDiscoveryTools } from './tools/discovery.mjs';
 import { registerCommandRunTool } from './tools/command-run.mjs';
 import { registerInteractionTools } from './tools/interaction.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from './tools/subsystems.mjs';
-import { AIWG_ROOT } from './helpers.mjs';
+import { AIWG_ROOT, findProjectRoot, resolveProjectAiwgDir } from './helpers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,34 +34,9 @@ const FRAMEWORKS = {
 };
 
 /**
- * Find project root by walking up the directory tree looking for .aiwg directory
- * @param {string} startDir - Directory to start searching from (defaults to cwd)
- * @returns {Promise<string>} - Path to project root
- * @throws {Error} - If no .aiwg directory found
- */
-async function findProjectRoot(startDir = process.cwd()) {
-  let currentDir = startDir;
-
-  while (currentDir !== path.dirname(currentDir)) { // Stop at filesystem root
-    const aiwgPath = path.join(currentDir, '.aiwg');
-    try {
-      const stat = await fs.stat(aiwgPath);
-      if (stat.isDirectory()) {
-        return currentDir;
-      }
-    } catch {
-      // Directory doesn't exist, continue up
-    }
-    currentDir = path.dirname(currentDir);
-  }
-
-  throw new Error("No .aiwg directory found. Run from an AIWG project or `aiwg -new` first.");
-}
-
-/**
  * Create and configure the AIWG MCP Server
  */
-export function createServer() {
+export async function createServer() {
   const server = new McpServer({
     name: 'aiwg',
     version: '1.0.0'
@@ -76,6 +52,7 @@ export function createServer() {
   //   rule-list, rule-show, agent-show, template-list, template-show
   // ============================================
   registerDiscoveryTools(server);
+  registerWriterProfileResources(server);
 
   // ============================================
   // Command-run dispatch (#1312) — registers:
@@ -93,11 +70,25 @@ export function createServer() {
   // Opt-in subsystem toolsets (#1322-#1332)
   //
   // Enabled via AIWG_MCP_TOOLSETS env or `aiwg mcp serve --toolsets=`.
-  // Known: flows, missions, memory, kb, research, activity-log, index, ralph, mc, ops, all
+  // Known: flows, missions, memory, kb, research, activity-log, index, ralph, mc, ops, sandbox, decision, all
+  // `workers` (#2892 direct worker run/status/cancel) needs an EXPLICIT name;
+  // `all` deliberately does not reach it (src/mcp/tools/subsystems.mjs).
   // Default: none (core only — discovery + command-run)
   // ============================================
   const requested = parseToolsets(process.env.AIWG_MCP_TOOLSETS || '');
-  registerOptInToolsets(server, requested);
+  // #2892 B1: the `workers` toolset's served project root is resolved ONCE,
+  // here, at registration time — never lazily from `process.cwd()` inside
+  // the tool handler on first request. A project root that cannot be found
+  // (not running inside an AIWG project) means `workers` is simply not
+  // registered; `registerWorkerInvokeToolset` refuses rather than falling
+  // back to an implicit cwd.
+  let projectRoot;
+  try {
+    projectRoot = await findProjectRoot();
+  } catch {
+    projectRoot = undefined;
+  }
+  await registerOptInToolsets(server, requested, { projectRoot });
 
   // Tool: artifact-read
   server.registerTool('artifact-read', {
@@ -111,7 +102,7 @@ export function createServer() {
     try {
       // Auto-find project root if not specified
       const projectRoot = project_dir || await findProjectRoot();
-      const fullPath = path.join(projectRoot, '.aiwg', artifactPath);
+      const fullPath = path.join(await resolveProjectAiwgDir(projectRoot), artifactPath);
       const content = await fs.readFile(fullPath, 'utf-8');
       return {
         content: [{
@@ -143,7 +134,7 @@ export function createServer() {
     try {
       // Auto-find project root if not specified
       const projectRoot = project_dir || await findProjectRoot();
-      const fullPath = path.join(projectRoot, '.aiwg', artifactPath);
+      const fullPath = path.join(await resolveProjectAiwgDir(projectRoot), artifactPath);
       const dir = path.dirname(fullPath);
 
       // Ensure directory exists
@@ -634,7 +625,7 @@ async function scanDirectory(dir, type) {
  * Start the MCP server with stdio transport
  */
 export async function startServer() {
-  const server = createServer();
+  const server = await createServer();
   const transport = new StdioServerTransport();
 
   console.error('[AIWG MCP] Starting server...');

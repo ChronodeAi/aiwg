@@ -6,8 +6,10 @@ description: List and filter tickets/issues from configured backend
 commandHint:
   argumentHint: [--status STATE --label LABEL --assignee USER --limit NUM --format table|json|markdown]
   allowedTools: Read, Write, Glob, Bash
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -45,6 +47,9 @@ Given optional filter parameters:
   - Default: `open` (only show open tickets)
   - Use `all` to show all tickets regardless of status
 - **`--label LABEL`** (optional): Filter by label (can specify multiple: `--label bug --label high-priority`)
+- **`--label-role ROLE`** (optional): Resolve a stable semantic role from
+  `.aiwg/aiwg.config` `issues.labels` for the target tracker, then filter by its
+  provider-native name
 - **`--assignee USER`** (optional): Filter by assignee (use `unassigned` for unassigned tickets)
 - **`--limit NUM`** (optional): Limit results to NUM tickets (default: 50)
 - **`--sort FIELD`** (optional): Sort by field (created|updated|priority|id)
@@ -202,6 +207,9 @@ Same resolution rules as `issue-create` (preferred path):
 
 1. **`--provider` flag** — explicit override always wins.
 2. **`.aiwg/aiwg.config` `remotes.issue_tracker`** (#994) — derive provider via `resolveRemotes()` + `resolveRemoteProvider()` from `src/config/aiwg-config.ts`.
+   Resolve any `--label-role` through `resolveIssueLabels()` for that provider.
+   Report missing, duplicate, conflicting, or unavailable taxonomy entries;
+   never provision tracker labels during a list operation.
 3. **Legacy `.aiwg/config.yaml`** (`ticketing` block) — back-compat.
 4. **`CLAUDE.md` "Issueing Configuration"** — fallback.
 5. **`local`** — default.
@@ -824,9 +832,9 @@ Filters applied:
 - Assignee: johndoe
 
 Try:
-- Remove filters: /issue-list
-- Change status: /issue-list --status all
-- Create ticket: /issue-create "title"
+- Remove filters by loading `issue-list` without filters.
+- Change status filter by loading `issue-list` with status all.
+- Create a ticket by loading `issue-create`.
 ```
 
 ### Provider Error
@@ -918,6 +926,6 @@ Example: /issue-list --status in_progress
 ## References
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/config/issueing-config.md - Configuration schema
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/commands/issue-create.md - Create ticket command
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/commands/issue-update.md - Update ticket command
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/issue-create/SKILL.md - Create ticket skill
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/issue-update/SKILL.md - Update ticket skill
 - @CLAUDE.md - User ticketing configuration

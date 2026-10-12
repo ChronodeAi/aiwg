@@ -192,3 +192,76 @@ describe('versionHandler.execute — getVersionInfo failure', () => {
     consoleSpy.mockRestore();
   });
 });
+
+describe('versionHandler.execute — installation drift (#2529)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports the running root, not the declared edge checkout', async () => {
+    mockGetVersionInfo.mockResolvedValue(versionInfo({
+      version: '2026.9.6',
+      channel: 'edge',
+      packageRoot: '/home/u/.nvm/lib/node_modules/aiwg',
+      gitHash: 'abc1234',
+      gitBranch: 'main',
+      edgePath: '/home/u/dev/aiwg',
+      installation: {
+        state: 'mismatch',
+        actualRoot: '/home/u/.nvm/lib/node_modules/aiwg',
+        identity: { method: 'source', root: '/home/u/dev/aiwg' },
+      },
+    }));
+
+    const lines: string[] = [];
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation((v) => lines.push(String(v)));
+    const { dim } = await import('../../../../src/cli/ui.js');
+    await versionHandler.execute(makeCtx());
+    const dimmed = (dim as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    consoleSpy.mockRestore();
+
+    // path: must name the binary that actually ran.
+    expect(dimmed.some((l) => l.includes('path:') && l.includes('.nvm/lib/node_modules/aiwg'))).toBe(true);
+    expect(dimmed.some((l) => l.includes('path:') && l.includes('/home/u/dev/aiwg'))).toBe(false);
+  });
+
+  it('surfaces the drift notice naming the canonical root', async () => {
+    mockGetVersionInfo.mockResolvedValue(versionInfo({
+      version: '2026.9.6',
+      packageRoot: '/home/u/.nvm/lib/node_modules/aiwg',
+      installation: {
+        state: 'mismatch',
+        actualRoot: '/home/u/.nvm/lib/node_modules/aiwg',
+        identity: { method: 'source', root: '/home/u/dev/aiwg' },
+      },
+    }));
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { dim } = await import('../../../../src/cli/ui.js');
+    await versionHandler.execute(makeCtx());
+    const dimmed = (dim as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    consoleSpy.mockRestore();
+
+    const notice = dimmed.find((l) => l.includes('canonical install declares'));
+    expect(notice).toBeDefined();
+    expect(notice).toContain('source');
+    expect(notice).toContain('/home/u/dev/aiwg');
+    expect(notice).toContain('aiwg installation show');
+  });
+
+  it('prints no drift notice when canonical and actual agree', async () => {
+    mockGetVersionInfo.mockResolvedValue(versionInfo({
+      installation: {
+        state: 'aligned',
+        actualRoot: '/usr/local/lib/node_modules/aiwg',
+        identity: { method: 'npm', root: '/usr/local/lib/node_modules/aiwg' },
+      },
+    }));
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { dim } = await import('../../../../src/cli/ui.js');
+    await versionHandler.execute(makeCtx());
+    const dimmed = (dim as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    consoleSpy.mockRestore();
+
+    expect(dimmed.some((l) => l.includes('canonical install declares'))).toBe(false);
+  });
+});

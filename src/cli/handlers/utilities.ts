@@ -16,11 +16,17 @@ import path from 'path';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
 import { getFrameworkRoot } from '../../channel/manager.mjs';
-import { forceUpdateCheck } from '../../update/checker.mjs';
+import { updateInstallation } from '../../update/service.mjs';
 import { useHandler as useFrameworkHandler } from './use.js';
+import { projectAiwgPath } from '../../config/project-artifacts.js';
 import {
   checkCollisions,
 } from '../../smiths/skillsmith/collision-detector.js';
+import {
+  renderUseDeploymentResult,
+  verifyConfiguredDeployments,
+  type DeploymentScope,
+} from '../services/deployment-verification.js';
 
 /**
  * Maps framework registry IDs (e.g. 'sdlc-complete') to `aiwg use` names (e.g. 'sdlc').
@@ -43,11 +49,18 @@ interface FrameworkRegistry {
   }>;
 }
 
+function flagValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  if (index >= 0) return args[index + 1];
+  const prefix = `${flag}=`;
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
 /**
  * Read the installed frameworks from the on-disk registry.
  */
 function readFrameworkRegistry(cwd: string): FrameworkRegistry | null {
-  const registryPath = path.join(cwd, '.aiwg', 'frameworks', 'registry.json');
+  const registryPath = projectAiwgPath(cwd, 'frameworks', 'registry.json');
   if (!fs.existsSync(registryPath)) {
     return null;
   }
@@ -151,8 +164,8 @@ function countSentences(s: string): number {
 }
 
 /**
- * Scan source SKILL.md files in `agentic/code/` for namespace issues:
- * - Missing `namespace: aiwg`
+ * Scan canonical AIWG source SKILL.md files in `agentic/code/` for policy issues:
+ * - Missing the AIWG-only `namespace: aiwg` source convention
  * - Slug (`aiwg-{name}`) that would shadow an AIWG CLI command
  *
  * Returns lines suitable for console output, or empty array if clean.
@@ -290,12 +303,14 @@ export const validateMetadataHandler: CommandHandler = {
       cwd: ctx.cwd,
     });
 
-    // Append namespace validation: scan source SKILL.md files
+    // Append canonical AIWG source policy. `namespace` is an AIWG extension,
+    // not an Agent Skills standard requirement; shared conformance is emitted
+    // by validate-metadata.mjs before this source-only convention.
     try {
       const issues = await scanSourceNamespaceIssues(frameworkRoot);
       if (issues.length > 0) {
-        console.log('\n── Namespace validation ──');
-        console.log(`  ${issues.length} skill(s) missing namespace field:`);
+        console.log('\n── AIWG source conventions ──');
+        console.log(`  ${issues.length} canonical source convention issue(s):`);
         // Show first 20 to avoid flooding output
         issues.slice(0, 20).forEach(l => console.log(l));
         if (issues.length > 20) {
@@ -303,10 +318,10 @@ export const validateMetadataHandler: CommandHandler = {
         }
         // Non-zero exit only in strict mode
         if (ctx.args.includes('--strict') && result.exitCode === 0) {
-          return { exitCode: 1, message: `Namespace validation failed: ${issues.length} skill(s) missing namespace field` };
+          return { exitCode: 1, message: `AIWG source convention validation failed: ${issues.length} issue(s)` };
         }
       } else {
-        console.log('\n── Namespace validation: all skills have namespace field ✓');
+        console.log('\n── AIWG source conventions: all canonical skills include the AIWG namespace extension ✓');
       }
     } catch {
       // Namespace scan is non-fatal
@@ -459,6 +474,25 @@ async function runUserScopeDoctor(verbose: boolean): Promise<HandlerResult> {
   };
 }
 
+const DOCTOR_HELP = `aiwg doctor — check AIWG installation health
+
+Usage:
+  aiwg doctor [options]
+  aiwg -doctor [options]
+  aiwg --doctor [options]
+
+Options:
+  --deployment          Verify configured provider deployments
+  --provider <name>     Limit deployment verification to one provider
+  --bundle <name>       Limit deployment verification to one bundle
+  --scope <scope>       Verification scope: project or user
+  --user                Alias for --scope user
+  --project-local       Include project-local artifact diagnostics
+  --json                Emit machine-readable deployment verification output
+  --verbose, -v         Include verbose diagnostics
+  --help, -h            Show this help
+`;
+
 /**
  * Handler for doctor command
  *
@@ -478,7 +512,37 @@ export const doctorHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-doctor', '--doctor'],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
+      return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
+    }
+
+    if (ctx.args.includes('--deployment')) {
+      const providerIndex = ctx.args.indexOf('--provider');
+      const bundleIndex = ctx.args.indexOf('--bundle');
+      const scopeIndex = ctx.args.indexOf('--scope');
+      const scopeValue = scopeIndex >= 0 ? ctx.args[scopeIndex + 1] : undefined;
+      if (scopeValue && scopeValue !== 'project' && scopeValue !== 'user') {
+        return { exitCode: 2, message: `Invalid deployment verification scope: ${scopeValue}` };
+      }
+      const result = await verifyConfiguredDeployments(ctx.cwd || process.cwd(), {
+        provider: providerIndex >= 0 ? ctx.args[providerIndex + 1] : undefined,
+        bundle: bundleIndex >= 0 ? ctx.args[bundleIndex + 1] : undefined,
+        scope: scopeValue as DeploymentScope | undefined,
+      }, ctx.frameworkRoot);
+      return {
+        exitCode: result.exitCode,
+        message: ctx.args.includes('--json')
+          ? JSON.stringify(result, null, 2)
+          : renderUseDeploymentResult(result),
+        rawOutput: ctx.args.includes('--json'),
+      };
+    }
+
     // #1156 Phase 1 — `aiwg doctor --scope user` / `aiwg doctor --user`
     // validates the per-user registry (~/.aiwg/installed.json) without
     // running the project-scope diagnostics. Operators need this to verify
@@ -496,6 +560,38 @@ export const doctorHandler: CommandHandler = {
 
     // Run core doctor diagnostics
     const result = await runner.run('tools/cli/doctor.mjs', ctx.args, { cwd: ctx.cwd });
+    let agentSkillsFailure = false;
+
+    try {
+      const { inspectGrokBuildNative } = await import('../../mcp/grok-build-config.mjs');
+      const native = await inspectGrokBuildNative({ projectDir: ctx.cwd || process.cwd() });
+      console.log(`\n── Grok Build native extensions ──\n  MCP: ${native.mcp}\n  Hooks: ${native.hooks}`);
+      for (const diagnostic of native.diagnostics) console.log(`  ⚠ ${diagnostic}`);
+    } catch (error) {
+      console.log(`\n── Grok Build native extensions ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      const projectDir = ctx.cwd || process.cwd();
+      const provider = flagValue(ctx.args, '--provider');
+      const requested = provider === 'muse' || ctx.args.includes('--all-providers');
+      const { inspectMuseNative, isMuseDeployedProject } = await import('../../mcp/muse-native-config.mjs');
+      if (requested || await isMuseDeployedProject(projectDir)) {
+        const native = await inspectMuseNative({ projectDir });
+        console.log(`\n── Muse Code native extensions ──\n  CLI: ${native.cli}\n  Hooks: ${native.hooks}\n  MCP: ${native.mcp}`);
+      }
+    } catch (error) {
+      console.log(`\n── Muse Code native extensions ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      const { buildAgentSkillsDoctorSection } = await import('../../skills/doctor.js');
+      const section = buildAgentSkillsDoctorSection(ctx.cwd || process.cwd());
+      console.log(section.output);
+      agentSkillsFailure = section.hasFailures;
+    } catch (error) {
+      console.log(`\n── Agent Skills conformance ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     // Surface feedback escape hatch when doctor finds issues
     if (result.exitCode !== 0) {
@@ -528,18 +624,34 @@ export const doctorHandler: CommandHandler = {
           namespace: 'aiwg',
           skillsBaseDir: skillsDir,
         });
-        const errorAndWarn = collisions.filter(r => r.severity === 'error' || r.severity === 'warn');
-        if (errorAndWarn.length > 0) {
-          // In doctor context we report stale skills, not deployment blocks.
-          // Re-running `aiwg use` will auto-clean aiwg-owned stale skills.
+        // Two distinct causes share this scan, and conflating them mislabels
+        // one as the other: an `error` is a name that shadows a Claude
+        // built-in; a `warn` is a deployed skill this namespace does not own
+        // (#2504). Report each under its own heading with its own remedy.
+        const builtinCollisions = collisions.filter(r => r.severity === 'error');
+        const unownedCollisions = collisions.filter(r => r.severity === 'warn');
+        if (builtinCollisions.length > 0 || unownedCollisions.length > 0) {
           console.log('\n── Skill collision scan ──');
-          console.log('');
-          console.log('⚠ Stale skills detected (names collide with Claude built-ins):');
-          for (const r of errorAndWarn) {
-            console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+          if (builtinCollisions.length > 0) {
+            console.log('');
+            console.log('⚠ Stale skills detected (names collide with Claude built-ins):');
+            for (const r of builtinCollisions) {
+              console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+            }
+            console.log('');
+            console.log('  Fix: run `aiwg use <framework>` to redeploy and auto-clean stale skill directories.');
           }
-          console.log('');
-          console.log('  Fix: run `aiwg use <framework>` to redeploy and auto-clean stale skill directories.');
+          if (unownedCollisions.length > 0) {
+            console.log('');
+            console.log("⚠ Deployed skills not owned by namespace 'aiwg' (a redeploy would overwrite them):");
+            for (const r of unownedCollisions) {
+              console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+            }
+            console.log('');
+            console.log("  Fix: if the skill is yours, move it out of the AIWG-managed skills directory");
+            console.log("  or give it its own namespace. If AIWG generated it, re-run `aiwg use` to");
+            console.log('  restore the ownership marker.');
+          }
         }
       }
     } catch {
@@ -576,7 +688,143 @@ export const doctorHandler: CommandHandler = {
       // Project-local section is non-fatal for doctor
     }
 
-    return result;
+    // Web-backed resource lock/cache diagnostics (#1850). Report lock source
+    // mode, cold cache, and digest drift without requiring web mode to be in use.
+    try {
+      const { buildWebResourceDoctorSection } = await import('../../resources/doctor.js');
+      const section = buildWebResourceDoctorSection(ctx.cwd || process.cwd(), {
+        cacheRoot: process.env.AIWG_RESOURCE_CACHE_ROOT,
+      });
+      if (section.output) console.log(section.output);
+      if (section.hasFailures) return { exitCode: 1, message: '' };
+    } catch (error) {
+      console.log(`\n── Web resource cache ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // Canonical workspace-context graph diagnostics (#1811). Legacy projects
+    // remain valid; drift, loops, conflicts, and possible credentials fail.
+    try {
+      const { diagnoseWorkspaceContext } = await import('../../smiths/context-pipeline/workspace-context.js');
+      const diagnostics = await diagnoseWorkspaceContext(ctx.cwd || process.cwd());
+      console.log('\n── Workspace context graph ──');
+      for (const diagnostic of diagnostics) {
+        const mark = diagnostic.severity === 'error' ? '✗' : diagnostic.severity === 'warning' ? '⚠' : '✓';
+        console.log(`  ${mark} ${diagnostic.message}`);
+      }
+      if (diagnostics.some((item) => item.severity === 'error')) return { exitCode: 1, message: '' };
+    } catch (error) {
+      console.log(`\n── Workspace context graph ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return agentSkillsFailure
+      ? { exitCode: 1, message: '' }
+      : result;
+  },
+};
+
+const CONTEXT_FIREWALL_HELP = `aiwg context-firewall — inspect provider context and reviewed memory
+
+Usage:
+  aiwg context-firewall [scan] [options]
+  aiwg context-firewall baseline [--plan]
+  aiwg context-firewall baseline --write --confirm-reviewed [--output <path>]
+
+Actions:
+  scan       Read-only inventory, trust, poisoning, drift, and budget checks (default)
+  baseline   Plan or explicitly write the reviewed digest baseline
+
+Options:
+  --root <path>           Project root (default: current directory)
+  --provider <name>       Limit to a provider; repeatable
+  --baseline <path>       Existing reviewed baseline used by the scan
+  --output <path>         Baseline destination (must remain within the project)
+  --budget-tokens <n>     Portable provider-context budget
+  --warn-ratio <n>        Warning threshold as a fraction of the budget
+  --strict                Exit non-zero for violations or a missing baseline
+  --json                  Emit stable machine-readable output
+  --limit <n>             Bound scan detail in human-readable output
+  --no-content-scan       Skip poisoning classification
+  --plan                  Show every record; do not write (baseline default)
+  --write                 Write after review; requires --confirm-reviewed
+  --confirm-reviewed      Confirm every record in the plan was reviewed
+`;
+
+function contextFirewallError(message: string): HandlerResult {
+  return { exitCode: 2, message: `${message}\n\n${CONTEXT_FIREWALL_HELP}` };
+}
+
+/**
+ * Public operator route for the context/memory firewall.
+ *
+ * The implementation remains a reusable packaged engine, while this handler
+ * owns stable command vocabulary and keeps internal script entrypoints out of
+ * user- and agent-facing remediation guidance.
+ */
+export const contextFirewallHandler: CommandHandler = {
+  id: 'context-firewall',
+  name: 'Context Firewall',
+  description: 'Audit provider context and manage its reviewed baseline',
+  category: 'maintenance',
+  aliases: ['-context-firewall', '--context-firewall'],
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
+      return { exitCode: 0, message: CONTEXT_FIREWALL_HELP };
+    }
+
+    const action = ctx.args[0] && !ctx.args[0].startsWith('-') ? ctx.args[0] : 'scan';
+    if (!['scan', 'baseline'].includes(action)) {
+      return contextFirewallError(`Unknown context-firewall action '${action}'.`);
+    }
+
+    const input = action === 'scan' ? ctx.args.slice(action === ctx.args[0] ? 1 : 0) : ctx.args.slice(1);
+    const forwarded: string[] = ['--package-root', ctx.frameworkRoot];
+    let output: string | undefined;
+    let plan = false;
+    let write = false;
+    let confirmed = false;
+
+    for (let index = 0; index < input.length; index += 1) {
+      const arg = input[index];
+      if (arg === '--output') {
+        output = input[index + 1];
+        if (!output) return contextFirewallError('--output requires a path.');
+        index += 1;
+      } else if (arg.startsWith('--output=')) {
+        output = arg.slice('--output='.length);
+        if (!output) return contextFirewallError('--output requires a path.');
+      } else if (arg === '--plan') {
+        plan = true;
+      } else if (arg === '--write') {
+        write = true;
+      } else if (arg === '--confirm-reviewed') {
+        confirmed = true;
+      } else {
+        forwarded.push(arg);
+      }
+    }
+
+    if (action === 'scan' && (output || plan || write || confirmed)) {
+      return contextFirewallError('Baseline mutation options require the `baseline` action.');
+    }
+    if (plan && write) return contextFirewallError('Choose either --plan or --write, not both.');
+    if (write && !confirmed) {
+      return contextFirewallError('Baseline writes require --confirm-reviewed after inspecting the plan.');
+    }
+    if (confirmed && !write) {
+      return contextFirewallError('--confirm-reviewed is only valid with --write.');
+    }
+
+    if (action === 'baseline') {
+      if (write) {
+        forwarded.push(output ? `--write-baseline=${output}` : '--write-baseline', '--confirm-reviewed');
+      } else {
+        forwarded.push(output ? `--plan-baseline=${output}` : '--plan-baseline');
+      }
+    }
+
+    const runner = createScriptRunner(ctx.frameworkRoot);
+    return runner.run('tools/security/context-memory-firewall.mjs', forwarded, { cwd: ctx.cwd });
   },
 };
 
@@ -603,7 +851,7 @@ export const updateHandler: CommandHandler = {
   name: 'Update',
   description: 'Update AIWG and re-deploy installed frameworks',
   category: 'maintenance',
-  aliases: ['-update', '--update'],
+  aliases: ['-update', '--update', 'upgrade'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const args = ctx.args;
@@ -620,9 +868,17 @@ export const updateHandler: CommandHandler = {
     // Step 1: Check for package updates (unless --skip-check)
     if (!skipCheck) {
       try {
-        console.log('Checking for AIWG updates...\n');
-        await forceUpdateCheck();
+        console.log('Updating AIWG installation...\n');
+        const update = await updateInstallation({
+          dryRun,
+          offline: args.includes('--offline'),
+        });
+        console.log(`${update.message}\n`);
       } catch (error) {
+        if ((error as { code?: string }).code === 'AIWG_INSTALLATION_DRIFT'
+          || (error as { code?: string }).code === 'AIWG_INSTALLATION_INVALID') {
+          return { exitCode: 78, message: error instanceof Error ? error.message : String(error) };
+        }
         console.error(`Warning: Update check failed: ${error instanceof Error ? error.message : String(error)}`);
         console.log('Continuing with re-deployment...\n');
       }
@@ -657,32 +913,15 @@ export const updateHandler: CommandHandler = {
       return { exitCode: 0 };
     }
 
-    // Map registry IDs to framework use-names
-    const installedFrameworks: string[] = [];
-    const unmapped: string[] = [];
-
-    for (const fw of registry.frameworks) {
-      const useName = REGISTRY_ID_TO_USE_NAME[fw.id];
-      if (useName) {
-        installedFrameworks.push(useName);
-      } else {
-        unmapped.push(fw.id);
-      }
-    }
-
-    if (installedFrameworks.length === 0) {
-      console.log('No recognized frameworks in registry');
-      if (unmapped.length > 0) {
-        console.log(`Unrecognized entries: ${unmapped.join(', ')}`);
-      }
-      return { exitCode: 0 };
-    }
+    // Canonical framework IDs need their historical public aliases. Add-ons,
+    // extensions, and project-local bundles are already accepted by `aiwg use`,
+    // so preserve their registry IDs instead of silently skipping them.
+    const installedFrameworks = registry.frameworks.map(
+      item => REGISTRY_ID_TO_USE_NAME[item.id] ?? item.id
+    );
 
     // Report what will be updated
     console.log(`Installed frameworks: ${installedFrameworks.join(', ')}`);
-    if (unmapped.length > 0) {
-      console.log(`Skipping unrecognized: ${unmapped.join(', ')}`);
-    }
     console.log('');
 
     if (dryRun) {
@@ -740,5 +979,6 @@ export const utilityHandlers: CommandHandler[] = [
   contributeStartHandler,
   validateMetadataHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
 ];

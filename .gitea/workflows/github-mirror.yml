@@ -1,8 +1,9 @@
-# GitHub Mirror — auto-push tag + create Release on stable tags (#1251)
+# GitHub Mirror — wait for operator tag + create Release on stable tags (#1251)
 #
 # Triggered by tag pushes. On STABLE tags only (no pre-release suffix), this
 # workflow:
-#   1. Pushes main + the tag to the GitHub mirror at jmagly/aiwg
+#   1. Pushes main and waits for the operator to push the original signed,
+#      annotated tag object to the GitHub mirror at jmagly/aiwg
 #   2. Creates a GitHub Release using docs/releases/v${VERSION}-announcement.md
 #      as the body (falls back to extracting the CHANGELOG section if the
 #      announcement file is missing).
@@ -11,14 +12,18 @@
 # entirely — per CLAUDE.md these are internal pipeline checkpoints and never
 # get a GitHub Release.
 #
-# REQUIRED SECRETS:
-#   GH_ACCESS_TOKEN - GitHub personal access token with `public_repo` scope
-#               (sufficient for tag push + release creation on the public
-#               jmagly/aiwg mirror). Workflow gracefully skips if absent so
-#               forks without a GitHub mirror don't fail CI. (Consumed as the
-#               GH_TOKEN env var that gh/the push URL read.)
+# REQUIRED TRACKER SECRETS:
+#   VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID - vault AppRole bootstrap pair.
+#
+# vault fetch spec:
+#   ci/vault-fetch.github-mirror.spec -> GH_TOKEN
 
 name: GitHub Mirror
+
+env:
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+  GH_MIRROR_TOKEN_VAULT_PATH: ${{ vars.GH_MIRROR_TOKEN_VAULT_PATH }}
+  GH_MIRROR_TOKEN_VAULT_FIELD: ${{ vars.GH_MIRROR_TOKEN_VAULT_FIELD }}
 
 on:
   push:
@@ -46,11 +51,14 @@ jobs:
         with:
           fetch-depth: 0  # full history so we can push to mirror
 
-      - name: Install gh CLI + jq
+      - name: Verify source-bound storage benchmark claims (#2191)
+        run: npm run verify:storage-claims
+
+      - name: Install gh CLI + vault fetch dependencies
         run: |
           set -euo pipefail
-          if ! command -v jq >/dev/null 2>&1; then
-            apt-get update && apt-get install -y --no-install-recommends jq
+          if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+            apt-get update && apt-get install -y --no-install-recommends curl jq
           fi
           if ! command -v gh >/dev/null 2>&1; then
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -78,23 +86,28 @@ jobs:
             echo "version=${TAG_VERSION}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check GH_ACCESS_TOKEN availability
+      - name: Check vault bootstrap availability
         id: token
         if: ${{ steps.classify.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
-          if [ -z "${{ secrets.GH_ACCESS_TOKEN }}" ]; then
-            echo "GH_ACCESS_TOKEN secret is not configured. Skipping GitHub fan-out (forks without a GitHub mirror should leave this empty)."
+          if [ -z "${{ secrets.VAULT_CI_ROLE_ID }}" ] || [ -z "${{ secrets.VAULT_CI_SECRET_ID }}" ]; then
+            echo "vault CI bootstrap is not configured. Skipping GitHub fan-out."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "GH_ACCESS_TOKEN configured."
+            echo "vault CI bootstrap configured."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Push main to GitHub mirror (best-effort; operator pushes the tag)
+      - name: Fetch GitHub mirror token from vault
         if: ${{ steps.classify.outputs.skip != 'true' && steps.token.outputs.skip != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
+          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
+        run: bash ci/vault-fetch.sh --spec ci/vault-fetch.github-mirror.spec
+
+      - name: Push main to GitHub mirror (best-effort; operator pushes the tag)
+        if: ${{ steps.classify.outputs.skip != 'true' && steps.token.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           MIRROR="https://x-access-token:${GH_TOKEN}@github.com/jmagly/aiwg.git"
@@ -137,10 +150,30 @@ jobs:
             echo "body_file=/tmp/release-body.md" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create GitHub Release
+      - name: Wait for operator-pushed signed annotated tag
         if: ${{ steps.classify.outputs.skip != 'true' && steps.token.outputs.skip != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.classify.outputs.version }}"
+          # actions/checkout peels a tag-trigger checkout to its commit and may
+          # expose refs/tags/$TAG as that commit. Resolve the authoritative
+          # annotated-tag object directly from Gitea instead, so the GitHub API
+          # comparison is tag-object-to-tag-object.
+          EXPECTED_TAG_OBJECT="$(git ls-remote origin "refs/tags/$TAG" | awk 'NR == 1 { print $1 }')"
+          if ! [[ "$EXPECTED_TAG_OBJECT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: could not resolve annotated tag object for $TAG from Gitea." >&2
+            exit 1
+          fi
+          node tools/ci/wait-for-github-tag.mjs \
+            --repo jmagly/aiwg \
+            --tag "$TAG" \
+            --expected-sha "$EXPECTED_TAG_OBJECT" \
+            --attempts 30 \
+            --delay-seconds 10
+
+      - name: Create GitHub Release
+        id: release
+        if: ${{ steps.classify.outputs.skip != 'true' && steps.token.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.classify.outputs.version }}"
@@ -164,7 +197,10 @@ jobs:
           if [ "${{ steps.classify.outputs.skip }}" = "true" ]; then
             echo "✓ Pre-release tag — GitHub fan-out skipped by design."
           elif [ "${{ steps.token.outputs.skip }}" = "true" ]; then
-            echo "✓ Stable tag, but GH_ACCESS_TOKEN not configured — skipped (fork mode)."
-          else
+            echo "✓ Stable tag, but vault CI bootstrap is not configured — skipped."
+          elif [ "${{ steps.release.outcome }}" = "success" ]; then
             echo "✓ Stable tag v${{ steps.classify.outputs.version }} mirrored + released to github.com/jmagly/aiwg."
+          else
+            echo "✗ GitHub Release v${{ steps.classify.outputs.version }} was not completed."
+            exit 1
           fi

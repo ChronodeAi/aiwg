@@ -1,0 +1,18 @@
+{
+  "scenarioId": "T-OG-03-cursor-own-grammar",
+  "provider": "cursor",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "stream.ndjson",
+  "expectedKinds": [
+    "setup",
+    "activity",
+    "activity",
+    "progress",
+    "terminal"
+  ],
+  "expectedOutcome": "execution candidate only; strict final and conductor verification remain separate",
+  "sanitizedEvidence": "synthetic content and identifiers only",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}

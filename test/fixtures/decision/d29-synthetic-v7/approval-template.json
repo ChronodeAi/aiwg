@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "decision-heldout-approval/v1",
+  "approved": false,
+  "study": "D29",
+  "runId": null,
+  "reviewer": "roctinam",
+  "approvalReference": null,
+  "sourceCommit": null,
+  "exactHeadCi": null,
+  "stagingHost": "titan",
+  "stagingWorkspace": null,
+  "model": "jev-1.13.0",
+  "servedModel": "jev-1.13.0",
+  "region": null,
+  "credentialRef": null,
+  "credentialResolverDigest": null,
+  "corpusDigest": "sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de",
+  "preregistrationDigest": "sha256:5a8a2fbdd385c5879505c1757043dd851e924e903c28389260270a4baf6b44eb",
+  "executionDigest": null,
+  "calibration": {
+    "mode": "staged",
+    "phase": "calibration"
+  },
+  "providerTermsReference": null,
+  "priceBound": {
+    "inputUsdPerMTok": 0.042,
+    "outputUsdPerMTok": 0,
+    "perRequestUsd": 0,
+    "evidenceReferences": [
+      "https://www.eesel.ai/blog/typesafe-jev-pricing",
+      "https://www.mindstudio.ai/blog/jev-pricing-cost-per-token",
+      "roctinam/aiwg#2613 comment 153093"
+    ],
+    "approvalReference": null
+  },
+  "budget": {
+    "calls": 15000,
+    "tokens": 60000000,
+    "usd": 6
+  },
+  "priorStudySpendUsd": null,
+  "priorPortfolioSpendUsd": null,
+  "gateBindingDigest": "sha256:20c3042d3a1c555f1ff9fa8c6a0008cc7777cea3f24ec992b2d65253bf6ef2d6",
+  "gatePackDigests": [
+    {
+      "id": "aiwg:decision-engine/absolute-screening",
+      "version": "1.0.0",
+      "digest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138",
+      "resolvedDigest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138"
+    },
+    {
+      "id": "aiwg:decision-engine/integrity-ceiling",
+      "version": "1.0.0",
+      "digest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058",
+      "resolvedDigest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058"
+    }
+  ]
+}

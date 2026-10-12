@@ -11,6 +11,8 @@
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import * as ui from '../ui.js';
 import { maybePrintCommunityFooter } from '../../community/footer.js';
+import { listProviderDefinitions } from '../../providers/provider-definitions.js';
+import { getCommandIds } from '../../extensions/commands/definitions.js';
 
 /**
  * Help command handler
@@ -22,7 +24,12 @@ export const helpHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-h', '-help', '--help'],
 
-  async execute(_ctx: HandlerContext): Promise<HandlerResult> {
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--json')) {
+      // Canonical IDs only: aliases and example prose are not registry entries.
+      console.log(JSON.stringify({ schema: 'aiwg.command-registry.v1', commandIds: getCommandIds() }));
+      return { exitCode: 0 };
+    }
     displayHelp();
     return { exitCode: 0 };
   },
@@ -52,7 +59,7 @@ function displayHelp(): void {
   ui.blank();
 
   helpGroup('FRAMEWORK', [
-    ['use <framework>', 'Deploy framework (sdlc, marketing, media-curator, research, forensics, security-engineering, ops, knowledge-base, all)'],
+    ['use <framework>', 'Deploy framework (sdlc, marketing, media-curator, research, forensics, security-engineering, ops, validation, knowledge-base, all)'],
     ['use cockpit', 'Install the opt-in @aiwg/cockpit package outside the base aiwg footprint'],
     ['list', 'List installed frameworks and addons'],
     ['remove <id>', 'Remove a framework or addon'],
@@ -62,10 +69,13 @@ function displayHelp(): void {
     ['new <name>', 'Create new project with SDLC templates'],
     ['init', 'Create the baseline .aiwg/aiwg.config file'],
     ['setup project', 'CLI helper used by agents for repo/tracker/delivery/signing policy'],
+    ['quickref generate --project', 'Generate the canonical project quickref skill (--dry-run previews deterministic output)'],
+    ['quickref deploy --project', 'Deploy the project quickref to configured provider kernel surfaces'],
   ]);
 
   helpGroup('WORKSPACE', [
     ['status', 'Show workspace health and installed frameworks'],
+    ['sessions <command>', 'Manage the normalized session catalog, imports, and analytics'],
     ['migrate-workspace', 'Migrate legacy .aiwg/ to framework-scoped structure'],
     ['rollback-workspace', 'Rollback workspace migration from backup'],
   ]);
@@ -80,6 +90,8 @@ function displayHelp(): void {
     ['runtime-info', 'Show runtime environment summary'],
     ['runtime-info --discover', 'Full tool discovery and catalog generation'],
     ['runtime-info --check <tool>', 'Check specific tool availability'],
+    ['runtime-info --transports', 'Show configured transport capabilities separately from providers'],
+    ['uhp <operation> --profile <name>', 'Inspect or smoke-test an explicit experimental UHP endpoint profile'],
   ]);
 
   helpGroup('CATALOG', [
@@ -91,21 +103,40 @@ function displayHelp(): void {
   helpGroup('DISCOVERY', [
     ['discover "<phrase>"', 'Find skills/agents/commands/rules by capability'],
     ['show <type> <name>', 'Stream the body of an indexed artifact'],
+    ['versions <list|resolve|show>', 'Browse and resolve signed AIWG web resource releases'],
+    ['auth <login|status|logout>', 'Authenticate for paid AIWG web resources'],
     ['index <subcommand>', 'Manage the artifact index (build/query/discover/deps/stats)'],
+    ['artifacts move --to <path>', 'Move/rename the project AIWG artifact root and reindex'],
   ]);
 
   helpGroup('DISPATCH', [
     ['run skill <name>', 'Execute a script-bearing skill'],
     ['run <script-name>', 'Run a user-defined script from .aiwg/aiwg.config'],
+    ['writing <plan|proofread>', 'Use grounded briefs and authorized proofreading'],
+    ['writer-profile <action>', 'Manage author-controlled writer profile sidecars'],
+    ['output-mode <action>', 'Configure composable output language and presentation'],
   ]);
 
   helpGroup('FEATURES', [
     ['features', 'Show optional feature install status'],
-    ['cockpit [--status]', 'Launch the opt-in AIWG Cockpit control plane'],
+    ['cockpit [--status|doctor]', 'Launch Cockpit or diagnose its executor topology'],
   ]);
 
   helpGroup('VALIDATION', [
     ['validate-metadata [path]', 'Validate AIWG component metadata (defaults to agentic/code)'],
+    ['context-firewall [scan]', 'Audit provider context, trust, drift, poisoning signals, and budget'],
+    ['context-firewall baseline', 'Plan or explicitly write the reviewed context baseline'],
+  ]);
+
+  helpGroup('METRICS', [
+    ['cost-report --fleet', 'Observe OpenRouter per-bot MTD spend and correlate local activity'],
+  ]);
+
+  helpGroup('EVIDENCE', [
+    ['evidence export --output <dir>', 'Package portable activity, report, source, eval, and provenance evidence'],
+    ['evidence verify <bundle>', 'Verify every member hash and the bundle checkpoint'],
+    ['effect record|lookup|reconcile', 'Record, look up or reconcile a side effect in the signed effect ledger'],
+    ['effect verify|checkpoint|keys', 'Verify the effect ledger, checkpoint it, or manage its signing key'],
   ]);
 
   helpGroup('SCAFFOLDING', [
@@ -126,18 +157,19 @@ function displayHelp(): void {
     ['promote <name>', 'Graduate project-local bundle to upstream (--to upstream|corpus, --dry-run, --cleanup)'],
   ]);
 
-  helpGroup('RALPH LOOP', [
-    ['ralph "<task>"', 'Execute iterative task loop (--completion, --max-iterations)'],
-    ['ralph-status', 'Check current loop status'],
-    ['ralph-abort', 'Abort running loop'],
-    ['ralph-resume', 'Resume interrupted loop'],
+  helpGroup('AGENT LOOP', [
+    ['agent-loop "<task>"', 'Execute iterative task loop (--completion, --max-iterations)'],
+    ['agent-loop-status', 'Check current loop status'],
+    ['agent-loop-abort', 'Abort running loop'],
+    ['agent-loop-resume', 'Resume interrupted loop'],
+    ['', 'Legacy ralph* names remain accepted as aliases'],
   ]);
 
   helpGroup('MAINTENANCE', [
     ['doctor', 'Check installation health'],
     ['version', 'Show version and channel info'],
     ['refresh', 'Update AIWG and redeploy frameworks (formerly: sync)'],
-    ['update', 'Check for updates'],
+    ['update', 'Update the active installation and re-deploy installed frameworks (alias: upgrade)'],
     ['help', 'Show this help message'],
   ]);
 
@@ -149,10 +181,12 @@ function displayHelp(): void {
 
   ui.rule();
   ui.blank();
-  console.log(`  ${ui.dimText('Providers:')} claude (default), copilot, factory, codex, cursor, opencode, warp, windsurf`);
+  const providers = listProviderDefinitions().filter(({ id }) => id !== 'generic');
+  console.log(`  ${ui.dimText('Providers:')} ${providers.length} — ${providers.map(({ id }) => id).join(', ')} (default: claude; aliases: agy → antigravity, devin → windsurf, oh-my-pi → omp)`);
   ui.blank();
   console.log(`  ${ui.dimText('Examples:')}`);
   console.log(`    aiwg use sdlc                   ${ui.dimText('Install SDLC framework')}`);
+  console.log(`    aiwg use sdlc --global          ${ui.dimText('Install user assets + lightweight project wiring')}`);
   console.log(`    aiwg use cockpit                ${ui.dimText('Install opt-in Cockpit package')}`);
   console.log(`    aiwg cockpit                    ${ui.dimText('Launch Cockpit after install')}`);
   console.log(`    aiwg discover "deploy"          ${ui.dimText('Find skills by capability')}`);

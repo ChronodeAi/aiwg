@@ -1,0 +1,116 @@
+[
+  {
+    "id": "module-path-traversal",
+    "mutation": "traversal",
+    "error": "path",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-path-symlink",
+    "mutation": "symlink",
+    "error": "Symlink",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-digest-tamper",
+    "mutation": "digest",
+    "error": "digest",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-package-version-tamper",
+    "mutation": "package-version",
+    "error": "version",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-interface-version",
+    "mutation": "interface",
+    "error": "binding",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-wrong-export",
+    "mutation": "export",
+    "error": "exports",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-wrong-version-export",
+    "mutation": "version-export",
+    "error": "exports",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-url-reference",
+    "mutation": "url",
+    "error": "not installed/approved",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-worker-writable",
+    "mutation": "writable",
+    "error": "worker-writable",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-world-writable",
+    "mutation": "mode",
+    "error": "writable",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-duplicate-id",
+    "mutation": "duplicate-id",
+    "error": "Duplicate",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-duplicate-reference",
+    "mutation": "duplicate-reference",
+    "error": "Duplicate",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-unsupported-platform",
+    "mutation": "platform",
+    "error": "Unsupported",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-catalog-tamper",
+    "mutation": "catalog",
+    "error": "digest",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-adapter-version",
+    "mutation": "adapter-version",
+    "error": "version",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-package-name",
+    "mutation": "package-name",
+    "error": "identity",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-unknown-driver",
+    "mutation": "unknown-driver",
+    "error": "not installed/approved",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-builtin-id-collision",
+    "mutation": "builtin-id",
+    "error": "Duplicate",
+    "pack": "T-OG-10/14"
+  },
+  {
+    "id": "module-export-reassignment",
+    "mutation": "reassigned-export",
+    "error": "exports",
+    "pack": "T-OG-10/14"
+  }
+]

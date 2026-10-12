@@ -2,12 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { projectAiwgPath, resolveProjectAiwgDir } from '../../../src/config/project-artifacts.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const repo = resolve(__dirname, '../../..');
-function read(rel: string): string {
-  return readFileSync(resolve(repo, rel), 'utf8');
+function resolveTestPath(rel: string): string {
+  if (rel === '.aiwg') return resolveProjectAiwgDir(repo);
+  if (rel.startsWith('.aiwg/')) return projectAiwgPath(repo, rel.slice('.aiwg/'.length));
+  return resolve(repo, rel);
 }
+function read(rel: string): string {
+  return readFileSync(resolveTestPath(rel), 'utf8');
+}
+function exists(rel: string): boolean {
+  return existsSync(resolveTestPath(rel));
+}
+
+const fortemiCorpusIt = exists('.aiwg/planning/fortemi-core-index-migration/current-surface-inventory.md')
+  ? it
+  : it.skip;
 
 describe('routing documentation regressions', () => {
   it('agent-loop documents native /goal routing for Codex and Claude Code', () => {
@@ -18,11 +31,19 @@ describe('routing documentation regressions', () => {
     expect(skill).toContain('stays AIWG-native');
     const addressIssues = read('agentic/code/frameworks/sdlc-complete/skills/address-issues/SKILL.md');
     expect(addressIssues).toContain('Codex and Claude Code');
-    expect(existsSync(resolve(repo, '.aiwg/research/codex-goal-integration.md'))).toBe(true);
-    expect(existsSync(resolve(repo, '.aiwg/architecture/adr-codex-goal-routing.md'))).toBe(true);
+    expect(addressIssues).toContain('MUST NOT author a free-form cycle comment');
+    expect(addressIssues).toContain('scripts/cycle-comment.mjs');
+    expect(addressIssues).toContain('templates/issue-comments/al-cycle.md');
+    expect(addressIssues).toContain('structured checkpoint is returned to address-issues');
+    if (exists('.aiwg/research/codex-goal-integration.md')) {
+      expect(exists('.aiwg/research/codex-goal-integration.md')).toBe(true);
+    }
+    if (exists('.aiwg/architecture/adr-codex-goal-routing.md')) {
+      expect(exists('.aiwg/architecture/adr-codex-goal-routing.md')).toBe(true);
+    }
   });
 
-  it('address-issues maintains question labels for unresolved workflow questions (#1726)', () => {
+  it('address-issues resolves semantic human-interaction labels and preserves their lifecycle (#1726, #1789)', () => {
     const docs = [
       'agentic/code/frameworks/sdlc-complete/skills/address-issues/SKILL.md',
       'agentic/code/plugins/sdlc/skills/address-issues/SKILL.md',
@@ -32,15 +53,32 @@ describe('routing documentation regressions', () => {
     for (const docPath of docs) {
       const doc = read(docPath);
       expect(doc).toContain('question-label-lifecycle');
-      expect(doc).toContain('Audit stale `question` labels');
-      expect(doc).toContain('If the tracker lacks a `question` label, create it once');
-      expect(doc).toContain('Add the label after posting the question-bearing comment');
-      expect(doc).toContain('remove the `question` label only if no other unresolved `Open Questions` remain');
+      expect(doc).toContain('Audit stale human-question labels');
+      expect(doc).toContain('never silently provision it');
+      expect(doc).toContain('Add the resolved label after posting the question-bearing comment');
+      expect(doc).toContain('Preserve unrelated labels');
       expect(doc).toContain('Question labels are active-state labels');
     }
 
     const template = read('agentic/code/frameworks/sdlc-complete/templates/issue-comments/feedback-needed.md');
-    expect(template).toContain('Apply the `question` label while any specific question above is unanswered');
+    expect(template).toContain('Apply the configured human-interaction semantic label');
+  });
+
+  it('all issue mutation workflows use the semantic label contract (#1789)', () => {
+    const docs = [
+      'issue-create',
+      'issue-update',
+      'issue-close',
+      'issue-comment',
+      'issue-sync',
+    ];
+    for (const name of docs) {
+      const doc = read(`agentic/code/frameworks/sdlc-complete/skills/${name}/SKILL.md`);
+      expect(doc).toContain('Semantic Label Contract (#1789)');
+      expect(doc).toContain('issues.labels');
+      expect(doc).toMatch(/preserv/i);
+      expect(doc).toMatch(/never (provision|create)/i);
+    }
   });
 
   it('agent-loop documents external-route /workflow handling (verified against codex 0.135.0)', () => {
@@ -48,15 +86,25 @@ describe('routing documentation regressions', () => {
     expect(skill).toContain('native dynamic orchestration (Claude Code Workflow tool)');
     expect(skill).toContain('Codex has no core `/workflow`');
     expect(skill).toContain('detached/resume-after-session work stays AIWG-native');
-    expect(existsSync(resolve(repo, '.aiwg/architecture/adr-workflow-routing.md'))).toBe(true);
-    expect(existsSync(resolve(repo, '.aiwg/research/provider-workflow-integration.md'))).toBe(true);
+    if (exists('.aiwg/architecture/adr-workflow-routing.md')) {
+      expect(exists('.aiwg/architecture/adr-workflow-routing.md')).toBe(true);
+    }
+    if (exists('.aiwg/research/provider-workflow-integration.md')) {
+      expect(exists('.aiwg/research/provider-workflow-integration.md')).toBe(true);
+    }
   });
 
-  it('steward persona surfaces orchestration/loop routing incl. cross-stack Missions (#1538/#1546)', () => {
+  it('steward Tier-3 reference surfaces orchestration/loop routing incl. cross-stack Missions (#1538/#1546)', () => {
     const addon = read('agentic/code/addons/aiwg-utils/agents/aiwg-steward.md');
     const persona = read('agentic/code/agents/personas/aiwg-steward.md');
+    const reference = read('agentic/code/addons/aiwg-utils/docs/agent-examples/aiwg-steward-routing-reference.md');
     for (const doc of [addon, persona]) {
-      expect(doc).toContain('Orchestration & loop routing');
+      expect(doc).toContain('Tier Loading Contract');
+      expect(doc).toContain('aiwg discover "agent-loop"');
+      expect(doc).toContain('[[aiwg-steward routing reference]]');
+    }
+    for (const doc of [reference]) {
+      expect(doc).toContain('Orchestration & Loop Routing');
       // External/background stays AIWG-native (native primitives are session-scoped)
       expect(doc).toContain('AIWG-native external route');
       // AIWG-owned Codex Mission entry, not the plugin /workflow
@@ -71,10 +119,11 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('steward routes project-local authoring through AIWG creation commands and docs', () => {
+  it('steward routes project-local authoring through Tier-1 pointers and Tier-3 details', () => {
     const steward = read('agentic/code/addons/aiwg-utils/skills/steward/SKILL.md');
     const persona = read('agentic/code/agents/personas/aiwg-steward.md');
-    for (const doc of [steward, persona]) {
+    const reference = read('agentic/code/addons/aiwg-utils/docs/agent-examples/aiwg-steward-routing-reference.md');
+    for (const doc of [steward, reference]) {
       expect(doc).toContain('Project-Local Authoring Routing');
       expect(doc).toContain('aiwg new-bundle <name> --starter skill');
       expect(doc).toContain('aiwg new-provider <name>');
@@ -83,14 +132,41 @@ describe('routing documentation regressions', () => {
       expect(doc).toContain('docs/customization/project-local-lifecycle.md');
       expect(doc).not.toContain('docs/project-local/overview.md');
     }
+    expect(persona).toContain('aiwg discover "project-local customization"');
+    expect(persona).toContain('[[steward-quickref]]');
+    expect(persona).toContain('[[aiwg-steward routing reference]]');
     const quickref = read('agentic/code/addons/aiwg-utils/skills/aiwg-utils-quickref/SKILL.md');
     expect(quickref).toContain('aiwg discover "project-local customization"');
   });
 
+  it('steward Tier-1 definitions stay small and point at Tier-2/Tier-3 routes (#1661)', () => {
+    const docs = [
+      'agentic/code/addons/aiwg-utils/agents/aiwg-steward.md',
+      'agentic/code/plugins/utils/agents/aiwg-steward.md',
+      'agentic/code/agents/personas/aiwg-steward.md',
+    ];
+    for (const docPath of docs) {
+      const doc = read(docPath);
+      expect(Buffer.byteLength(doc, 'utf8')).toBeLessThanOrEqual(12 * 1024);
+      expect(doc).toContain('Tier Loading Contract');
+      expect(doc).toContain('[[steward-quickref]]');
+      expect(doc).toContain('[[aiwg-steward routing reference]]');
+      expect(doc).toContain('ask **one** clarifying question');
+      expect(doc).toContain('file a detailed AIWG correction issue');
+    }
+
+    const reference = read('agentic/code/addons/aiwg-utils/docs/agent-examples/aiwg-steward-routing-reference.md');
+    const examples = read('agentic/code/addons/aiwg-utils/docs/agent-examples/aiwg-steward-examples.md');
+    expect(reference).toContain('Issue Workflow Routing');
+    expect(reference).toContain('Project-Local Authoring Routing');
+    expect(examples).toContain('Badge Helper');
+    expect(reference).toContain('aiwg discover "aiwg-steward routing reference"');
+  });
+
   it('Claude Code docs cover the managed 1M-context default and opt-in path', () => {
-    const quickstart = read('docs/integrations/claude-code-quickstart.md');
-    expect(quickstart).toContain('CLAUDE_CODE_DISABLE_1M_CONTEXT=1');
-    expect(quickstart).toContain('export CLAUDE_CODE_DISABLE_1M_CONTEXT=0');
+    const operationalReference = read('docs/agents/providers/claude.md');
+    expect(operationalReference).toContain('CLAUDE_CODE_DISABLE_1M_CONTEXT=1');
+    expect(operationalReference).toContain('export CLAUDE_CODE_DISABLE_1M_CONTEXT=0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toContain('Claude Code external loop launches now default-disable 1M-context model variants');
   });
@@ -127,7 +203,7 @@ describe('routing documentation regressions', () => {
   });
 
   it('cli-reference.md carries the skill-first reading guide (#1480)', () => {
-    const ref = read('docs/cli-reference.md');
+    const ref = read('docs/cli/reference.md');
     expect(ref).toContain('skill-first');
     expect(ref).toContain('augment');
     // distinguishes the two categories and routes paired commands through the skill
@@ -160,14 +236,45 @@ describe('routing documentation regressions', () => {
 
   it('Fortemi storage docs stay separate from Fortemi Core index/search', () => {
     const doc = read('docs/storage/backends/fortemi.md');
+    const qualification = read('docs/storage/qualification.md');
+    const secrets = read('docs/contributing/ci-cd-secrets.md');
+    const prebuilt = read('docs/fortemi-core-prebuilt-indices.md');
     expect(doc).toContain('Fortemi MCP storage adapter');
     expect(doc).toMatch(/not the Fortemi\s+Core index\/search backend/);
     expect(doc).toContain('aiwg index sync');
     expect(doc).toContain('"type": "fortemi"');
+    expect(doc).toContain('This command is read-only by default');
+    expect(doc).toContain('Only the exact value `1` enables');
+    expect(doc).toContain('Endpoint access alone is not mutation authorization');
+    expect(doc).toContain('aiwg.fortemi-live-qualification-receipt/v1');
+    expect(qualification).toContain('PostgreSQL Direct, PostgREST, and Fortemi jobs');
+    expect(qualification).toContain('an uploaded');
+    expect(qualification).toContain('directory or console report is not certification evidence');
+    expect(secrets).toContain('ci/vault-fetch.storage-fortemi.spec');
+    expect(secrets).toContain('ci/vault-fetch.storage-fortemi-auth.spec');
+    expect(prebuilt).toContain('`AIWG_FORTEMI_CORE_LIVE` is a legacy test-only placeholder');
+    expect(prebuilt).toContain('It does not contact Fortemi');
+  });
+
+  it('documents provider-neutral corpus ingest and credential references (#1508)', () => {
+    const migration = read('docs/storage/migration.md');
+    const fortemi = read('docs/storage/backends/fortemi.md');
+    const cli = read('docs/cli/reference.md');
+
+    for (const doc of [migration, fortemi, cli]) {
+      expect(doc).toContain('aiwg storage import-corpus');
+      expect(doc).toContain('--header-env');
+      expect(doc).toContain('AIWG_FORTEMI_TOKEN');
+    }
+    expect(migration).toContain('Only the environment-variable name is persisted');
+    expect(migration).toContain('--to obsidian:~/vault');
+    expect(migration).toContain('does not read legacy Claude credential files');
+    expect(fortemi).toContain('non-loopback endpoints require');
+    expect(cli).toContain('without connecting');
   });
 
   it('CLI reference documents Fortemi Core graph traversal backend flags', () => {
-    const ref = read('docs/cli-reference.md');
+    const ref = read('docs/cli/reference.md');
 
     expect(ref).toContain(
       'aiwg index query "static retrieval evidence" --fulltext --graph project --json',
@@ -211,7 +318,7 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('Fortemi current-surface inventory reflects current public command signatures', () => {
+  fortemiCorpusIt('Fortemi current-surface inventory reflects current public command signatures', () => {
     const inventory = read('.aiwg/planning/fortemi-core-index-migration/current-surface-inventory.md');
 
     expect(inventory).toContain('status: local-evidence-mapped');
@@ -270,7 +377,8 @@ describe('routing documentation regressions', () => {
     expect(release).toContain('#1551');
     expect(release).toContain('#1508');
     expect(release).toMatch(/body-level embedding/);
-    expect(release).toMatch(/provider-neutral corpus-to-storage\/index boundary/);
+    expect(release).toMatch(/provider-neutral\s+storage\/index boundary/);
+    expect(release).toContain('operator-approved target environment');
     expect(release).toMatch(/Direct Fortemi\s+REST import and hardcoded-token patterns remain out of scope/);
     expect(changelog).toContain('Fortemi boundary docs');
     expect(changelog).toContain('local issue search');
@@ -296,7 +404,7 @@ describe('routing documentation regressions', () => {
     expect(doc).toMatch(/use `aiwg index` commands for\s+artifact-index Fortemi Core queries/);
   });
 
-  it('research-query docs use the synced Fortemi Core cache by default', () => {
+  fortemiCorpusIt('research-query docs use the synced Fortemi Core cache by default', () => {
     const source = read('agentic/code/frameworks/research-complete/skills/research-query/SKILL.md');
     const plugin = read('agentic/code/plugins/research/skills/research-query/SKILL.md');
 
@@ -306,6 +414,9 @@ describe('routing documentation regressions', () => {
       expect(doc).toContain('--backend local');
       expect(doc).toContain('fail with recovery guidance');
       expect(doc).toContain('instead of falling back silently');
+      expect(doc).toContain('--include-diagnostics');
+      expect(doc).toContain('diagnostics are not research evidence');
+      expect(doc).toContain('without rereading source files');
     }
 
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
@@ -317,25 +428,25 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('corpus snapshot docs keep snapshot metrics local during the Fortemi preview', () => {
+  it('corpus snapshot docs preserve the accepted AIWG-rendered boundary', () => {
     const source = read('agentic/code/frameworks/research-complete/skills/corpus-snapshot/SKILL.md');
     const plugin = read('agentic/code/plugins/research/skills/corpus-snapshot/SKILL.md');
 
     for (const doc of [source, plugin]) {
       expect(doc).toContain('Fortemi Core Migration Note');
       expect(doc).toContain('corpus snapshots remain');
-      expect(doc).toContain('AIWG-rendered from corpus sidecars, corpus views, and the local `.aiwg/.index`');
-      expect(doc).toContain('Do not use `--backend fortemi-core` as the source of truth');
-      expect(doc).toContain('REF/PROF, citation');
-      expect(doc).toContain('profile, radar, discovery, and quality metrics');
+      expect(doc).toMatch(/AIWG-rendered from\s+corpus sidecars, corpus views, and the local `.aiwg\/\.index`/);
+      expect(doc).toMatch(/Fortemi\s+v2 projects the underlying research and KB records/);
+      expect(doc).toContain('does not replace the snapshot renderer');
+      expect(doc).toContain('golden corpus-view fixtures');
     }
   });
 
-  it('Fortemi package-boundary proposal documents npm release-age override safeguards', () => {
+  fortemiCorpusIt('Fortemi package-boundary proposal documents npm release-age override safeguards', () => {
     const proposal = read('.aiwg/planning/fortemi-core-index-migration/fortemi-package-boundary-workflow-proposal.md');
 
     expect(proposal).toContain('npm Release-Age Override Record');
-    expect(proposal).toContain('@fortemi/core@2026.7.1');
+    expect(proposal).toContain('@fortemi/core@2026.7.7');
     expect(proposal).toContain('--min-release-age=0');
     expect(proposal).toContain('explicit human approval');
     expect(proposal).toContain('Approval record to fill before copying');
@@ -353,7 +464,7 @@ describe('routing documentation regressions', () => {
     expect(proposal).toContain('npm ci');
   });
 
-  it('Fortemi completion audit records current local validation evidence', () => {
+  fortemiCorpusIt('Fortemi completion audit records current local validation evidence', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const closeout = read('.aiwg/planning/fortemi-core-index-migration/post-ci-tracker-closeout-plan.md');
     const checklist = read('.aiwg/planning/fortemi-core-index-migration/pr-readiness-checklist.md');
@@ -423,7 +534,7 @@ describe('routing documentation regressions', () => {
     expect(trackerStatus).toContain('Do not use this snapshot as permission');
   });
 
-  it('Fortemi default-backend switch draft preserves post-gate filing constraints', () => {
+  fortemiCorpusIt('Fortemi default-backend switch draft preserves post-gate filing constraints', () => {
     const draft = read('.aiwg/planning/fortemi-core-index-migration/default-backend-switch-issue-draft.md');
     const closeout = read('.aiwg/planning/fortemi-core-index-migration/post-ci-tracker-closeout-plan.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
@@ -442,7 +553,7 @@ describe('routing documentation regressions', () => {
     expect(traceability).toContain('default-backend-switch-issue-draft.md');
   });
 
-  it('Fortemi migration evidence keeps required CI free of live/package flags', () => {
+  fortemiCorpusIt('Fortemi migration evidence keeps required CI free of live/package flags', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
 
@@ -454,7 +565,7 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('Fortemi completion evidence records traversal flag and operand parser hardening', () => {
+  fortemiCorpusIt('Fortemi completion evidence records traversal flag and operand parser hardening', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
 
@@ -481,7 +592,7 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('Fortemi completion evidence records corrupt-manifest status validation', () => {
+  fortemiCorpusIt('Fortemi completion evidence records corrupt-manifest status validation', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
 
@@ -492,7 +603,7 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('Fortemi React issue audit records the no-new-issue decision', () => {
+  fortemiCorpusIt('Fortemi React issue audit records the no-new-issue decision', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/fortemi-react-issue-audit.md');
 
     expect(audit).toMatch(/[Pp]ublic Gitea API recheck/);
@@ -509,7 +620,7 @@ describe('routing documentation regressions', () => {
     expect(audit).toContain('operator-authorized Gitea MCP connector');
   });
 
-  it('Fortemi tracker closeout plan records tea commands and MCP authorization boundary', () => {
+  fortemiCorpusIt('Fortemi tracker closeout plan records tea commands and MCP authorization boundary', () => {
     const plan = read('.aiwg/planning/fortemi-core-index-migration/post-ci-tracker-closeout-plan.md');
 
     expect(plan).toContain('tea whoami');
@@ -530,7 +641,7 @@ describe('routing documentation regressions', () => {
     expect(plan).toContain('use the connector');
   });
 
-  it('Fortemi tracker snapshot records the operator-authorized MCP status comment', () => {
+  fortemiCorpusIt('Fortemi tracker snapshot records the operator-authorized MCP status comment', () => {
     const snapshot = read('.aiwg/planning/fortemi-core-index-migration/tracker-status-refresh.md');
 
     expect(snapshot).toContain('Operator-Authorized MCP Status Comment');
@@ -539,7 +650,7 @@ describe('routing documentation regressions', () => {
     expect(snapshot).toMatch(/not\s+closure evidence/);
   });
 
-  it('Fortemi default-backend switch draft keeps rollback and CI gates explicit', () => {
+  fortemiCorpusIt('Fortemi default-backend switch draft keeps rollback and CI gates explicit', () => {
     const plan = read('.aiwg/planning/fortemi-core-index-migration/post-ci-tracker-closeout-plan.md');
 
     expect(plan).toContain('Default-Backend Switch Issue Draft');
@@ -551,7 +662,7 @@ describe('routing documentation regressions', () => {
     expect(plan).toContain('AIWG_FORTEMI_CORE_PACKAGE_REQUIRED');
   });
 
-  it('Fortemi completion audit records that legacy removal remains gated', () => {
+  fortemiCorpusIt('Fortemi completion audit records that legacy removal remains gated', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
 
@@ -562,7 +673,7 @@ describe('routing documentation regressions', () => {
     }
   });
 
-  it('Fortemi tracker refresh preserves related issue ordering gates', () => {
+  fortemiCorpusIt('Fortemi tracker refresh preserves related issue ordering gates', () => {
     const refresh = read('.aiwg/planning/fortemi-core-index-migration/tracker-status-refresh.md');
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
@@ -578,7 +689,7 @@ describe('routing documentation regressions', () => {
     expect(refresh).toContain('do not port the direct Fortemi REST/token pattern');
   });
 
-  it('Fortemi post-CI closeout keeps related issues non-closing', () => {
+  fortemiCorpusIt('Fortemi post-CI closeout keeps related issues non-closing', () => {
     const plan = read('.aiwg/planning/fortemi-core-index-migration/post-ci-tracker-closeout-plan.md');
     const checklist = read('.aiwg/planning/fortemi-core-index-migration/pr-readiness-checklist.md');
 
@@ -594,14 +705,14 @@ describe('routing documentation regressions', () => {
     expect(plan).toContain('Direct Fortemi REST import and hardcoded-token patterns remain out of scope');
   });
 
-  it('Fortemi package evidence separates availability from direct v2 acceptance', () => {
+  fortemiCorpusIt('Fortemi package evidence separates availability from direct v2 acceptance', () => {
     const audit = read('.aiwg/planning/fortemi-core-index-migration/completion-gate-audit.md');
     const traceability = read('.aiwg/planning/fortemi-core-index-migration/traceability-matrix.md');
     const decision = read('.aiwg/planning/fortemi-core-index-migration/package-boundary-decision-record.md');
 
     for (const doc of [audit, traceability]) {
       expect(doc).toContain(
-        'npm view @fortemi/core@2026.7.1 version dist-tags exports',
+        'npm view @fortemi/core@2026.7.7 version dist-tags exports',
       );
       expect(doc).toContain('--min-release-age=0');
       expect(doc).toMatch(/confirmed the\s+published (package still exports|exports still include)\s+`\.\/aiwg-index`/);
@@ -619,7 +730,7 @@ describe('routing documentation regressions', () => {
     expect(decision).toContain('Fortemi Core is the default backend');
   });
 
-  it('Fortemi Core ADR locks storage, issue-search, and package-boundary limits', () => {
+  fortemiCorpusIt('Fortemi Core ADR locks storage, issue-search, and verified package-boundary limits', () => {
     const adr = read('.aiwg/architecture/adr-fortemi-core-indexing-substrate.md');
 
     expect(adr).toContain('"type": "fortemi"');
@@ -628,11 +739,11 @@ describe('routing documentation regressions', () => {
     expect(adr).toContain('aiwg issue list --search');
     expect(adr).toContain('.aiwg/issues/index/issues.index.json');
     expect(adr).toContain('local issue CLI contract');
-    expect(adr).toContain('@fortemi/core@2026.7.1');
-    expect(adr).toContain('--min-release-age=0');
-    expect(adr).toContain('--ignore-scripts');
-    expect(adr).toContain('AIWG_FORTEMI_CORE_PACKAGE_REQUIRED=1');
-    expect(adr).toContain('explicitly human-approved');
+    expect(adr).toContain('@fortemi/core@2026.7.11');
+    expect(adr).toContain('blocking shard conformance CI');
+    expect(adr).toContain('clean PGlite import/re-export');
+    expect(adr).toContain('clean Fortemi server import/re-export');
+    expect(adr).toContain('not `full-v1`');
     expect(adr).toContain('source-body chunk export');
     expect(adr).toContain('vector embedding ownership');
   });

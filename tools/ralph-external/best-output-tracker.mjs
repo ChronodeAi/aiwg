@@ -34,7 +34,7 @@ import { join, dirname } from 'path';
  * @property {number} tokens_used - Tokens consumed
  * @property {number} token_cost_usd - Cost in USD
  * @property {number} execution_time_ms - Duration in milliseconds
- * @property {string} verification_status - passed|failed|skipped
+ * @property {string} verification_status - passed|failed|skipped|void
  * @property {string} snapshot_path - Path to artifact snapshot
  * @property {string[]} artifacts - Artifact file paths
  * @property {string[]} reflections - Self-reflection notes
@@ -94,6 +94,7 @@ export class BestOutputTracker {
       keep_all_iterations: config.keep_all_iterations !== false,
       quality_weights: { ...DEFAULT_WEIGHTS, ...(config.quality_weights || {}) },
     };
+    this.validateConfig();
 
     this.iterationsDir = join(this.config.storage_path, 'iterations');
     this.trackingFile = join(this.config.storage_path, 'best-output-tracking.json');
@@ -126,6 +127,13 @@ export class BestOutputTracker {
    * @returns {number} Score 0-100
    */
   calculateQualityScore(dimensions) {
+    const names = ['validation', 'completeness', 'correctness', 'readability', 'efficiency'];
+    for (const name of names) {
+      const value = dimensions?.[name];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+        throw new RangeError(`Quality dimension ${name} must be a finite number between 0 and 1`);
+      }
+    }
     const weights = this.config.quality_weights;
     const weighted =
       dimensions.validation * weights.validation +
@@ -192,6 +200,9 @@ export class BestOutputTracker {
       snapshot_path: snapshotDir,
       artifacts: snapshotArtifacts,
       reflections: params.reflections || [],
+      // VOID iterations are excluded from selection unless a human accepted
+      // them (#1776).
+      eval_human_override: params.eval_human_override === true,
     };
 
     this.iterations.push(record);
@@ -210,6 +221,13 @@ export class BestOutputTracker {
    * @param {IterationRecord} newRecord
    */
   updateBest(newRecord) {
+    // A VOID iteration is never the running best unless a human accepted it (#1776).
+    const isSelectable = (rec) =>
+      rec.verification_status !== 'void' || rec.eval_human_override === true;
+    if (!isSelectable(newRecord)) {
+      return;
+    }
+
     if (this.bestIterationNumber === null) {
       this.bestIterationNumber = newRecord.iteration_number;
       return;
@@ -253,8 +271,19 @@ export class BestOutputTracker {
     const criteria = this.config.selection;
     const finalIteration = this.iterations[this.iterations.length - 1];
 
+    // VOID iterations (an eval harness voided them — e.g. a lint violation)
+    // are never valid best-output candidates unless a human override accepted
+    // that specific iteration (#1776). This is the mechanical fence that stops
+    // the optimizer from being rewarded for a metric-gaming iteration.
+    const selectable = this.iterations.filter(
+      (it) => it.verification_status !== 'void' || it.eval_human_override === true
+    );
+    if (selectable.length === 0) {
+      throw new Error('No selectable iterations: all iterations are VOID without human override');
+    }
+
     // Filter by threshold
-    let candidates = this.iterations.filter(
+    let candidates = selectable.filter(
       (it) => it.quality_score >= criteria.threshold
     );
 
@@ -265,9 +294,10 @@ export class BestOutputTracker {
       );
     }
 
-    // If no candidates meet criteria, fall back to all iterations
+    // If no candidates meet criteria, fall back to all non-VOID iterations
+    // (never fall back to a VOID iteration).
     if (candidates.length === 0) {
-      candidates = [...this.iterations];
+      candidates = [...selectable];
     }
 
     let selected;
@@ -629,6 +659,22 @@ export class BestOutputTracker {
       total_cost_usd: totalCost,
       total_time_ms: totalTime,
     };
+  }
+
+  validateConfig() {
+    const { threshold } = this.config.selection;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+      throw new RangeError('Selection threshold must be a finite number between 0 and 100');
+    }
+    if (!['highest_quality', 'highest_quality_verified', 'most_recent_above_threshold'].includes(this.config.selection.mode)) {
+      throw new RangeError(`Unknown selection mode: ${this.config.selection.mode}`);
+    }
+    const weights = Object.values(this.config.quality_weights);
+    if (weights.length !== 5 || weights.some(weight => typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0)) {
+      throw new RangeError('Quality weights must be five finite non-negative numbers');
+    }
+    const sum = weights.reduce((total, weight) => total + weight, 0);
+    if (Math.abs(sum - 1) > 1e-9) throw new RangeError('Quality weights must sum to 1');
   }
 }
 

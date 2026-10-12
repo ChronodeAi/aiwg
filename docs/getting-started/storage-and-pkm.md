@@ -1,5 +1,8 @@
 # Storage & PKM Integration
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 By default AIWG persists everything under `.aiwg/` in your project. That's fine for most projects.
 But when you want AIWG memory to flow into your existing personal-knowledge system — Obsidian,
 Logseq, Fortemi — or you want to move heavy artifacts (research papers, media caches) onto a

@@ -1,5 +1,8 @@
 # Writing and Content
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 You want the AI to write the way you write — not in that recognizable AI voice that sounds the same as everything else.
 
 AIWG's voice framework lets you define or select a writing style, then apply it consistently across everything the AI generates: documentation, blog posts, proposals, READMEs, emails, technical explainers, whatever.
@@ -8,14 +11,8 @@ AIWG's voice framework lets you define or select a writing style, then apply it 
 
 ## Quickest path
 
-```bash
-npm install -g aiwg
-cd /path/to/your/project
-aiwg use writing
-claude .
-```
-
-Then:
+Open your AI tool in the connected project and ask for one concrete writing
+result:
 
 ```
 Write a README for this project in a clear, direct, technical tone
@@ -28,6 +25,13 @@ Rewrite this section so it sounds less like an AI wrote it
 ```
 Write a blog post about what we built. Keep it conversational and specific — no generic hype.
 ```
+
+Success means the draft preserves the facts, names the voice or guidance used,
+and gives you a short review note for anything that needs human judgment.
+
+If you intentionally run a targeted deployment instead of the complete setup
+path, `aiwg use writing` remains the manual command for the writing and voice
+tools.
 
 ---
 
@@ -87,7 +91,9 @@ After writing, run the validation:
 /writing-validator path/to/content.md
 ```
 
-This checks for AI-pattern phrases, passive voice overuse, vague hedging language, and structural issues. It's the same validator AIWG uses on its own documentation.
+This checks phrase patterns, passive voice, hedging and structure for editorial review. A match can be appropriate in context, including necessary uncertainty, quotations and technical terms.
+
+The numeric `score`, `authenticityScore` and `aiPatternScore` fields are deprecated legacy heuristics, not evidence or probabilities of human authorship. The CLI retains threshold options and exit codes for compatibility; those are legacy diagnostics, not publication gates. Review the findings and retain useful wording rather than aim for zero highlights.
 
 ---
 

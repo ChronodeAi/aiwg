@@ -1,0 +1,14 @@
+{
+  "scenarioId": "T-OG-03-copilot-own-grammar",
+  "provider": "copilot",
+  "synthetic": true,
+  "qualification": "synthetic-only; no account or live timing qualification",
+  "framing": "jsonl",
+  "fixture": "final.json",
+  "expectedKinds": [
+    null
+  ],
+  "expectedOutcome": "final-only JSONL from `--output-format json`; no event-level health grammar is evidenced from --help, so the observer reports process-only coverage and completion is exit-code gated",
+  "sanitizedEvidence": "synthetic content and identifiers only; result shape is not a pinned upstream contract",
+  "cleanup": "pure fixture; no process, credentials or persistent runtime"
+}

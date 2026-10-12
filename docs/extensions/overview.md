@@ -1,11 +1,17 @@
 # Extension System Overview
 
-AIWG's unified extension system provides a single schema for all extension types, enabling dynamic discovery, semantic search, and cross-platform deployment.
+AIWG's extension system is the source format for capabilities that can be
+discovered, validated, and deployed into provider-specific locations. Use it
+when you need to understand how agents, skills, commands, hooks, templates,
+frameworks, addons, behaviors, and teams are represented before they are
+installed.
+
+For most authors, the next step is the [Creating Extensions Guide](creating-extensions.md)
+or the [project-local customization quickstart](../customization/project-local-quickstart.md).
 
 **References:**
 
 - @src/extensions/types.ts - Core type definitions
-- @.aiwg/architecture/unified-extension-schema.md - Complete schema documentation
 - @src/extensions/commands/definitions.ts - Example command extensions
 
 ---
@@ -151,6 +157,12 @@ interface CommandMetadata {
 ### Skill Extensions
 
 Natural language workflows triggered by phrases or conditions.
+
+For portable third-party `SKILL.md` bundles, see
+[Agent Skills import and deployment](../skills/agent-skills.md). That guide
+covers agentskills.io conformance, managed import, validation, strict provider
+projection, and the mapping between portable fields and AIWG extension
+metadata.
 
 **Metadata:**
 
@@ -373,7 +385,7 @@ interface BehaviorMetadata {
 
 ### Team Extensions
 
-Multi-agent compositions (2–8 agents) with assigned roles, an execution
+Multi-agent compositions with assigned roles, an execution
 mode, and inter-agent handoffs. Native on Claude Code via the Task tool;
 emulated on other providers via `aiwg mc` Mission Control. Source format
 is JSON; schema lives in `agentic/code/frameworks/sdlc-complete/teams/schema.json`.
@@ -544,8 +556,7 @@ See:
 
 - [Creating Extensions Guide](creating-extensions.md)
 - [Extension Types Reference](extension-types.md)
-- @docs/development/agent-template.md
-- @agentic/code/frameworks/sdlc-complete/agents/README.md
+- [Development kit overview](../development/devkit-overview.md)
 
 ---
 
@@ -632,5 +643,4 @@ Existing formats automatically migrate to unified schema:
 - [Extension Types Reference](extension-types.md) - Detailed type definitions
 - [Graph Backends](graph-backends.md) - Artifact index graph storage tiers and configuration
 - @src/extensions/types.ts - Source code
-- @.aiwg/architecture/unified-extension-schema.md - Full specification
-- @docs/cli-reference.md - CLI command reference
+- [CLI command reference](../cli/reference.md)

@@ -26,6 +26,66 @@ import { getProjectDir } from "../../config/aiwg-config.js";
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
+import { pathToFileURL } from "node:url";
+
+/** Generate or deploy the canonical project quickref. */
+export const quickrefHandler: CommandHandler = {
+  id: 'quickref',
+  name: 'Project Quickref',
+  description: 'Generate and deploy an always-visible project quickref',
+  category: 'project',
+  aliases: [],
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    const action = ctx.args.find(arg => !arg.startsWith('-')) ?? 'generate';
+    if (!ctx.args.includes('--project')) {
+      return { exitCode: 1, message: 'Error: project quickrefs require --project\n\nUsage: aiwg quickref generate|deploy --project [--provider <id>] [--dry-run]' };
+    }
+    if (!['generate', 'deploy'].includes(action)) {
+      return { exitCode: 1, message: `Error: unknown quickref action '${action}' (expected generate or deploy)` };
+    }
+
+    const {
+      generateProjectQuickref,
+      deployProjectQuickref,
+    } = await import('../../extensions/project-quickref.js');
+    try {
+      if (action === 'generate') {
+        const result = await generateProjectQuickref(ctx.cwd, { dryRun: ctx.dryRun });
+        const verb = ctx.dryRun ? 'Would generate' : result.changed ? 'Generated' : 'Unchanged';
+        console.log(`${verb} ${result.skillName}`);
+        console.log(`  Source: ${result.sourcePath}`);
+        console.log(`  Output: ${result.outputPath}`);
+        for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
+        if (ctx.dryRun) {
+          console.log('\n--- preview ---\n');
+          console.log(result.content);
+        }
+        return { exitCode: 0 };
+      }
+
+      const providerIndex = ctx.args.indexOf('--provider');
+      const explicitProvider = providerIndex >= 0 ? ctx.args[providerIndex + 1] : undefined;
+      const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+      const config = await readAiwgConfig(ctx.cwd);
+      const providers = explicitProvider ? [explicitProvider] : (config?.providers ?? []);
+      if (providers.length === 0) {
+        return { exitCode: 1, message: 'No providers configured. Pass --provider <id> or add providers to .aiwg/aiwg.config.' };
+      }
+      for (const provider of providers) {
+        const result = await deployProjectQuickref(ctx.cwd, provider, { dryRun: ctx.dryRun });
+        const verb = ctx.dryRun ? 'Would deploy' : result.changed ? 'Deployed' : 'Unchanged';
+        console.log(`${verb} ${result.skillName} -> ${result.provider}: ${result.targetPath}${result.emulated ? ' (emulated skill surface)' : ''}`);
+        for (const stale of result.pruned) {
+          console.log(`  ${ctx.dryRun ? 'Would prune' : 'Pruned'} stale managed quickref: ${stale}`);
+        }
+      }
+      return { exitCode: 0 };
+    } catch (error) {
+      return { exitCode: 1, message: `Project quickref failed: ${(error as Error).message}` };
+    }
+  },
+};
 
 /**
  * Provider artifact-path map for `aiwg list` provider detection (#1530).
@@ -147,6 +207,12 @@ export const catalogHandler: CommandHandler = {
   description: "Model catalog commands (list, info, search)",
   category: "catalog",
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    const { printCatalogHelp } = await import("../../catalog/cli.mjs");
+    printCatalogHelp();
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
@@ -419,7 +485,7 @@ function formatProjectLocalOnly(
 
   if (total === 0 && result.errors.length === 0) {
     output += '\nNo project-local bundles found.\n';
-    output += '\nTip: place a manifest.json under .aiwg/{extensions,addons,frameworks,plugins,providers}/<name>/ to author a project-local artifact.\n';
+    output += '\nTip: place a manifest.json under the configured AIWG artifact root at {extensions,addons,frameworks,plugins,providers}/<name>/ to author a project-local artifact.\n';
     return { exitCode: 0, message: output };
   }
 
@@ -712,6 +778,18 @@ export const removeHandler: CommandHandler = {
   aliases: [],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    // Explicit provider removal is separate from framework removal. The native
+    // adapter validates receipt hashes and preserves operator modifications.
+    const nativeRemovalProvider = parseRemoveProvider(ctx.args);
+    if (firstRemovePositional(ctx.args) === 'omp' && nativeRemovalProvider.provider === 'omp') {
+      const { uninstall } = await import('../../../tools/agents/providers/omp.mjs');
+      const { getProjectDir } = await import('../../config/aiwg-config.js');
+      const dryRun = ctx.args.includes('--dry-run');
+      const scope = ctx.args.includes('--user') || isScopeUser(ctx.args) ? 'user' : 'project';
+      const count = uninstall(getProjectDir({ cwd: ctx.cwd }, ctx.args), { dryRun, scope });
+      return { exitCode: 0, message: `${dryRun ? 'Would remove' : 'Removed'} ${count} unchanged OMP-owned files; operator files preserved.` };
+    }
+
     // #1156 Phase 1 — `--scope user` / `--user`: revert the user-scope mirror
     // for the given framework. Independent of any project; reads the per-user
     // registry at ~/.aiwg/installed.json to find what was deployed, deletes
@@ -719,6 +797,36 @@ export const removeHandler: CommandHandler = {
     // updates the registry.
     if (ctx.args.includes('--user') || isScopeUser(ctx.args)) {
       return await removeUserScopeDeploy(ctx.args);
+    }
+
+    if (firstRemovePositional(ctx.args) === 'grok-build') {
+      const providerParse = parseRemoveProvider(ctx.args);
+      if (providerParse.provider !== 'grok-build' || providerParse.error) {
+        return { exitCode: 1, message: 'Use aiwg remove grok-build --provider grok-build [--dry-run] for reviewed project-scope removal.' };
+      }
+      const frameworkRoot = await getFrameworkRoot();
+      const { uninstall } = (await import(pathToFileURL(path.join(frameworkRoot, 'tools/agents/providers/grok-build.mjs')).href)) as typeof import('../../../tools/agents/providers/grok-build.mjs');
+      const { readAiwgConfig, writeAiwgConfig } = await import('../../config/aiwg-config.js');
+      const target = getProjectDir({ cwd: ctx.cwd }, ctx.args);
+      const dryRun = ctx.args.includes('--dry-run');
+      const report = uninstall(target, { dryRun, srcRoot: frameworkRoot });
+      if (!dryRun && report.skipped.length === 0) {
+        const config = await readAiwgConfig(target);
+        if (config) {
+          for (const [name, entry] of Object.entries(config.installed ?? {})) {
+            delete entry.deployedTo?.['grok-build'];
+            if (Object.keys(entry.deployedTo ?? {}).length === 0) delete config.installed[name];
+          }
+          await writeAiwgConfig(target, config);
+        }
+      }
+      const lines = [
+        `${dryRun ? 'Would remove' : 'Removed'} ${dryRun ? report.planned.length : report.removed.length} unchanged AIWG-owned Grok Build artifact(s).`,
+        ...report.planned.map(relative => `  ${relative}`),
+        ...report.skipped.map(relative => `  Preserved modified or unverifiable: ${relative}`),
+        'Operator-owned Grok content and shared context files are preserved.',
+      ];
+      return { exitCode: report.skipped.length ? 1 : 0, message: lines.join('\n') };
     }
 
     // #1037 — Project-local-aware remove. If the first positional arg matches
@@ -895,6 +1003,22 @@ export const promoteHandler: CommandHandler = {
       console.log(`✓ Promoted '${positional}' → ${result.plan?.destination}`);
       if (cleanup) {
         console.log('  Source removed from .aiwg/');
+        try {
+          const { deployProjectQuickref, generateProjectQuickref, hasProjectQuickref } = await import('../../extensions/project-quickref.js');
+          if (await hasProjectQuickref(projectDir)) {
+            if (config.providers.length > 0) {
+              for (const provider of config.providers) await deployProjectQuickref(projectDir, provider);
+              console.log(`  Managed project quickref refreshed for: ${config.providers.join(', ')}.`);
+            } else {
+              await generateProjectQuickref(projectDir);
+              console.log('  Managed project quickref generated; no providers are configured for deployment.');
+            }
+          } else {
+            console.log('  Managed project quickref is now empty; run `aiwg doctor --project-local` to inspect deployed stale copies.');
+          }
+        } catch (error) {
+          console.log(`  Managed project quickref refresh failed: ${(error as Error).message}`);
+        }
       }
       return { exitCode: 0 };
     } catch (err) {
@@ -905,8 +1029,8 @@ export const promoteHandler: CommandHandler = {
 };
 
 /**
- * New bundle handler — scaffolds a project-local bundle under
- * `.aiwg/{type}/{name}/` with a valid manifest, starter artifact, and a
+ * New bundle handler — scaffolds a project-local bundle under the configured
+ * AIWG artifact root with a valid manifest, starter artifact, and a
  * README that includes the identical-form portability reminder.
  *
  * Usage:
@@ -920,7 +1044,7 @@ export const promoteHandler: CommandHandler = {
 export const newBundleHandler: CommandHandler = {
   id: 'new-bundle',
   name: 'New Bundle',
-  description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
+  description: 'Scaffold a project-local bundle under the configured AIWG artifact root',
   category: 'scaffolding',
   aliases: ['new-extension', 'new-addon', 'new-framework', 'new-plugin', 'new-provider'],
 
@@ -1013,14 +1137,27 @@ export const newBundleHandler: CommandHandler = {
         // .gitignore management is best-effort; don't fail the scaffold
       }
 
-      // #1235 — auto-rebuild project graph so the new bundle is immediately
-      // discoverable via `aiwg discover`. Best-effort: don't fail the scaffold
-      // if the index build hiccups.
+      try {
+        const { generateProjectQuickref } = await import('../../extensions/project-quickref.js');
+        await generateProjectQuickref(ctx.cwd);
+        console.log('  → Managed project quickref refreshed from discovered capabilities.');
+      } catch (error) {
+        console.log(`  → Managed project quickref refresh deferred: ${(error as Error).message}`);
+      }
+
+      // #1235 / #1758 — auto-rebuild the project graph and refresh the
+      // Fortemi Core static cache so the new bundle is immediately
+      // discoverable via top-level `aiwg discover` / `aiwg show`.
+      // Best-effort: don't fail the scaffold if indexing hiccups.
       let indexedOk = false;
+      let fortemiSyncedOk = false;
       try {
         const { buildIndex } = await import('../../artifacts/index-builder.js');
         await buildIndex(ctx.cwd, { graph: 'project', force: false, explicit: true });
         indexedOk = true;
+        const { syncFortemiCoreIndex } = await import('../../artifacts/fortemi-core-sync.js');
+        syncFortemiCoreIndex(ctx.cwd, { graph: 'project' });
+        fortemiSyncedOk = true;
       } catch {
         // ignore — surface via next-steps hint instead
       }
@@ -1029,10 +1166,14 @@ export const newBundleHandler: CommandHandler = {
       console.log('Next steps:');
       console.log(`  1. Edit manifest.json (description, version, keywords)`);
       console.log(`  2. Customize the starter artifact under ${result.bundlePath}/`);
-      if (indexedOk) {
+      if (indexedOk && fortemiSyncedOk) {
         console.log(`  3. Discoverable now via:  aiwg discover "${positional}"`);
+      } else if (indexedOk) {
+        console.log(`  3. Sync project search cache: aiwg index sync --graph project`);
+        console.log(`     then:                       aiwg discover "${positional}"`);
       } else {
         console.log(`  3. Rebuild project index:  aiwg index build --graph project`);
+        console.log(`     then sync search cache: aiwg index sync --graph project`);
         console.log(`     then:                   aiwg discover "${positional}"`);
       }
       console.log(`  4. Deploy:  aiwg use ${positional}`);
@@ -1067,6 +1208,18 @@ export const newProjectHandler: CommandHandler = {
       cwd: ctx.cwd,
     });
     if (result.exitCode === 0) {
+      // The real scaffolder always runs in an existing target directory. Keep
+      // mocked/script-runner-only calls side-effect free when their synthetic
+      // cwd does not exist.
+      const { access } = await import('node:fs/promises');
+      const { constants } = await import('node:fs');
+      try {
+        await access(ctx.cwd, constants.W_OK);
+        const { ensureWorkspaceContext } = await import('../../smiths/context-pipeline/workspace-context.js');
+        await ensureWorkspaceContext(ctx.cwd);
+      } catch (error) {
+        if (!['ENOENT', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      }
       const { formatStarNudge } = await import("../../community/links.js");
       const { markNudgeShown, shouldShowNudge } = await import("../../community/nudge-policy.js");
       if (shouldShowNudge('intake')) {
@@ -1100,6 +1253,7 @@ export const installPluginHandler: CommandHandler = {
 
     return runner.run("tools/plugin/plugin-installer-cli.mjs", ctx.args, {
       cwd: ctx.cwd,
+      env: { AIWG_ROOT: frameworkRoot },
     });
   },
 };
@@ -1153,6 +1307,29 @@ export const pluginStatusHandler: CommandHandler = {
  *
  * Delegates to tools/plugin/package-plugins.mjs
  */
+function packagePluginHelp(): HandlerResult {
+  return {
+    exitCode: 0,
+    message: [
+      "aiwg package-plugin — package a project-local or built-in marketplace wrapper",
+      "",
+      "Usage:",
+      "  aiwg package-plugin <name> [--source <path>] [--output <path>] [--provider <name>] [--clean] [--dry-run]",
+      "  aiwg package-plugin --plugin <name> [options]  # compatibility form",
+      "",
+      "Options:",
+      "  --source <path>    explicit project-local wrapper source (must stay inside the project)",
+      "  --output <path>    standalone archive output (default: dist/plugins)",
+      "  --provider <name>  claude, codex, or all for standalone wrappers; built-ins retain all formats",
+      "  --clean            clean generated plugin output before packaging",
+      "  --dry-run, -n      preview without writing",
+      "  --help, -h         show this help",
+      "",
+      "Project-local wrappers are discovered under .aiwg/plugins and packaged as deterministic archives.",
+    ].join("\n"),
+  };
+}
+
 export const packagePluginHandler: CommandHandler = {
   id: "package-plugin",
   name: "Package Plugin",
@@ -1160,11 +1337,42 @@ export const packagePluginHandler: CommandHandler = {
   category: "plugin",
   aliases: ["-package-plugin", "--package-plugin"],
 
+  async help(): Promise<HandlerResult> {
+    return packagePluginHelp();
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes("--help") || ctx.args.includes("-h")) {
+      return packagePluginHelp();
+    }
+
+    const hasExplicitPlugin = ctx.args.includes("--plugin") || ctx.args.includes("-p");
+    const positional = ctx.args[0] && !ctx.args[0].startsWith("-")
+      ? ctx.args[0]
+      : undefined;
+    if (!hasExplicitPlugin && !positional) {
+      return {
+        exitCode: 1,
+        message: "Error: plugin name is required.\n\nRun `aiwg package-plugin --help` for usage.",
+      };
+    }
+    const positionalSource = positional && (positional.includes('/') || positional.includes('\\'))
+      ? positional
+      : undefined;
+    const normalizedArgs = hasExplicitPlugin
+      ? ctx.args
+      : positionalSource
+        ? [
+          "--plugin", path.basename(path.resolve(ctx.cwd, positionalSource)),
+          "--source", positionalSource,
+          ...ctx.args.slice(1),
+        ]
+        : ["--plugin", positional as string, ...ctx.args.slice(1)];
+
     const frameworkRoot = await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
-    return runner.run("tools/plugin/package-plugins.mjs", ctx.args, {
+    return runner.run("tools/plugin/package-plugins.mjs", normalizedArgs, {
       cwd: ctx.cwd,
     });
   },
@@ -1183,6 +1391,24 @@ export const packageAllPluginsHandler: CommandHandler = {
   aliases: ["-package-all-plugins", "--package-all-plugins"],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes("--help") || ctx.args.includes("-h")) {
+      return {
+        exitCode: 0,
+        message: [
+          "aiwg package-all-plugins — package every built-in marketplace wrapper",
+          "",
+          "Usage:",
+          "  aiwg package-all-plugins [--provider <name>] [--clean] [--dry-run]",
+          "",
+          "Options:",
+          "  --provider <name>  claude, codex, cursor, factory, openclaw, or all",
+          "  --clean            clean generated plugin output before packaging",
+          "  --dry-run, -n      preview without writing",
+          "  --help, -h         show this help",
+        ].join("\n"),
+      };
+    }
+
     const frameworkRoot = await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
@@ -1253,12 +1479,13 @@ export const corpusHandler: CommandHandler = {
  * with the project's general-purpose artifact graph indices.
  *
  *   aiwg discover "<phrase>" [--limit N] [--type skill,agent,...] [--json]
+ *     [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]
  */
 export const discoverHandler: CommandHandler = {
   id: "discover",
   name: "Discover",
   description:
-    "Find AIWG skills, agents, commands, and rules by capability — index-driven on-demand discovery",
+    "Find AIWG operational assets by capability — index-driven on-demand discovery",
   category: "index",
   aliases: [],
 
@@ -1280,15 +1507,14 @@ export const discoverHandler: CommandHandler = {
 /**
  * Features command handler — manage AIWG's optional runtime features (#1219).
  *
- * Subcommands: status / info / install / remove. Cycle 1 ships
- * status + info; install + remove arrive in Cycle 3 once install-mode
- * detection is designed.
+ * Subcommands: status / info / install / remove. Native feature installs use
+ * a user-owned package root with explicit package-level script approval.
  */
 export const featuresHandler: CommandHandler = {
   id: "features",
   name: "Features",
   description:
-    "List, inspect, and (eventually) install AIWG's optional runtime features",
+    "List, inspect, and install AIWG's optional runtime features",
   category: "maintenance",
   aliases: [],
 
@@ -1312,6 +1538,7 @@ export const featuresHandler: CommandHandler = {
  * so consumers don't need to navigate AIWG's storage paths themselves.
  *
  *   aiwg show <name> [--type skill,agent,...] [--json] [--first]
+ *     [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]
  */
 export const showHandler: CommandHandler = {
   id: "show",

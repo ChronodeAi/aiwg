@@ -1,5 +1,8 @@
 # First Success: Ask The Steward To Route You
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Use this recipe when you want AIWG to choose where to start instead of reading the catalog yourself.
 
 The steward is a guide agent that lives inside your AI session. You stay in the chat; the steward handles the AIWG-specific lookups for you. You do not need to type `aiwg` commands yourself — the agent runs them under the hood and reports back.
@@ -33,13 +36,10 @@ recommendation against the installed capabilities before answering.
 
 ## What The Agent Does Behind The Scenes
 
-You do not run these yourself. They are what the agent should be doing for you:
-
-- `aiwg discover "<phrase>"` to search the installed capability index.
-- `aiwg show skill <name>` (or `aiwg show agent <name>`) to fetch the matched artifact's body.
-- A short synthesis: one recommended path, one reason, one fallback.
-
-If the agent surfaces these commands as instructions for *you* to run, that is a sign the integration is incomplete. Ask it to run them itself.
+The agent searches the installed capability index, selects and loads the
+authoritative asset, then gives you one recommended path, one reason, and one
+fallback. These are agent operations. If the agent surfaces internal commands
+as instructions for *you* to run, ask it to complete the lookup itself.
 
 ## You Should See
 

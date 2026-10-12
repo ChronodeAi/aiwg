@@ -1,0 +1,617 @@
+[
+  {
+    "id": "direct-config-no-managed-state",
+    "owner": "config",
+    "value": {
+      "parallelism": {
+        "worker_dispatch": true,
+        "groups": {
+          "fixture": {
+            "maxParallel": 1,
+            "members": [
+              {
+                "id": "local",
+                "cli": "local-text",
+                "model": "fixture-text:q4",
+                "roles": [
+                  "efficiency"
+                ]
+              }
+            ],
+            "fallback": [],
+            "execution": {
+              "transport": "shell",
+              "isolation": "snapshot",
+              "sandbox": "read-only",
+              "approval": "never",
+              "receipts": "optional"
+            }
+          }
+        },
+        "clis": {
+          "local-text": {
+            "adapter": "workerAdapters:fixture",
+            "endpoint": "http://127.0.0.1:11434",
+            "accountScope": "synthetic",
+            "quotaScope": "synthetic-local"
+          }
+        }
+      }
+    },
+    "valid": true,
+    "pack": "T-OG-01/15"
+  },
+  {
+    "id": "direct-model-no-effort",
+    "owner": "models",
+    "value": {
+      "defaults": {
+        "workerSelection": {
+          "roleGuidance": {
+            "efficiency": {
+              "groups": [
+                "fixture"
+              ],
+              "tier": "economy",
+              "initialEffort": null,
+              "effortLadder": [],
+              "allowNotApplicableEffort": true
+            }
+          },
+          "guards": {
+            "deniedEfforts": [
+              "ultra"
+            ],
+            "denySelfDelegation": true,
+            "requireExactModel": true,
+            "minimumIdentityEvidence": "runtime-configured"
+          },
+          "dataPolicy": {
+            "allowedProcessing": [
+              "local"
+            ],
+            "allowProductImprovement": false,
+            "allowUnknown": false
+          }
+        }
+      }
+    },
+    "valid": true,
+    "pack": "T-OG-01"
+  },
+  {
+    "id": "duplicate-fallback",
+    "owner": "config",
+    "value": {
+      "parallelism": {
+        "groups": {
+          "fixture": {
+            "members": [
+              {
+                "id": "local",
+                "cli": "local-text",
+                "model": "fixture-text:q4",
+                "roles": [
+                  "efficiency"
+                ]
+              }
+            ],
+            "fallback": [
+              "local",
+              "local"
+            ]
+          }
+        }
+      }
+    },
+    "valid": false,
+    "pack": "T-OG-01"
+  },
+  {
+    "id": "unknown-adapter-prefix",
+    "owner": "config",
+    "value": {
+      "parallelism": {
+        "clis": {
+          "bad": {
+            "adapter": "builtin:codex",
+            "accountScope": "synthetic",
+            "quotaScope": "synthetic"
+          }
+        }
+      }
+    },
+    "valid": false,
+    "pack": "T-OG-14"
+  },
+  {
+    "id": "adapter-process-shape",
+    "owner": "adapter",
+    "value": {
+      "version": 1,
+      "id": "fixture",
+      "provider": "local",
+      "adapterVersion": "1.0.0",
+      "supportedVersions": "1.x",
+      "runtimeDriver": "installed:fixture-driver",
+      "catalogAdapter": {
+        "kind": "file",
+        "locator": "fixture:catalog",
+        "parser": "fixture-v1"
+      },
+      "invocation": {
+        "kind": "process",
+        "executable": "fixture-worker",
+        "argv": [
+          "${brief}"
+        ],
+        "stdin": "closed",
+        "cwd": "${workspace}",
+        "envAllowlist": [
+          "PATH"
+        ],
+        "versionArgv": [
+          "--version"
+        ]
+      },
+      "capabilities": {
+        "output": "text",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "read-only"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "fixture-shell": {
+          "transport": "shell",
+          "supportedVersions": "1.x",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "sandbox": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "approval": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "workdir": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "finalOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stdin": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "structuredOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stepCap": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "trust": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "children": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "fallback": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            }
+          },
+          "envAllowlist": [
+            "PATH"
+          ],
+          "pitfalls": [
+            "Synthetic fixture; no live qualification"
+          ]
+        }
+      }
+    },
+    "valid": true,
+    "pack": "T-OG-14"
+  },
+  {
+    "id": "unsupported-required-adapter-metadata",
+    "owner": "adapter",
+    "value": {
+      "version": 1,
+      "id": "fixture",
+      "provider": "local",
+      "adapterVersion": "1.0.0",
+      "supportedVersions": "1.x",
+      "runtimeDriver": "installed:fixture-driver",
+      "catalogAdapter": {
+        "kind": "file",
+        "locator": "fixture:catalog",
+        "parser": "fixture-v1"
+      },
+      "invocation": {
+        "kind": "process",
+        "executable": "fixture-worker",
+        "argv": [
+          "${brief}"
+        ],
+        "stdin": "closed",
+        "cwd": "${workspace}",
+        "envAllowlist": [
+          "PATH"
+        ],
+        "versionArgv": [
+          "--version"
+        ]
+      },
+      "capabilities": {
+        "output": "text",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "read-only"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "fixture-shell": {
+          "transport": "shell",
+          "supportedVersions": "1.x",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "sandbox": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "approval": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "workdir": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "finalOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stdin": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "structuredOutput": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "stepCap": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "trust": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "children": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            },
+            "fallback": {
+              "support": "not-applicable",
+              "mapping": "synthetic text-only fixture",
+              "evidence": "fixture:profile-v1"
+            }
+          },
+          "envAllowlist": [
+            "PATH"
+          ],
+          "pitfalls": [
+            "Synthetic fixture; no live qualification"
+          ]
+        }
+      },
+      "requiredFutureControl": true
+    },
+    "valid": false,
+    "pack": "T-OG-14"
+  },
+  {
+    "id": "observation-no-effort",
+    "owner": "observation",
+    "value": {
+      "version": 1,
+      "recordId": "fixture-observation-1",
+      "cliId": "local-text",
+      "family": "synthetic",
+      "runtimeVersion": "1.0.0",
+      "accountScope": "synthetic",
+      "endpointFingerprint": "fixture:loopback",
+      "observedAt": "2026-10-07T00:00:00Z",
+      "verifiedAt": "2026-10-07T00:00:00Z",
+      "releaseDate": null,
+      "releaseDateKind": "unknown",
+      "visibility": "listed",
+      "availability": "accessible",
+      "lifecycle": "active",
+      "contextTokens": 4096,
+      "maxOutputTokens": 1024,
+      "modalities": [
+        "text"
+      ],
+      "efforts": [],
+      "pricing": {
+        "costClass": "unknown",
+        "billing": "local",
+        "currency": "USD",
+        "inputPerMillion": null,
+        "outputPerMillion": null
+      },
+      "dataUse": {
+        "processing": "local",
+        "productImprovement": false,
+        "retentionDays": 0
+      },
+      "qualification": {
+        "status": "unqualified",
+        "roles": []
+      },
+      "provenance": [
+        {
+          "fields": [
+            "/effortSupport"
+          ],
+          "source": "fixture:synthetic-v1",
+          "kind": "derived",
+          "observedAt": "2026-10-07T00:00:00Z",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "confidence": "derived"
+        }
+      ],
+      "firstObservedAt": "2026-10-07T00:00:00Z",
+      "fetchedAt": "2026-10-07T00:00:00Z",
+      "retiredAt": null,
+      "effortSupport": "not-applicable"
+    },
+    "valid": true,
+    "pack": "T-OG-01/14"
+  },
+  {
+    "id": "observation-explicit-empty-efforts",
+    "owner": "observation",
+    "value": {
+      "version": 1,
+      "recordId": "fixture-observation-1",
+      "cliId": "local-text",
+      "family": "synthetic",
+      "runtimeVersion": "1.0.0",
+      "accountScope": "synthetic",
+      "endpointFingerprint": "fixture:loopback",
+      "observedAt": "2026-10-07T00:00:00Z",
+      "verifiedAt": "2026-10-07T00:00:00Z",
+      "releaseDate": null,
+      "releaseDateKind": "unknown",
+      "visibility": "listed",
+      "availability": "accessible",
+      "lifecycle": "active",
+      "contextTokens": 4096,
+      "maxOutputTokens": 1024,
+      "modalities": [
+        "text"
+      ],
+      "efforts": [],
+      "pricing": {
+        "costClass": "unknown",
+        "billing": "local",
+        "currency": "USD",
+        "inputPerMillion": null,
+        "outputPerMillion": null
+      },
+      "dataUse": {
+        "processing": "local",
+        "productImprovement": false,
+        "retentionDays": 0
+      },
+      "qualification": {
+        "status": "unqualified",
+        "roles": []
+      },
+      "provenance": [
+        {
+          "fields": [
+            "/effortSupport"
+          ],
+          "source": "fixture:synthetic-v1",
+          "kind": "derived",
+          "observedAt": "2026-10-07T00:00:00Z",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "confidence": "derived"
+        }
+      ],
+      "firstObservedAt": "2026-10-07T00:00:00Z",
+      "fetchedAt": "2026-10-07T00:00:00Z",
+      "retiredAt": null,
+      "effortSupport": "explicit"
+    },
+    "valid": false,
+    "pack": "T-OG-01/14"
+  },
+  {
+    "id": "observation-invalid-date",
+    "owner": "observation",
+    "value": {
+      "version": 1,
+      "recordId": "fixture-observation-1",
+      "cliId": "local-text",
+      "family": "synthetic",
+      "runtimeVersion": "1.0.0",
+      "accountScope": "synthetic",
+      "endpointFingerprint": "fixture:loopback",
+      "observedAt": "2026-10-07T00:00:00Z",
+      "verifiedAt": "2026-02-30T00:00:00Z",
+      "releaseDate": null,
+      "releaseDateKind": "unknown",
+      "visibility": "listed",
+      "availability": "accessible",
+      "lifecycle": "active",
+      "contextTokens": 4096,
+      "maxOutputTokens": 1024,
+      "modalities": [
+        "text"
+      ],
+      "efforts": [],
+      "pricing": {
+        "costClass": "unknown",
+        "billing": "local",
+        "currency": "USD",
+        "inputPerMillion": null,
+        "outputPerMillion": null
+      },
+      "dataUse": {
+        "processing": "local",
+        "productImprovement": false,
+        "retentionDays": 0
+      },
+      "qualification": {
+        "status": "unqualified",
+        "roles": []
+      },
+      "provenance": [
+        {
+          "fields": [
+            "/effortSupport"
+          ],
+          "source": "fixture:synthetic-v1",
+          "kind": "derived",
+          "observedAt": "2026-10-07T00:00:00Z",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "confidence": "derived"
+        }
+      ],
+      "firstObservedAt": "2026-10-07T00:00:00Z",
+      "fetchedAt": "2026-10-07T00:00:00Z",
+      "retiredAt": null,
+      "effortSupport": "not-applicable"
+    },
+    "valid": false,
+    "pack": "T-OG-01/14"
+  },
+  {
+    "id": "observation-unknown-field",
+    "owner": "observation",
+    "value": {
+      "version": 1,
+      "recordId": "fixture-observation-1",
+      "cliId": "local-text",
+      "family": "synthetic",
+      "runtimeVersion": "1.0.0",
+      "accountScope": "synthetic",
+      "endpointFingerprint": "fixture:loopback",
+      "observedAt": "2026-10-07T00:00:00Z",
+      "verifiedAt": "2026-10-07T00:00:00Z",
+      "releaseDate": null,
+      "releaseDateKind": "unknown",
+      "visibility": "listed",
+      "availability": "accessible",
+      "lifecycle": "active",
+      "contextTokens": 4096,
+      "maxOutputTokens": 1024,
+      "modalities": [
+        "text"
+      ],
+      "efforts": [],
+      "pricing": {
+        "costClass": "unknown",
+        "billing": "local",
+        "currency": "USD",
+        "inputPerMillion": null,
+        "outputPerMillion": null
+      },
+      "dataUse": {
+        "processing": "local",
+        "productImprovement": false,
+        "retentionDays": 0
+      },
+      "qualification": {
+        "status": "unqualified",
+        "roles": []
+      },
+      "provenance": [
+        {
+          "fields": [
+            "/effortSupport"
+          ],
+          "source": "fixture:synthetic-v1",
+          "kind": "derived",
+          "observedAt": "2026-10-07T00:00:00Z",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "confidence": "derived"
+        }
+      ],
+      "firstObservedAt": "2026-10-07T00:00:00Z",
+      "fetchedAt": "2026-10-07T00:00:00Z",
+      "retiredAt": null,
+      "effortSupport": "not-applicable",
+      "modelId": "competing-selector"
+    },
+    "valid": false,
+    "pack": "T-OG-01/14"
+  }
+]

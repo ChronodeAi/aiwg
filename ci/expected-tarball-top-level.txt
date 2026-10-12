@@ -40,6 +40,7 @@
 CLAUDE.md
 LICENSE
 README.md
+THIRD_PARTY_NOTICES.md
 agentic
 apps
 bin
@@ -48,5 +49,9 @@ docs
 man
 package.json
 prebuilt
+schemas
+setup.aiwg.yaml
 templates
+test
 tools
+vscode-extension

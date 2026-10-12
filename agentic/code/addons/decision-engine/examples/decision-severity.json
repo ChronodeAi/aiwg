@@ -1,0 +1,37 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionDefinition",
+  "metadata": {
+    "id": "example-severity",
+    "version": "1.0.0",
+    "description": "example severity"
+  },
+  "spec": {
+    "purpose": "Triage a synthetic support report without performing any action.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "question": "Assess functional impact.",
+    "answer": {
+      "kind": "ordinal-score",
+      "levels": [
+        "Cosmetic or documentation issue; core functions work.",
+        "A feature fails but has a workaround.",
+        "Core functions unavailable."
+      ]
+    },
+    "requiredCapabilities": [
+      "ordinal-score"
+    ]
+  }
+}

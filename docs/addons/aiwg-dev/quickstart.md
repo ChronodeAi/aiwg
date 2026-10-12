@@ -1,15 +1,18 @@
 # aiwg-dev Quickstart
 
-Install the developer toolkit and validate your first component in 5 minutes.
+> **First time using AIWG?** Begin with [Install, Connect, and
+Verify](../../getting-started/install-connect-verify.md). This guide assumes AIWG is connected to the target project
+and your provider session can read the deployed context.
+
+Enable the developer toolkit and validate one AIWG component before review.
 
 ## Who This Is For
 
 aiwg-dev is for contributors working on AIWG source code — adding addons, frameworks, agents, skills, or commands. If you are an end user of deployed AIWG frameworks, use `aiwg doctor` instead.
 
-## Installation
+## Enable If Needed
 
 ```bash
-# Install the developer toolkit
 aiwg use aiwg-dev
 
 # Confirm it's active
@@ -163,6 +166,9 @@ Find orphaned skills
 Does TypeScript compile?
 Find circular skill calls
 ```
+
+Success means the report names the checked component or repo scope, shows the
+failing validations if any, and points to the next file or manifest change.
 
 ## References
 

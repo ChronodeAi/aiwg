@@ -1,12 +1,25 @@
 # Storage Documentation
 
-User-facing documentation for AIWG's pluggable storage adapter system (#934).
+AIWG stores project artifacts on the local filesystem by default. These pages
+explain when to keep that default, when to route a subsystem to another backend,
+and how to verify storage behavior before relying on it.
+
+Start with [Overview](overview.md) if you are choosing a backend. Use
+[Security](security.md) before adding external services or credential-backed
+configuration.
 
 ## Pages
 
 - **[Overview](overview.md)** — what the storage system does, quick start, CLI surface, what's implemented vs deferred
 - **[Security](security.md)** — credential handling, path traversal rejection, atomic writes, doctor validation
 - **[Migration](migration.md)** — `aiwg storage migrate` command walkthrough
+- **[Direct PostgreSQL](backends/postgres.md)** — advanced canonical backend, roles, TLS, migration, and qualification
+- **[PostgreSQL through PostgREST](backends/postgrest.md)** — optional HTTP transport, RPC boundaries, RLS, and limits
+- **[Scalable backend contract](backend-contract.md)** — versioned capabilities,
+  data classes, consistency, and backend maturity
+- **[Scalable migration protocol](migration-protocol.md)** — checksum-backed
+  offline/online migration, approval, cutover, and rollback
+- **[Qualification evidence](qualification.md)** — correctness-first concurrency, fault, recovery, and benchmark reports
 
 ## Per-backend pages
 
@@ -23,9 +36,5 @@ User-facing documentation for AIWG's pluggable storage adapter system (#934).
 
 ## Reference
 
-- Full design: `.aiwg/architecture/storage-design.md`
-- ADR: `.aiwg/architecture/adr-configurable-storage-backends.md`
-- JSON Schema: `.aiwg/architecture/schemas/storage.config.v1.json`
-- Research note: `.aiwg/architecture/research/storage-backends.md`
 - Live backend status: `aiwg storage list-backends`
-- Fortemi Core index/search packaging: `docs/fortemi-core-prebuilt-indices.md`
+- Fortemi Core index/search packaging: [Fortemi Core prebuilt indices](../fortemi-core-prebuilt-indices.md)

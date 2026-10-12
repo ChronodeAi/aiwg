@@ -27,16 +27,17 @@
 # What it does (fail-fast at each step):
 #   1. Verifies <version> matches the CalVer YYYY.M.PATCH shape (no leading zeros)
 #   2. Verifies package.json version matches <version>
-#   3. Verifies .claude-plugin/marketplace.json metadata.version matches (PUW-038 lockstep)
+#   3. Verifies .claude-plugin/marketplace.json version matches (PUW-038 lockstep)
 #   4. Verifies apps/cockpit/package.json version matches (@aiwg/cockpit lockstep)
-#   5. Verifies package-lock.json version matches (CI check:versions / npm ci gate)
-#   6. Verifies CHANGELOG.md has an entry for [<version>]
-#   7. Verifies docs/releases/v<version>-announcement.md exists
-#   8. Verifies the AIWG release-signing key is available locally
-#   9. Verifies the release-signing key is published in .gitea/keys/maintainers.asc
-#  10. Creates the signed tag with `git tag -s -u <release-key-fingerprint>`
-#  11. Verifies the tag's signature locally before any push (`git tag -v`)
-#  12. Reports next-step push commands; does NOT push automatically
+#   5. Verifies packages/cli/package.json version matches (@aiwg/cli lockstep)
+#   6. Verifies package-lock.json version matches (CI check:versions / npm ci gate)
+#   7. Verifies CHANGELOG.md has an entry for [<version>]
+#   8. Verifies docs/releases/v<version>-announcement.md exists
+#   9. Verifies the AIWG release-signing key is available locally
+#  10. Verifies the release-signing key is published in .gitea/keys/maintainers.asc
+#  11. Creates the signed tag with `git tag -s -u <release-key-fingerprint>`
+#  12. Verifies the tag's signature locally before any push (`git tag -v`)
+#  13. Reports next-step push commands; does NOT push automatically
 #
 # The push step is intentionally left to the operator so this script can
 # also be run as a sanity check before a release ceremony.
@@ -49,7 +50,15 @@ set -euo pipefail
 # Fingerprint of the AIWG release-signing key, per SECURITY.md and
 # .gitea/keys/maintainers.asc. Override via $AIWG_RELEASE_KEY_FINGERPRINT
 # for forks or migration scenarios.
-RELEASE_KEY_FINGERPRINT="${AIWG_RELEASE_KEY_FINGERPRINT:-FE9272F0BC5781E1DE77FAAA719AB63879E84CE8}"
+#
+# Release tags use the release-only identity; ordinary commits use the
+# maintainer commit key. Public keys for historical tags remain in the
+# repository keyring for verification.
+RELEASE_KEY_FINGERPRINT="${AIWG_RELEASE_KEY_FINGERPRINT:-401584AAA3376B898FB34427839584D0E25E5126}"
+
+# Source the key from the configured vault at cut time (default on). Set to 0 to sign with a
+# key already present in the local GPG keyring (fork/offline scenarios).
+AIWG_RELEASE_SIGN_FROM_VAULT="${AIWG_RELEASE_SIGN_FROM_VAULT:-1}"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -104,7 +113,7 @@ FAIL: '$VERSION' does not match CalVer 'YYYY.M.PATCH'.
 EOF
   exit 1
 fi
-echo "  [1/12] CalVer shape OK: $VERSION"
+echo "  [1/13] CalVer shape OK: $VERSION"
 
 # ---------------------------------------------------------------------------
 # 2. package.json lockstep
@@ -118,21 +127,24 @@ FAIL: package.json version is '$PKG_VERSION', expected '$VERSION'.
 EOF
   exit 1
 fi
-echo "  [2/12] package.json lockstep OK"
+echo "  [2/13] package.json lockstep OK"
 
 # ---------------------------------------------------------------------------
-# 3. .claude-plugin/marketplace.json metadata.version lockstep (PUW-038 #1139)
+# 3. .claude-plugin/marketplace.json version lockstep (PUW-038 #1139)
+#    Current manifests use the top-level field. Keep the legacy metadata.version
+#    fallback aligned with tools/workspace/check-marketplace-version.mjs so older
+#    release branches can still use this wrapper.
 # ---------------------------------------------------------------------------
-MP_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.claude-plugin/marketplace.json','utf8')).metadata.version)")
+MP_VERSION=$(node -e "const m=JSON.parse(require('fs').readFileSync('.claude-plugin/marketplace.json','utf8')); console.log(m.version ?? m.metadata?.version ?? '')")
 if [ "$MP_VERSION" != "$VERSION" ]; then
   cat <<EOF >&2
-FAIL: .claude-plugin/marketplace.json metadata.version is '$MP_VERSION',
+FAIL: .claude-plugin/marketplace.json version is '$MP_VERSION',
        expected '$VERSION' (PUW-038 lockstep — #1139).
        Update the file and commit.
 EOF
   exit 1
 fi
-echo "  [3/12] marketplace.json lockstep OK"
+echo "  [3/13] marketplace.json lockstep OK"
 
 # ---------------------------------------------------------------------------
 # 4. @aiwg/cockpit package lockstep
@@ -146,10 +158,24 @@ FAIL: apps/cockpit/package.json version is '$COCKPIT_VERSION',
 EOF
   exit 1
 fi
-echo "  [4/12] @aiwg/cockpit package lockstep OK"
+echo "  [4/13] @aiwg/cockpit package lockstep OK"
 
 # ---------------------------------------------------------------------------
-# 5. package-lock.json lockstep
+# 5. @aiwg/cli package lockstep
+# ---------------------------------------------------------------------------
+CLI_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('packages/cli/package.json','utf8')).version)")
+if [ "$CLI_VERSION" != "$VERSION" ]; then
+  cat <<EOF >&2
+FAIL: packages/cli/package.json version is '$CLI_VERSION',
+       expected '$VERSION' so @aiwg/cli stays compatible with aiwg.
+       Update the file and commit.
+EOF
+  exit 1
+fi
+echo "  [5/13] @aiwg/cli package lockstep OK"
+
+# ---------------------------------------------------------------------------
+# 6. package-lock.json lockstep
 #    CI's `check:versions` / `npm ci` reject a lockfile whose version drifts
 #    from package.json, which fails the build gate and blocks npm publish.
 #    Catch it here instead of after the tag is already pushed.
@@ -163,10 +189,10 @@ FAIL: package-lock.json version is '$LOCK_VERSION', expected '$VERSION'.
 EOF
   exit 1
 fi
-echo "  [5/12] package-lock.json lockstep OK"
+echo "  [6/13] package-lock.json lockstep OK"
 
 # ---------------------------------------------------------------------------
-# 6. CHANGELOG.md entry exists
+# 7. CHANGELOG.md entry exists
 # ---------------------------------------------------------------------------
 if ! grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
   cat <<EOF >&2
@@ -175,10 +201,10 @@ FAIL: CHANGELOG.md does not contain '## [${VERSION}]'.
 EOF
   exit 1
 fi
-echo "  [6/12] CHANGELOG.md entry OK"
+echo "  [7/13] CHANGELOG.md entry OK"
 
 # ---------------------------------------------------------------------------
-# 7. Release announcement file exists
+# 8. Release announcement file exists
 # ---------------------------------------------------------------------------
 ANNOUNCEMENT="docs/releases/v${VERSION}-announcement.md"
 if [ ! -f "$ANNOUNCEMENT" ]; then
@@ -189,10 +215,68 @@ FAIL: $ANNOUNCEMENT does not exist.
 EOF
   exit 1
 fi
-echo "  [7/12] Announcement file OK"
+echo "  [8/13] Announcement file OK"
 
 # ---------------------------------------------------------------------------
-# 8. Release-signing key available locally
+# 7b. Source the signing key from the configured vault into an ephemeral keyring.
+# ---------------------------------------------------------------------------
+# The dedicated CI key and its machine passphrase are vault-only. We fetch both
+# into mode-600 keyfiles, import the key into a throwaway GNUPGHOME, and point
+# git at a loopback-pinentry gpg wrapper so `git tag -s` is non-interactive.
+# Nothing is written to the operator's real keyring; everything is shredded on
+# exit. Requires VAULT_CI_ROLE_ID / VAULT_CI_SECRET_ID (CI secrets, or exported from
+# the operator TPM credstore — see docs/contributing/versioning.md).
+GIT_TAG_GPG_OPTS=()
+if [ "$AIWG_RELEASE_SIGN_FROM_VAULT" = "1" ]; then
+  if [ -z "${VAULT_CI_ROLE_ID:-}" ] || [ -z "${VAULT_CI_SECRET_ID:-}" ]; then
+    cat <<EOF >&2
+FAIL: AIWG_RELEASE_SIGN_FROM_VAULT=1 but VAULT_CI_ROLE_ID / VAULT_CI_SECRET_ID are
+       not set. Export the ci-aiwg AppRole creds before cutting the tag, e.g.
+       from the operator vault handoff or credential store.
+       Or set AIWG_RELEASE_SIGN_FROM_VAULT=0 to sign with a locally-held key.
+       See docs/contributing/versioning.md → "Signing your release tag".
+EOF
+    exit 1
+  fi
+  RELEASE_GNUPGHOME="$(mktemp -d)"
+  RELEASE_FETCH_ENV="$(mktemp)"
+  chmod 700 "$RELEASE_GNUPGHOME"; chmod 600 "$RELEASE_FETCH_ENV"
+  cleanup_release_key() {
+    bash ci/vault-fetch.sh --cleanup >/dev/null 2>&1 || true
+    [ -n "${RELEASE_GNUPGHOME:-}" ] && rm -rf "$RELEASE_GNUPGHOME"
+    [ -n "${RELEASE_FETCH_ENV:-}" ] && rm -f "$RELEASE_FETCH_ENV"
+  }
+  trap cleanup_release_key EXIT
+  if ! bash ci/vault-fetch.sh --spec ci/vault-fetch.release-signing.spec \
+       --env-file "$RELEASE_FETCH_ENV"; then
+    echo "FAIL: could not fetch the release-signing key from the configured vault." >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  set -a; . "$RELEASE_FETCH_ENV"; set +a
+  export GNUPGHOME="$RELEASE_GNUPGHOME"
+  gpg --batch --import "$GPG_SIGNING_KEY_FILE" >/dev/null 2>&1
+  GPG_WRAPPER="$GNUPGHOME/git-gpg.sh"
+  GPG_PROBE="$GNUPGHOME/signing-probe"
+  printf 'pinentry-mode loopback\n' > "$GNUPGHOME/gpg.conf"
+  cat > "$GPG_WRAPPER" <<WRAP
+#!/usr/bin/env bash
+exec gpg --batch --pinentry-mode loopback --passphrase-file "$GPG_PASSPHRASE_FILE" "\$@"
+WRAP
+  chmod 700 "$GPG_WRAPPER"
+  printf 'aiwg release signing probe\n' > "$GPG_PROBE"
+  if ! "$GPG_WRAPPER" --yes --local-user "$RELEASE_KEY_FINGERPRINT" \
+       --detach-sign "$GPG_PROBE" >/dev/null 2>&1; then
+    echo 'FAIL: release-signing probe failed with the vault-supplied passphrase.' >&2
+    exit 1
+  fi
+  rm -f "$GPG_PROBE" "$GPG_PROBE.sig"
+  GIT_TAG_GPG_OPTS=(-c "gpg.program=$GPG_WRAPPER")
+  echo "  [7b/12] Release-signing key sourced from vault (ephemeral keyring)"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Release-signing key available locally
 # ---------------------------------------------------------------------------
 if ! gpg --list-secret-keys "$RELEASE_KEY_FINGERPRINT" >/dev/null 2>&1; then
   cat <<EOF >&2
@@ -208,10 +292,10 @@ FAIL: Release-signing key $RELEASE_KEY_FINGERPRINT not found in local
 EOF
   exit 1
 fi
-echo "  [8/12] Release-signing key present locally"
+echo "  [9/13] Release-signing key present locally"
 
 # ---------------------------------------------------------------------------
-# 9. Release-signing key published in maintainers.asc
+# 10. Release-signing key published in maintainers.asc
 # ---------------------------------------------------------------------------
 # Extract fingerprints from the committed keyring and check ours is among
 # them. We use `gpg --show-keys --with-colons` so the output is parseable
@@ -228,10 +312,10 @@ FAIL: Release-signing key $RELEASE_KEY_FINGERPRINT is NOT published in
 EOF
   exit 1
 fi
-echo "  [9/12] Release-signing key published in maintainers.asc"
+echo "  [10/13] Release-signing key published in maintainers.asc"
 
 # ---------------------------------------------------------------------------
-# 10. Create signed tag with explicit release key (-u override)
+# 11. Create signed tag with explicit release key (-u override)
 # ---------------------------------------------------------------------------
 if [ -z "$TAG_MESSAGE" ]; then
   TODAY=$(date -u '+%Y-%m-%d')
@@ -251,30 +335,34 @@ EOF
   exit 1
 fi
 
-git tag -s -u "$RELEASE_KEY_FINGERPRINT" "$TAG" -m "$TAG_MESSAGE"
-echo "  [10/12] Signed tag '$TAG' created with release key"
+git "${GIT_TAG_GPG_OPTS[@]}" tag -s -u "$RELEASE_KEY_FINGERPRINT" "$TAG" -m "$TAG_MESSAGE"
+echo "  [11/13] Signed tag '$TAG' created with release key"
 
 # ---------------------------------------------------------------------------
-# 11. Local verify (mirror of the CI gate logic)
+# 12. Local verify (mirror of the CI gate logic)
 # ---------------------------------------------------------------------------
-if ! git tag -v "$TAG" >/dev/null 2>&1; then
+# Verification must use the same ephemeral release-key adapter as signing.
+# The repository-level gpg.program intentionally points at the distinct
+# commit-signing key, so plain `git tag -v` would invoke the wrong AppRole and
+# reject a tag that was correctly signed with the release key.
+if ! git "${GIT_TAG_GPG_OPTS[@]}" tag -v "$TAG" >/dev/null 2>&1; then
   cat <<EOF >&2
-FAIL: Local 'git tag -v $TAG' verification did not succeed.
-       This means even the local GPG can't verify what it just signed —
-       check that the release key is not expired or revoked.
+FAIL: Ephemeral release-key verification of '$TAG' did not succeed.
+       Check that the release key is not expired or revoked and that the
+       injected release-key route resolves to the expected fingerprint.
        Deleting the bad tag for cleanup:
 EOF
   git tag -d "$TAG" >/dev/null 2>&1 || true
   exit 1
 fi
-echo "  [11/12] Local 'git tag -v' verification passed"
+echo "  [12/13] Local 'git tag -v' verification passed"
 
 # ---------------------------------------------------------------------------
-# 12. Report next steps; do NOT auto-push
+# 13. Report next steps; do NOT auto-push
 # ---------------------------------------------------------------------------
 cat <<EOF
 
-  [12/12] Ready to push. The push step is left manual on purpose —
+  [13/13] Ready to push. The push step is left manual on purpose —
   inspect the tag once more with 'git tag -v $TAG' if you want, then:
 
     git push origin main --tags

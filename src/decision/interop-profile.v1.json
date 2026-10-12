@@ -1,0 +1,112 @@
+{
+  "apiVersion": "decision-interop.aiwg.io/v1",
+  "kind": "DecisionInteropProfile",
+  "metadata": {
+    "id": "aiwg-decision-dmn-opa-interop",
+    "version": "1.0.0",
+    "description": "AIWG deterministic decision interoperability profile for a safe DMN 1.6 subset and OPA decision-log exchange"
+  },
+  "spec": {
+    "dmn": {
+      "version": "1.6",
+      "namespace": "https://www.omg.org/spec/DMN/20240513/MODEL/",
+      "supportedElements": [
+        "definitions",
+        "decision",
+        "informationRequirement",
+        "requiredDecision",
+        "decisionTable",
+        "input",
+        "inputExpression",
+        "output",
+        "rule",
+        "inputEntry",
+        "outputEntry",
+        "text"
+      ],
+      "hitPolicies": [
+        "UNIQUE",
+        "ANY",
+        "FIRST",
+        "RULE ORDER",
+        "COLLECT"
+      ],
+      "collectAggregations": [
+        "LIST",
+        "SUM",
+        "MIN",
+        "MAX",
+        "COUNT"
+      ],
+      "comparisons": [
+        "dash",
+        "literal",
+        "eq",
+        "ne",
+        "lt",
+        "lte",
+        "gt",
+        "gte"
+      ],
+      "extensions": [
+        "aiwg:order",
+        "aiwg:defer-on-conflict"
+      ],
+      "exclusions": [
+        "arbitrary FEEL expressions",
+        "literalExpression execution",
+        "scripts",
+        "businessKnowledgeModel",
+        "imports",
+        "remote references",
+        "XInclude",
+        "DTD",
+        "external entities",
+        "missing dependency pins"
+      ],
+      "dependencyProfile": {
+        "mode": "local-acyclic-external-evidence",
+        "pinAuthority": "caller-supplied ArtifactPin values only; XML never establishes trusted AIWG decision authority",
+        "unsupported": [
+          "cycles",
+          "executable dependency decisions",
+          "remote hrefs",
+          "missing external decision pins"
+        ],
+        "nativeMapping": "required decisions become decision-source predicates and normalized ruleset evaluations"
+      }
+    },
+    "opa": {
+      "input": "default-deny structured JSON evidence projection with explicit reviewed JSON-pointer allowlist",
+      "result": "deterministic policy output only",
+      "bundlePins": [
+        "name",
+        "revision",
+        "digest"
+      ],
+      "decisionLogFields": [
+        "decision_id",
+        "trace_id",
+        "span_id",
+        "bundles.<name>.revision",
+        "metrics",
+        "revisionLineage"
+      ],
+      "defaultRedaction": [
+        "raw",
+        "body",
+        "secret",
+        "token",
+        "credential",
+        "private",
+        "locator",
+        "state",
+        "authorization",
+        "password",
+        "key"
+      ],
+      "enforcement": "separate PEP/action contract; OPA/DMN decisions do not authorize AIWG actions"
+    },
+    "activation": "dry-run imports only; review/publish path required for activation"
+  }
+}

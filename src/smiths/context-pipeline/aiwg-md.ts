@@ -4,7 +4,7 @@
  * Per ADR-1 §0.5: AIWG.md at project root has the same content shape as
  * CLAUDE.md. Both files `@`-reference the project's `.aiwg/AIWG.md` (the
  * source of truth). Non-Claude providers reach AIWG.md transitively via the
- * AGENTS.md `## Framework Context` link. The two project-root files contain
+ * provider startup adapters. WORKSPACE.md and AIWG.md contain
  * identical framework prose; they exist as two named files because Claude
  * Code looks for `CLAUDE.md` and the seven AGENTS.md providers reach
  * AIWG.md via the AGENTS.md hook-up.
@@ -17,8 +17,13 @@
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { projectControlPath } from '../../config/project-artifacts.js';
 import { buildParallelismSection, replaceOrAppendParallelismBlock } from './parallelism-section.js';
 import { buildContextFinalizationBlock, replaceOrAppendFinalizationBlock } from './finalization.js';
+import {
+  buildExternalLinksSection,
+  replaceOrAppendExternalLinksBlock,
+} from './external-links-section.js';
 
 const AIWG_SIGNATURE_COMMENT = '<!-- aiwg-managed -->';
 
@@ -34,21 +39,31 @@ const AIWG_SIGNATURE_COMMENT = '<!-- aiwg-managed -->';
  * Returns the rendered content as a string. Caller is responsible for the
  * atomic-write emission and the operator-claimed-file detection.
  */
-export async function buildAiwgMdContent(projectPath: string): Promise<string> {
-  const claudeMdPath = path.join(projectPath, 'CLAUDE.md');
-  let claudeMdContent: string | null = null;
-  try {
-    claudeMdContent = await fs.readFile(claudeMdPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw err;
+export async function buildAiwgMdContent(
+  projectPath: string,
+  stagedClaudeMdContent?: string | null,
+): Promise<string> {
+  let claudeMdContent = stagedClaudeMdContent;
+  if (stagedClaudeMdContent === undefined) {
+    const claudeMdPath = path.join(projectPath, 'CLAUDE.md');
+    try {
+      claudeMdContent = await fs.readFile(claudeMdPath, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+      claudeMdContent = null;
     }
   }
 
   // #1362: parallelism cap section, injected after generation so it surfaces
   // in regenerated context files regardless of CLAUDE.md content.
   const parallelismSection = await buildParallelismSection(projectPath);
-  const finalizationBlock = await buildContextFinalizationBlock(projectPath);
+  const finalizationBlock = await buildContextFinalizationBlock(
+    projectPath,
+    path.join(projectPath, 'AIWG.md'),
+  );
+  const externalLinksSection = await buildExternalLinksSection(projectPath);
 
   if (claudeMdContent) {
     // Insert the AIWG signature comment as the second line.
@@ -77,21 +92,26 @@ export async function buildAiwgMdContent(projectPath: string): Promise<string> {
         ].join('\n');
 
     const withParallelism = replaceOrAppendParallelismBlock(baseContent, parallelismSection);
-    return replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
+    const withFinalization = replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
+    return replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection);
   }
 
   // Fallback stub.
+  const normalizedPath = projectControlPath(projectPath, 'AIWG.md');
+  const normalizedRelative = path.relative(projectPath, normalizedPath).replace(/\\/g, '/');
+  const normalizedLink = normalizedRelative.startsWith('.') ? normalizedRelative : `./${normalizedRelative}`;
   const stub = [
     '# AIWG.md',
     AIWG_SIGNATURE_COMMENT,
     '<!-- CLAUDE.md companion for non-Claude providers. -->',
     '',
     'CLAUDE.md was not found at project root. AIWG.md normally mirrors that content.',
-    'See [.aiwg/AIWG.md](./.aiwg/AIWG.md) for the project framework context.',
+    `See [${normalizedRelative}](${normalizedLink}) for the project framework context.`,
     '',
   ].join('\n');
   const withParallelism = replaceOrAppendParallelismBlock(stub, parallelismSection);
-  return replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
+  const withFinalization = replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
+  return replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection);
 }
 
 /**

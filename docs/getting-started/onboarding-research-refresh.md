@@ -1,5 +1,8 @@
 # Onboarding Research Refresh
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 This note refreshes the evidence base for beginner onboarding. The practical problem is narrow: AIWG needs first-run guidance that helps a beginner build the right mental model, calibrate trust, and verify what the agent actually did.
 
 We chose a bounded refresh instead of a broad literature review because the docs decision is already scoped. While 5 sources are not a full survey, they are enough to test whether the current Start Here pattern is still defensible in 2026.

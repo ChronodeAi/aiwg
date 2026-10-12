@@ -40,7 +40,7 @@ export function Actions({ refreshTick = 0, session, setComposer, goSessions }: {
         },
       }),
     }).catch(() => undefined);
-    if (session.isController && session.sendInput(command)) {
+    if (session.isController && session.state.target && session.sendInput(command, session.state.target)) {
       setNote(`Injected "${command}" into the attached session — the agent runs it.`);
     } else {
       setComposer(command); // prefill the session composer; attach (drive) or start one, then Send
@@ -81,6 +81,7 @@ export function Actions({ refreshTick = 0, session, setComposer, goSessions }: {
               <button className="act" title={`injects: ${a.inject.command}`} onClick={() => inject(a)}>
                 {a.icon ? a.icon + ' ' : ''}{a.title}
               </button>
+              {a.trust_tier === 'sandboxed-third-party' && <span className="badge">sandboxed</span>}
               <button className="copy-command" aria-label={`Copy CLI command for ${a.title}`} title={a.inject.command} onClick={() => copyCommand(a)}>
                 Copy CLI
               </button>

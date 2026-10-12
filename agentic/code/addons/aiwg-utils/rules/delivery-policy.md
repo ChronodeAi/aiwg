@@ -4,6 +4,12 @@ id: delivery-policy
 severity: HIGH
 applies_to: [all-agents]
 tags: [git, workflow, project-config, branching]
+triggers:
+  - "should I open a pull request"
+  - "do I branch for this"
+  - "can I commit to main"
+  - "how does this project deliver changes"
+  - "force push policy"
 ---
 
 # Delivery Policy Rule
@@ -46,8 +52,14 @@ Located at `.aiwg/aiwg.config` (top level), the `delivery` block contains:
       "program": "gpg",
       "enforce": "commits" | "tags" | "all"
     },
+    "release_signing": {
+      "format": "openpgp" | "ssh" | "x509",
+      "key": "RELEASE_KEY_FINGERPRINT",
+      "program": "tools/release/cut-tag.sh",
+      "enforce": "tags"
+    },
     "require_ci_green": true,
-    "force_push_policy": "never" | "main-only-blocked" | "allowed",
+    "force_push_policy": "never" | "own-branch-only" | "allowed",
     "require_signed_commits": true,
     "auto_close_issues": true,
     "issue_comment_on_cycle": true,
@@ -62,6 +74,12 @@ Located at `.aiwg/aiwg.config` (top level), the `delivery` block contains:
       "via": "tea" | "gh" | "mcp" | "api",
       "forbid_actors": ["roctibot"]
     },
+    "transport": {
+      "login": "roctinam",
+      "protocol": "ssh" | "https",
+      "helper": "tools/git/push-origin-as-roctinam.sh",
+      "key_fingerprint": "SHA256:..."
+    },
     "secondary": [ ... ]
   }
 }
@@ -75,13 +93,25 @@ Before filing an issue, commenting on an issue, closing an issue, changing
 labels or milestones, creating a branch, committing, pushing, opening a PR, or
 preparing release tags, the agent MUST run a project-config preflight:
 
-1. Read `.aiwg/aiwg.config` from the repository root.
-2. Resolve `remotes.primary`, `remotes.issue_tracker`, and `remotes.ci`.
-3. Resolve `delivery.mode`, `delivery.default_branch`, signing requirements,
-   and `delivery.committer` when present.
-4. Resolve `remotes.tracker_actor` for tracker mutations and reject any route
+1. Resolve the target repository through the workspace `repos` list when one
+   exists, check the requested operation with `aiwg repo-access check`, and read
+   `.aiwg/aiwg.config` from the **target member repository**. Never apply the
+   workspace root config or a sibling config to the target. In a single-repo
+   project: Read `.aiwg/aiwg.config` from the repository root.
+2. Resolve `remotes.primary`, `remotes.issue_tracker`, optional
+   `remotes.customer_issue_tracker`, and `remotes.ci`.
+3. Resolve `delivery.mode`, `delivery.default_branch`, commit and release-tag
+   signing requirements, and `delivery.committer` when present.
+4. Resolve `remotes.tracker_actor` for internal tracker mutations and
+   `remotes.customer_tracker_actor` for customer tracker mutations; reject any route
    that would write as a login listed in `remotes.tracker_actor.forbid_actors`.
-5. If the config file is missing, unreadable, invalid, or ambiguous, stop and
+5. Resolve `remotes.transport` for git pushes and verify its configured login,
+   protocol, helper, and public key fingerprint rather than using an arbitrary
+   available SSH credential.
+6. Resolve tracker access for `remotes.issue_tracker` in this order:
+   MCP/app tools for the configured tracker, tracker HTTP API with configured
+   credentials, then the tracker CLI after confirming authentication.
+7. If the config file is missing, unreadable, invalid, or ambiguous, stop and
    report the exact missing/ambiguous field instead of guessing a provider,
    remote, branch lifecycle, or commit identity.
 
@@ -89,6 +119,20 @@ This preflight is required for both issue workflows and commit/PR workflows.
 Read-only issue inspection may use any available credential, but tracker
 mutations and git delivery actions must follow the configured topology and
 identity.
+
+In a workspace, authorization and repo policy compose: the workspace member
+must allow the operation and the target member config must provide the route
+and workflow. An allowed `push` does not override
+`delivery.force_push_policy`; a valid tracker route does not override a missing
+`issue-comment` capability.
+
+Do not infer tracker authority from whichever CLI is installed or authenticated.
+An unauthenticated tracker CLI is one failed access path, not proof that the
+configured tracker is unavailable. Git SSH remote access is sufficient for repo
+sync, pushes, and tags only; it is not issue, PR, release, label, milestone, or
+CI API access. If no MCP/app/API/CLI path can operate on the configured tracker,
+stop and report a blocker. Do not file on a mirror or secondary remote just
+because its CLI is authenticated unless the user explicitly asks for that.
 
 ### Rule 1: Read the Delivery Block Before Any Git Workflow Action
 
@@ -159,11 +203,15 @@ When `push_on_release: true`, release workflows MUST push release commits and ta
 
 Always resolve remote names through `aiwg.config.remotes`:
 
-- Issues, PRs, milestones, labels → `remotes.issue_tracker`
+- Internal engineering issues, PRs, milestones, labels → `remotes.issue_tracker`
+- Customer acknowledgements, follow-up, and closure → `remotes.customer_issue_tracker` when configured
 - CI status checks → `remotes.ci`
 - Tag pushes → `remotes.primary` (and `remotes.secondary[].push_on_release` if applicable)
 
 Do not assume `origin` is the issue tracker. Do not assume GitHub. Read the config.
+Prefer MCP/app/API access for the configured tracker before CLI access. Use a
+tracker CLI only after confirming it targets the configured tracker and is
+authenticated as an allowed actor.
 
 Treat issue location as project topology, not as a separate provider-design
 decision. If `remotes.issue_tracker` resolves to a git remote, derive the
@@ -178,7 +226,9 @@ issues live.
 When delivery identity fields are present, they are authoritative for writes:
 
 - Commits → use `delivery.committer.name` / `delivery.committer.email` when set; otherwise inherit normal `git config`.
-- Commit and tag signing → if `delivery.require_signed_commits: true` or `delivery.signing.enforce` covers the artifact being written, use `delivery.signing.format`, `delivery.signing.key` or `delivery.signing.key_file`, and `delivery.signing.program` where applicable.
+- Commit signing → if `delivery.require_signed_commits: true` or `delivery.signing.enforce` covers commits, use `delivery.signing.format`, `delivery.signing.key` or `delivery.signing.key_file`, and `delivery.signing.program` where applicable.
+- Release-tag signing → use `delivery.release_signing` when present; never fall back to the commit key merely because it is Git's configured `user.signingkey`.
+- Git pushes → use `remotes.transport.login` through the declared protocol/helper and verify `key_fingerprint` when present.
 - Issue comments, issue closures, PRs, labels, and milestone writes → use `remotes.tracker_actor.login` through `remotes.tracker_actor.via` when set.
 - Never author delivery mutations as any login listed in `remotes.tracker_actor.forbid_actors`.
 
@@ -198,7 +248,7 @@ When the policy is already declared, do NOT use `AskUserQuestion` (or equivalent
 `force_push_policy` defines what's allowed:
 
 - `never`: no force-push to any branch, ever
-- `main-only-blocked`: force-push allowed on feature branches, never on `default_branch`
+- `own-branch-only`: force-push allowed on the agent's own feature branch, never on `default_branch`
 - `allowed`: force-push allowed everywhere (rare; only configure on solo projects)
 
 Agents MUST NOT force-push outside the declared policy.

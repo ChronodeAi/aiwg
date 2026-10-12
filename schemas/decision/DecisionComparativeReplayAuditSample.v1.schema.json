@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayAuditSample.v1.schema.json",
+  "title": "DecisionComparativeReplayAuditSample.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatorDigest",
+    "splitDigest",
+    "goldDigest",
+    "status",
+    "reviewer",
+    "completedAt",
+    "itemAssessments",
+    "uniqueDevelopmentRoots",
+    "uniqueHoldoutRoots",
+    "delayedRepeats",
+    "artifactReviews",
+    "blinding",
+    "assessments"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-audit-sample/v1"
+    },
+    "generatorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "splitDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "goldDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "status": {
+      "const": "pending"
+    },
+    "reviewer": {
+      "type": "null"
+    },
+    "completedAt": {
+      "type": "null"
+    },
+    "itemAssessments": {
+      "const": 44
+    },
+    "uniqueDevelopmentRoots": {
+      "const": 20
+    },
+    "uniqueHoldoutRoots": {
+      "const": 20
+    },
+    "delayedRepeats": {
+      "const": 4
+    },
+    "artifactReviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact",
+          "status"
+        ],
+        "properties": {
+          "artifact": {
+            "enum": [
+              "protocol-preregistration",
+              "final-comparative-report"
+            ]
+          },
+          "status": {
+            "const": "pending"
+          }
+        }
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "blinding": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "assessments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assessmentId",
+          "phase",
+          "rootId",
+          "repeatOf",
+          "pairOrder"
+        ],
+        "properties": {
+          "assessmentId": {
+            "type": "string",
+            "pattern": "^audit-[0-9]{2}$"
+          },
+          "phase": {
+            "enum": [
+              "development",
+              "holdout",
+              "delayed-repeat"
+            ]
+          },
+          "rootId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "repeatOf": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^audit-[0-9]{2}$"
+          },
+          "pairOrder": {
+            "enum": [
+              "gold-report",
+              "report-gold"
+            ]
+          }
+        }
+      },
+      "minItems": 44,
+      "maxItems": 44
+    }
+  }
+}

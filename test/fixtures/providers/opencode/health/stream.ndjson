@@ -1,0 +1,3 @@
+{"type":"step_start","sessionID":"fixture-session","part":{}}
+{"type":"text","sessionID":"fixture-session","part":{"id":"opencode-part-1","type":"text","text":"synthetic answer"}}
+{"type":"step_finish","sessionID":"fixture-session","part":{"reason":"stop"}}

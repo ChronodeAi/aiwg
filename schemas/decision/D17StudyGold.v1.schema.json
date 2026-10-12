@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyGold.v1.schema.json",
+  "title": "D17StudyGold",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "labels",
+    "worlds"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-gold/v1"
+    },
+    "labels": {
+      "type": "object",
+      "minProperties": 1800,
+      "maxProperties": 1800,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[0-9a-f]{64}$": {
+          "enum": [
+            "yes",
+            "no"
+          ]
+        }
+      }
+    },
+    "worlds": {
+      "type": "object",
+      "minProperties": 1800,
+      "maxProperties": 1800,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[0-9a-f]{64}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "slice",
+            "subject",
+            "object",
+            "destination",
+            "decoy",
+            "enabled",
+            "hasLink",
+            "explicitNegative",
+            "unknown",
+            "quantity",
+            "day"
+          ],
+          "properties": {
+            "slice": {
+              "enum": [
+                "direct-facts",
+                "multi-fact",
+                "negation",
+                "authority"
+              ]
+            },
+            "subject": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "object": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "destination": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "decoy": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "hasLink": {
+              "type": "boolean"
+            },
+            "explicitNegative": {
+              "type": "boolean"
+            },
+            "unknown": {
+              "type": "boolean"
+            },
+            "quantity": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "day": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            }
+          }
+        }
+      }
+    }
+  }
+}

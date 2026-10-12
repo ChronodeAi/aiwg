@@ -10,6 +10,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // Mock script runner
 const mockRun = vi.fn().mockResolvedValue({ exitCode: 0 });
@@ -25,9 +28,14 @@ vi.mock('../../../../src/channel/manager.mjs', () => ({
   getFrameworkRoot: vi.fn().mockResolvedValue('/mock/framework/root'),
 }));
 
-// Mock update checker
-vi.mock('../../../../src/update/checker.mjs', () => ({
-  forceUpdateCheck: vi.fn().mockResolvedValue(undefined),
+// Mock install-aware update service
+vi.mock('../../../../src/update/service.mjs', () => ({
+  updateInstallation: vi.fn().mockResolvedValue({
+    mode: 'npm',
+    status: 'updated',
+    changed: true,
+    message: 'Updated test installation.',
+  }),
 }));
 
 // Mock fs for registry reading
@@ -49,6 +57,7 @@ vi.mock('fs', async () => {
             frameworks: [
               { id: 'sdlc-complete', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
               { id: 'media-marketing-kit', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
+              { id: 'team-tools-addon', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
             ],
           });
         }
@@ -67,6 +76,7 @@ vi.mock('fs', async () => {
           frameworks: [
             { id: 'sdlc-complete', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
             { id: 'media-marketing-kit', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
+            { id: 'team-tools-addon', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
           ],
         });
       }
@@ -105,6 +115,7 @@ import {
   contributeStartHandler,
   validateMetadataHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   utilityHandlers,
 } from '../../../../src/cli/handlers/utilities.js';
@@ -218,25 +229,102 @@ describe('Utility Command Handlers', () => {
         { cwd: mockContext.cwd }
       );
     });
+
+    it('shows Muse native extensions when Muse is requested', async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-muse-'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        mockContext.cwd = tmp;
+        mockContext.args = ['--provider', 'muse'];
+        await doctorHandler.execute(mockContext);
+        expect(log.mock.calls.map((call) => String(call[0])).join('\n'))
+          .toContain('── Muse Code native extensions ──');
+      } finally {
+        log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('hides Muse native extensions when Muse is neither requested nor deployed', async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-no-muse-'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        mockContext.cwd = tmp;
+        await doctorHandler.execute(mockContext);
+        expect(log.mock.calls.map((call) => String(call[0])).join('\n'))
+          .not.toContain('── Muse Code native extensions ──');
+      } finally {
+        log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('contextFirewallHandler', () => {
+    it('maps the default read-only scan to the packaged engine', async () => {
+      await contextFirewallHandler.execute(mockContext);
+
+      expect(mockRun).toHaveBeenCalledWith(
+        'tools/security/context-memory-firewall.mjs',
+        ['--package-root', mockContext.frameworkRoot],
+        { cwd: mockContext.cwd },
+      );
+    });
+
+    it('maps baseline planning without mutation', async () => {
+      mockContext.args = ['baseline', '--plan', '--output', '.aiwg/review.json', '--json'];
+      await contextFirewallHandler.execute(mockContext);
+
+      expect(mockRun).toHaveBeenCalledWith(
+        'tools/security/context-memory-firewall.mjs',
+        ['--package-root', mockContext.frameworkRoot, '--json', '--plan-baseline=.aiwg/review.json'],
+        { cwd: mockContext.cwd },
+      );
+    });
+
+    it('requires explicit confirmation before a baseline write', async () => {
+      mockContext.args = ['baseline', '--write'];
+      const result = await contextFirewallHandler.execute(mockContext);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.message).toMatch(/requires --confirm-reviewed/);
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it('maps a confirmed baseline write', async () => {
+      mockContext.args = ['baseline', '--write', '--confirm-reviewed'];
+      await contextFirewallHandler.execute(mockContext);
+
+      expect(mockRun).toHaveBeenCalledWith(
+        'tools/security/context-memory-firewall.mjs',
+        ['--package-root', mockContext.frameworkRoot, '--write-baseline', '--confirm-reviewed'],
+        { cwd: mockContext.cwd },
+      );
+    });
   });
 
   describe('updateHandler', () => {
     it('should have correct metadata', () => {
       expect(updateHandler.id).toBe('update');
       expect(updateHandler.category).toBe('maintenance');
-      expect(updateHandler.aliases).toEqual(['-update', '--update']);
+      expect(updateHandler.aliases).toEqual(['-update', '--update', 'upgrade']);
       expect(updateHandler.name).toBe('Update');
       expect(updateHandler.description).toMatch(/update/i);
     });
 
     it('should check for updates and re-deploy installed frameworks', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
 
       const result = await updateHandler.execute(mockContext);
 
-      expect(forceUpdateCheck).toHaveBeenCalled();
-      // Should call UseHandler for each installed framework (sdlc, marketing)
-      expect(mockUseExecute).toHaveBeenCalledTimes(2);
+      expect(updateInstallation).toHaveBeenCalled();
+      // Canonical frameworks use aliases; add-ons preserve their registry ID.
+      expect(mockUseExecute).toHaveBeenCalledTimes(3);
+      expect(mockUseExecute.mock.calls.map(call => call[0].args[0])).toEqual([
+        'sdlc',
+        'marketing',
+        'team-tools-addon',
+      ]);
       expect(result.exitCode).toBe(0);
     });
 
@@ -245,7 +333,7 @@ describe('Utility Command Handlers', () => {
 
       await updateHandler.execute(mockContext);
 
-      // Both calls should include --provider factory
+      // Every installed item should include --provider factory
       for (const call of mockUseExecute.mock.calls) {
         const ctx = call[0] as HandlerContext;
         expect(ctx.args).toContain('--provider');
@@ -273,9 +361,9 @@ describe('Utility Command Handlers', () => {
       expect(mockUseExecute).not.toHaveBeenCalled();
     });
 
-    it('should handle errors from forceUpdateCheck gracefully', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
-      (forceUpdateCheck as any).mockRejectedValueOnce(new Error('Network error'));
+    it('should handle errors from the update service gracefully', async () => {
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
+      (updateInstallation as any).mockRejectedValueOnce(new Error('Network error'));
 
       // Should still proceed with re-deployment
       const result = await updateHandler.execute(mockContext);
@@ -284,13 +372,25 @@ describe('Utility Command Handlers', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it('should fail safely on canonical installation drift', async () => {
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
+      const error = Object.assign(new Error('canonical root mismatch'), { code: 'AIWG_INSTALLATION_DRIFT' });
+      (updateInstallation as any).mockRejectedValueOnce(error);
+
+      const result = await updateHandler.execute(mockContext);
+
+      expect(result.exitCode).toBe(78);
+      expect(result.message).toContain('canonical root mismatch');
+      expect(mockUseExecute).not.toHaveBeenCalled();
+    });
+
     it('should skip update check when --skip-check is passed', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
       mockContext.args = ['--skip-check'];
 
       await updateHandler.execute(mockContext);
 
-      expect(forceUpdateCheck).not.toHaveBeenCalled();
+      expect(updateInstallation).not.toHaveBeenCalled();
       expect(mockUseExecute).toHaveBeenCalled();
     });
 
@@ -298,7 +398,8 @@ describe('Utility Command Handlers', () => {
       mockContext.args = ['--skip-check'];
       mockUseExecute
         .mockResolvedValueOnce({ exitCode: 0 })  // sdlc succeeds
-        .mockResolvedValueOnce({ exitCode: 1 });  // marketing fails
+        .mockResolvedValueOnce({ exitCode: 1 })  // marketing fails
+        .mockResolvedValueOnce({ exitCode: 0 }); // add-on succeeds
 
       const result = await updateHandler.execute(mockContext);
 
@@ -309,13 +410,14 @@ describe('Utility Command Handlers', () => {
 
   describe('utilityHandlers array', () => {
     it('should export all utility handlers', () => {
-      expect(utilityHandlers).toHaveLength(5);
+      expect(utilityHandlers).toHaveLength(6);
 
       const handlerIds = utilityHandlers.map(h => h.id);
       expect(handlerIds).toContain('prefill-cards');
       expect(handlerIds).toContain('contribute-start');
       expect(handlerIds).toContain('validate-metadata');
       expect(handlerIds).toContain('doctor');
+      expect(handlerIds).toContain('context-firewall');
       expect(handlerIds).toContain('update');
     });
 
@@ -343,7 +445,7 @@ describe('Utility Command Handlers', () => {
 
     it('maintenance handlers should have maintenance category', () => {
       const maintenanceCategories = utilityHandlers
-        .filter(h => ['doctor', 'update'].includes(h.id))
+        .filter(h => ['doctor', 'context-firewall', 'update'].includes(h.id))
         .map(h => h.category);
 
       maintenanceCategories.forEach(category => {

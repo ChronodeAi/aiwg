@@ -210,7 +210,17 @@ from a server are exposed to a specific provider without affecting other provide
 ```
 
 **`toolDeny`** — glob patterns of tool names to block for this provider.  
-**`toolAllow`** — if non-empty, only these tools are exposed (allowlist mode). Takes precedence over `toolDeny`.
+**`toolAllow`** — a per-server allowlist: for each server named in an allow pattern, only its listed
+tools are exposed. Servers absent from the allow patterns remain unrestricted by `toolAllow`;
+`toolDeny` still applies to them. Codex prints a warning naming those unrestricted servers.
+Add allow patterns for every server to restrict the entire profile, or deny an omitted server
+with `<server>__*`. Provider support and overlap precedence differ as described below.
+
+Claude Code refuses `toolAllow`: its allow rules pre-approve tools and cannot restrict availability.
+Codex uses exact tool names; deny rules win an identical allow/deny overlap. OpenCode uses the last
+matching key: AIWG emits deny keys before allow keys so an explicit allow can override a matching
+wildcard deny. An identical key present in both lists stays denied. Factory, Windsurf and Antigravity
+have no documented tool allowlist and warn instead. See [tool filter support](./README.md#profile-tool-filters).
 
 Tool name format: `<server-name>__<tool-name>`, e.g. `git-gitea__delete_branch`.
 Glob patterns are supported: `git-gitea__delete_*` blocks all delete operations.
@@ -297,4 +307,4 @@ alias crx='aiwg session --provider codex --profile'  # crx dev, crx ops
 
 - [Codex Per-Profile Runtime Homes](./codex-profiles.md) — OAuth isolation for Codex
 - [MCP Server Registry](./README.md) — Registering and managing servers
-- [CLI Reference: mcp profile](../cli-reference.md#mcp-profile) — Full command reference
+- [CLI Reference: mcp profile](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md#mcp-profile) — Full command reference

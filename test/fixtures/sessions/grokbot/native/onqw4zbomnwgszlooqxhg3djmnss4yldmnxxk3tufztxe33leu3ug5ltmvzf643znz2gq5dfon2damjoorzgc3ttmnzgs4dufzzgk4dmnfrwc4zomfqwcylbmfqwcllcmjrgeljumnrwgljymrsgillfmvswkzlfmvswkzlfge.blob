@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "value": {
+    "entries": [
+      {
+        "kind": "message",
+        "id": "evt-1",
+        "timestampMs": 1700000000000,
+        "requestId": "req-1",
+        "seq": 1,
+        "role": "user",
+        "content": "Can you help me plan a release?"
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-2",
+        "timestampMs": 1700000001000,
+        "requestId": "req-1",
+        "seq": 2,
+        "message": {
+          "type": "text",
+          "content": "Sure — what is the target date?"
+        }
+      },
+      {
+        "kind": "message",
+        "id": "evt-3",
+        "timestampMs": 1700000002000,
+        "requestId": "req-1",
+        "seq": 3,
+        "role": "user",
+        "content": "Next Friday."
+      },
+      {
+        "kind": "message",
+        "id": "evt-4",
+        "timestampMs": 1700000003000,
+        "requestId": "req-2",
+        "seq": 4,
+        "role": "assistant",
+        "content": "Pulled in the release checklist for you.",
+        "fromAgent": {
+          "id": "agent-release-bot",
+          "name": "Release Bot"
+        }
+      },
+      {
+        "kind": "user-attachment",
+        "id": "evt-5",
+        "timestampMs": 1700000004000,
+        "requestId": "req-3",
+        "seq": 5,
+        "file_name": "roadmap.png",
+        "file_path": "/synthetic/uploads/roadmap.png",
+        "width": 1200,
+        "height": 800,
+        "byteSize": 345678
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-6",
+        "timestampMs": 1700000005000,
+        "requestId": "req-3",
+        "seq": 6,
+        "message": {
+          "type": "widget",
+          "widget": {
+            "prompt": "Pick a release channel"
+          }
+        },
+        "respondedValue": "stable"
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-7",
+        "timestampMs": 1700000006000,
+        "requestId": "req-4",
+        "seq": 7,
+        "message": {
+          "type": "email-draft",
+          "draft": {
+            "subject": "Release notes draft",
+            "body": "Hello team, here are the draft release notes..."
+          }
+        }
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-8",
+        "timestampMs": 1700000007000,
+        "requestId": "req-5",
+        "seq": 8,
+        "message": {
+          "type": "slack-draft",
+          "draft": {
+            "target": "#release-engineering",
+            "body": "Heads up: release cut next Friday."
+          }
+        }
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-9",
+        "timestampMs": 1700000008000,
+        "requestId": "req-6",
+        "seq": 9,
+        "message": {
+          "type": "attachment",
+          "url": "https://example.test/synthetic/checklist.pdf",
+          "file_name": "checklist.pdf"
+        }
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-10",
+        "timestampMs": 1700000009000,
+        "requestId": "req-7",
+        "seq": 10,
+        "message": {
+          "type": "user-form",
+          "formRequest": {
+            "title": "Confirm release owner"
+          }
+        }
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-11",
+        "timestampMs": 1700000010000,
+        "requestId": "req-8",
+        "seq": 11,
+        "message": {
+          "type": "secret-request",
+          "secretRequest": {
+            "label": "Deploy API token"
+          }
+        },
+        "secretProvided": true
+      },
+      {
+        "kind": "event",
+        "id": "evt-12",
+        "timestampMs": 1700000011000,
+        "requestId": "req-9",
+        "seq": 12,
+        "event": {
+          "kind": "tool-run",
+          "tool": "checklist-generator",
+          "status": "ok"
+        }
+      },
+      {
+        "kind": "notice",
+        "id": "evt-13",
+        "timestampMs": 1700000012000,
+        "requestId": "req-9",
+        "seq": 13,
+        "text": "Conversation archived by user."
+      },
+      {
+        "kind": "future-unreleased-kind",
+        "id": "evt-14",
+        "timestampMs": 1700000013000,
+        "requestId": "req-10",
+        "seq": 14,
+        "somePayload": {
+          "nested": true
+        }
+      }
+    ],
+    "epochHint": "epoch-synthetic-1",
+    "acceptedSequenceHint": 14,
+    "persistedAt": 1700000020000,
+    "precedingTimestampMs": 0
+  }
+}

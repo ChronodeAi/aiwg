@@ -1,127 +1,28 @@
-# Warp Terminal Quick Start
+# Connect AIWG to Warp
 
----
+For the complete first-time journey, start with [Install, Connect, and Verify](../getting-started/install-connect-verify.md).
 
-## Install & Deploy
+Warp is the **provider** in this guide. Complete the [safe Node.js setup](../getting-started/install-node.md) first if
+`node` or `npm` is unavailable.
 
-**1. Install**
+From a terminal opened in the project's main folder, install AIWG and deploy the complete system:
 
 ```bash
 npm install -g aiwg
+aiwg use all --provider warp
 ```
 
-**2. Deploy to your project**
+The deployment command refreshes AIWG's shared project context and prints a verification result. Open a fresh Warp tab
+or agent session if the `aiwg use` output says a reload is required. After that, ask Warp to verify AIWG by reporting
+the project root, provider files it can read, installed frameworks, and one useful next action.
 
-```bash
-cd /path/to/your/project
-
-# Deploy SDLC framework:
-aiwg use sdlc --provider warp
-```
-
-**3. Open in Warp Terminal**
-
-```bash
-# Warp automatically loads WARP.md
-cd /path/to/your/project
-```
-
-**4. Regenerate for intelligent integration**
+Try one small task immediately after verification:
 
 ```text
-/aiwg-regenerate-warp
+Review this project's README and getting-started docs for unclear positioning, missing setup steps, or unsupported claims. Save the three highest-priority fixes with file references and a recommended next edit at .aiwg/marketing/brand/audit/readme-review.md. Leave the reviewed files unchanged.
 ```
 
-This step is critical - it enables natural language command mapping ("run security review" → workflow). Without it, advanced features won't work correctly. See the [Regenerate Guide](#regenerate-guide) for details.
-
-**5. You're ready.** See the [Intake Guide](#intake-guide) for starting projects.
-
----
-
-## What Gets Created
-
-```text
-WARP.md              # Project rules file (auto-loaded by Warp)
-.warp/
-├── skills/          # Skill directories (natively discovered by Warp)
-└── workflows/       # Legacy YAML workflows (natively discovered)
-
-.aiwg/               # SDLC artifacts
-```
-
-> **Note:** Warp natively discovers `.warp/skills/` and `.warp/workflows/`. Agents, commands, and rules are aggregated into `WARP.md` for single-file context loading — Warp does not natively discover those directories. Warp also supports `AGENTS.md` as an alternative project rules filename; `WARP.md` takes priority when both files exist. AIWG uses `WARP.md`.
-
----
-
-## Using Warp AI
-
-Natural language works directly:
-
-```text
-"Generate intake for an e-commerce platform"
-"Transition to Elaboration"
-"Run security review"
-"Where are we in the project?"
-```
-
----
-
-## Warp Commands
-
-```bash
-/init              # Re-index project (reload WARP.md)
-/compact           # Summarize conversation to free context window space
-/orchestrate       # Dispatch parallel subtasks within a session
-```
-
----
-
-## Agent Loop
-
-Agent loops support multi-provider execution. While Warp context is deployed via AIWG, agent task loops run through the CLI:
-
-```bash
-aiwg ralph "Fix all tests" --completion "npm test passes"
-```
-
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
-
----
-
-## Troubleshooting
-
-**Natural language not working?** Run regenerate:
-```text
-/aiwg-regenerate-warp
-```
-
-**WARP.md not loading?** Re-index:
-```bash
-/init
-```
-
-**Still not loading?** Verify the filename is all caps: `WARP.md`. Lowercase `warp.md` is not recognized by Warp.
-
-**Redeploy if needed:**
-```bash
-aiwg use sdlc --provider warp --force
-```
-
----
-
-## MCP Sidecar (Unrestricted AIWG Access)
-
-Warp Terminal has no dangerous mode flag. The MCP sidecar is the only path to unrestricted AIWG tool access.
-
-MCP servers in Warp are configured via the UI, not via a file. Add AIWG as an MCP server directly in Warp:
-
-```text
-/add-mcp
-# Then configure:
-#   Command: aiwg
-#   Args: mcp serve
-```
-
-Alternatively, open Settings and add the MCP server from there.
-
-See the [Warp MCP Sidecar Guide](warp-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
+Success means Warp names the intended project, follows the AIWG bootstrap into `WORKSPACE.md` and `AIWG.md` or the
+provider-specific adapter, and produces a concrete review you can inspect. For advanced flags, compatibility notes,
+and recovery details, see the [Warp operational
+reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/providers/warp.md).

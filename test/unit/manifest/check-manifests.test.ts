@@ -17,7 +17,7 @@ function writeJson(path: string, value: unknown) {
 }
 
 function runChecker(root: string) {
-  return spawnSync(process.execPath, [checker, root], {
+  return spawnSync(process.execPath, [checker, root], { timeout: 60_000,
     encoding: 'utf8',
   });
 }
@@ -119,6 +119,6 @@ describe('check-manifests', () => {
       });
     }
 
-    execFileSync(process.execPath, [checker, root], { encoding: 'utf8' });
+    execFileSync(process.execPath, [checker, root], { timeout: 60_000, encoding: 'utf8' });
   });
 });

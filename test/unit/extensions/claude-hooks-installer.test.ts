@@ -103,11 +103,23 @@ describe('installAiwgHooks', () => {
           expect(h._aiwg_managed).toBe(true);
           expect(typeof h._aiwg_id).toBe('string');
           expect(h.type).toBe('command');
-          expect(h.command).toMatch(/^node \.claude[/\\]hooks[/\\]aiwg-/);
+          expect(h.command).toMatch(/^node \.claude\/hooks\/aiwg-/);
+          expect(h.command).not.toContain('\\');
         }
       }
       void event;
     }
+
+    const commandFor = (event: string, hookId: string): string | undefined =>
+      hooks[event]
+        ?.flatMap((group) => group.hooks)
+        .find((hook) => hook._aiwg_id === hookId)?.command;
+    expect(commandFor('SubagentStart', 'aiwg-trace')).toBe(
+      'node .claude/hooks/aiwg-trace.cjs start',
+    );
+    expect(commandFor('SubagentStop', 'aiwg-trace')).toBe(
+      'node .claude/hooks/aiwg-trace.cjs stop',
+    );
   });
 
   it('preserves operator-authored entries when merging (object shape)', async () => {
@@ -258,6 +270,87 @@ describe('installAiwgHooks', () => {
     expect(result?.warnings.some((w) => w.includes('Refreshed stale'))).toBe(true);
   });
 
+  it('refreshes Windows backslash hook commands to shell-safe forward slashes (#133)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'node .claude\\hooks\\aiwg-session.cjs',
+                  _aiwg_managed: true,
+                  _aiwg_id: 'aiwg-session',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      'utf8',
+    );
+
+    const result = await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    const sessionEntry = (settings.hooks?.SessionStart ?? [])
+      .flatMap((group) => group.hooks)
+      .find((hook) => hook._aiwg_id === 'aiwg-session');
+
+    expect(sessionEntry?.command).toBe('node .claude/hooks/aiwg-session.cjs');
+    expect(result?.warnings).toContain(
+      'Refreshed stale SessionStart → aiwg-session command path',
+    );
+  });
+
+  it('refreshes trace hooks missing their event-specific subcommands (#134)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: Object.fromEntries(
+          ['SubagentStart', 'SubagentStop'].map((event) => [
+            event,
+            [
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'node .claude/hooks/aiwg-trace.cjs',
+                    _aiwg_managed: true,
+                    _aiwg_id: 'aiwg-trace',
+                  },
+                ],
+              },
+            ],
+          ]),
+        ),
+      }),
+      'utf8',
+    );
+
+    const result = await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    const traceCommand = (event: string): string | undefined =>
+      settings.hooks?.[event]
+        ?.flatMap((group) => group.hooks)
+        .find((hook) => hook._aiwg_id === 'aiwg-trace')?.command;
+
+    expect(traceCommand('SubagentStart')).toBe(
+      'node .claude/hooks/aiwg-trace.cjs start',
+    );
+    expect(traceCommand('SubagentStop')).toBe(
+      'node .claude/hooks/aiwg-trace.cjs stop',
+    );
+    expect(
+      result?.warnings.filter((warning) => warning.includes('Refreshed stale')),
+    ).toHaveLength(2);
+  });
+
   it('dry-run does not write files', async () => {
     const r = await installAiwgHooks({ projectPath, frameworkRoot, dryRun: true });
     expect(r).not.toBeNull();
@@ -317,6 +410,64 @@ describe('installAiwgHooks', () => {
     // AIWG marker recognized in legacy form → no backup, but migration still runs
     expect(r?.backupPath).toBeUndefined();
     expect(r?.migratedFromLegacy).toBe(true);
+  });
+
+  it('adopts a pre-existing untagged entry instead of registering the hook twice (#2543)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    // An operator (or an older AIWG) already wired the same script, untagged.
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'node .claude/hooks/aiwg-session.cjs' }] },
+          ],
+        },
+      }),
+      'utf8',
+    );
+
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    const sessionEntries = (settings.hooks?.SessionStart ?? [])
+      .flatMap((group) => group.hooks ?? [])
+      .filter((entry) => entry.command.includes('aiwg-session'));
+
+    expect(sessionEntries).toHaveLength(1);
+    expect(sessionEntries[0]._aiwg_managed).toBe(true);
+    expect(sessionEntries[0]._aiwg_id).toBe('aiwg-session');
+  });
+
+  it('does not back up a settings.json AIWG created itself (#2542)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    // Exactly what tools/agents/providers/claude.mjs writes on a greenfield deploy.
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({ version: '1.0', created: new Date().toISOString(), aiwg: { enabled: true, mode: 'all' } }),
+      'utf8',
+    );
+
+    const r = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(r?.backupPath).toBeUndefined();
+    const entries = await fs.readdir(claudeDir);
+    expect(entries.filter((name) => name.includes('.bak.'))).toHaveLength(0);
+  });
+
+  it('still backs up genuinely operator-authored settings (#2542)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({ env: { OPERATOR: 'yes' } }),
+      'utf8',
+    );
+
+    const r = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(r?.backupPath).toBeDefined();
+    const entries = await fs.readdir(claudeDir);
+    expect(entries.filter((name) => name.includes('.bak.')).length).toBeGreaterThan(0);
   });
 });
 

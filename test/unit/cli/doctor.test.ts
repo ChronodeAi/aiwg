@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -64,6 +64,14 @@ describe('tools/cli/doctor.mjs — file', () => {
 
     expect(content).toContain("shell: process.platform === 'win32'");
     expect(content).toContain('spawn failed: ${r.error.code || r.error.message}');
+  });
+
+  it('requires discovery to return the known aiwg-doctor capability', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain("args: ['discover', 'aiwg doctor', '--json', '--limit', '10']");
+    expect(content).toContain("result?.name === 'aiwg-doctor'");
+    expect(content).toContain('returned zero results for the known aiwg-doctor capability');
   });
 });
 
@@ -194,6 +202,17 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('aiwg list --deployed');
   });
 
+  it('offers a non-destructive Codex repair without counting hidden standard skills (#2561)', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    // `--force` overwrites unmanaged files; it is never the budget remediation.
+    expect(content).not.toContain('aiwg use all --provider codex --force');
+    expect(content).toContain('aiwg use <bundle> --provider codex');
+    expect(content).toContain('standard tier');
+    expect(content).toContain("provName !== 'codex' && provider?.paths?.skills");
+    expect(content).toContain('startup-visible skills');
+  });
+
   it('uses the same Claude override budget for deployed skill count warnings', async () => {
     const { readFileSync } = await import('fs');
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
@@ -201,6 +220,17 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('resolveClaudeListingBudget');
     expect(content).not.toContain("above Claude Code's default listing budget");
     expect(content).toContain('Refs #1609');
+  });
+});
+
+describe('doctor: optional native feature builds', () => {
+  it('warns on installed-but-unloadable native modules with a scoped rebuild command', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('p.installed && !p.loadable');
+    expect(content).toContain('native build unavailable');
+    expect(content).toContain('features install ${s.feature.name}');
+    expect(content).toContain('scoped lifecycle-script approval');
   });
 });
 
@@ -312,9 +342,11 @@ describe('doctor: Fortemi Core prebuilt index findings (#1697)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
     expect(content).toContain('getFortemiCorePrebuiltStatus');
+    expect(content).toContain('getFortemiCoreExecutableSkillStatus');
     expect(content).toContain('getFortemiCoreSyncStatus');
     expect(content).toContain('fortemi-core-index');
     expect(content).toContain('prebuilt framework index present');
+    expect(content).toContain('prebuilt framework index is missing executable metadata');
     expect(content).toContain('run "npm run release:fortemi-index" before release packaging');
   });
 });
@@ -345,6 +377,8 @@ describe('doctor: provider awareness (regression)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
     expect(content).toMatch(/openhuman:\s*'OpenHuman'/);
+    expect(content).toMatch(/grokbot:\s*'Grok Bot'/);
+    expect(content).toMatch(/muse:\s*'Muse Code'/);
     expect(content).toContain('checkOpenHumanHarnessTier2');
     expect(content).toContain('OpenHuman Tier-2 harness');
     expect(content).toContain("'agent', 'prompts'");
@@ -461,6 +495,14 @@ describe('tools/cli/doctor.mjs — agent-def size ceiling (#1587)', () => {
     expect(content.toLowerCase()).toContain('externalize examples');
   });
 
+  it('compares deployed findings with current packaged agent sources before diagnosis', () => {
+    expect(content).toContain('collectPackagedAgentInventory');
+    expect(content).toContain('diagnoseOversizedAgent');
+    expect(content).toContain('current packaged sources');
+    expect(content).toContain('stale managed deployment bytes');
+    expect(content).toContain('unmanaged or project-local');
+  });
+
   it('scans the deployed agent definition file types', () => {
     // .md, .agent.md (Copilot), .soul.md (Windsurf)
     expect(content).toContain('.soul.md');
@@ -473,6 +515,16 @@ describe('tools/cli/doctor.mjs — agent-def size ceiling (#1587)', () => {
     const ci = readFileSync(resolve(__dirname, '../../../.gitea/workflows/ci.yml'), 'utf-8');
     expect(pkg.scripts['lint:agent-sizes']).toBe('node tools/lint/agent-def-sizes.mjs');
     expect(ci).toContain('npm run lint:agent-sizes');
+  });
+
+  it('guards aiwg-steward as a 12 KB Tier-1 routing core (#1661)', () => {
+    const lint = readFileSync(resolve(__dirname, '../../../tools/lint/agent-def-sizes.mjs'), 'utf-8');
+    expect(lint).toContain('STEWARD_AGENT_TARGET_BYTES = 12 * 1024');
+    expect(lint).toContain('STEWARD_AGENT_TARGET_PATHS');
+    expect(lint).toContain('agentic/code/addons/aiwg-utils/agents/aiwg-steward.md');
+    expect(lint).toContain('agentic/code/agents/personas/aiwg-steward.md');
+    expect(lint).toContain('stewardTargetViolations');
+    expect(lint).toContain('Tier-1 routing core');
   });
 });
 
@@ -512,5 +564,147 @@ describe('tools/cli/doctor.mjs — startup-context budget (#1673)', () => {
     // Must not fail doctor (error => exit 1) for a structural over-budget.
     expect(fn).not.toContain("'error'");
     expect(fn).toContain('Startup Context');
+  });
+});
+
+describe('tools/cli/doctor.mjs — subagent dispatch headroom (#2562)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('defines a claude-only dispatch headroom check invoked next to the startup budget', () => {
+    expect(content).toContain('async function checkSubagentDispatchHeadroom');
+    expect(content).toContain('await checkSubagentDispatchHeadroom(provName, label)');
+    expect(content).toMatch(/checkSubagentDispatchHeadroom[\s\S]*?if \(provName !== 'claude'\) return;/);
+  });
+
+  it('fails doctor when the inlined surface leaves no room for a subagent, unlike the advisory startup budget', () => {
+    const fn = content.slice(
+      content.indexOf('async function checkSubagentDispatchHeadroom'),
+      content.indexOf('async function checkStartupContextBudget'),
+    );
+    expect(fn).toContain("status === 'fails' ? 'error' : 'warn'");
+    expect(fn).toContain('Prompt is too long');
+    expect(fn).toContain('Ancestor directories contribute');
+    expect(fn).toContain('AIWG_RULES_INLINE_BUDGET_TOKENS');
+  });
+
+  it('computes headroom from the standard window minus startup context, agent def, and system prompt', async () => {
+    // @ts-expect-error — .mjs module without type declarations
+    const { subagentDispatchHeadroom } = await import('../../../tools/lint/claude-context-inventory.mjs');
+    expect(subagentDispatchHeadroom({ totalTokens: 97_000, budgetTokens: 200_000 })).toEqual({ headroom: 87_000, status: 'ok' });
+    expect(subagentDispatchHeadroom({ totalTokens: 150_000, budgetTokens: 200_000 })).toEqual({ headroom: 34_000, status: 'at-risk' });
+    expect(subagentDispatchHeadroom({ totalTokens: 190_000, budgetTokens: 200_000 })).toMatchObject({ status: 'fails' });
+  });
+});
+
+// ── Context and persistent-memory firewall (#2040) ────────────────────
+
+describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('imports and invokes the cross-category firewall', () => {
+    expect(content).toContain('scanContextMemoryFirewall');
+    expect(content).toContain("from '../security/context-memory-firewall.mjs'");
+    expect(content).toContain('const firewall = await scanContextMemoryFirewall');
+  });
+
+  it('exposes strict, baseline, and provider-budget controls', () => {
+    expect(content).toContain("a === '--strict-context'");
+    expect(content).toContain("a === '--context-baseline'");
+    expect(content).toContain("a === '--context-budget-tokens'");
+    expect(content).toContain("strictContext ? 'error' : 'warn'");
+  });
+
+  it('reports all six context contributions and review states', () => {
+    expect(content).toContain('Object.entries(firewall.categories)');
+    expect(content).toContain('firewall.trust.stale');
+    expect(content).toContain('firewall.trust.quarantined');
+    expect(content).toContain("record.reviewStatus === 'changed-review-required'");
+  });
+
+  it('scans Muse Code through the firewall without an unknown-provider hole (#229)', () => {
+    // The doctor-side provider filter must admit muse, and the firewall
+    // PROVIDERS table must know its layout — otherwise `aiwg doctor
+    // --provider muse` degrades to `scan failed: Unknown provider 'muse'`.
+    expect(content).toMatch(/'grokbot', 'muse'\]/);
+    expect(content).toMatch(/provName === 'muse' && \(providerArg \|\| allProviders\)/);
+  });
+});
+
+// ── User registry override + shared parallelism defaults (#246 / #249) ──
+
+describe('doctor: user registry override warn (#246)', () => {
+  it('warns when AIWG_USER_REGISTRY_PATH is set', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("AIWG_USER_REGISTRY_PATH");
+    expect(content).toContain('test override active');
+    expect(content).toContain('User Registry Path');
+    expect(content).toContain('not writing to default ~/.aiwg/installed.json');
+  });
+});
+
+describe('doctor: parallelism defaults use shared map (#249)', () => {
+  it('imports getProviderParallelismDefaults instead of a hardcoded subset', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain('getProviderParallelismDefaults');
+    expect(content).not.toContain('const PROVIDER_DEFAULTS = {');
+  });
+
+  it('labels primary=grokbot with shared default of 4', async () => {
+    const { getProviderParallelismDefaults } = await import('../../../src/config/aiwg-config.js');
+    const primary = 'grokbot';
+    const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
+    expect(expectedDefault).toBe(4);
+    const p = { max_parallel_subagents: 4 };
+    const isOverride =
+      p.max_parallel_subagents !== undefined &&
+      p.max_parallel_subagents !== expectedDefault;
+    const label = isOverride
+      ? `max_parallel_subagents=${p.max_parallel_subagents} (operator override; provider default for ${primary} = ${expectedDefault})`
+      : `max_parallel_subagents=${p.max_parallel_subagents} (provider default for ${primary})`;
+    expect(isOverride).toBe(false);
+    expect(label).toBe('max_parallel_subagents=4 (provider default for grokbot)');
+  });
+});
+
+// ── Drift-aware "Unknown provider" message (#270) ──
+
+describe('doctor: unknown-provider check names installation drift (#270)', () => {
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+  it('parses AIWG_INSTALLATION_DRIFT published by bin/aiwg.mjs', () => {
+    expect(content).toContain('process.env.AIWG_INSTALLATION_DRIFT');
+    expect(content).toContain('installationDrift');
+  });
+
+  it('keeps the bare message when no drift is active', () => {
+    expect(content).toContain('`Unknown provider: ${provName}${driftNote}`');
+  });
+
+  it('names the stale install and the repair path under drift', () => {
+    expect(content).toContain('installation identity drift');
+    expect(content).toContain('stale canonical install');
+    expect(content).toContain('aiwg installation adopt');
+  });
+
+  it('builds the drift-aware message only when drift is present', () => {
+    // Mirror the branch logic so the contract is pinned, not just the strings.
+    const buildMessage = (provName, installationDrift) => {
+      const driftNote = installationDrift
+        ? ' (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)'
+        : '';
+      return `Unknown provider: ${provName}${driftNote}`;
+    };
+    expect(buildMessage('muse', null)).toBe('Unknown provider: muse');
+    expect(buildMessage('muse', { state: 'mismatch', drift: [] })).toBe(
+      'Unknown provider: muse (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)',
+    );
   });
 });

@@ -5,12 +5,24 @@ platforms: [all]
 description: Mark an issue as complete with comprehensive summary and verification
 commandHint:
   argumentHint: <issue_number> [--reason <text>] [--no-verify] [--link-artifacts]
-  allowedTools: Bash(git *, gh *), Read, Glob, mcp__gitea__*
-  model: sonnet
+  allowedTools: Bash(git *, gh *), Bash(aiwg effect *), Read, Glob, mcp__gitea__*
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Issue Close
+
+## Semantic Label Contract (#1789)
+
+Before closure, resolve lifecycle, blocked, review/approval, and
+human-interaction roles from `.aiwg/aiwg.config` `issues.labels` for the
+configured tracker. Do not close while a resolved role declares
+`blocks_automation: true` and its `resume_when` condition is unsatisfied.
+Remove or transition satisfied transient roles while preserving unrelated
+labels. Report unavailable configured labels without provisioning them.
+Never provision tracker labels during closure.
 
 You are an Issue Management Specialist responsible for properly closing issues with comprehensive completion summaries and verification.
 
@@ -338,6 +350,40 @@ Total changes: +{lines_added} -{lines_removed} across {files_count} files
 ```
 
 ### Step 6: Close Issue with Summary
+
+**Guard against a duplicate closing comment (#2722).** Re-entry after a crash
+must not post the summary twice. Record both effects in the effect ledger with
+the issue on the configured tracker as the target
+(`gitea:<owner>/<repo>#<N>` or `github:<owner>/<repo>#<N>`):
+
+```bash
+COMMENT=(--kind tracker.comment --target "gitea:{owner}/{repo}#{number}" --issue {number} --action close-summary)
+CLOSE=(--kind tracker.issue.closed --target "gitea:{owner}/{repo}#{number}" --issue {number} --action close)
+EFFECT_ID=$(aiwg effect id "${COMMENT[@]}" --format text)
+# Append to completion-summary.md:  <!-- aiwg-effect: $EFFECT_ID -->
+aiwg effect lookup "${COMMENT[@]}"
+```
+
+- `lookup` exit `0`: the closing comment is already recorded. Skip the comment
+  and continue with the close.
+- `lookup` exit `4` (an intent with no outcome): run
+  `aiwg effect reconcile "${COMMENT[@]}"`. Exit `0` means the marker comment is
+  already on the thread; skip the comment. Exit `3` means it is absent; post
+  it. Exit `4` means the tracker could not be read; stop and report a blocker.
+- `lookup` exit `3`: record the intent, then post:
+  `aiwg effect intent "${COMMENT[@]}" --payload-file completion-summary.md`.
+
+After posting, record the comment and the closure:
+
+```bash
+aiwg effect record "${COMMENT[@]}" --payload-file completion-summary.md --verify
+# ... close the issue (below) ...
+aiwg effect record "${CLOSE[@]}" --payload-digest sha256:<digest-of-completion-summary> --verify
+```
+
+`record --verify` exits `0` only when the tracker shows the marker comment by
+the pinned tracker actor, or the issue state `closed`. Exit `4` means the
+tracker could not be read: report it and never claim the issue closed.
 
 **GitHub**:
 

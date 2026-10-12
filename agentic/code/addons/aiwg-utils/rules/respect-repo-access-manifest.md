@@ -1,11 +1,26 @@
 ---
 enforcement: high
+triggers:
+  - "register a repo in the workspace manifest"
+  - "add a repo to the access manifest"
+  - "register a repo"
+  - "repo access manifest"
+  - "am I allowed to write to this repo"
+  - "is this repo authorized"
 ---
 
 # Respect Repo Access Manifest
 
 **Enforcement Level**: HIGH
-Agents must treat tool capability as separate from authorization. If a workspace has `.aiwg/ops/security/repo-access.manifest.yaml` or `.aiwg/security/repo-access.manifest.yaml`, check it before doing non-trivial work in any repository path.
+Agents must treat tool capability as separate from authorization. The canonical
+workspace manifest is `.aiwg/aiwg.config` `workspace` + `repos`. Legacy
+`.aiwg/ops/security/repo-access.manifest.yaml` and
+`.aiwg/security/repo-access.manifest.yaml` remain compatibility fallbacks.
+
+To **register a repo in the workspace manifest**, add a repo to the access manifest,
+or list repositories that are unlisted and therefore denied, use
+`aiwg repo-access add | remove | audit`. Registration is an operator decision:
+propose the command, do not run it on your own authority.
 
 ## Rule
 
@@ -13,20 +28,58 @@ Before reading deeply, editing, committing, pushing, commenting on issues, or ta
 
 ```bash
 aiwg repo-access check --path <repo-or-file> --action <read|write|commit|push|issue-comment|service-action|destructive>
+# register a repo in the workspace manifest / add a repo to the access manifest:
+aiwg repo-access add --path <p> --name <n> --allow read,write
 ```
 
-If the repo/path is unlisted, deny by default. Ask the operator to add or update the manifest before proceeding.
+If the repo/path is unlisted, deny by default. Ask the operator to add or update
+the manifest before proceeding — the registration command is:
+
+```bash
+aiwg repo-access add --path <repo-or-file> --name <name> \
+  --allow read,write,commit,push[,issue-comment,service-action] [--notes "..."]
+aiwg repo-access remove --name <name>
+aiwg repo-access audit   # git repos under the workspace root with no manifest entry
+```
+
+Registration is the operator's decision: propose the exact command, do not run it
+on your own authority. For every listed member, load that member's own
+`.aiwg/aiwg.config`; never reuse the workspace root's delivery, remotes, tracker
+actor, or signing policy.
 
 ## Semantics
 
 - Tool access is not authorization.
 - Unlisted repos are denied for write, commit, push, issue-comment, service-action, and destructive work.
+- The effective permission is the intersection of workspace `allowed`, the member config, and narrower repo-local instructions.
+- Resolve providers/domains from each member's configured git remotes. Sibling repositories may route to different forges.
+- Reject tracker writes by logins in the target member's `remotes.tracker_actor.forbid_actors`.
 - Repo-local instructions may narrow access, but they cannot expand beyond the manifest.
 - Newer operator instructions may narrow permissions immediately and should be reflected in the manifest.
 - Adjacent repos may be handoff-only: for example `read` and `issue-comment` allowed, `write` denied.
 - Accidental adjacent-repo modifications should not be reverted automatically unless the operator explicitly directs rollback.
 
-## Manifest Shape
+## Canonical Manifest Shape
+
+```json
+{
+  "workspace": { "name": "home", "root": "~/dev" },
+  "repos": [
+    {
+      "name": "aiwg",
+      "path": "./aiwg",
+      "allowed": ["read", "write", "commit", "push", "issue-comment"]
+    },
+    {
+      "name": "research-papers",
+      "path": "/srv/research-papers",
+      "allowed": ["read", "issue-comment"]
+    }
+  ]
+}
+```
+
+## Legacy Manifest Shape
 
 ```yaml
 version: "1"
@@ -47,12 +100,14 @@ If asked to edit an adjacent repo that is not listed:
 
 1. Stop before editing.
 2. Explain that the manifest denies unlisted repo work.
-3. Ask for a manifest update or explicit operator instruction to add the repo.
+3. Ask for a manifest update or explicit operator instruction to add the repo,
+   quoting the `aiwg repo-access add` command that would register it.
 
 If asked to comment on an issue in a handoff-only repo:
 
 1. Check `issue-comment`.
-2. Proceed only if the manifest allows it.
+2. Load that member's `remotes.issue_tracker` and `tracker_actor`.
+3. Proceed only if the manifest, route, and actor all allow it.
 
 ## Incorrect Behavior
 

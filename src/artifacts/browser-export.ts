@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { createHash } from "crypto";
+import { load as loadYaml } from "js-yaml";
 import type {
   ArtifactIndex,
   DependencyGraph,
@@ -9,6 +10,7 @@ import type {
   TypedEdge,
 } from "./types.js";
 import { loadGraphIndexFile } from "./index-reader.js";
+import type { OperationalStateProvenance } from "./operational-state.js";
 
 export type AiwgFortemiRecordType =
   | "crm.contact"
@@ -20,6 +22,7 @@ export type AiwgFortemiRecordType =
   | "aiwg.agent"
   | "aiwg.command"
   | "aiwg.rule"
+  | "aiwg.schema"
   | "aiwg.behavior"
   | "aiwg.flow"
   | "aiwg.provider"
@@ -165,6 +168,10 @@ export interface AiwgFortemiRecord {
   skos_relations?: AiwgFortemiSkosRelation[];
   provenance_events?: AiwgFortemiProvenanceEvent[];
   compatibility?: Record<string, unknown>;
+  operational_state?: OperationalStateProvenance;
+  state_transfer?: {
+    deleted_at: string | null;
+  };
   updated_at: string;
 }
 
@@ -192,7 +199,48 @@ export interface BrowserIndexExportOptions {
   generatedAt?: string;
   schemaVersion?: AiwgFortemiExportSchemaVersion;
   includeSourceBody?: boolean;
+  maxSourceBodyBytes?: number;
 }
+
+export const DEFAULT_MAX_SOURCE_BODY_BYTES = 256 * 1024;
+
+const BINARY_SOURCE_EXTENSIONS = new Set([
+  ".7z",
+  ".a",
+  ".avi",
+  ".bin",
+  ".bmp",
+  ".bz2",
+  ".class",
+  ".dll",
+  ".doc",
+  ".docx",
+  ".dylib",
+  ".exe",
+  ".gif",
+  ".gz",
+  ".ico",
+  ".jar",
+  ".jpeg",
+  ".jpg",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".o",
+  ".odt",
+  ".pdf",
+  ".png",
+  ".ppt",
+  ".pptx",
+  ".so",
+  ".tar",
+  ".tgz",
+  ".war",
+  ".webp",
+  ".xls",
+  ".xlsx",
+  ".zip",
+]);
 
 function stableArtifactId(artifactPath: string): string {
   return (
@@ -224,15 +272,26 @@ function uniqueSorted(values: Array<string | undefined>): string[] {
   ].sort((a, b) => a.localeCompare(b));
 }
 
+function slug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function textForEntry(entry: MetadataEntry): string {
   return uniqueSorted([
     entry.title,
     entry.summary,
     entry.capability,
     entry.name,
+    entry.kind,
+    entry.sourceType,
     entry.path,
     ...entry.tags,
     ...(entry.triggers ?? []),
+    ...(entry.searchTerms ?? []),
   ]).join("\n");
 }
 
@@ -242,15 +301,220 @@ function stripFrontmatter(text: string): string {
   return match ? text.slice(match[0].length) : text;
 }
 
-function sourceBodyForEntry(cwd: string, entry: MetadataEntry): string {
+function looksBinary(buffer: Buffer): boolean {
+  if (buffer.includes(0)) return true;
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString("utf-8");
+  if (sample.length === 0) return false;
+  const replacementCount = (sample.match(/\uFFFD/g) ?? []).length;
+  return replacementCount / sample.length > 0.01;
+}
+
+function sourceBodyForEntry(
+  cwd: string,
+  entry: MetadataEntry,
+  maxBytes: number,
+): string {
   const sourcePath = path.isAbsolute(entry.path)
     ? entry.path
     : path.join(cwd, entry.path);
   try {
-    return stripFrontmatter(fs.readFileSync(sourcePath, "utf-8")).trim();
+    const stat = fs.statSync(sourcePath);
+    if (!stat.isFile() || stat.size > maxBytes) return "";
+    if (BINARY_SOURCE_EXTENSIONS.has(path.extname(sourcePath).toLowerCase()))
+      return "";
+    const buffer = fs.readFileSync(sourcePath);
+    if (looksBinary(buffer)) return "";
+    return stripFrontmatter(buffer.toString("utf-8")).trim();
   } catch {
     return "";
   }
+}
+
+function sourceFrontmatterForEntry(
+  cwd: string,
+  entry: MetadataEntry,
+  maxBytes: number,
+): Record<string, unknown> {
+  const sourcePath = path.isAbsolute(entry.path)
+    ? entry.path
+    : path.join(cwd, entry.path);
+  try {
+    const stat = fs.statSync(sourcePath);
+    if (!stat.isFile() || stat.size > maxBytes) return {};
+    if (BINARY_SOURCE_EXTENSIONS.has(path.extname(sourcePath).toLowerCase()))
+      return {};
+    const buffer = fs.readFileSync(sourcePath);
+    if (looksBinary(buffer)) return {};
+    const text = buffer.toString("utf-8");
+    const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+    if (!match) return {};
+    const parsed = loadYaml(match[1]);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return asArray(value)
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
+function skosConceptFromValue(
+  value: unknown,
+  fallbackScheme: string,
+): AiwgFortemiSkosConcept | null {
+  if (typeof value === "string") {
+    const label = value.trim();
+    if (!label) return null;
+    return {
+      id: `${fallbackScheme}:${slug(label)}`,
+      prefLabel: label,
+      scheme: fallbackScheme,
+    };
+  }
+  const obj = asObject(value);
+  const prefLabel =
+    typeof obj.prefLabel === "string"
+      ? obj.prefLabel.trim()
+      : typeof obj.label === "string"
+        ? obj.label.trim()
+        : typeof obj.name === "string"
+          ? obj.name.trim()
+          : "";
+  const id =
+    typeof obj.id === "string" && obj.id.trim()
+      ? obj.id.trim()
+      : prefLabel
+        ? `${fallbackScheme}:${slug(prefLabel)}`
+        : "";
+  if (!id || !prefLabel) return null;
+  const concept: AiwgFortemiSkosConcept = {
+    id,
+    prefLabel,
+    ...(typeof obj.definition === "string" ? { definition: obj.definition } : {}),
+    ...(typeof obj.scheme === "string" ? { scheme: obj.scheme } : { scheme: fallbackScheme }),
+    ...(typeof obj.notation === "string" ? { notation: obj.notation } : {}),
+    ...(typeof obj.uri === "string" ? { uri: obj.uri } : {}),
+    ...(Array.isArray(obj.altLabels) ? { altLabels: stringArray(obj.altLabels) } : {}),
+  };
+  const metadata = asObject(obj.metadata);
+  if (Object.keys(metadata).length > 0) concept.metadata = metadata;
+  return concept;
+}
+
+function skosRelationFromValue(
+  value: unknown,
+  sourcePath: string,
+): AiwgFortemiSkosRelation | null {
+  const obj = asObject(value);
+  const type = typeof obj.type === "string" ? obj.type.trim() : "";
+  const sourceId =
+    typeof obj.source_id === "string"
+      ? obj.source_id.trim()
+      : typeof obj.source === "string"
+        ? obj.source.trim()
+        : "";
+  const targetId =
+    typeof obj.target_id === "string"
+      ? obj.target_id.trim()
+      : typeof obj.target === "string"
+        ? obj.target.trim()
+        : "";
+  if (!type || !sourceId || !targetId) return null;
+  const relation: AiwgFortemiSkosRelation = {
+    type,
+    source_id: sourceId,
+    target_id: targetId,
+    source_path: sourcePath,
+  };
+  const metadata = asObject(obj.metadata);
+  if (Object.keys(metadata).length > 0) relation.metadata = metadata;
+  return relation;
+}
+
+function skosForEntry(
+  cwd: string,
+  entry: MetadataEntry,
+  maxBytes: number,
+): {
+  concepts: AiwgFortemiSkosConcept[];
+  relations: AiwgFortemiSkosRelation[];
+} {
+  const frontmatter = sourceFrontmatterForEntry(cwd, entry, maxBytes);
+  const skos = asObject(frontmatter.skos);
+  const explicitConceptValues = [
+    ...asArray(frontmatter.skos_concepts),
+    ...asArray(skos.concepts),
+  ];
+  const explicitRelationValues = [
+    ...asArray(frontmatter.skos_relations),
+    ...asArray(skos.relations),
+  ];
+  const derivedConcepts: AiwgFortemiSkosConcept[] = [
+    { value: entry.type, scheme: "aiwg-types", source: "aiwg-index-type" },
+    { value: entry.phase, scheme: "aiwg-phases", source: "aiwg-index-phase" },
+    ...(entry.kind
+      ? [{ value: entry.kind, scheme: "aiwg-kinds", source: "aiwg-index-kind" }]
+      : []),
+    ...(entry.sourceType
+      ? [{ value: entry.sourceType, scheme: "aiwg-source-types", source: "aiwg-index-source-type" }]
+      : []),
+    ...(entry.name
+      ? [{ value: entry.name, scheme: "aiwg-names", source: "aiwg-index-name" }]
+      : []),
+    ...entry.tags.map((tag) => ({
+      value: tag,
+      scheme: "aiwg-tags",
+      source: "aiwg-index-tags",
+    })),
+  ]
+    .filter((item) => item.value.length > 0)
+    .map((item) => ({
+      id: `${item.scheme}:${slug(item.value)}`,
+      prefLabel: item.value,
+      scheme: item.scheme,
+      metadata: {
+        source: item.source,
+        path: entry.path,
+      },
+    }));
+  const conceptsById = new Map<string, AiwgFortemiSkosConcept>();
+  for (const concept of [
+    ...explicitConceptValues
+      .map((value) => skosConceptFromValue(value, "aiwg-skos"))
+      .filter((value): value is AiwgFortemiSkosConcept => value !== null),
+    ...derivedConcepts,
+  ]) {
+    conceptsById.set(concept.id, concept);
+  }
+  const relations = explicitRelationValues
+    .map((value) => skosRelationFromValue(value, entry.path))
+    .filter((value): value is AiwgFortemiSkosRelation => value !== null)
+    .sort((left, right) =>
+      `${left.type}:${left.source_id}:${left.target_id}`.localeCompare(
+        `${right.type}:${right.source_id}:${right.target_id}`,
+      ),
+    );
+  return {
+    concepts: [...conceptsById.values()].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    ),
+    relations,
+  };
 }
 
 function textForRecord(
@@ -267,24 +531,30 @@ function relationshipsForEntry(
   entry: MetadataEntry,
   graph: DependencyGraph | null,
   recordTypesByPath: Map<string, AiwgFortemiRecordType>,
+  schemaVersion: AiwgFortemiExportSchemaVersion,
 ): AiwgFortemiRelationship[] {
   const edges = graph?.[entry.path];
   if (!edges) return [];
 
   const relationships: AiwgFortemiRelationship[] = [];
   const append = (prefix: "upstream" | "downstream", edge: TypedEdge) => {
+    if (schemaVersion === "v1" && prefix === "downstream") return;
+
     const targetRecordType =
       recordTypesByPath.get(edge.path) ?? "aiwg.artifact";
-    relationships.push({
+    const relationship: AiwgFortemiRelationship = {
       type: edge.type,
       target_id: stableRecordId(targetRecordType, edge.path),
       source_path: edge.path,
-      target_path: edge.path,
-      direction: prefix,
-      metadata: Object.fromEntries(
+    };
+    if (schemaVersion === "v2") {
+      relationship.target_path = edge.path;
+      relationship.direction = prefix;
+      relationship.metadata = Object.fromEntries(
         Object.entries(edge).filter(([key]) => key !== "path" && key !== "type"),
-      ),
-    });
+      );
+    }
+    relationships.push(relationship);
   };
 
   for (const edge of edges.upstream) append("upstream", edge);
@@ -313,6 +583,8 @@ export function recordTypeForEntry(
       return "aiwg.command";
     case "rule":
       return "aiwg.rule";
+    case "schema":
+      return "aiwg.schema";
     case "behavior":
       return "aiwg.behavior";
     case "flow":
@@ -402,6 +674,7 @@ function localityForPath(
 }
 
 function recordForEntry(
+  cwd: string,
   entry: MetadataEntry,
   graphName: string,
   dependencyGraph: DependencyGraph | null,
@@ -409,9 +682,11 @@ function recordForEntry(
   schemaVersion: AiwgFortemiExportSchemaVersion,
   recordTypesByPath: Map<string, AiwgFortemiRecordType>,
   sourceBody: string,
+  maxSourceBodyBytes: number,
 ): AiwgFortemiRecord {
   const recordType = recordTypeForEntry(entry, schemaVersion);
   const text = textForRecord(entry, schemaVersion, sourceBody);
+  const skos = schemaVersion === "v2" ? skosForEntry(cwd, entry, maxSourceBodyBytes) : null;
   const recordSchemaVersion: AiwgFortemiRecordSchemaVersion =
     schemaVersion === "v2"
       ? "aiwg.fortemi.index.record.v2"
@@ -451,6 +726,12 @@ function recordForEntry(
             type: entry.type,
             frontmatter: {
               ...(entry.kernel === undefined ? {} : { kernel: entry.kernel }),
+              ...(entry.kind ? { aiwg_kind: entry.kind } : {}),
+              ...(entry.sourceType ? { aiwg_source_type: entry.sourceType } : {}),
+              ...(entry.searchTerms?.length
+                ? { aiwg_search_terms: uniqueSorted(entry.searchTerms) }
+                : {}),
+              ...(entry.script ? { aiwg_script: entry.script } : {}),
             },
           },
         }
@@ -462,18 +743,24 @@ function recordForEntry(
       phase: uniqueSorted([entry.phase]),
       graph: uniqueSorted([graphName]),
       privacy: uniqueSorted([privacy]),
+      ...(entry.kind ? { process_kind: uniqueSorted([entry.kind]) } : {}),
+      ...(entry.sourceType ? { source_type: uniqueSorted([entry.sourceType]) } : {}),
     },
     tags: uniqueSorted(entry.tags),
     concepts: uniqueSorted([
       entry.type,
       entry.phase,
       entry.name,
+      entry.kind,
+      entry.sourceType,
       ...(entry.triggers ?? []),
+      ...(skos?.concepts.map((concept) => concept.id) ?? []),
     ]),
     relationships: relationshipsForEntry(
       entry,
       dependencyGraph,
       recordTypesByPath,
+      schemaVersion,
     ),
     provenance: [
       {
@@ -506,6 +793,18 @@ function recordForEntry(
             vector_ref?: string;
             input_hash: string;
           }>,
+          skos_concepts: skos?.concepts ?? [],
+          skos_relations: skos?.relations ?? [],
+          ...(entry.operationalState
+            ? { operational_state: entry.operationalState }
+            : {}),
+          ...(entry.stateTransfer
+            ? {
+                state_transfer: {
+                  deleted_at: entry.stateTransfer.deletedAt,
+                },
+              }
+            : {}),
         }
       : {}),
     updated_at: entry.updated,
@@ -541,6 +840,8 @@ export function buildAiwgFortemiIndexExport(
   );
   const privacy = options.privacy ?? "private";
   const repo = options.repo ?? path.basename(cwd);
+  const maxSourceBodyBytes =
+    options.maxSourceBodyBytes ?? DEFAULT_MAX_SOURCE_BODY_BYTES;
   const entries = Object.values(index.entries);
   const recordTypesByPath = new Map(
     entries.map((entry) => [
@@ -551,13 +852,17 @@ export function buildAiwgFortemiIndexExport(
   const items = entries
     .map((entry) =>
       recordForEntry(
+        cwd,
         entry,
         graphName,
         dependencyGraph,
         privacy,
         schemaVersion,
         recordTypesByPath,
-        options.includeSourceBody === false ? "" : sourceBodyForEntry(cwd, entry),
+        options.includeSourceBody === false
+          ? ""
+          : sourceBodyForEntry(cwd, entry, maxSourceBodyBytes),
+        maxSourceBodyBytes,
       ),
     )
     .sort((left, right) => left.id.localeCompare(right.id));

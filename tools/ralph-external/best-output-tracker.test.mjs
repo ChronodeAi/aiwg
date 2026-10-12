@@ -7,11 +7,12 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { BestOutputTracker } from './best-output-tracker.mjs';
 
-const TEST_DIR = join(process.cwd(), '.test-ralph-output');
+const TEST_DIR = mkdtempSync(join(tmpdir(), 'aiwg-best-output-test-'));
 
 describe('BestOutputTracker', () => {
   let tracker;
@@ -152,6 +153,46 @@ describe('BestOutputTracker', () => {
       assert.equal(best.iteration_number, 2); // Should be iteration 2, not final
       assert.ok(best.quality_score >= 80);
     });
+
+    it('excludes a VOID iteration from best-output even at peak quality (#1776)', () => {
+      // Iteration 1: 70%, verified
+      tracker.recordIteration({
+        iteration_number: 1,
+        dimensions: { validation: 0.7, completeness: 0.7, correctness: 0.7, readability: 0.7, efficiency: 0.7 },
+        artifacts: [testArtifactPath],
+        verification_status: 'passed',
+      });
+      // Iteration 2: 95%, but VOID (eval harness voided it — e.g. lint violation)
+      tracker.recordIteration({
+        iteration_number: 2,
+        dimensions: { validation: 1, completeness: 0.95, correctness: 0.95, readability: 0.9, efficiency: 0.9 },
+        artifacts: [testArtifactPath],
+        verification_status: 'void',
+      });
+
+      // The higher-scoring iteration 2 is VOID → best stays iteration 1.
+      const best = tracker.getBest();
+      assert.equal(best.iteration_number, 1);
+    });
+
+    it('accepts a VOID iteration as best when human-overridden (#1776)', () => {
+      tracker.recordIteration({
+        iteration_number: 1,
+        dimensions: { validation: 0.7, completeness: 0.7, correctness: 0.7, readability: 0.7, efficiency: 0.7 },
+        artifacts: [testArtifactPath],
+        verification_status: 'passed',
+      });
+      tracker.recordIteration({
+        iteration_number: 2,
+        dimensions: { validation: 1, completeness: 0.95, correctness: 0.95, readability: 0.9, efficiency: 0.9 },
+        artifacts: [testArtifactPath],
+        verification_status: 'void',
+        eval_human_override: true,
+      });
+
+      const best = tracker.getBest();
+      assert.equal(best.iteration_number, 2);
+    });
   });
 
   describe('selectOutput', () => {
@@ -241,6 +282,18 @@ describe('BestOutputTracker', () => {
       const selection = tracker.selectOutput();
       assert.equal(selection.selected_iteration, 2); // Still selects best
       assert.ok(selection.reason.includes('no verified'));
+    });
+
+    it('refuses to select when every iteration is VOID without a human override', () => {
+      tracker = new BestOutputTracker('only-void', { storage_path: join(TEST_DIR, 'only-void') });
+      tracker.recordIteration({
+        iteration_number: 1,
+        dimensions: { validation: 1, completeness: 1, correctness: 1, readability: 1, efficiency: 1 },
+        artifacts: [testArtifactPath],
+        verification_status: 'void',
+      });
+
+      assert.throws(() => tracker.selectOutput(), /all iterations are VOID without human override/);
     });
   });
 
@@ -531,6 +584,23 @@ describe('BestOutputTracker', () => {
 
       const score = customTracker.calculateQualityScore(dimensions);
       assert.equal(score, 70); // (0.8 * 50) + (0.6 * 50) = 70
+    });
+
+    it('should reject invalid dimensions and configuration', () => {
+      const valid = { validation: 1, completeness: 1, correctness: 1, readability: 1, efficiency: 1 };
+      for (const [dimension, value] of [
+        ['validation', -0.01], ['completeness', 1.01], ['correctness', Number.NaN],
+        ['readability', Number.POSITIVE_INFINITY], ['efficiency', '1'],
+      ]) {
+        assert.throws(() => tracker.calculateQualityScore({ ...valid, [dimension]: value }), /finite number between 0 and 1/);
+      }
+      assert.throws(() => tracker.calculateQualityScore({ ...valid, validation: undefined }), /Quality dimension validation/);
+      assert.throws(() => new BestOutputTracker('bad-threshold', {
+        storage_path: join(TEST_DIR, 'bad-threshold'), selection: { threshold: 101 },
+      }), /threshold must be a finite number between 0 and 100/);
+      assert.throws(() => new BestOutputTracker('bad-weights', {
+        storage_path: join(TEST_DIR, 'bad-weights'), quality_weights: { validation: 0.5 },
+      }), /weights must sum to 1/);
     });
   });
 });

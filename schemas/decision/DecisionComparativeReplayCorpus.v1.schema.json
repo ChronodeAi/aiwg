@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayCorpus.v1.schema.json",
+  "title": "DecisionComparativeReplayCorpus.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "seed",
+    "generatorDigest",
+    "origin",
+    "fixtureClock",
+    "proceduralFreeze",
+    "hostIdentity",
+    "hostProbeQuota",
+    "deduplication",
+    "roots"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-corpus/v1"
+    },
+    "seed": {
+      "const": "aiwg-holdout-2497b51d-v1"
+    },
+    "generatorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "origin": {
+      "const": "locally-authored-synthetic"
+    },
+    "fixtureClock": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "proceduralFreeze": {
+      "const": "pending-operator-record"
+    },
+    "hostIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenantId",
+        "workspaceId",
+        "projectId",
+        "principalId"
+      ],
+      "properties": {
+        "tenantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "hostProbeQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxEntriesPerPrincipal",
+        "maxReportsPerWindow",
+        "maxPerPrincipalSubjectPath"
+      ],
+      "properties": {
+        "maxEntriesPerPrincipal": {
+          "const": 600
+        },
+        "maxReportsPerWindow": {
+          "const": 2
+        },
+        "maxPerPrincipalSubjectPath": {
+          "const": 2
+        }
+      }
+    },
+    "deduplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roots",
+        "payloads",
+        "duplicatePayloads",
+        "sourceInputs",
+        "duplicateSourceInputs",
+        "crossSplitFamilies"
+      ],
+      "properties": {
+        "roots": {
+          "const": 600
+        },
+        "payloads": {
+          "const": 600
+        },
+        "duplicatePayloads": {
+          "const": 0
+        },
+        "sourceInputs": {
+          "const": 600
+        },
+        "duplicateSourceInputs": {
+          "const": 0
+        },
+        "crossSplitFamilies": {
+          "const": 0
+        }
+      }
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "slice",
+          "split",
+          "payloadDigest",
+          "request"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "slice": {
+            "enum": [
+              "threshold-boundary",
+              "priority-loss",
+              "unchanged-control",
+              "unreplayable"
+            ]
+          },
+          "split": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          },
+          "payloadDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "plan",
+              "sourceRuleset",
+              "sourceBinding",
+              "sourceDefinitions",
+              "sourceInput",
+              "sourceResult",
+              "generatedAt",
+              "probeIdentity"
+            ],
+            "properties": {
+              "plan": {
+                "$ref": "https://aiwg.io/schemas/decision/DecisionSensitivityPlan.v1.schema.json"
+              },
+              "sourceRuleset": {
+                "$ref": "https://aiwg.io/schemas/decision/DecisionRuleset.v1alpha1.schema.json"
+              },
+              "sourceBinding": {
+                "$ref": "https://aiwg.io/schemas/decision/DecisionBinding.v1alpha1.schema.json"
+              },
+              "sourceDefinitions": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": {
+                  "$ref": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha1.schema.json"
+                }
+              },
+              "sourceInput": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "subject",
+                  "quantity"
+                ],
+                "properties": {
+                  "subject": {
+                    "type": "string",
+                    "pattern": "^Fable-[0-9]{6}$"
+                  },
+                  "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000
+                  }
+                }
+              },
+              "sourceResult": {
+                "$ref": "https://aiwg.io/schemas/decision/RulesetResult.v1alpha1.schema.json"
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "probeIdentity": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tenantId",
+                  "workspaceId",
+                  "projectId",
+                  "principalId"
+                ],
+                "properties": {
+                  "tenantId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "workspaceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "projectId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "principalId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "minItems": 600,
+      "maxItems": 600
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionRuleset",
+  "metadata": {
+    "id": "example-triage",
+    "version": "1.0.0",
+    "description": "example triage"
+  },
+  "spec": {
+    "purpose": "Select a review queue as data only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "evaluations": [
+      {
+        "alias": "category",
+        "decision": {
+          "id": "example-category",
+          "version": "1.0.0",
+          "digest": "sha256:161af95ce387331720fe1ded3a45cdf90f6d3feb32f24c74f0745714cd0d6b2e"
+        },
+        "inputPointer": ""
+      },
+      {
+        "alias": "severity",
+        "decision": {
+          "id": "example-severity",
+          "version": "1.0.0",
+          "digest": "sha256:0d68cc3e1b61f6452e8485664205296266bf6fac73b499c96eb3e3454f2e8c26"
+        },
+        "inputPointer": ""
+      },
+      {
+        "alias": "core_unavailable",
+        "decision": {
+          "id": "example-core_unavailable",
+          "version": "1.0.0",
+          "digest": "sha256:409f1441f515ae6dd144cc603246943e680c686fd608491215aa61718fab9e32"
+        },
+        "inputPointer": ""
+      }
+    ],
+    "rules": [
+      {
+        "id": "core-outage",
+        "priority": 100,
+        "when": {
+          "op": "gte",
+          "left": {
+            "source": "decision",
+            "alias": "core_unavailable",
+            "pointer": "/value"
+          },
+          "right": 1
+        },
+        "outcome": "runtime-review"
+      },
+      {
+        "id": "docs",
+        "priority": 50,
+        "when": {
+          "op": "eq",
+          "left": {
+            "source": "decision",
+            "alias": "category",
+            "pointer": "/value"
+          },
+          "right": "documentation"
+        },
+        "outcome": "docs-review"
+      }
+    ],
+    "composition": "first-match",
+    "conflict": "review",
+    "defaultOutcome": "manual-review",
+    "failureOutcome": "manual-review",
+    "outputSchema": {
+      "enum": [
+        "docs-review",
+        "runtime-review",
+        "manual-review"
+      ]
+    }
+  }
+}

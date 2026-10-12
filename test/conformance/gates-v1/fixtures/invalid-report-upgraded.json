@@ -1,0 +1,77 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GateReport",
+  "metadata": {
+    "id": "test-gates/conformance-run",
+    "version": "1.0.0",
+    "description": "Upgraded decision fixture."
+  },
+  "binding": {
+    "id": "test-gates/conformance-run",
+    "version": "1.0.0",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "packs": [
+    {
+      "id": "aiwg:test-gates/conformance-v1",
+      "version": "1.0.0",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "resolvedDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "metricProviders": [
+    {
+      "id": "test.proportion/v1",
+      "version": "1.0.0",
+      "sourceDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "metricsDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "holdout": {
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "frozenDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "firstAccessedAt": null
+  },
+  "gateEvidence": [
+    {
+      "gateId": "blocking-events",
+      "kind": "count-max",
+      "scope": {
+        "mode": "listed",
+        "slices": [
+          "b"
+        ]
+      },
+      "slice": "b",
+      "n": 1000,
+      "events": 3,
+      "statistic": {
+        "method": "exact-count"
+      },
+      "threshold": {
+        "op": "lte",
+        "value": 0,
+        "resolved": 0
+      },
+      "status": "fail",
+      "outcome": "ROLLBACK",
+      "reasons": [
+        "blocking-events:count-breaches-threshold"
+      ]
+    }
+  ],
+  "references": [],
+  "upstream": null,
+  "ceilings": {
+    "packOutcome": "ROLLBACK",
+    "upstreamCeiling": "HOLD",
+    "bindingCeiling": "PROMOTE"
+  },
+  "decision": "PROMOTE",
+  "evaluatedAt": "2026-09-03T00:00:00.000Z",
+  "floors": {
+    "mode": "applied",
+    "digest": "sha256:27219d2e415e6d6904d372444d83f4e3e62b823fbe2d504a5fa265a4d0dc56b3"
+  },
+  "digest": "sha256:8af3463105ffc7248c322365688ab90124b7c6038a12ffcb7cf4327c6eafdb14"
+}

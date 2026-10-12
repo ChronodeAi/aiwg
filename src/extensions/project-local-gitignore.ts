@@ -42,6 +42,8 @@ export const AIWG_GITIGNORE_BLOCK = [
   '',
   AIWG_GITIGNORE_SENTINEL,
   '!.aiwg/aiwg.config',
+  '!.aiwg/quickref.json',
+  '!.aiwg/quickref.config.json',
   '!.aiwg/addons/',
   '!.aiwg/extensions/',
   '!.aiwg/frameworks/',
@@ -164,6 +166,18 @@ export async function appendAiwgSourceTrackBlock(
   // so the existing-negation check would otherwise mis-fire on subsequent
   // runs.
   if (report.hasManagedBlock) {
+    const path = join(projectDir, '.gitignore');
+    let existing = await readFile(path, 'utf8');
+    const required = ['!.aiwg/quickref.json', '!.aiwg/quickref.config.json'];
+    const missing = required.filter(negation =>
+      !existing.split(/\r?\n/).some(line => line.trim() === negation)
+    );
+    if (missing.length > 0) {
+      const sep = existing.endsWith('\n') ? '' : '\n';
+      existing = `${existing}${sep}${missing.join('\n')}\n`;
+      await writeFile(path, existing, 'utf8');
+      return { added: true, reason: `updated managed block to track ${missing.join(', ')}` };
+    }
     return { added: false, reason: 'block already present — no change' };
   }
   if (report.hasExistingNegation) {
@@ -174,7 +188,7 @@ export async function appendAiwgSourceTrackBlock(
   const existing = await readFile(path, 'utf8');
   const sep = existing.endsWith('\n') ? '' : '\n';
   await writeFile(path, existing + sep + AIWG_GITIGNORE_BLOCK, 'utf8');
-  return { added: true, reason: 'appended .aiwg/{addons,extensions,frameworks,plugins,providers} un-ignore block' };
+  return { added: true, reason: 'appended project-local source un-ignore block (bundles, config, and quickref)' };
 }
 
 /**

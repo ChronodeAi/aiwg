@@ -36,6 +36,10 @@ If your Gitea account can submit a private security advisory against [`roctinam/
 
 Release tags are signed by maintainer keys published in this repo. CI fails to publish any release whose tag does not verify against one of these keys (gate added per [#1299](https://git.integrolabs.net/roctinam/aiwg/issues/1299), enforced by `tools/ci/verify-signed-tag.sh`).
 
+Private signing-key custody is handled outside this repository in OpenBao. The
+repository publishes only public verification material; release CI imports those
+public keys and never reads private key material.
+
 Either format is accepted; both can co-exist:
 
 | Format | Public-key location | Notes |
@@ -43,12 +47,14 @@ Either format is accepted; both can co-exist:
 | GPG (ASCII-armored) | `.gitea/keys/maintainers.asc` | Preferred for long-lived release keys |
 | SSH (allowed-signers format) | `.gitea/allowed_signers` | Acceptable; works with hardware-backed keys (YubiKey, etc.) |
 
-> **GPG maintainer signing key (active)** — registered 2026-05-12
-> Principal:   `AIWG Release Signing <release@aiwg.io>`
-> Fingerprint: `FE9272F0BC5781E1DE77FAAA719AB63879E84CE8`
+> **GPG maintainer signing key (active)** — registered 2026-07-20
+> Principal:   `AIWG Release Signing <1159087+jmagly@users.noreply.github.com>`
+> Fingerprint: `401584AAA3376B898FB34427839584D0E25E5126`
 > Published:   `.gitea/keys/maintainers.asc`
 
-External reproducers should verify release tags only after importing the key above and confirming that the fingerprint reported by `gpg --fingerprint release@aiwg.io` matches the value in this section.
+External reproducers should verify release tags only after importing the key
+above and confirming its full fingerprint. Previously published public keys
+remain in the keyring for historical tag verification.
 
 ## Encryption Key
 

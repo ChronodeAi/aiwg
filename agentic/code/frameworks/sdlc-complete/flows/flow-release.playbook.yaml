@@ -3,7 +3,8 @@
 # thin wrapper that points here; this playbook is the source of truth for the
 # release gate sequence. Detailed per-gate config still lives in the project's
 # `.aiwg/release.config` (which flow-release already reads) — this playbook
-# encodes the gate SEQUENCE, dependencies, hard-stops, and the human gate.
+# encodes the release-plan resolution point, gate SEQUENCE, dependencies,
+# hard-stops, and the human gate.
 #
 # Schema-fit note (#1539): `inventory`/`targets` are now optional for
 # non-iterating Flows. SDLC flows act on a single project context rather than
@@ -19,9 +20,21 @@ metadata:
 spec:
   vars:
     config_path: .aiwg/release.config
+    release_plan_dir: .aiwg/releases
   steps:
+    - id: resolve-release-plan
+      capability: release-plan-resolve
+      inputs:
+        - name: release_plan_dir
+          value: .aiwg/releases
+        - name: selected_plan_id
+          value: "{plan}"
+        - name: project_delivery_mode
+          value: "{project_delivery_mode}"
+
     - id: local-build-test
       capability: release-build-gate
+      depends_on: [resolve-release-plan]
       inputs:
         - name: gate
           value: local-build-test
@@ -34,7 +47,7 @@ spec:
 
     - id: ci-green
       capability: release-ci-poll
-      depends_on: [local-build-test]
+      depends_on: [resolve-release-plan, local-build-test]
       inputs:
         - name: hard_stop
           value: true
@@ -54,9 +67,24 @@ spec:
         - name: dry_run_first
           value: true
 
+    - id: assess-release-content
+      capability: threat-assessment
+      depends_on: [doc-sync]
+      inputs:
+        - name: engine
+          value: tools/security/threat-assessment.mjs
+        - name: surface
+          value: release-note
+        - name: policy
+          value: .aiwg/aiwg.config#security.threatAssessment
+        - name: content
+          value: "{release_notes_and_announcement}"
+      outputs:
+        - name: threat_assessment_report
+
     - id: changelog-and-announcement
       capability: release-assert-artifacts
-      depends_on: [doc-sync]
+      depends_on: [assess-release-content]
       inputs:
         - name: hard_stop
           value: true
@@ -86,9 +114,18 @@ spec:
       outputs:
         - name: tag
 
+    - id: verify-release-publication
+      capability: release-publication-verify
+      depends_on: [tag-and-release]
+      inputs:
+        - name: tag
+          value: "{tag}"
+        - name: hard_stop
+          value: true
+
     - id: post-release
       capability: release-post-actions
-      depends_on: [tag-and-release]
+      depends_on: [verify-release-publication]
       inputs:
         - name: hard_stop
           value: false
@@ -97,3 +134,11 @@ spec:
             - { close_imported_issues_with_thanks: true }
             - { update_release_entry: gitea }
             - { update_release_entry: github, skip_when_flag: "--no-mirror" }
+            - create_github_announcement_discussion:
+                category: Announcements
+                required_for_channels: [stable]
+                hard_stop: true
+                skip_when_flag: "--no-mirror"
+                links: [github_release, npm_version, release_notes, changelog]
+                style: conversational-impact-guidance
+                run: node tools/release/publish-github-release-discussion.mjs --version {version} --body {evidence_dir}/discussion.md --evidence-dir {evidence_dir}

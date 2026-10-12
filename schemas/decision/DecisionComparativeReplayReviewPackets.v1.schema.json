@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayReviewPackets.v1.schema.json",
+  "title": "DecisionComparativeReplayReviewPackets.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "packets"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-review-packets/v1"
+    },
+    "status": {
+      "const": "pending"
+    },
+    "packets": {
+      "type": "array",
+      "minItems": 44,
+      "maxItems": 44,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assessmentId",
+          "context",
+          "A",
+          "B"
+        ],
+        "properties": {
+          "assessmentId": {
+            "type": "string",
+            "pattern": "^audit-[0-9]{2}$"
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "storedValue",
+              "storedStatus",
+              "storedOutcome",
+              "matchedRules",
+              "confidence",
+              "distribution",
+              "attempts",
+              "targets",
+              "fallbackOn",
+              "composition",
+              "rules",
+              "defaultOutcome",
+              "failureOutcome",
+              "changes"
+            ],
+            "properties": {
+              "storedValue": {
+                "enum": [
+                  "bay-a",
+                  "bay-b"
+                ]
+              },
+              "storedStatus": {
+                "const": "success"
+              },
+              "storedOutcome": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bay",
+                  "loss"
+                ],
+                "properties": {
+                  "bay": {
+                    "enum": [
+                      "a",
+                      "b",
+                      "review"
+                    ]
+                  },
+                  "loss": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "matchedRules": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "distribution": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "bay-a",
+                      "bay-b"
+                    ],
+                    "properties": {
+                      "bay-a": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "bay-b": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              "attempts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "targetIndex",
+                    "status",
+                    "reason"
+                  ],
+                  "properties": {
+                    "targetIndex": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "status": {
+                      "enum": [
+                        "success",
+                        "abstained"
+                      ]
+                    },
+                    "reason": {
+                      "enum": [
+                        "none",
+                        "low-confidence"
+                      ]
+                    }
+                  }
+                }
+              },
+              "targets": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "acceptance"
+                  ],
+                  "properties": {
+                    "acceptance": {
+                      "$ref": "https://aiwg.io/schemas/decision/DecisionBinding.v1alpha1.schema.json#/properties/spec/properties/evaluations/additionalProperties/properties/targets/items/properties/acceptance"
+                    }
+                  }
+                }
+              },
+              "fallbackOn": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 1,
+                "items": {
+                  "enum": [
+                    "low-confidence"
+                  ]
+                }
+              },
+              "composition": {
+                "const": "first-match"
+              },
+              "rules": {
+                "$ref": "https://aiwg.io/schemas/decision/DecisionRuleset.v1alpha1.schema.json#/properties/spec/properties/rules"
+              },
+              "defaultOutcome": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bay",
+                  "loss"
+                ],
+                "properties": {
+                  "bay": {
+                    "enum": [
+                      "a",
+                      "b",
+                      "review"
+                    ]
+                  },
+                  "loss": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "failureOutcome": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bay",
+                  "loss"
+                ],
+                "properties": {
+                  "bay": {
+                    "enum": [
+                      "a",
+                      "b",
+                      "review"
+                    ]
+                  },
+                  "loss": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "changes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "$ref": "https://aiwg.io/schemas/decision/DecisionSensitivityPlan.v1.schema.json#/$defs/change"
+                }
+              }
+            }
+          },
+          "A": {
+            "$ref": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGold.v1.schema.json#/items/properties/gold"
+          },
+          "B": {
+            "$ref": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGold.v1.schema.json#/items/properties/gold"
+          }
+        }
+      }
+    }
+  }
+}

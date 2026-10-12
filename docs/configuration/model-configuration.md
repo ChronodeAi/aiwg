@@ -4,6 +4,33 @@
 
 AIWG uses a configurable model mapping system that allows users to specify which AI models to use for different agent roles without modifying deployment scripts or documentation.
 
+The current provider-aware contract separates three concerns:
+
+- canonical policy: `model-role`, `model-tier`, optional `model-effort`, and an
+  exceptional exact `model-override`;
+- provider capabilities:
+  `agentic/code/providers/model-capabilities.v1.json`; and
+- volatile exact identifiers:
+  `agentic/code/providers/model-catalog.v1.json`.
+
+Provider compilation reports one of `native`, `compiled`, `inherited`,
+`global-only`, `informational`, or `unsupported`. An unsupported field is
+omitted rather than copied into an artifact that ignores it.
+
+Generated bootstrap context also presents a bounded delegation rubric. For
+independent work, orchestrators prefer `aiwg-model-efficiency-worker` for
+discovery and focused low-cost tasks, `aiwg-model-coding-worker` for
+implementation and tests, and `aiwg-model-reasoning-worker` for architecture
+or high-consequence analysis. This complements model routing: routing resolves
+the role to provider policy, while the delegation rubric decides whether the
+work should leave the primary context at all. Trivial, tightly coupled, serial,
+or shared-state-sensitive work stays with the primary agent, which always owns
+integration and final validation.
+
+The versioned schemas are under `schemas/models/`. Project/user compatibility
+input still accepts `max-quality` for one migration window, but canonical
+policy uses `premium`.
+
 ## Configuration File Location
 
 Models are defined in `models.json` files with the following priority:
@@ -22,28 +49,28 @@ Models are defined in `models.json` files with the following priority:
 
   "claude": {
     "reasoning": {
-      "model": "claude-opus-4-6",
+      "model": "claude-opus-5",
       "description": "Best for complex reasoning, architecture design"
     },
     "coding": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-sonnet-5",
       "description": "Best for code generation, implementation"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5",
+      "model": "claude-haiku-4-5",
       "description": "Best for quick tasks, simple edits"
     }
   },
 
   "factory": {
     "reasoning": {
-      "model": "claude-opus-4-6"
+      "model": "heavy"
     },
     "coding": {
-      "model": "claude-sonnet-4-6"
+      "model": "medium"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5"
+      "model": "light"
     }
   },
 
@@ -60,15 +87,92 @@ Models are defined in `models.json` files with the following priority:
   },
 
   "shorthand": {
-    "opus": "claude-opus-4-6",
-    "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5",
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5",
     "inherit": "inherit"
   }
 }
 ```
 
 ## Model Roles
+
+AIWG classifies both the legacy aliases and pinned or provider-qualified
+Claude-family identifiers consistently:
+
+| Canonical family | Role | Recognized examples |
+|---|---|---|
+| Opus | reasoning | `opus`, `claude-opus-5`, `anthropic/claude-opus-5` |
+| Sonnet | coding | `sonnet`, `claude-sonnet-5`, `anthropic/claude-sonnet-5` |
+| Haiku | efficiency | `haiku`, `claude-haiku-4-5`, `anthropic/claude-haiku-4-5` |
+
+An explicit identifier outside a recognized family remains `unknown`. Role
+filters do not silently include it in the coding population, and provider
+transforms preserve it instead of rewriting it as a coding model. Omitted model
+metadata retains the legacy coding default during deployment.
+
+Claude deployments compile bare aliases by default. A source agent that says
+`model: sonnet` deploys to `.claude/agents/` as `model: claude-sonnet-5` (the
+`claude.coding.model` tier in `models.json`; `opus` → `claude-opus-5`,
+`haiku` → `claude-haiku-4-5`). A bare alias would otherwise inherit the parent
+session's variant, and under a 1M-context parent every subagent dispatch then
+hits the usage-credit gate (#1442, #2563). Source frontmatter stays
+provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
+`opus[1m]` opt-ins are deployed unchanged, and `--coding-model` /
+`--reasoning-model` / `--efficiency-model` overrides still win.
+
+## Provider compilation examples
+
+Codex agents compile to standalone `.codex/agents/*.toml` files. Every file has
+the required `name`, `description`, and `developer_instructions` fields; native
+model controls use `model` and `model_reasoning_effort`. Codex skills have no
+documented per-skill model field, so AIWG reports that policy as `unsupported`
+and does not emit a pretend pin.
+
+Warp and Hermes can apply run-wide or global delegation policy but cannot
+enforce heterogeneous per-agent files. Their per-agent result is
+`global-only`. Windsurf currently has no supported portable child selector, so
+its per-agent result is `unsupported`.
+
+`aiwg doctor --provider <name>` reports canonical agent counts and the target
+surface separately. It does not describe skills as pinned when the provider
+cannot enforce skill-local model selection.
+
+## Model management CLI
+
+Use the typed `aiwg models` command family to inspect effective policy before
+changing canonical files:
+
+```bash
+aiwg models audit --provider codex --json
+aiwg models resolve --skill address-issues --provider claude
+aiwg models set --agent test-engineer --tier economy --dry-run --json
+aiwg models set --glob '*-reviewer' --tier standard
+aiwg models set-default economy --scope project
+aiwg models validate
+aiwg models migrate --all --dry-run
+```
+
+Selectors support exact agents/skills, globs, role, current tier, framework,
+provider compilation, and `--all`. Project configuration resolves under
+`--target/models.json`; user defaults resolve under
+`~/.config/aiwg/models.json`. Writes use
+same-directory temporary files and atomic rename, preserve unrelated JSON or
+frontmatter content, and validate the full requested change set before writing.
+
+Skill policy lives under `commandHint` as `modelRole`, `modelTier`, and optional
+`modelEffort`; premium policy also requires `modelRationale`. During migration,
+legacy `commandHint.model` remains readable:
+`opus` maps to reasoning/premium, `sonnet` to coding/standard, and `haiku` to
+efficiency/economy. Claude deployment compiles requested skill intent to its
+native turn-scoped fields. Other providers retain canonical intent but only
+report the capability outcome; they do not receive a fabricated native pin.
+
+Canonical agents use `model-role`, `model-tier`, and, for premium defaults,
+`model-rationale`. Economy is the corpus default. Premium is an allowlisted
+exception whose rationale names the quality or risk reason. The compatibility
+`model` aliases remain for one migration window and must not contain pinned
+provider IDs.
 
 ### Reasoning (opus)
 **Use for:** Complex analysis, critical decisions, strategic planning
@@ -124,9 +228,9 @@ Create `models.json` in your project root:
 ```json
 {
   "factory": {
-    "reasoning": { "model": "claude-sonnet-4-6" },
-    "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-sonnet-4-6" }
+    "reasoning": { "model": "claude-sonnet-5" },
+    "coding": { "model": "claude-sonnet-5" },
+    "efficiency": { "model": "claude-sonnet-5" }
   }
 }
 ```
@@ -137,8 +241,8 @@ Create `models.json` in your project root:
 {
   "factory": {
     "reasoning": { "model": "claude-opus-custom-finetuned" },
-    "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "coding": { "model": "claude-sonnet-5" },
+    "efficiency": { "model": "claude-haiku-4-5" }
   }
 }
 ```
@@ -167,14 +271,14 @@ mkdir -p ~/.config/aiwg
 cat > ~/.config/aiwg/models.json <<'EOF'
 {
   "factory": {
-    "reasoning": { "model": "claude-opus-4-6" },
-    "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "reasoning": { "model": "claude-opus-5" },
+    "coding": { "model": "claude-sonnet-5" },
+    "efficiency": { "model": "claude-haiku-4-5" }
   },
   "shorthand": {
-    "opus": "claude-opus-4-6",
-    "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5"
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5"
   }
 }
 EOF

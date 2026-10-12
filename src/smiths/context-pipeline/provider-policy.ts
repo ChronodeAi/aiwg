@@ -33,7 +33,7 @@ export const AGENTS_MD_PROVIDERS: ReadonlySet<Platform> = new Set(
     .map((definition) => definition.id),
 );
 
-export type AgentsMdProvider = Platform & ('codex' | 'copilot' | 'cursor' | 'windsurf' | 'hermes' | 'warp' | 'factory' | 'opencode');
+export type AgentsMdProvider = Platform & ('antigravity' | 'codex' | 'copilot' | 'cursor' | 'windsurf' | 'hermes' | 'grokbot' | 'grok-build' | 'muse' | 'pi' | 'omp' | 'warp' | 'factory' | 'opencode');
 
 /**
  * Whether the context-pipeline has ANY work to do for this provider.
@@ -56,8 +56,8 @@ export function shouldEmitAiwgMd(provider: Platform): boolean {
 
 /**
  * Whether to emit AGENTS.md at project root. True for the AGENTS-MD
- * provider set (codex, copilot, cursor, windsurf, hermes, warp, factory,
- * opencode). False for claude (uses CLAUDE.md hook instead), openclaw,
+ * provider set (antigravity, codex, copilot, cursor, windsurf, hermes, warp,
+ * factory, opencode). False for claude (uses CLAUDE.md hook instead), openclaw,
  * and generic.
  */
 export function shouldEmitAgentsMd(provider: Platform): boolean {
@@ -72,3 +72,9 @@ export function shouldEmitAgentsMd(provider: Platform): boolean {
 export function shouldEmitClaudeMdHook(provider: Platform): boolean {
   return getProviderDefinition(provider)?.paths.contextFiles.claudeMdHook ?? false;
 }
+
+// The Muse discover-first bridge text lives in ./muse-bridge.js (kept
+// dependency-free so consumers like buildProviderBootstrapBlock do not pull
+// this module's evaluation side effects into every import graph). Re-export
+// it here so the provider-policy surface stays the canonical policy home.
+export { buildMuseBridgeText } from './muse-bridge.js';

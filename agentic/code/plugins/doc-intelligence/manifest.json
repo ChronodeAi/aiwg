@@ -1,0 +1,47 @@
+{
+  "id": "doc-intelligence",
+  "type": "addon",
+  "name": "Doc Intelligence",
+  "version": "1.1.0",
+  "description": "Documentation intelligence addon for scraping, extraction, analysis, and generated-docs auditing.",
+  "core": false,
+  "autoInstall": false,
+  "author": "AIWG Contributors",
+  "license": "MIT",
+  "repository": "https://github.com/jmagly/aiwg",
+  "keywords": [
+    "documentation",
+    "scraping",
+    "pdf",
+    "extraction",
+    "llms-txt",
+    "doc-analysis",
+    "docs-audit",
+    "discoverability"
+  ],
+  "entry": {
+    "agents": "agents/",
+    "skills": "skills/"
+  },
+  "agents": [
+    "doc-analyst"
+  ],
+  "skills": [
+    "doc-scraper",
+    "pdf-extractor",
+    "llms-txt-support",
+    "source-unifier",
+    "doc-splitter",
+    "generated-docs-audit"
+  ],
+  "platforms": ["claude-code", "factory-ai", "openai-codex"],
+  "dependencies": {
+    "optional": {
+      "python": ">=3.10"
+    }
+  },
+  "researchCompliance": {
+    "REF-001": ["BP-1", "BP-3", "BP-4", "BP-5", "BP-9"],
+    "REF-002": ["archetype-1", "archetype-2", "archetype-3", "archetype-4"]
+  }
+}

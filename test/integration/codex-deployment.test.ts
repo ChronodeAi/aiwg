@@ -25,7 +25,7 @@ const REPO_ROOT = path.resolve(__dirname, '../..');
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-codex-git-check-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmpDir, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -94,10 +94,11 @@ function runAiwg(args: string[], cwd = TEST_PROJECT_DIR): string {
     ...process.env,
     HOME: TEST_HOME_DIR,
     USERPROFILE: TEST_HOME_DIR,
+    CODEX_HOME: TEST_CODEX_DIR,
   };
 
   // Use bin/aiwg.mjs which properly awaits async operations
-  return execFileSync(process.execPath, [path.join(REPO_ROOT, 'bin/aiwg.mjs'), ...args], {
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, 'bin/aiwg.mjs'), ...args], { timeout: 60_000,
     cwd,
     env,
     encoding: 'utf-8',
@@ -113,9 +114,10 @@ function runScript(scriptPath: string, args: string[] = []): string {
     ...process.env,
     HOME: TEST_HOME_DIR,
     USERPROFILE: TEST_HOME_DIR,
+    CODEX_HOME: TEST_CODEX_DIR,
   };
 
-  return execFileSync(process.execPath, [path.join(REPO_ROOT, scriptPath), ...args], {
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, scriptPath), ...args], { timeout: 60_000,
     cwd: TEST_PROJECT_DIR,
     env,
     encoding: 'utf-8',
@@ -129,7 +131,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
     await fs.mkdir(TEST_CODEX_DIR, { recursive: true });
 
     // Initialize as git repo (Codex requires this)
-    execFileSync('git', ['init'], { cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
   });
 
   afterEach(async () => {
@@ -251,6 +253,46 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
       expect(skillMd).toMatch(/\n---\n/);
     });
 
+    it('replaces the malformed pre-fix aiwg-mcp deployment with aiwg-mcp-server', async () => {
+      const skillsDir = path.join(TEST_CODEX_DIR, 'skills');
+      const legacyDir = path.join(skillsDir, 'aiwg-mcp');
+      await fs.mkdir(legacyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(legacyDir, 'SKILL.md'),
+        '---\nnamespace: aiwg\nname: aiwg-mcp\nplatforms: [all]\n\n---\n\n# AIWG MCP Server\n'
+      );
+
+      const output = runScript('tools/skills/deploy-skills-codex.mjs', [
+        '--target', skillsDir
+      ]);
+
+      await expect(fs.access(legacyDir)).rejects.toThrow();
+      const canonical = await fs.readFile(
+        path.join(skillsDir, 'aiwg-mcp-server', 'SKILL.md'),
+        'utf-8'
+      );
+      expect(canonical).toMatch(/name: "aiwg-mcp-server"/);
+      expect(canonical).toMatch(/description: ".+"/);
+      expect(output).toContain('1 pruned');
+    });
+
+    it('ships only described aiwg-mcp-server skills in source and plugin inventories', async () => {
+      const inventories = [
+        path.join(REPO_ROOT, 'agentic/code/addons/aiwg-utils/skills'),
+        path.join(REPO_ROOT, 'agentic/code/plugins/utils/skills')
+      ];
+
+      for (const inventory of inventories) {
+        await expect(fs.access(path.join(inventory, 'aiwg-mcp'))).rejects.toThrow();
+        const canonical = await fs.readFile(
+          path.join(inventory, 'aiwg-mcp-server', 'SKILL.md'),
+          'utf-8'
+        );
+        expect(canonical).toMatch(/^---\n[\s\S]*^name:\s+aiwg-mcp-server\s*$/m);
+        expect(canonical).toMatch(/^description:\s+\S.+$/m);
+      }
+    });
+
     it('truncates description to 500 chars', async () => {
       runScript('tools/skills/deploy-skills-codex.mjs', [
         '--target', path.join(TEST_CODEX_DIR, 'skills')
@@ -316,6 +358,59 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
         }
       }
     });
+
+    it('prunes stale managed standard skills during a component-scoped kernel deployment', async () => {
+      const skillsDir = path.join(TEST_PROJECT_DIR, '.agents', 'skills');
+      const staleDir = path.join(skillsDir, 'eval-agent');
+      await fs.mkdir(staleDir, { recursive: true });
+      await fs.writeFile(path.join(staleDir, 'SKILL.md'), '---\nname: eval-agent\ndescription: stale\n---\n');
+      await fs.writeFile(path.join(staleDir, '.aiwg-managed'), 'aiwg\n');
+
+      execFileSync(process.execPath, [
+        path.join(REPO_ROOT, 'tools/skills/deploy-skills-codex.mjs'),
+        '--source', path.join(REPO_ROOT, 'agentic', 'code', 'addons', 'aiwg-utils'),
+        '--target', skillsDir,
+      ], { timeout: 60_000,
+        cwd: TEST_PROJECT_DIR,
+        env: {
+          ...process.env,
+          HOME: TEST_HOME_DIR,
+          USERPROFILE: TEST_HOME_DIR,
+          AIWG_ROOT: REPO_ROOT,
+        },
+        encoding: 'utf-8',
+      });
+
+      await expect(fs.access(staleDir)).rejects.toThrow();
+      await expect(fs.access(path.join(skillsDir, 'aiwg-doctor', 'SKILL.md'))).resolves.toBeUndefined();
+    });
+
+    it('preserves skill model intent as explicit unsupported policy, not a native pin', async () => {
+      runScript('tools/agents/deploy-agents.mjs', [
+        '--provider', 'codex',
+        '--mode', 'sdlc',
+        '--deploy-skills',
+        '--target', TEST_PROJECT_DIR,
+      ]);
+      // A `--copy-all` deploy exceeds Codex's startup listing cap, so the
+      // deployer places overflow on the standard tier (#2561); the model
+      // policy contract holds wherever the skill landed.
+      const candidates = [
+        path.join(TEST_PROJECT_DIR, '.agents', 'skills', 'flow-deploy-to-production', 'SKILL.md'),
+        path.join(TEST_PROJECT_DIR, '.codex', '.aiwg', 'skills', 'flow-deploy-to-production', 'SKILL.md'),
+      ];
+      let content = '';
+      for (const candidate of candidates) {
+        try { content = await fs.readFile(candidate, 'utf8'); break; } catch { /* try the other tier */ }
+      }
+      expect(content, `flow-deploy-to-production deployed to neither tier: ${candidates.join(', ')}`).not.toBe('');
+      expect(content).toContain(
+        '<!-- aiwg:model-policy role=reasoning tier=premium outcome=unsupported rationale=',
+      );
+      const frontmatter = content.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
+      expect(frontmatter).not.toMatch(/^model:/m);
+      expect(frontmatter).not.toMatch(/^effort:/m);
+    });
   });
 
   describe('MCP Configuration', () => {
@@ -351,7 +446,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
       expect(config).toContain('agent-list');
     });
 
-    it.skipIf(!TSX_AVAILABLE)('does not duplicate MCP config on re-run', async () => {
+    it.skipIf(!TSX_AVAILABLE)('does not duplicate MCP config on re-run', { timeout: 15000 }, async () => {
       await fs.writeFile(
         path.join(TEST_CODEX_DIR, 'config.toml'),
         '# Config\n'
@@ -369,7 +464,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
 
       const matches = config.match(/\[mcp_servers\.aiwg\]/g);
       expect(matches?.length).toBe(1);
-    }, { timeout: 15000 });
+    });
   });
 
   describe('Dry Run', () => {

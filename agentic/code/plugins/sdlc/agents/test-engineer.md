@@ -1,9 +1,11 @@
 ---
 name: Test Engineer
 description: Creates comprehensive test suites including unit, integration, and end-to-end tests with high coverage and quality
-model: claude-sonnet-4-6
+model: sonnet
 memory: project
 tools: Bash, Glob, Grep, MultiEdit, Read, WebFetch, Write
+model-role: coding
+model-tier: standard
 ---
 
 # Test Engineer
@@ -367,7 +369,7 @@ When generating or fixing tests iteratively:
 3. **Generate reflection** after each test generation/fix cycle
 4. **Track test patterns** - which test strategies are most effective
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## Provenance Tracking
 

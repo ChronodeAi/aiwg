@@ -61,9 +61,9 @@ interface AgentMetadata {
 
 | Tier | When to Use | Example Models |
 |------|-------------|----------------|
-| **haiku** | Simple, repetitive tasks | claude-haiku-4 |
-| **sonnet** | Most tasks, balanced | claude-sonnet-4-5 |
-| **opus** | Complex reasoning, critical decisions | claude-opus-4-5 |
+| **haiku** | Simple, repetitive tasks | claude-haiku-4-5 |
+| **sonnet** | Most tasks, balanced | claude-sonnet-5 |
+| **opus** | Complex reasoning, critical decisions | claude-opus-5 |
 
 ### Example
 
@@ -255,6 +255,13 @@ Every SKILL.md file MUST include these fields in its YAML frontmatter:
 | `version:` | Recommended | Semver (`1.0.0`) or CalVer (`2026.1.5`). |
 | `namespace:` | Recommended | `aiwg` for AIWG-owned skills; drives collision avoidance. |
 | `platforms:` | Optional | Target platform list (e.g. `[all]`, `[claude, codex]`). |
+
+This table describes canonical AIWG skill-source conventions. Portable Agent
+Skills require only `name` and `description`; AIWG-only fields such as
+`namespace` and `platforms` are accepted by the compatible profile and moved
+outside strict provider frontmatter. See
+[Agent Skills import and deployment](../skills/agent-skills.md) for the
+complete field mapping and provider lifecycle.
 
 Missing or empty `description:` will cause deployment to fail on Codex and
 degrade discoverability on every platform. The `aiwg add-skill` scaffolder,
@@ -1730,4 +1737,4 @@ aiwg behavior stop <name>
 - [Daemon Guide](../daemon-guide.md) — Daemon architecture that behaviors integrate with
 - @src/extensions/types.ts - Full type definitions
 - @.aiwg/architecture/unified-extension-schema.md - Complete schema
-- @docs/cli-reference.md - CLI command reference
+- @docs/cli/reference.md - CLI command reference

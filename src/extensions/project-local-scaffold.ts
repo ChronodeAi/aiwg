@@ -14,6 +14,8 @@
 
 import { mkdir, writeFile, stat } from 'fs/promises';
 import { join } from 'path';
+import { projectAiwgPath } from '../config/project-artifacts.js';
+import { PROJECT_LOCAL_TYPE_TO_DIR as TYPE_TO_DIR } from './project-local-paths.js';
 import type { ProjectLocalType } from './manifest.js';
 
 export type StarterKind = 'skill' | 'rule' | 'agent' | 'minimal';
@@ -45,14 +47,6 @@ export interface ScaffoldResult {
   /** True when no files were written because dryRun was set. */
   dryRun?: boolean;
 }
-
-const TYPE_TO_DIR: Record<ProjectLocalType, string> = {
-  extension: 'extensions',
-  addon: 'addons',
-  framework: 'frameworks',
-  plugin: 'plugins',
-  provider: 'providers',
-};
 
 const NAME_REGEX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
@@ -159,6 +153,9 @@ Keep this directory shaped like upstream so \`aiwg promote\` works.
 const STARTER_SKILL = (name: string) => `---
 name: ${name}-skill
 description: Starter skill for the ${name} project-local bundle. Customize this.
+commandHint:
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # ${name}-skill
@@ -199,7 +196,8 @@ State when this rule fires and what action it requires.
 const STARTER_AGENT = (name: string) => `---
 name: ${name}-agent
 description: Starter agent for the ${name} project-local bundle.
-model: claude-sonnet-4-6
+model-role: efficiency
+model-tier: economy
 ---
 
 # ${name}-agent
@@ -222,7 +220,7 @@ export async function scaffoldProjectLocalBundle(
   }
 
   const dirName = TYPE_TO_DIR[options.type];
-  const bundlePath = join(projectDir, '.aiwg', dirName, options.name);
+  const bundlePath = projectAiwgPath(projectDir, dirName, options.name);
 
   // Refuse to overwrite
   try {

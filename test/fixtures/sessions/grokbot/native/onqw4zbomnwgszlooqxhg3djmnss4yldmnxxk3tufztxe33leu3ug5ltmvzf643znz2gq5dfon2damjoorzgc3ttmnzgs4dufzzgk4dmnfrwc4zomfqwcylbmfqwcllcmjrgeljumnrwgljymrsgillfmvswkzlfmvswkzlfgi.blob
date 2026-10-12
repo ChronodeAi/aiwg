@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "value": {
+    "entries": [
+      {
+        "kind": "message",
+        "id": "evt-41",
+        "timestampMs": 1700500000000,
+        "requestId": "req-41",
+        "seq": 41,
+        "role": "user",
+        "content": "Still with me after the long thread?"
+      },
+      {
+        "kind": "send-message",
+        "id": "evt-42",
+        "timestampMs": 1700500001000,
+        "requestId": "req-41",
+        "seq": 42,
+        "message": {
+          "type": "text",
+          "content": "Yes — earlier turns were evicted from the local cache, but I am."
+        }
+      }
+    ],
+    "epochHint": "epoch-synthetic-2",
+    "acceptedSequenceHint": 42,
+    "persistedAt": 1700500010000,
+    "precedingTimestampMs": 1700499999000
+  }
+}

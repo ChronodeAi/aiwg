@@ -6,8 +6,10 @@ description: The canonical, extensible source-type registry for a research corpu
 commandHint:
   argumentHint: "source-types [--json]"
   allowedTools: Read, Bash, Write
-  model: sonnet
+  model: haiku
   category: research-foundation
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Source-Type Registry
@@ -56,7 +58,7 @@ Per canonical type: `template`, `required-sections`, `citation-format`,
 | video | reference-media | timestamp-transcript | media-curator | media/video | on-demand |
 | podcast | reference-media | timestamp-transcript | media-curator | media/audio | on-demand |
 
-(16 canonical types ship by default; `aiwg corpus source-types` lists them all.)
+(17 canonical types ship by default; `aiwg corpus source-types` lists them all.)
 
 ## Adding a new source type is config, not code
 

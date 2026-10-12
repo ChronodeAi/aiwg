@@ -10,10 +10,25 @@
  * project` are mutually exclusive; default is `project`.
  */
 
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
+import { resolveHermesHome, resolveHermesHomePath } from '../providers/hermes-home.js';
+import { resolveGrokbotSkillsDir } from '../providers/grokbot-paths.js';
+import { resolveGrokHome } from '../providers/grok-build-paths.js';
+import { resolveMuseXdgSkillsDir } from '../providers/muse-paths.js';
+
+export const hermesHome = resolveHermesHome;
 
 export type Scope = 'project' | 'user';
+
+function piAgentDir(): string {
+  const configured = process.env.PI_CODING_AGENT_DIR;
+  if (!configured) return path.join(homedir(), '.pi', 'agent');
+  if (configured === '~') return homedir();
+  if (configured.startsWith('~/')) return path.join(homedir(), configured.slice(2));
+  return configured;
+}
 
 /**
  * User-scope deploy paths per provider per ADR-4 §2. Each path is absolute
@@ -48,6 +63,24 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     commands: path.join(homedir(), '.codex', 'prompts'),
     rules: '',
     behaviors: '',
+  },
+  get omp() {
+    const { agentDir } = resolveOmpPaths();
+    return { agents: path.join(agentDir, 'agents'), skills: path.join(agentDir, 'skills'),
+      commands: path.join(agentDir, 'prompts'), rules: path.join(agentDir, 'rules'),
+      behaviors: path.join(agentDir, 'extensions') };
+  },
+  pi: {
+    // Pi's global resource root is configurable. Unlike project deployment,
+    // user-scope resources belong under the effective agent directory. Keep
+    // skills on this single native path instead of also copying them to
+    // ~/.agents/skills, which would create duplicate Pi discovery entries.
+    // PI_CODING_AGENT_DIR is configuration only and is not runtime evidence.
+    agents: '',
+    skills: path.join(piAgentDir(), 'skills'),
+    commands: path.join(piAgentDir(), 'prompts'),
+    rules: '',
+    behaviors: path.join(piAgentDir(), 'extensions'),
   },
   copilot: {
     // #1160 — Non-applicable for filesystem user-scope discovery.
@@ -163,7 +196,10 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
   },
   hermes: {
     agents: '',
-    skills: path.join(homedir(), '.hermes', 'skills'),
+    // #2119: honor HERMES_HOME so `--scope user` deploys land under the same
+    // root the running Hermes session scans, matching the hermes provider's
+    // paths.skills resolution.
+    skills: resolveHermesHomePath('skills'),
     commands: '',
     rules: '',
     behaviors: '',
@@ -185,6 +221,44 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     commands: '',
     rules: path.join(homedir(), '.openhuman', '.aiwg', 'rules'),
     behaviors: '',
+  },
+  get grokbot() {
+    // Fail-closed: skills path is empty until AIWG_GROKBOT_SKILLS_DIR is set.
+    // Never invent ~/.grokbot. See adr-grokbot-provider-target / #205/#207.
+    const skills = resolveGrokbotSkillsDir() || '';
+    return {
+      agents: '',
+      skills,
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
+  },
+  get 'grok-build'() {
+    // Grok Build discovers user agents and skills under the resolved home.
+    const home = resolveGrokHome();
+    return {
+      agents: home ? path.join(home, 'agents') : '',
+      skills: home ? path.join(home, 'skills') : '',
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
+  },
+  get muse() {
+    // #226 — Muse XDG user skills root resolves at deploy time (fail-closed).
+    // Bad XDG metadata yields '' so the --scope user mirror skips the skills
+    // lane rather than inventing ~/.muse or writing ~/.agents/skills
+    // (the cross-provider canonical is a READ surface for Muse, never an
+    // AIWG write target — see adr-muse-provider-target.md).
+    const skills = resolveMuseXdgSkillsDir() || '';
+    return {
+      agents: '',
+      skills,
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
   },
   factory: {
     // #1164 — Verified against Factory docs (docs.factory.ai/cli/configuration/skills).
@@ -309,7 +383,14 @@ export interface ArtifactMirrorResult {
  */
 export async function mirrorToUserScope(
   provider: string,
-  projectPaths: { agents: string; skills: string; commands: string; rules: string; behaviors: string },
+  projectPaths: {
+    agents: string;
+    skills: string;
+    kernelSkills?: string;
+    commands: string;
+    rules: string;
+    behaviors: string;
+  },
 ): Promise<{
   agents: ArtifactMirrorResult;
   skills: ArtifactMirrorResult;
@@ -322,14 +403,87 @@ export async function mirrorToUserScope(
   if (!userPaths) {
     return { agents: empty, skills: empty, commands: empty, rules: empty, behaviors: empty };
   }
+  if (provider === 'grok-build') await assertGrokUserMirrorPaths(projectPaths, userPaths);
   const [agents, skills, commands, rules, behaviors] = await Promise.all([
     userPaths.agents ? mirrorArtifactDir(projectPaths.agents, userPaths.agents) : Promise.resolve(empty),
-    userPaths.skills ? mirrorArtifactDir(projectPaths.skills, userPaths.skills) : Promise.resolve(empty),
+    userPaths.skills
+      ? mirrorSkillDirsToUserScope(
+        [projectPaths.skills, projectPaths.kernelSkills ?? ''],
+        userPaths.skills,
+      )
+      : Promise.resolve(empty),
     userPaths.commands ? mirrorArtifactDir(projectPaths.commands, userPaths.commands) : Promise.resolve(empty),
     userPaths.rules ? mirrorArtifactDir(projectPaths.rules, userPaths.rules) : Promise.resolve(empty),
     userPaths.behaviors ? mirrorArtifactDir(projectPaths.behaviors, userPaths.behaviors) : Promise.resolve(empty),
   ]);
   return { agents, skills, commands, rules, behaviors };
+}
+
+async function assertGrokUserMirrorPaths(
+  projectPaths: { agents: string; skills: string; kernelSkills?: string },
+  userPaths: { agents: string; skills: string },
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  const statIfPresent = async (target: string) => {
+    try { return await fs.lstat(target); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+  const checkTarget = async (target: string): Promise<void> => {
+    const stat = await statIfPresent(target);
+    if (!stat) return;
+    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
+      throw new Error(`Refusing unsafe Grok Build user mirror target: ${target}`);
+    }
+    if (stat.isDirectory()) {
+      for (const name of await fs.readdir(target)) await checkTarget(path.join(target, name));
+    }
+  };
+  for (const [destination, sources] of [
+    [userPaths.agents, [projectPaths.agents]],
+    [userPaths.skills, [projectPaths.skills, projectPaths.kernelSkills ?? '']],
+  ] as const) {
+    if (!destination) continue;
+    const rootStat = await statIfPresent(destination);
+    if (rootStat && (rootStat.isSymbolicLink() || !rootStat.isDirectory())) {
+      throw new Error(`Refusing unsafe Grok Build user mirror root: ${destination}`);
+    }
+    for (const source of sources) {
+      if (!source) continue;
+      let names: string[];
+      try { names = await fs.readdir(source); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      for (const name of names) await checkTarget(path.join(destination, name));
+    }
+  }
+}
+
+/**
+ * Merge standard and kernel skill directories into one user-discoverable
+ * target. Provider deployments intentionally keep those source surfaces
+ * separate, while user scope exposes one native skill root. Duplicate skill
+ * names created by the earlier source are overwritten by the later source
+ * and counted once; pre-existing operator-owned names are preserved.
+ */
+export async function mirrorSkillDirsToUserScope(
+  sourceDirs: ReadonlyArray<string>,
+  targetDir: string,
+): Promise<ArtifactMirrorResult> {
+  const entries = new Set<string>();
+  for (const sourceDir of sourceDirs) {
+    const result = await mirrorArtifactDir(sourceDir, targetDir, entries);
+    for (const entry of result.entries) entries.add(entry);
+  }
+  return {
+    count: entries.size,
+    targetDir,
+    entries: [...entries],
+  };
 }
 
 /**
@@ -344,7 +498,7 @@ export async function mirrorToUserScope(
  * providers). Failures on individual entries are swallowed so a single bad
  * entry doesn't fail the whole mirror.
  */
-async function mirrorArtifactDir(src: string, dst: string): Promise<ArtifactMirrorResult> {
+async function mirrorArtifactDir(src: string, dst: string, ownedThisCall: ReadonlySet<string> = new Set()): Promise<ArtifactMirrorResult> {
   if (!src || !dst) return { count: 0, targetDir: dst, entries: [] };
   const fs = await import('node:fs/promises');
 
@@ -355,6 +509,19 @@ async function mirrorArtifactDir(src: string, dst: string): Promise<ArtifactMirr
     return { count: 0, targetDir: dst, entries: [] };
   }
 
+  // Some providers already deploy kernel skills to an absolute user-level
+  // path. Inventory that source for registry accounting instead of trying to
+  // recursively copy each entry onto itself.
+  if (path.resolve(src) === path.resolve(dst)) {
+    const entries: string[] = [];
+    for (const entry of dirents) {
+      if ((entry.isDirectory() || entry.isFile()) && await isAiwgManagedEntry(path.join(dst, entry.name), entry.isDirectory())) {
+        entries.push(entry.name);
+      }
+    }
+    return { count: entries.length, targetDir: dst, entries };
+  }
+
   await fs.mkdir(dst, { recursive: true });
   let count = 0;
   const entries: string[] = [];
@@ -362,6 +529,15 @@ async function mirrorArtifactDir(src: string, dst: string): Promise<ArtifactMirr
     const s = path.join(src, entry.name);
     const d = path.join(dst, entry.name);
     try {
+      // User-scope directories are shared with operator-created artifacts.
+      // A same-named unmanaged entry belongs to the operator, even when a
+      // project has an AIWG-managed source with that name.
+      try {
+        const existing = await fs.lstat(d);
+        if (!ownedThisCall.has(entry.name) && !await isAiwgManagedEntry(d, existing.isDirectory())) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue;
+      }
       if (entry.isDirectory()) {
         await fs.cp(s, d, { recursive: true, force: true });
       } else if (entry.isFile()) {
@@ -376,6 +552,23 @@ async function mirrorArtifactDir(src: string, dst: string): Promise<ArtifactMirr
     }
   }
   return { count, targetDir: dst, entries };
+}
+
+async function isAiwgManagedEntry(target: string, directory: boolean): Promise<boolean> {
+  const fs = await import('node:fs/promises');
+  if (directory) {
+    try {
+      const marker = await fs.readFile(path.join(target, '.aiwg-managed'), 'utf8');
+      if (marker.trim() === 'aiwg') return true;
+    } catch { /* legacy deployed skill may use an inline marker */ }
+  }
+  const markerFile = directory ? path.join(target, 'SKILL.md') : target;
+  try {
+    const text = await fs.readFile(markerFile, 'utf8');
+    return /(?:#|<!--) aiwg:managed v[^\s]+ [^\r\n]+/.test(text.slice(0, 2048));
+  } catch {
+    return false;
+  }
 }
 
 /**

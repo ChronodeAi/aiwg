@@ -1,0 +1,4 @@
+{"type":"assistant","session_id":"fixture-session","text":"fixture working"}
+{"type":"tool_call","session_id":"fixture-session","id":"factory-fixture-call-1","name":"Read"}
+{"type":"tool_result","session_id":"fixture-session","tool_call_id":"factory-fixture-call-1"}
+{"type":"result","session_id":"fixture-session","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"fixture done"}

@@ -1,5 +1,15 @@
 # Storage Backends — Migration Guide
 
+> **Current CLI versus scalable protocol:** This page documents the currently
+> shipped path-oriented `aiwg storage migrate` command. Its JSONL receipt and
+> pathname-only resume behavior do not satisfy the scalable migration contract.
+> The versioned `aiwg.storage-migration/v1` coordinator is documented in
+> [Scalable Storage Migration Protocol](migration-protocol.md); it provides
+> revision/digest receipts, tombstones, atomic batches, online replay, parity
+> verification, approval-bound cutover, and rollback, but is not yet wired into
+> this CLI command. Do not use the legacy command as scale-out certification
+> evidence.
+
 `aiwg storage migrate` copies entries from one backend to another. Use it when you decide to move a subsystem's persistence — for example, AIWG memory was on the local filesystem, you've now installed Obsidian, and you want the existing pages in your vault.
 
 ## Synopsis
@@ -76,6 +86,40 @@ aiwg storage migrate memory \
 
 (`fortemi:<server-name>` references an MCP server registered via `aiwg mcp add fortemi --command <…>`.)
 
+### Ingest the research corpus into a memory store
+
+The provider-neutral corpus command selects textual research records, preserves
+Markdown frontmatter as adapter metadata, and skips binary attachments rather
+than decoding them as UTF-8. Previewing never connects to the destination:
+
+```bash
+aiwg storage import-corpus --dry-run
+aiwg storage import-corpus                       # local `fortemi` stdio server
+aiwg storage import-corpus --server fortemi-enterprise
+aiwg storage import-corpus --to obsidian:~/vault # any implemented storage backend
+```
+
+Fortemi destinations use deterministic IDs of the form
+`research:<corpus-relative-path>`, so the resumable AIWG migration receipt
+replaces the old machine-specific `import-ids.log`. Binary attachment upload is
+not part of the text-based `StorageAdapter` contract; skipped paths are counted
+explicitly and remain in the source corpus for a future binary-attachment
+adapter rather than being corrupted or silently discarded.
+
+For an authenticated internal/Enterprise service, register an HTTPS MCP server
+with a credential reference. Only the environment-variable name is persisted:
+
+```bash
+aiwg mcp add fortemi-enterprise \
+  --type http \
+  --url https://memory.example.internal/mcp \
+  --header-env Authorization=AIWG_FORTEMI_TOKEN
+```
+
+Set `AIWG_FORTEMI_TOKEN` in the approved process secret provider before the live
+run. AIWG does not read legacy Claude credential files and does not accept a
+token in `storage.config`. Non-loopback remote endpoints must use HTTPS.
+
 ## How it works
 
 1. **Build adapters** — one each from `--from` and `--to` specs.
@@ -93,6 +137,11 @@ Long migrations can be interrupted (Ctrl-C, a network hiccup, a backend rate lim
 - Retries the rest
 
 This means you can safely run a migration in chunks, or re-run after fixing a backend issue. The command prints `skipped=N` in the summary so you can see what the resume picked up.
+
+Because completion is keyed only by pathname, changing an already-receipted
+source entry or deleting it does not update the destination on rerun. Use this
+legacy path only for quiesced, backup-first copies and perform an independent
+source/destination comparison before changing configuration.
 
 ## Dry-run mode
 

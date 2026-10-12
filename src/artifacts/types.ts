@@ -10,7 +10,17 @@
  */
 
 import fs from 'fs';
+import os from 'node:os';
+import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import type { OperationalStateProvenance } from './operational-state.js';
+import type { StateTransferProjection } from './state-transfer.js';
+import {
+  DEFAULT_PROJECT_AIWG_DIR,
+  projectAiwgPath,
+  projectControlPath,
+  resolveProjectAiwgDir,
+} from '../config/project-artifacts.js';
 
 /**
  * A single indexed artifact entry
@@ -21,6 +31,20 @@ export interface MetadataEntry {
 
   /** Artifact type (use-case, adr, test-plan, nfr, threat-model, etc.) */
   type: string;
+
+  /**
+   * Exact declarative/process kind when the source format defines one.
+   * Examples: `FlowPlaybook`, `OpsInventory`, and `Runbook`. This preserves
+   * distinctions that are intentionally coarser in the top-level `type`.
+   */
+  kind?: string;
+
+  /**
+   * Physical/original artifact classification when semantic classification
+   * changes the top-level type. A Markdown runbook under `templates/`, for
+   * example, has `type: runbook` and `sourceType: template`.
+   */
+  sourceType?: string;
 
   /** SDLC phase (requirements, architecture, testing, security, deployment, etc.) */
   phase: string;
@@ -56,6 +80,9 @@ export interface MetadataEntry {
   /** Outbound @-mention references (paths this artifact depends on) */
   dependencies: string[];
 
+  /** Raw relative Markdown link targets parsed from this artifact. */
+  markdownLinks?: string[];
+
   /** Computed: paths that reference this artifact */
   dependents: string[];
 
@@ -73,6 +100,13 @@ export interface MetadataEntry {
    * generic body summary.
    */
   capability?: string;
+
+  /**
+   * Compact, structure-aware language lookup terms. Process artifacts use
+   * this for headings, step/capability identifiers, validation language, and
+   * other signals that do not belong in a one-line summary.
+   */
+  searchTerms?: string[];
 
   /**
    * `kernel: true` from frontmatter. Marks always-loaded skills the
@@ -93,6 +127,19 @@ export interface MetadataEntry {
    * themselves.
    */
   script?: SkillScriptSpec;
+
+  /**
+   * Optional live-state provenance for tracker/repository observations. This
+   * is exported only through the Fortemi v2 contract; v1 remains unchanged.
+   */
+  operationalState?: OperationalStateProvenance;
+
+  /**
+   * Explicit state-transfer projection for bridge consumers. This is distinct
+   * from operationalState, which records observed external state and must not
+   * be interpreted as persistence lifecycle.
+   */
+  stateTransfer?: StateTransferProjection;
 }
 
 /**
@@ -122,11 +169,76 @@ export interface SkillScriptSpec {
 }
 
 /**
+ * Operational artifact kinds that belong on the broad capability-discovery
+ * surface. This is intentionally narrower than every indexed artifact type:
+ * `query` remains the general document/artifact search surface, while
+ * `discover` is for assets agents can act on or route to.
+ */
+export const OPERATIONAL_DISCOVERY_TYPES = [
+  'skill',
+  'agent',
+  'command',
+  'rule',
+  'schema',
+  'decision-definition',
+  'decision-ruleset',
+  'decision-binding',
+  'gate-pack',
+  'flow',
+  'runbook',
+  'template',
+  'behavior',
+] as const;
+
+/**
+ * Operational artifact kinds that `aiwg show <type> <name>` can fetch. Hooks
+ * are operational but low-level, so they are showable and focus-searchable
+ * without being part of broad discovery defaults.
+ */
+export const OPERATIONAL_SHOW_TYPES = [
+  ...OPERATIONAL_DISCOVERY_TYPES,
+  'hook',
+] as const;
+
+export type OperationalDiscoveryType = typeof OPERATIONAL_DISCOVERY_TYPES[number];
+export type OperationalShowType = typeof OPERATIONAL_SHOW_TYPES[number];
+
+export function isOperationalShowType(value: string): value is OperationalShowType {
+  return (OPERATIONAL_SHOW_TYPES as readonly string[]).includes(value);
+}
+
+export const DEFAULT_INDEX_EXTENSIONS = ['.md', '.yaml', '.yml', '.json'] as const;
+
+/**
+ * Template assets are often provider-native files (`config.toml`,
+ * `AGENTS.md.aiwg-template`, GitHub workflow `.yml`, JSONC snippets, etc.).
+ * These extensions are only meaningful as operational templates when the file
+ * is under a `templates/` directory; type inference enforces that boundary.
+ */
+export const TEMPLATE_INDEX_EXTENSIONS = [
+  '.aiwg-template',
+  '.aiwg-base',
+  '.jsonc',
+  '.tmpl',
+  '.j2',
+  '.csv',
+  '.toml',
+] as const;
+
+export const FRAMEWORK_INDEX_EXTENSIONS = [
+  ...DEFAULT_INDEX_EXTENSIONS,
+  ...TEMPLATE_INDEX_EXTENSIONS,
+] as const;
+
+/**
  * The master artifact index stored at .aiwg/.index/metadata.json
  */
 export interface ArtifactIndex {
   /** Index format version */
   version: string;
+
+  /** Metadata extractor revision used to build the entries. */
+  extractorVersion?: string;
 
   /** ISO timestamp of last build */
   builtAt: string;
@@ -196,6 +308,9 @@ export interface IndexStats {
   /** Index format version */
   version: string;
 
+  /** Metadata extractor revision used for the corresponding index. */
+  extractorVersion?: string;
+
   /** ISO timestamp of last build */
   builtAt: string;
 
@@ -216,7 +331,25 @@ export interface IndexStats {
 
   /** Dependency graph metrics */
   graphMetrics: {
+    /**
+     * Unique directed relationships. For citation graphs this is a
+     * compatibility alias for canonicalEdges.
+     */
     totalEdges: number;
+    /** Unique directed source -> target citations declared by outgoing tables. */
+    canonicalEdges?: number;
+    /** Parsed outgoing citation declarations after per-sidecar deduplication. */
+    outgoingDeclarations?: number;
+    /** Parsed incoming/cited-by declarations after per-sidecar deduplication. */
+    incomingDeclarations?: number;
+    /** Stored upstream plus downstream adjacency entries. */
+    adjacencyEntries?: number;
+    /** Edges derived from relative Markdown links that resolve to indexed nodes. */
+    markdownLinkEdges?: number;
+    /** Canonical outgoing citations without a matching incoming declaration. */
+    unmirroredOutgoing?: number;
+    /** Incoming declarations without a matching canonical outgoing citation. */
+    unmirroredIncoming?: number;
     orphanedArtifacts: number;
     mostReferenced: { path: string; count: number } | null;
   };
@@ -290,6 +423,13 @@ export const INDEX_DIR = '.aiwg/.index';
  * Current index format version
  */
 export const INDEX_VERSION = '1.0.0';
+
+/**
+ * Metadata extraction revision. Unlike INDEX_VERSION, this can change without
+ * making the serialized index schema incompatible; a mismatch simply forces a
+ * one-time content re-extraction during the next incremental build.
+ */
+export const INDEX_EXTRACTOR_VERSION = '2026.08.24.1';
 
 /**
  * Built-in graph type identifiers
@@ -380,6 +520,18 @@ export interface GraphConfig {
   /** Whether to include in default `aiwg index build` (no --graph flag) */
   defaultBuild: boolean;
 
+  /**
+   * Build tier used to order multi-graph build/sync runs. Lightweight corpus
+   * graphs become queryable before standard/heavy graphs backfill (#1720).
+   */
+  buildTier?: 'lightweight' | 'standard' | 'heavy';
+
+  /**
+   * Optional numeric ordering within/across tiers. Lower values build/sync
+   * first. Use this for refs → citations → bibliography ordering (#1720).
+   */
+  buildOrder?: number;
+
   /** Optional edge extraction configuration */
   edgeExtraction?: EdgeExtractionConfig;
 
@@ -412,8 +564,8 @@ export interface GraphConfig {
   /**
    * Graph storage backend for this graph.
    * - 'json' (default): zero-dep adjacency list
-   * - 'graphology': rich traversal, community detection (requires npm install graphology)
-   * - 'sqlite': persistent on-disk, SQL set operations (requires npm install better-sqlite3)
+   * - 'graphology': rich traversal, community detection (`aiwg features install graph`)
+   * - 'sqlite': persistent on-disk, SQL set operations (`aiwg features install sqlite`)
    *
    * @implements #727
    */
@@ -421,7 +573,7 @@ export interface GraphConfig {
 
   /**
    * Optional embedding index configuration for semantic similarity queries.
-   * Requires: npm install @xenova/transformers hnswlib-node
+   * Enable with: aiwg features install embeddings
    *
    * @implements #730
    */
@@ -462,27 +614,35 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
       'agentic/code/behaviors',
       'docs',
     ],
-    extensions: ['.md', '.yaml', '.json'],
+    extensions: [...FRAMEWORK_INDEX_EXTENSIONS],
     shared: true,
     // Not built by `aiwg index build` (no flag) — that would write to
     // the shared XDG location from any project. Freshness is guaranteed
     // by the explicit post-deploy rebuild in `useHandler` (#1212/#1214)
     // and by `aiwg index build --graph framework` for manual rebuilds.
     defaultBuild: false,
+    buildTier: 'standard',
   },
   project: {
     type: 'project',
     scanDirs: ['.aiwg'],
-    extensions: ['.md', '.yaml', '.json'],
+    // Project-local bundles are byte-compatible pilots of upstream
+    // extensions/addons/frameworks/plugins. Scan the same provider-native
+    // template extensions as the framework graph so local assets do not
+    // disappear from discover/show merely because they have not been
+    // promoted upstream yet.
+    extensions: [...FRAMEWORK_INDEX_EXTENSIONS],
     shared: false,
     defaultBuild: true,
+    buildTier: 'standard',
   },
   codebase: {
     type: 'codebase',
     scanDirs: ['src', 'test', 'tools'],
-    extensions: ['.ts', '.mts', '.js', '.mjs', '.json', '.yaml'],
+    extensions: ['.ts', '.mts', '.js', '.mjs', '.json', '.yaml', '.yml'],
     shared: false,
     defaultBuild: true,
+    buildTier: 'heavy',
   },
   source: {
     type: 'source',
@@ -490,6 +650,7 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
     extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'],
     shared: false,
     defaultBuild: false,
+    buildTier: 'heavy',
   },
   user: {
     type: 'user',
@@ -499,11 +660,17 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
       '~/.aiwg/commands',
       '~/.aiwg/rules',
       '~/.aiwg/flows',
+      '~/.aiwg/runbooks',
       '~/.aiwg/frameworks',
+      '~/.aiwg/addons',
+      '~/.aiwg/extensions',
+      '~/.aiwg/plugins',
+      '~/.aiwg/providers',
     ],
-    extensions: ['.md', '.yaml', '.json'],
+    extensions: [...DEFAULT_INDEX_EXTENSIONS],
     shared: true,
     defaultBuild: false,
+    buildTier: 'standard',
   },
 };
 
@@ -513,6 +680,72 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
  * @implements #426
  */
 export const GRAPH_CONFIGS: Record<string, GraphConfig> = { ...BUILTIN_GRAPH_CONFIGS };
+
+let projectGraphBackend: GraphConfig['graphBackend'];
+
+/** Resolve backend precedence: graph override, project default, then JSON. */
+export function resolveGraphBackendType(graph?: GraphType): NonNullable<GraphConfig['graphBackend']> {
+  return (graph ? GRAPH_CONFIGS[graph]?.graphBackend : undefined) ?? projectGraphBackend ?? 'json';
+}
+
+interface BuiltinGraphOverride {
+  scanDirs?: string[];
+  extensions?: string[];
+}
+
+function freshBuiltinGraphConfig(name: BuiltinGraphType): GraphConfig {
+  const config = BUILTIN_GRAPH_CONFIGS[name];
+  return {
+    ...config,
+    scanDirs: [...config.scanDirs],
+    extensions: [...config.extensions],
+  };
+}
+
+/**
+ * Detect conventional Python layouts without treating every top-level folder
+ * as source. A Python project manifest activates `.py`/`.pyi` support; package
+ * roots are immediate directories containing `__init__.py`, plus the common
+ * `tests/` and `scripts/` roots when present.
+ */
+function detectPythonCodebaseConfig(cwd: string, base: GraphConfig): GraphConfig {
+  const hasPythonManifest = ['pyproject.toml', 'setup.py', 'setup.cfg']
+    .some((manifest) => fs.existsSync(path.join(cwd, manifest)));
+  if (!hasPythonManifest) return base;
+
+  const detectedRoots: string[] = [];
+  for (const root of ['tests', 'scripts']) {
+    if (fs.existsSync(path.join(cwd, root))) detectedRoots.push(root);
+  }
+
+  const excluded = new Set([
+    '.aiwg', '.git', '.github', '.venv', 'venv', 'node_modules',
+    'src', 'test', 'tests', 'tools', 'scripts', 'docs', 'documentation',
+  ]);
+  try {
+    for (const entry of fs.readdirSync(cwd, { withFileTypes: true })) {
+      if (!entry.isDirectory() || excluded.has(entry.name) || entry.name.startsWith('.')) continue;
+      if (fs.existsSync(path.join(cwd, entry.name, '__init__.py'))) detectedRoots.push(entry.name);
+    }
+  } catch {
+    // Layout detection is best-effort; the immutable defaults still apply.
+  }
+
+  return {
+    ...base,
+    scanDirs: [...new Set([...base.scanDirs, ...detectedRoots])],
+    extensions: [...new Set([...base.extensions, '.py', '.pyi'])],
+  };
+}
+
+function applyBuiltinGraphOverride(base: GraphConfig, override: BuiltinGraphOverride | undefined): GraphConfig {
+  if (!override) return base;
+  return {
+    ...base,
+    scanDirs: override.scanDirs ? [...override.scanDirs] : base.scanDirs,
+    extensions: override.extensions ? [...override.extensions] : base.extensions,
+  };
+}
 
 /**
  * Normalize metadataSupplements entries.
@@ -565,9 +798,16 @@ function parseGraphDef(name: string, graphDef: Record<string, unknown>): GraphCo
   return {
     type: name,
     scanDirs: graphDef.scanDirs as string[],
-    extensions: Array.isArray(graphDef.extensions) ? graphDef.extensions as string[] : ['.md', '.yaml', '.json'],
+    extensions: Array.isArray(graphDef.extensions) ? graphDef.extensions as string[] : [...DEFAULT_INDEX_EXTENSIONS],
     shared: graphDef.shared === true,
     defaultBuild: graphDef.defaultBuild !== false,
+    buildTier:
+      graphDef.buildTier === 'lightweight' || graphDef.buildTier === 'standard' || graphDef.buildTier === 'heavy'
+        ? graphDef.buildTier
+        : undefined,
+    buildOrder: typeof graphDef.buildOrder === 'number' && Number.isFinite(graphDef.buildOrder)
+      ? graphDef.buildOrder
+      : undefined,
     edgeExtraction: graphDef.edgeExtraction as EdgeExtractionConfig | undefined,
     nodeStrategy: graphDef.nodeStrategy as GraphConfig['nodeStrategy'],
     filenamePattern: typeof graphDef.filenamePattern === 'string' ? graphDef.filenamePattern : undefined,
@@ -578,6 +818,40 @@ function parseGraphDef(name: string, graphDef: Record<string, unknown>): GraphCo
       ? graphDef.graphBackend as GraphConfig['graphBackend']
       : undefined,
   };
+}
+
+const BUILD_TIER_ORDER: Record<NonNullable<GraphConfig['buildTier']>, number> = {
+  lightweight: 10,
+  standard: 50,
+  heavy: 90,
+};
+
+function inferredGraphBuildOrder(name: string): number {
+  const normalized = name.toLowerCase();
+  if (/(^|[-_])(refs?|references?)([-_]|$)/.test(normalized)) return 10;
+  if (/(citation|citations|cites|citation-network)/.test(normalized)) return 20;
+  if (/(bib|bibliography)/.test(normalized)) return 30;
+  if (/(summary|summaries)/.test(normalized)) return 40;
+  if (/(paper|papers|source|codebase|embedding|full)/.test(normalized)) return 90;
+  return 50;
+}
+
+export function graphBuildOrder(name: string, config: GraphConfig): number {
+  if (typeof config.buildOrder === 'number' && Number.isFinite(config.buildOrder)) {
+    return config.buildOrder;
+  }
+  if (config.buildTier) return BUILD_TIER_ORDER[config.buildTier];
+  return inferredGraphBuildOrder(name);
+}
+
+export function orderedGraphEntries(
+  entries: Array<[string, GraphConfig]>,
+): Array<[string, GraphConfig]> {
+  return [...entries].sort(([leftName, leftConfig], [rightName, rightConfig]) => {
+    const orderCmp = graphBuildOrder(leftName, leftConfig) - graphBuildOrder(rightName, rightConfig);
+    if (orderCmp !== 0) return orderCmp;
+    return leftName.localeCompare(rightName);
+  });
 }
 
 /**
@@ -596,7 +870,7 @@ function parseGraphDef(name: string, graphDef: Record<string, unknown>): GraphCo
  * @implements #726
  */
 export function loadModuleGraphConfigs(cwd: string, diagnostics?: GraphConfigWarning[]): string[] {
-  const registryPath = `${cwd}/.aiwg/frameworks/registry.json`;
+  const registryPath = projectAiwgPath(cwd, 'frameworks', 'registry.json');
   const loaded: string[] = [];
 
   try {
@@ -688,24 +962,38 @@ export function loadModuleGraphConfigs(cwd: string, diagnostics?: GraphConfigWar
  * @implements #426 #726
  */
 export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarning[]): string[] {
+  // Built-ins are immutable in index.graphs, but codebase roots/extensions may
+  // be adapted through the explicitly bounded graphOverrides contract (#2123).
+  // Reset on every project load so a prior cwd cannot leak its override or
+  // detected Python package roots into a later build in the same process.
+  GRAPH_CONFIGS.codebase = detectPythonCodebaseConfig(cwd, freshBuiltinGraphConfig('codebase'));
+  projectGraphBackend = undefined;
+
   // Load module-declared graphs first (frameworks/addons)
   const moduleLoaded = loadModuleGraphConfigs(cwd, diagnostics);
   const loaded: string[] = [...moduleLoaded];
 
   // Resolve the operator's index.graphs source. Canonical home is
-  // .aiwg/aiwg.config (JSON, #1491); the legacy .aiwg/config.yaml is a
+  // the configured artifact root's aiwg.config (JSON, #1491); the legacy
+  // config.yaml is a
   // deprecated fallback so un-migrated corpora keep working.
   let graphs: Record<string, unknown> | undefined;
+  let graphOverrides: Record<string, unknown> | undefined;
   let fromDeprecatedYaml = false;
+  let canonicalIndexPresent = false;
 
   // (a) Canonical: .aiwg/aiwg.config (JSON).
   try {
-    const aiwgConfigPath = `${cwd}/.aiwg/aiwg.config`;
+    const aiwgConfigPath = projectControlPath(cwd, 'aiwg.config');
     if (fs.existsSync(aiwgConfigPath)) {
       const parsed = JSON.parse(fs.readFileSync(aiwgConfigPath, 'utf-8')) as Record<string, unknown>;
       const idx = parsed.index as Record<string, unknown> | undefined;
+      canonicalIndexPresent = idx !== undefined;
+      if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
       const g = idx?.graphs as Record<string, unknown> | undefined;
       if (g && typeof g === 'object') graphs = g;
+      const overrides = idx?.graphOverrides as Record<string, unknown> | undefined;
+      if (overrides && typeof overrides === 'object') graphOverrides = overrides;
     }
   } catch {
     // #1624 — surface a malformed aiwg.config rather than dropping the whole
@@ -718,15 +1006,21 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   }
 
   // (b) Fallback: legacy .aiwg/config.yaml.
-  if (!graphs) {
+  if (!canonicalIndexPresent && !graphs && !graphOverrides) {
     try {
-      const configPath = `${cwd}/.aiwg/config.yaml`;
+      const configPath = projectAiwgPath(cwd, 'config.yaml');
       if (fs.existsSync(configPath)) {
         const config = loadYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> | null;
         const idx = config?.index as Record<string, unknown> | undefined;
+        if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
         const g = idx?.graphs as Record<string, unknown> | undefined;
         if (g && typeof g === 'object') {
           graphs = g;
+          fromDeprecatedYaml = true;
+        }
+        const overrides = idx?.graphOverrides as Record<string, unknown> | undefined;
+        if (overrides && typeof overrides === 'object') {
+          graphOverrides = overrides;
           fromDeprecatedYaml = true;
         }
       }
@@ -735,12 +1029,20 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
     }
   }
 
+  const codebaseOverride = graphOverrides?.codebase;
+  if (codebaseOverride && typeof codebaseOverride === 'object' && !Array.isArray(codebaseOverride)) {
+    GRAPH_CONFIGS.codebase = applyBuiltinGraphOverride(
+      GRAPH_CONFIGS.codebase,
+      codebaseOverride as BuiltinGraphOverride,
+    );
+  }
+
   if (!graphs) return loaded;
 
   if (fromDeprecatedYaml && !yamlIndexDeprecationWarned) {
     yamlIndexDeprecationWarned = true;
     process.stderr.write(
-      '[aiwg index] note: index.graphs in .aiwg/config.yaml is deprecated — move the index block into .aiwg/aiwg.config (see docs/cli-reference.md, #1491).\n',
+      '[aiwg index] note: index.graphs in .aiwg/config.yaml is deprecated — move the index block into .aiwg/aiwg.config (see docs/cli/reference.md, #1491).\n',
     );
   }
 
@@ -863,10 +1165,35 @@ export function getGraphIndexDir(cwd: string, graphType: GraphType): string {
   const config = GRAPH_CONFIGS[graphType];
   if (graphType === 'framework' || config?.shared) {
     // Shared across projects — XDG data directory
-    const xdgData = process.env.XDG_DATA_HOME ?? `${process.env.HOME}/.local/share`;
-    return `${xdgData}/aiwg/index/${graphType}`;
+    const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
+    return path.join(xdgData, 'aiwg', 'index', graphType);
   }
-  return `${cwd}/.aiwg/.index/${graphType}`;
+  return path.join(getProjectIndexRoot(cwd), graphType);
+}
+
+/**
+ * Resolve the project-local index root for the configured AIWG artifact dir.
+ */
+export function getProjectIndexRoot(cwd: string): string {
+  return path.join(resolveProjectAiwgDir(cwd), '.index');
+}
+
+/**
+ * Resolve graph scan directories using the same AIWG artifact root contract as
+ * runtime config/storage. This keeps built-in project graph paths virtualized
+ * as `.aiwg/...` while allowing the physical directory to be renamed or moved.
+ */
+export function resolveGraphScanDir(cwd: string, scanDir: string): string {
+  if (scanDir === '~') return process.env.HOME ?? scanDir;
+  if (scanDir.startsWith('~/')) {
+    return path.join(process.env.HOME ?? '', scanDir.slice(2));
+  }
+  if (path.isAbsolute(scanDir)) return scanDir;
+  if (scanDir === DEFAULT_PROJECT_AIWG_DIR) return resolveProjectAiwgDir(cwd);
+  if (scanDir.startsWith(`${DEFAULT_PROJECT_AIWG_DIR}/`)) {
+    return path.join(resolveProjectAiwgDir(cwd), scanDir.slice(DEFAULT_PROJECT_AIWG_DIR.length + 1));
+  }
+  return path.join(cwd, scanDir);
 }
 
 /**

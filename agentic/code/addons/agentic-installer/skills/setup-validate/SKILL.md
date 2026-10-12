@@ -29,7 +29,7 @@ Path to schema file. Default: auto-located from AIWG installation.
 Fail on warnings in addition to errors.
 
 ### --fix (optional)
-Auto-fix simple issues (missing `id`, missing `depends_on` on sequential steps).
+Reserved for future safe autofixes. The current CLI validates and reports only.
 
 ## Validation Checks
 
@@ -40,6 +40,7 @@ Auto-fix simple issues (missing `id`, missing `depends_on` on sequential steps).
 - All step types are one of: `script`, `detect`, `ask`, `verify`, `agentic`, `platform-route`, `chain`, `os-config`
 - Param types are one of: `string`, `path`, `boolean`, `integer`, `choice`
 - `metadata.install_type` must be one of: `user`, `developer`, `ci` (if present)
+- `metadata.execution_mode` must be `deterministic` or `provider-orchestrated` (if present)
 
 ### Reference Checks
 - Every `script:` path exists relative to the manifest directory
@@ -76,7 +77,8 @@ These checks apply only to manifests with `install_type: developer`:
 - Warn if a script template is used directly without customization (template placeholder text detected)
 
 ### Agentic Step Audit
-- Warn on any `type: agentic` step — print a reminder that agentic steps are exception handling only
+- Warn on any `type: agentic` step in a deterministic manifest — print a reminder that agentic steps are exception handling only
+- Do not warn merely because a provider-orchestrated manifest uses agentic steps
 - Error if `type: agentic` step has no `instruction` field
 
 ## Output Format
@@ -122,17 +124,8 @@ Result: INVALID — fix errors before running
 
 ## Auto-fix (--fix)
 
-When `--fix` is passed, the skill will:
-1. Add `id` fields to any steps missing them (sequential: `step-1`, `step-2`, ...)
-2. Add obvious `depends_on` for sequential steps (each step depends on the previous)
-3. Print a diff of changes made
-
-It will NOT:
-- Change step types
-- Add or remove scripts
-- Modify param definitions
-- Add or remove `interactive_required` flags
-- Add or remove `os_config` entries
+`--fix` is reserved for future safe autofixes. The current agent-facing CLI
+validates and reports only; it does not mutate manifests.
 
 ## References
 

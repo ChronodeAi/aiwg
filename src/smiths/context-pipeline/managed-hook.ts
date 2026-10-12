@@ -13,18 +13,19 @@
  */
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { buildProviderBootstrapBlock } from './workspace-context.js';
+import { dominantLineEnding, withLineEnding } from './line-endings.js';
+import { assertSafeContextFile } from './context-file-safety.js';
 
 export const CONTEXT_HOOK_START = '<!-- AIWG:context-hook:start -->';
 export const CONTEXT_HOOK_END = '<!-- AIWG:context-hook:end -->';
 
-/** The managed block — points the provider's main context file at AIWG.md. */
-export function buildContextHookBlock(): string {
+/** The managed block — loads canonical workspace context before framework context. */
+export function buildContextHookBlock(provider = 'codex'): string {
   return [
     CONTEXT_HOOK_START,
     '',
-    '# AIWG',
-    '',
-    '@AIWG.md',
+    buildProviderBootstrapBlock(provider),
     '',
     '<!--',
     '  This block is managed by `aiwg regenerate` and `aiwg use`.',
@@ -43,18 +44,21 @@ export interface ManagedHookResult {
   warnings: string[];
 }
 
-/** Does the file already carry the AIWG context hook (either the marker block or a bare @AIWG.md)? */
+/** Does the file already carry the canonical context hook? */
 export function hasContextHook(content: string): boolean {
-  return content.includes(CONTEXT_HOOK_START) || /^[ \t]*@AIWG\.md[ \t]*$/m.test(content);
+  return content.includes(CONTEXT_HOOK_START) || (
+    /^[ \t]*@WORKSPACE\.md[ \t]*$/m.test(content) && /^[ \t]*@AIWG\.md[ \t]*$/m.test(content)
+  );
 }
 
 /**
  * Ensure `filePath` contains the AIWG `@AIWG.md` hook block, preserving all
  * operator-authored content. Additive by default (no `--force` needed).
  */
-export async function ensureManagedHook(filePath: string, opts: { force?: boolean } = {}): Promise<ManagedHookResult> {
+export async function ensureManagedHook(filePath: string, opts: { force?: boolean; provider?: string } = {}): Promise<ManagedHookResult> {
+  await assertSafeContextFile(filePath);
   const base = path.basename(filePath);
-  const block = buildContextHookBlock();
+  let block = buildContextHookBlock(opts.provider);
   const result: ManagedHookResult = { path: filePath, action: 'skipped', warnings: [] };
 
   let existing: string;
@@ -69,8 +73,11 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
     throw err;
   }
 
-  // Already has a bare @AIWG.md include (operator wired it by hand) — nothing to do.
-  if (!existing.includes(CONTEXT_HOOK_START) && /^[ \t]*@AIWG\.md[ \t]*$/m.test(existing)) {
+  const lineEnding = dominantLineEnding(existing);
+  block = withLineEnding(block, lineEnding);
+
+  // Already has both bare includes (operator wired them by hand) — nothing to do.
+  if (!existing.includes(CONTEXT_HOOK_START) && /^[ \t]*@WORKSPACE\.md[ \t]*$/m.test(existing) && /^[ \t]*@AIWG\.md[ \t]*$/m.test(existing)) {
     result.action = 'unchanged';
     return result;
   }
@@ -80,8 +87,8 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
 
   // No managed block — append it to the end, preserving everything above.
   if (s === -1 && e === -1) {
-    const trimmed = existing.replace(/\n+$/, '\n');
-    await fs.writeFile(filePath, `${trimmed}\n${block}\n`, 'utf8');
+    const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
+    await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -89,8 +96,8 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
   // Malformed (one marker only) — repair only with --force to avoid clobbering.
   if (s === -1 || e === -1) {
     if (opts.force) {
-      const trimmed = existing.replace(/\n+$/, '\n');
-      await fs.writeFile(filePath, `${trimmed}\n${block}\n`, 'utf8');
+      const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
+      await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
       result.action = 'inserted';
       return result;
     }

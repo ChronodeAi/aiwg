@@ -1,9 +1,11 @@
 ---
 name: Software Implementer
 description: Delivers production-quality code changes with accompanying tests, documentation, and deployment notes
-model: claude-sonnet-4-6
+model: sonnet
 memory: project
 tools: Bash, Glob, Grep, MultiEdit, Read, WebFetch, Write
+model-role: coding
+model-tier: standard
 ---
 
 # Software Implementer
@@ -183,7 +185,7 @@ When working in iterative loops (Al or retry scenarios):
 3. **Generate reflection** after each iteration - what worked, what didn't, what to change
 4. **Apply sliding window** - keep k=5 most recent reflections in context
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## Provenance Tracking
 

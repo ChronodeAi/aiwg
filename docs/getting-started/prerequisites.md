@@ -1,5 +1,8 @@
 # Prerequisites
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Before installing AIWG, ensure you have the following requirements.
 
 ## Required
@@ -22,16 +25,11 @@ Contributor and release workflows have stricter npm requirements:
 | Change dependencies or regenerate lockfiles | npm 11.5+ | Required for the committed `min-release-age=7` gate |
 | Publish AIWG releases | Node 24 in the release workflow | Current npm 11.x plus npm trusted-publishing support |
 
-**Installation options:**
-
-| Platform | Command |
-|----------|---------|
-| **macOS (recommended)** | `nvm install 24 && nvm use 24` |
-| **macOS (Homebrew)** | `brew install node@24` |
-| **Ubuntu/Debian** | `curl -fsSL https://deb.nodesource.com/setup_24.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
-| **Fedora/RHEL** | `curl -fsSL https://rpm.nodesource.com/setup_24.x \| sudo bash - && sudo dnf install -y nodejs` |
-| **NVM (All platforms)** | `nvm install 24 && nvm use 24` |
-| **Windows** | Use WSL2, then follow Ubuntu instructions |
+Reuse a healthy Node version manager if one is already installed. Do not stack
+`nvm`, `fnm`, `asdf`, `mise`, Volta, or another manager. If no manager exists,
+the new-user defaults are `nvm-sh` on macOS, Linux, and WSL, and `nvm-windows`
+on native Windows. See [Install Node.js and npm Safely](install-node.md) for
+the platform-specific checks and official installation sources.
 
 macOS users should start with the [macOS Install Guide](macos-install.md).
 npm's own documentation recommends a Node version manager on macOS to avoid
@@ -47,27 +45,29 @@ global-package permission errors such as `EACCES` under `/usr/local/lib/node_mod
 | **Cursor** | IDE-native rules | [cursor.sh](https://cursor.sh/) |
 | **GitHub Copilot** | GitHub integration | VS Code extension |
 
-**Use multiple platforms for best results:**
+After Node and an AI platform are available, continue with
+[Install, Connect, and Verify](install-connect-verify.md). Teams that use more
+than one provider can repeat the deployment step for each provider:
 
 ```bash
-aiwg use sdlc                      # Claude Code (default)
-aiwg use sdlc --provider warp      # Warp Terminal
-aiwg use sdlc --provider factory   # Factory AI
-aiwg use sdlc --provider cursor    # Cursor IDE
+aiwg use all --provider claude
+aiwg use all --provider warp
+aiwg use all --provider factory
+aiwg use all --provider cursor
 ```
 
-## Platform Support Status
+## Provider Deployment Surface
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **Claude Code** | ✅ Tested & Validated | Multi-agent orchestration, native plugins |
-| **GitHub Copilot** | ✅ Tested & Validated | copilot-instructions.md |
-| **Warp Terminal** | ✅ Tested & Validated | Terminal-native workflows |
-| **Factory AI** | ✅ Tested & Validated | Native droid format, AGENTS.md |
-| **OpenCode** | ✅ Tested & Validated | AGENTS.md |
-| **Cursor** | ✅ Tested & Validated | Native rules format, AGENTS.md |
-| **OpenAI/Codex** | ✅ Tested & Validated | Native prompts format, AGENTS.md |
-| **Windsurf** | 🟡 Experimental | Should work, not validated |
+| Platform | Notes |
+|----------|-------|
+| **Claude Code** | Multi-agent orchestration and native plugin paths |
+| **GitHub Copilot** | `copilot-instructions.md` and GitHub-facing context |
+| **Warp Terminal** | Terminal-native workflows |
+| **Factory AI** | Native droid format and `AGENTS.md` |
+| **OpenCode** | `AGENTS.md` and OpenCode paths |
+| **Cursor** | Native rules format and `AGENTS.md` |
+| **OpenAI/Codex** | Native prompts format and `AGENTS.md` |
+| **Devin Desktop** | Uses the `.windsurf/` compatibility adapter; select with `devin` |
 
 ## Operating Systems
 
@@ -76,7 +76,7 @@ aiwg use sdlc --provider cursor    # Cursor IDE
 | **macOS** (Intel + Apple Silicon) | ✅ Supported |
 | **Linux** (Ubuntu, Debian, Fedora, Arch, RHEL) | ✅ Supported |
 | **WSL2** (Windows Subsystem for Linux) | ✅ Supported |
-| **Native Windows** (PowerShell/CMD) | ❌ Not supported — Use WSL2 |
+| **Native Windows** (PowerShell) | ✅ Supported |
 
 ## Optional (Recommended)
 
@@ -110,4 +110,4 @@ factory --version 2>/dev/null && echo "✅ Factory AI" || echo "ℹ️ Factory A
 git --version && echo "✅ Git" || echo "ℹ️ Git optional"
 ```
 
-**All checks passed?** Continue to [Quick Start](../quickstart.md)
+**All checks passed?** Continue to [Install, Connect, and Verify](install-connect-verify.md).

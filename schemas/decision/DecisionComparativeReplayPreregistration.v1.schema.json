@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayPreregistration.v1.schema.json",
+  "title": "DecisionComparativeReplayPreregistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "mode",
+    "corpusDigest",
+    "goldDigest",
+    "splitDigest",
+    "comparatorVersion",
+    "frozenAt",
+    "minimumTestRoots",
+    "minimumSliceRoots",
+    "levelBps",
+    "pairedMethod",
+    "errorMethod",
+    "nonInferiorityMarginBps",
+    "maxErrorUpperBps",
+    "maxSliceErrorUpperBps",
+    "maxBackendCalls",
+    "maxTokens",
+    "maxCostMicros",
+    "requireExactReproduction",
+    "digest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-preregistration/v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "const": "shadow"
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "goldDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "splitDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "comparatorVersion": {
+      "const": "policy-replay-reference-v1"
+    },
+    "frozenAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "minimumTestRoots": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 6000
+    },
+    "minimumSliceRoots": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1500
+    },
+    "levelBps": {
+      "type": "integer",
+      "minimum": 5001,
+      "maximum": 9998
+    },
+    "pairedMethod": {
+      "const": "newcombe-10"
+    },
+    "errorMethod": {
+      "const": "wilson"
+    },
+    "nonInferiorityMarginBps": {
+      "type": "integer",
+      "minimum": -10000,
+      "maximum": 0
+    },
+    "maxErrorUpperBps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "maxSliceErrorUpperBps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "maxBackendCalls": {
+      "const": 0
+    },
+    "maxTokens": {
+      "const": 0
+    },
+    "maxCostMicros": {
+      "const": 0
+    },
+    "requireExactReproduction": {
+      "const": true
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

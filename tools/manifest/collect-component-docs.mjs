@@ -13,8 +13,15 @@
  *   node tools/manifest/collect-component-docs.mjs [--dry-run] [--verbose]
  *
  * Options:
- *   --dry-run   Show what would be copied/added without writing anything
- *   --verbose   Print every file checked, not just changes
+ *   --dry-run          Show what would be copied/added without writing anything
+ *   --verbose          Print every file checked, not just changes
+ *   --allow-unresolved Copy files whose relative links cannot be rewritten
+ *
+ * Relative links are rewritten as part of the copy (#2519): a link is correct
+ * where it lives in the source tree, and the destination sits at a different
+ * depth, so the transform belongs to whatever performs the copy. A link whose
+ * target lands outside the collected set is a collection error, not a silent
+ * break — the file is skipped and reported unless --allow-unresolved is set.
  */
 
 import fs from 'fs';
@@ -30,6 +37,10 @@ const AGENTIC = path.join(ROOT, 'agentic', 'code');
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const VERBOSE = args.includes('--verbose');
+// Collect a file whose links cannot be re-expressed in the destination tree.
+// Off by default: the docsite build runs with strictLinks, so a silent break
+// here turns a green build red at release time (#2519).
+const ALLOW_UNRESOLVED = args.includes('--allow-unresolved');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,6 +100,182 @@ function discoverComponents() {
   }
 
   return components;
+}
+
+// ---------------------------------------------------------------------------
+// Relative link rewriting (#2519)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inline links/images `[text](target)` and reference definitions `[id]: target`.
+ * Angle-bracket targets `[text](<a b.md>)` are matched so paths with spaces survive.
+ */
+// `[^\]]*` spans newlines on purpose — markdown link text may wrap across lines.
+const INLINE_LINK_RE = /(!?\[[^\]]*\]\()(<[^>]*>|[^()\s]*)((?:\s+"[^"]*")?\))/g;
+const REF_DEF_RE = /^([ \t]{0,3}\[[^\]]+\]:[ \t]*)(<[^>]*>|\S+)([^\n]*)$/gm;
+
+/**
+ * Canonical browse URL for repo files the docsite does not publish.
+ *
+ * Matches what the sibling public-source builder emits and what the previously
+ * hand-patched collected docs use, so a link the docsite cannot resolve becomes
+ * a working link to the source instead of a broken route.
+ */
+const SOURCE_BASE_URL = 'https://github.com/jmagly/aiwg';
+
+/** Targets that are not repo-relative paths and must be left alone. */
+function isNonRelativeTarget(target) {
+  if (!target) return true;
+  if (target.startsWith('#')) return true;               // same-page anchor
+  if (target.startsWith('/')) return true;               // site-absolute
+  if (target.startsWith('//')) return true;              // protocol-relative
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target);       // http:, mailto:, data:, ...
+}
+
+/** Split "path#frag" / "path?q" into its path and the trailing suffix. */
+function splitTarget(target) {
+  const match = target.match(/^([^#?]*)([#?].*)?$/);
+  return { pathPart: match?.[1] ?? target, suffix: match?.[2] ?? '' };
+}
+
+/**
+ * Re-express one relative target for the destination location.
+ *
+ * Three outcomes:
+ *
+ * 1. The target is collected, or already lives under docs/ — re-express it
+ *    relative to the destination. Preferred: the link stays inside the site.
+ * 2. The target exists in the repo but the docsite does not publish it — point
+ *    at the canonical source URL. The reader still reaches the file.
+ * 3. The target does not resolve at source but does resolve from the
+ *    destination — it was authored against the collected layout. Leave it.
+ * 4. Nothing resolves — the tool cannot invent a destination. Report it so the
+ *    source link is fixed deliberately.
+ *
+ * @returns {{ ok: true, target: string, rewroteToSource?: boolean }
+ *          | { ok: false, target: string, reason: string }}
+ */
+function remapTarget(rawTarget, srcPath, destPath, collectedMap, collectedDests) {
+  const bare = rawTarget.startsWith('<') && rawTarget.endsWith('>')
+    ? rawTarget.slice(1, -1)
+    : rawTarget;
+  if (isNonRelativeTarget(bare)) return { ok: true, target: rawTarget };
+
+  const { pathPart, suffix } = splitTarget(bare);
+  if (!pathPart) return { ok: true, target: rawTarget };
+
+  const absTarget = path.resolve(path.dirname(srcPath), decodeURI(pathPart));
+
+  // A target that is itself collected moves with us; one already inside docs/
+  // is reachable from the destination. Anything else leaves the collected set.
+  let resolvedDest = collectedMap.get(absTarget);
+  if (!resolvedDest) {
+    const insideDocs = absTarget === DOCS || absTarget.startsWith(DOCS + path.sep);
+    if (insideDocs && fs.existsSync(absTarget)) resolvedDest = absTarget;
+  }
+  if (!resolvedDest) {
+    // Some links were authored against the collected layout rather than the
+    // source layout — they are wrong at source and right after the copy. Leave
+    // those untouched instead of "fixing" a link that already works.
+    const fromDest = path.resolve(path.dirname(destPath), decodeURI(pathPart));
+    const destResolves = collectedDests.has(fromDest)
+      || ((fromDest === DOCS || fromDest.startsWith(DOCS + path.sep)) && fs.existsSync(fromDest));
+    if (destResolves) return { ok: true, target: rawTarget };
+
+    if (!fs.existsSync(absTarget)) return { ok: false, target: bare, reason: 'unresolved-at-source' };
+    const insideRepo = absTarget.startsWith(ROOT + path.sep);
+    if (!insideRepo) return { ok: false, target: bare, reason: 'outside-repo' };
+    // Not published by the docsite, but it does exist — link to the source.
+    const kind = fs.statSync(absTarget).isDirectory() ? 'tree' : 'blob';
+    const repoRel = path.relative(ROOT, absTarget).split(path.sep).map(encodeURIComponent).join('/');
+    const url = `${SOURCE_BASE_URL}/${kind}/main/${repoRel}${suffix}`;
+    return { ok: true, target: rawTarget.startsWith('<') ? `<${url}>` : url, rewroteToSource: true };
+  }
+
+  const rel = path.relative(path.dirname(destPath), resolvedDest).split(path.sep).join('/');
+  // Preserve the original spelling when the path is unchanged — re-encoding an
+  // already-correct link is pure diff noise across every collected file.
+  if (rel === pathPart.replace(/^\.\//, '')) return { ok: true, target: rawTarget };
+  const encoded = rel.split('/').map(encodeURIComponent).join('/');
+  const next = `${encoded}${suffix}`;
+  return { ok: true, target: rawTarget.startsWith('<') ? `<${next}>` : next };
+}
+
+/**
+ * Byte ranges covered by fenced code blocks. A match starting inside one is a
+ * markdown sample, not a link the docsite will resolve.
+ */
+export function fencedRanges(text) {
+  const ranges = [];
+  let offset = 0;
+  let start = -1;
+  let marker = '';
+  for (const line of text.split('\n')) {
+    const fence = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (start < 0) { start = offset; marker = fence[1][0]; }
+      else if (fence[1][0] === marker) {
+        ranges.push([start, offset + line.length]);
+        start = -1;
+        marker = '';
+      }
+    }
+    offset += line.length + 1;
+  }
+  if (start >= 0) ranges.push([start, text.length]);
+  return ranges;
+}
+
+/**
+ * Rewrite every relative link in a markdown document for its collected location.
+ *
+ * Fenced code blocks are left untouched — a markdown sample inside a fence is
+ * illustrative text, not a link the docsite will resolve.
+ *
+ * @returns {{ content: string, unresolved: Array<{ target: string, reason: string }>,
+ *             sourceLinks: string[] }}
+ */
+function rewriteRelativeLinks(content, srcPath, destPath, collectedMap, collectedDests) {
+  const unresolved = [];
+  const sourceLinks = [];
+
+  const apply = (text, regex, build) => {
+    // Recomputed per pass: an earlier pass rewrites targets and shifts every
+    // later offset, so ranges measured against the previous text would
+    // misclassify links near a fence.
+    const fenced = fencedRanges(text);
+    const inFence = (at) => fenced.some(([start, end]) => at >= start && at < end);
+    regex.lastIndex = 0;
+    return text.replace(regex, (...groups) => {
+      const match = groups[0];
+      const at = groups[groups.length - 2];
+      if (inFence(at)) return match;
+      const rawTarget = groups[2];
+      const result = remapTarget(rawTarget, srcPath, destPath, collectedMap, collectedDests);
+      if (!result.ok) {
+        unresolved.push({ target: result.target, reason: result.reason });
+        return match;
+      }
+      if (result.rewroteToSource) sourceLinks.push(rawTarget);
+      return build(groups, result.target);
+    });
+  };
+
+  let next = apply(content, REF_DEF_RE, (groups, target) => `${groups[1]}${target}${groups[3]}`);
+  next = apply(next, INLINE_LINK_RE, (groups, target) => `${groups[1]}${target}${groups[3]}`);
+
+  return { content: next, unresolved, sourceLinks };
+}
+
+/** Map every source doc that will be collected to its destination path. */
+function buildCollectedMap(components) {
+  const map = new Map();
+  for (const { kind, name, docsDir, files } of components) {
+    for (const { relPath } of files) {
+      map.set(path.join(docsDir, relPath), path.join(DOCS, kind, name, relPath));
+    }
+  }
+  return map;
 }
 
 /** Ensure a directory exists (no-op if already present). */
@@ -184,7 +371,7 @@ function fileSection(kind, name, relPath, docsDestDir) {
     'rules-reference': 'Rules Reference',
     // Ralph
     'cross-loop-learning': 'Cross-Loop Learning',
-    'when-to-use-ralph': 'When to Use Ralph',
+    'when-to-use-agent-loop': 'When to Use the Agent Loop',
     'agent-persistence-integration': 'Agent Persistence Integration',
     'executable-feedback-guide': 'Executable Feedback Guide',
     'reflection-memory-guide': 'Reflection & Memory Guide',
@@ -262,6 +449,12 @@ function main() {
   const newOrderEntries = [];
   let copied = 0;
   let skipped = 0;
+  /** Files whose links have no resolvable target — reported, not silently broken (#2519). */
+  const unresolvedReports = [];
+  let rewritten = 0;
+  let sourceLinked = 0;
+  const collectedMap = buildCollectedMap(components);
+  const collectedDests = new Set(collectedMap.values());
 
   for (const { kind, name, docsDir, files } of components) {
     const destDir = path.join(DOCS, kind, name);
@@ -287,6 +480,22 @@ function main() {
       const dest = path.join(destDir, relPath);
       const fileId = `${kind}/${name}/${relPath.replace(/\.md$/, '')}`;
 
+      // Rewrite relative links for the destination depth before anything is
+      // written. A link that cannot be re-expressed means the target is not in
+      // the collected set, which the docsite's strictLinks build would reject —
+      // so skip the file and report it rather than emit a known-broken page.
+      const source = fs.readFileSync(src, 'utf8');
+      const { content, unresolved, sourceLinks } = rewriteRelativeLinks(source, src, dest, collectedMap, collectedDests);
+      if (sourceLinks.length > 0) sourceLinked += sourceLinks.length;
+      if (unresolved.length > 0) {
+        unresolvedReports.push({ src: path.relative(ROOT, src), links: unresolved });
+        if (!ALLOW_UNRESOLVED) {
+          log(`  ! skipped (${unresolved.length} link(s) with no resolvable target): ${relPath}`);
+          continue;
+        }
+      }
+      if (content !== source) rewritten++;
+
       // Ensure intermediate subdirectory group sections exist for nested files
       const relDir = path.dirname(relPath);
       if (relDir !== '.') {
@@ -308,10 +517,10 @@ function main() {
         }
       }
 
-      // Copy the file
+      // Copy the file (with rewritten links)
       if (!DRY_RUN) {
         ensureDir(path.dirname(dest));
-        fs.copyFileSync(src, dest);
+        fs.writeFileSync(dest, content, 'utf8');
         verbose(`  copied: ${kind}/${name}/${relPath}`);
         copied++;
       } else {
@@ -349,6 +558,8 @@ function main() {
   }
 
   log(`\nDone: ${copied} files ${DRY_RUN ? 'would be ' : ''}copied, ${skipped} sections already present.`);
+  if (rewritten > 0) log(`Rewrote relative links in ${rewritten} file(s) for the collected layout.`);
+  if (sourceLinked > 0) log(`Pointed ${sourceLinked} link(s) at the canonical source — the docsite does not publish those targets.`);
 
   // Emit a docs-sources.json for reference
   if (!DRY_RUN) {
@@ -363,6 +574,29 @@ function main() {
     fs.writeFileSync(sourcesPath, JSON.stringify(sources, null, 2) + '\n', 'utf8');
     log(`Wrote docs/docs-sources.json (${sources.length} components)`);
   }
+
+  if (unresolvedReports.length > 0) {
+    const REASON_LABEL = {
+      'unresolved-at-source': 'does not resolve in the source tree either — fix the source link',
+      'outside-repo': 'resolves outside the repository',
+    };
+    const total = unresolvedReports.reduce((sum, item) => sum + item.links.length, 0);
+    const verb = ALLOW_UNRESOLVED ? 'collected anyway' : 'not collected';
+    console.error(`\n${unresolvedReports.length} file(s) ${verb} — ${total} link(s) have no resolvable target:`);
+    for (const item of unresolvedReports) {
+      console.error(`  ${item.src}`);
+      for (const link of item.links) console.error(`    -> ${link.target}  (${REASON_LABEL[link.reason] ?? link.reason})`);
+    }
+    console.error('\nCollection cannot invent a destination for these. Fix the link in the source');
+    console.error('doc, or re-run with --allow-unresolved to collect it anyway (the docsite build');
+    console.error('enforces strictLinks and will fail on it). See #2519.');
+    if (!ALLOW_UNRESOLVED) process.exitCode = 1;
+  }
 }
 
-main();
+// Guarded so the pure helpers can be imported by tests without running a collect.
+const invokedDirectly = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) main();
+
+export { rewriteRelativeLinks, remapTarget, buildCollectedMap, isNonRelativeTarget };

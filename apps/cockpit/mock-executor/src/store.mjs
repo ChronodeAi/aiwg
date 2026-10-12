@@ -4,7 +4,7 @@
 
 export const DEFAULT_INSTANCE = process.env.MOCK_INSTANCE_ID ?? '550e8400-e29b-41d4-a716-446655440000';
 
-/** @typedef {{ instance_id: string, runtime: string, loadout: string, state: 'running'|'stopped'|'provisioning', created_at: string, tenant_id: string, host_daemon?: object, transport?: object, launch_context?: object, session_backends?: object[] }} Instance */
+/** @typedef {{ instance_id: string, runtime: string, loadout: string, state: 'running'|'stopped'|'provisioning', created_at: string, tenant_id: string, host_daemon?: object, transport?: object, launch_context?: object, storage?: object, lifecycle?: object, session_backends?: object[] }} Instance */
 
 /** @type {Map<string, Instance>} */
 export const instances = new Map([
@@ -16,7 +16,9 @@ export const instances = new Map([
     created_at: '2026-06-13T12:00:00Z',
     tenant_id: 'default',
     transport: { mode: 'loopback-rest', trust: 'local', source: 'agentic-sandbox admin', evidence: '127.0.0.1 REST control plane' },
-    launch_context: { cwd: '/home/roctinam/dev/aiwg', loadout: 'agentic-dev', runtime_kind: 'container', selected_tier: 'container' },
+    launch_context: { cwd: '/home/roctinam/dev/aiwg', loadout: 'agentic-dev', runtime_kind: 'container', selected_tier: 'container', name: 'agentic-default' },
+    storage: { persistent: true, delete_on_destroy: true, scope: 'inbox', reason: 'Container workspace persists until sandbox destroy.' },
+    lifecycle: { destroy: { delegated: true }, reconnect: { delegated: false, reason: 'management reconnect endpoint not advertised by this mock' } },
     session_backends: [
       { mode: 'direct', backend: 'native', replay: true, keyframe: true, drive: true, observe: true, available: true },
       { mode: 'managed', backend: 'tmux', replay: true, keyframe: true, drive: true, observe: true, available: true },
@@ -25,6 +27,13 @@ export const instances = new Map([
   ['7c1f0b2a-3d4e-4f5a-9b8c-1d2e3f4a5b6c', {
     instance_id: '7c1f0b2a-3d4e-4f5a-9b8c-1d2e3f4a5b6c',
     runtime: 'vm',
+    provider: 'cloud-hypervisor',
+    capabilities: [
+      { id: 'instance.snapshot', label: 'Snapshot' },
+      { id: 'instance.restore', label: 'Restore' },
+      { id: 'instance.fork', label: 'Fork' },
+      { id: 'warm_pool.manage', label: 'Warm pools' },
+    ],
     loadout: 'security-audit',
     state: 'running',
     created_at: '2026-06-13T12:05:00Z',
@@ -74,10 +83,47 @@ export function getInstance(id) {
 // Loadout catalog (#1641) — the full set the operator can pick from at session start,
 // a superset of the loadouts the seeded instances happen to be running.
 export const loadouts = [
-  { id: 'agentic-dev', label: 'Agentic Dev', description: 'General coding agent loadout', runtimes: ['container', 'host', 'vm'] },
+  {
+    id: 'agentic-dev',
+    label: 'Agentic Dev',
+    description: 'General coding agent loadout',
+    runtimes: ['container', 'host', 'vm'],
+    runtime_options: { kind: 'vm', provider: 'cloud-hypervisor', launch_strategy: { mode: 'cold' } },
+    compatibility: [
+      { runtime_kind: 'vm', provider: 'cloud-hypervisor', eligible: true, launch_strategy: { mode: 'cold' } },
+      { runtime_kind: 'vm', provider: 'libvirt', eligible: true, launch_strategy: { mode: 'cold' } },
+    ],
+  },
   { id: 'security-audit', label: 'Security Audit', description: 'Hardened audit toolchain', runtimes: ['vm'] },
   { id: 'host-tools', label: 'Host Tools', description: 'Native host operations', runtimes: ['host'] },
   { id: 'research', label: 'Research', description: 'Long-context research corpus', runtimes: ['container', 'vm'] },
+  {
+    id: 'gpu-vfio',
+    label: 'GPU VFIO',
+    description: 'GPU-backed VM that cold-boots only',
+    runtimes: ['vm'],
+    runtime_options: {
+      kind: 'vm',
+      provider: 'cloud-hypervisor',
+      required_capabilities: ['device.vfio'],
+      excluded_capabilities: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+      launch_strategy: { mode: 'cold' },
+      constraints: { allow_vfio_fast_start: false, fallback_mode: 'fail' },
+    },
+    compatibility: [{
+      runtime_kind: 'vm',
+      provider: 'cloud-hypervisor',
+      eligible: true,
+      required_capabilities: ['device.vfio'],
+      excluded_capabilities: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+      constraints: [{
+        capability: 'device.vfio',
+        excludes: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+        reason: 'VFIO-backed VMs cannot safely reuse memory state.',
+      }],
+      launch_strategy: { mode: 'cold' },
+    }],
+  },
   { id: 'minimal', label: 'Minimal', description: 'Bare shell, no framework deploy', runtimes: ['container', 'host', 'vm', 'wasm-edge'] },
 ];
 export function listLoadouts() {

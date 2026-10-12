@@ -7,8 +7,9 @@ import YAML from 'yaml';
 export const DEFAULT_SKILL_CEILING_BYTES = 24 * 1024;
 export const DEFAULT_AGENT_CEILING_BYTES = 16 * 1024;
 
-// Standard Claude Code Sonnet context window (claude-sonnet-4-6). The 1M window is a
-// premium tier gated behind usage credits; AIWG must fit the standard baseline.
+// Conservative standard-context baseline. Current Claude models advertise 1M
+// windows, but 1M dispatch can be gated behind usage credits on some plans, so
+// AIWG keeps fitting the 200K standard baseline.
 export const STANDARD_SONNET_BUDGET_TOKENS = 200000;
 // Warn before the hard ceiling so there is headroom for the base system prompt, tool
 // definitions, skill listings, and at least the opening turns of real work.
@@ -22,6 +23,12 @@ export const STARTUP_CONTEXT_SOURCES = [
   { label: 'AIWG.md', kind: 'memory', glob: ['AIWG.md'] },
   { label: '.aiwg/AIWG.md', kind: 'memory', glob: ['.aiwg/AIWG.md'] },
   { label: 'AGENTS.md', kind: 'memory', glob: ['AGENTS.md'] },
+  { label: '.claude/rules/*.md', kind: 'rules', dir: '.claude/rules', ext: '.md' },
+];
+
+// Ancestor directories contribute their CLAUDE.md and rules too (#2562).
+export const ANCESTOR_CONTEXT_SOURCES = [
+  { label: 'CLAUDE.md', kind: 'memory', glob: ['CLAUDE.md'] },
   { label: '.claude/rules/*.md', kind: 'rules', dir: '.claude/rules', ext: '.md' },
 ];
 
@@ -171,7 +178,60 @@ export async function scanStartupContext(options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const budgetTokens = options.budgetTokens ?? STANDARD_SONNET_BUDGET_TOKENS;
   const warnRatio = options.warnRatio ?? DEFAULT_STARTUP_WARN_RATIO;
+  const includeAncestors = options.includeAncestors ?? true;
+  // The walk otherwise climbs to the real filesystem root, so a caller that
+  // wants a bounded ancestor chain (for example a test building a synthetic
+  // workspace/project pair under the OS temp directory, which is itself
+  // nested under whatever real ancestors TMPDIR happens to resolve under —
+  // the user's home directory carries its own real CLAUDE.md/.claude/rules)
+  // can cap it at `ancestorStopAt`, inclusive, instead of picking up
+  // unrelated real ancestor content.
+  const ancestorStopAt = options.ancestorStopAt ? path.resolve(options.ancestorStopAt) : null;
   const components = [];
+
+  // Claude Code walks up from the working directory and inlines every
+  // ancestor's CLAUDE.md and `.claude/rules/*.md` alongside the project's own.
+  // A project nested under a workspace that carries its own rule deployment
+  // starts with both sets, which is what turned a "~97K, ok" project into a
+  // subagent dispatch failure with "Prompt is too long" (#2562).
+  if (includeAncestors) {
+    let current = path.resolve(rootDir);
+    for (;;) {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+      const relative = path.relative(rootDir, current) || '.';
+      for (const source of ANCESTOR_CONTEXT_SOURCES) {
+        if (source.glob) {
+          for (const rel of source.glob) {
+            const text = await readIfExists(path.join(current, rel));
+            if (text == null) continue;
+            components.push({
+              label: `${relative}/${rel}`, kind: source.kind, files: 1,
+              bytes: Buffer.byteLength(text), approxTokens: approxTokens(text), ancestor: current,
+            });
+          }
+        } else if (source.dir) {
+          const files = await listDirFiles(path.join(current, source.dir), source.ext);
+          let bytes = 0;
+          let tokens = 0;
+          for (const file of files) {
+            const text = await readIfExists(file);
+            if (text == null) continue;
+            bytes += Buffer.byteLength(text);
+            tokens += approxTokens(text);
+          }
+          if (files.length > 0) {
+            components.push({
+              label: `${relative}/${source.label}`, kind: source.kind, files: files.length,
+              bytes, approxTokens: tokens, ancestor: current,
+            });
+          }
+        }
+      }
+      if (ancestorStopAt && current === ancestorStopAt) break;
+    }
+  }
 
   for (const source of STARTUP_CONTEXT_SOURCES) {
     if (source.glob) {
@@ -203,6 +263,8 @@ export async function scanStartupContext(options = {}) {
   if (totalTokens > budgetTokens) status = 'over';
   else if (totalTokens > warnTokens) status = 'warn';
 
+  const ancestorTokens = components.filter((c) => c.ancestor).reduce((sum, c) => sum + c.approxTokens, 0);
+
   return {
     rootDir,
     budgetTokens,
@@ -211,7 +273,25 @@ export async function scanStartupContext(options = {}) {
     components: components.sort((a, b) => b.approxTokens - a.approxTokens),
     totalBytes,
     totalTokens,
+    /** Tokens contributed by ancestor directories' CLAUDE.md and rules (#2562). */
+    ancestorTokens,
     status,
+  };
+}
+
+// Subagent dispatch headroom (#2562). A dispatch inherits the inlined startup
+// context plus the agent definition and the base system prompt, and still
+// needs room to work inside the standard window.
+export const SUBAGENT_AGENT_DEF_TOKENS = 4_000;       // 16 KB agent-def ceiling
+export const SUBAGENT_SYSTEM_PROMPT_TOKENS = 12_000;  // base system prompt + tool schemas
+export const SUBAGENT_MIN_WORKING_TOKENS = 40_000;    // room to actually do the task
+
+export function subagentDispatchHeadroom(startup) {
+  const consumed = startup.totalTokens + SUBAGENT_AGENT_DEF_TOKENS + SUBAGENT_SYSTEM_PROMPT_TOKENS;
+  const headroom = startup.budgetTokens - consumed;
+  return {
+    headroom,
+    status: headroom < 0 ? 'fails' : headroom < SUBAGENT_MIN_WORKING_TOKENS ? 'at-risk' : 'ok',
   };
 }
 

@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRoutingShadowReport.v1.schema.json",
+  "title": "Decision Routing Shadow Report",
+  "description": "D28 paired held-out comparison of fixed, heuristic and Jev-assisted routing. It carries its observations so any verifier can rebuild it against a separately trusted preregistration digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "preregistration", "holdoutAccessedAt", "evaluatedAt", "observations", "arms", "comparisons", "integrity", "integrityFindings", "decision", "reasons", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-routing-shadow-report/v1" },
+    "id": { "$ref": "#/$defs/name" },
+    "preregistration": { "$ref": "#/$defs/preregistration" },
+    "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" },
+    "evaluatedAt": { "type": "string", "format": "date-time" },
+    "observations": { "type": "array", "maxItems": 300000, "items": { "$ref": "#/$defs/observation" } },
+    "arms": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "$ref": "#/$defs/arm" } },
+    "comparisons": {
+      "type": "object", "additionalProperties": false,
+      "required": ["baselineArm", "candidateArm", "pairedN", "quality", "economics", "latencyP95IncreaseMs", "providerCallsPerTask", "budgetCompliant"],
+      "properties": {
+        "baselineArm": { "enum": ["fixed", "heuristic"] },
+        "candidateArm": { "const": "jev-assisted" },
+        "pairedN": { "type": "integer", "minimum": 0 },
+        "quality": {
+          "type": "object", "additionalProperties": false, "required": ["marginBps", "interval", "decision"],
+          "properties": {
+            "marginBps": { "type": "integer", "minimum": -10000, "maximum": 0 },
+            "interval": {
+              "anyOf": [{ "type": "null" }, {
+                "type": "object", "additionalProperties": false, "required": ["lowerBps", "upperBps", "estimateBps", "n", "method"],
+                "properties": {
+                  "lowerBps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+                  "upperBps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+                  "estimateBps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+                  "n": { "type": "integer", "minimum": 1 },
+                  "method": { "enum": ["newcombe-hybrid-score", "tango-score"] }
+                }
+              }]
+            },
+            "decision": { "enum": ["non-inferior", "not-non-inferior", "insufficient"] }
+          }
+        },
+        "economics": {
+          "type": "object", "additionalProperties": false, "required": ["baselineRiskAdjustedMicros", "candidateRiskAdjustedMicros", "netSavingsMicros"],
+          "properties": {
+            "baselineRiskAdjustedMicros": { "type": "integer", "minimum": 0 },
+            "candidateRiskAdjustedMicros": { "type": "integer", "minimum": 0 },
+            "netSavingsMicros": { "type": "integer" }
+          }
+        },
+        "latencyP95IncreaseMs": { "type": "integer" },
+        "providerCallsPerTask": { "type": "number", "minimum": 0 },
+        "budgetCompliant": { "type": "boolean" }
+      }
+    },
+    "integrity": { "type": "object", "additionalProperties": true },
+    "integrityFindings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+    "reasons": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "count": { "type": "integer", "minimum": 0 },
+    "rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "digest"],
+      "properties": { "id": { "$ref": "#/$defs/name" }, "version": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" } }
+    },
+    "thresholds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimumOverallN", "minimumSliceN", "ciMethod", "ciLevelBps", "qualityNonInferiorityMarginBps", "maxFailureRate", "maxReworkRate", "maxFallbackRate", "maxHumanOverrideRate", "maxLatencyP95IncreaseMs", "maxProviderCallsPerTask", "failurePenaltyMicros", "humanOverridePenaltyMicros", "budgetComplianceRequired", "positiveNetEconomicsRequired"],
+      "properties": {
+        "minimumOverallN": { "type": "integer", "minimum": 30 },
+        "minimumSliceN": { "type": "integer", "minimum": 10 },
+        "ciMethod": { "enum": ["newcombe-10", "tango"] },
+        "ciLevelBps": { "type": "integer", "minimum": 5001, "maximum": 9998 },
+        "qualityNonInferiorityMarginBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "maxFailureRate": { "$ref": "#/$defs/rate" },
+        "maxReworkRate": { "$ref": "#/$defs/rate" },
+        "maxFallbackRate": { "$ref": "#/$defs/rate" },
+        "maxHumanOverrideRate": { "$ref": "#/$defs/rate" },
+        "maxLatencyP95IncreaseMs": { "type": "integer", "minimum": 0 },
+        "maxProviderCallsPerTask": { "type": "number", "minimum": 0 },
+        "failurePenaltyMicros": { "$ref": "#/$defs/count" },
+        "humanOverridePenaltyMicros": { "$ref": "#/$defs/count" },
+        "budgetComplianceRequired": { "type": "boolean" },
+        "positiveNetEconomicsRequired": { "type": "boolean" }
+      }
+    },
+    "preregistration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "policy", "baselineArm", "registeredAt", "tasks", "thresholds", "digest"],
+      "properties": {
+        "schemaVersion": { "const": "decision-routing-preregistration/v1" },
+        "policy": { "$ref": "#/$defs/pin" },
+        "baselineArm": { "enum": ["fixed", "heuristic"] },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "tasks": {
+          "type": "array", "minItems": 30, "maxItems": 100000,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "slice"],
+            "properties": { "id": { "$ref": "#/$defs/name" }, "slice": { "$ref": "#/$defs/name" } }
+          }
+        },
+        "thresholds": { "$ref": "#/$defs/thresholds" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["arm", "taskId", "slice", "success", "rework", "fallback", "humanOverride", "providerCalls", "inputTokens", "outputTokens", "attemptCostMicros", "reworkCostMicros", "budgetMicros", "latencyMs", "accepted", "policyViolation"],
+      "properties": {
+        "arm": { "enum": ["fixed", "heuristic", "jev-assisted"] },
+        "taskId": { "$ref": "#/$defs/name" },
+        "slice": { "$ref": "#/$defs/name" },
+        "success": { "type": "boolean" },
+        "rework": { "type": "boolean" },
+        "fallback": { "type": "boolean" },
+        "humanOverride": { "type": "boolean" },
+        "providerCalls": { "$ref": "#/$defs/count" },
+        "inputTokens": { "$ref": "#/$defs/count" },
+        "outputTokens": { "$ref": "#/$defs/count" },
+        "attemptCostMicros": { "$ref": "#/$defs/count" },
+        "reworkCostMicros": { "$ref": "#/$defs/count" },
+        "budgetMicros": { "$ref": "#/$defs/count" },
+        "latencyMs": { "$ref": "#/$defs/count" },
+        "accepted": { "type": "boolean" },
+        "policyViolation": { "type": "boolean" }
+      }
+    },
+    "arm": {
+      "type": "object", "additionalProperties": false,
+      "required": ["arm", "sampleN", "slices", "successRate", "failureRate", "reworkRate", "fallbackRate", "selectiveCoverage", "humanOverrideRate", "providerCalls", "inputTokens", "outputTokens", "attemptCostMicros", "reworkCostMicros", "totalCostMicros", "riskAdjustedCostMicros", "overBudgetTasks", "latencyMsP95", "policyViolations"],
+      "properties": {
+        "arm": { "enum": ["fixed", "heuristic", "jev-assisted"] },
+        "sampleN": { "$ref": "#/$defs/count" },
+        "slices": { "type": "object", "additionalProperties": { "$ref": "#/$defs/slice" } },
+        "successRate": { "$ref": "#/$defs/rate" },
+        "failureRate": { "$ref": "#/$defs/rate" },
+        "reworkRate": { "$ref": "#/$defs/rate" },
+        "fallbackRate": { "$ref": "#/$defs/rate" },
+        "selectiveCoverage": { "$ref": "#/$defs/rate" },
+        "humanOverrideRate": { "$ref": "#/$defs/rate" },
+        "providerCalls": { "$ref": "#/$defs/count" },
+        "inputTokens": { "$ref": "#/$defs/count" },
+        "outputTokens": { "$ref": "#/$defs/count" },
+        "attemptCostMicros": { "$ref": "#/$defs/count" },
+        "reworkCostMicros": { "$ref": "#/$defs/count" },
+        "totalCostMicros": { "$ref": "#/$defs/count" },
+        "riskAdjustedCostMicros": { "$ref": "#/$defs/count" },
+        "overBudgetTasks": { "$ref": "#/$defs/count" },
+        "latencyMsP95": { "$ref": "#/$defs/count" },
+        "policyViolations": { "$ref": "#/$defs/count" }
+      }
+    },
+    "slice": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sampleN", "successRate", "failureRate", "reworkRate", "fallbackRate"],
+      "properties": {
+        "sampleN": { "$ref": "#/$defs/count" },
+        "successRate": { "$ref": "#/$defs/rate" },
+        "failureRate": { "$ref": "#/$defs/rate" },
+        "reworkRate": { "$ref": "#/$defs/rate" },
+        "fallbackRate": { "$ref": "#/$defs/rate" }
+      }
+    }
+  }
+}

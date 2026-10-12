@@ -23,6 +23,13 @@ import {
 } from './ralph-launcher.js';
 import { handlerResultFromError } from '../errors.js';
 
+/** Parse a complete positive decimal value without truncating counter limits. */
+function parsePositiveLimit(raw: string | undefined, integer = false): number | undefined {
+  if (typeof raw !== 'string' || !/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 && (!integer || Number.isSafeInteger(value)) ? value : undefined;
+}
+
 /**
  * Parse Ralph command arguments
  */
@@ -32,6 +39,13 @@ function parseRalphArgs(args: string[]): {
   maxIterations?: number;
   model?: string;
   budget?: number;
+  maxTotalTokens?: number;
+  maxOutputTokens?: number;
+  maxToolCalls?: number;
+  maxTotalCost?: number;
+  maxWallClockMinutes?: number;
+  explorationQuota?: number;
+  budgetStopPolicy?: 'completion-wins' | 'budget-wins';
   timeout?: number;
   mcpConfig?: string;
   giteaIssue?: boolean;
@@ -49,9 +63,24 @@ function parseRalphArgs(args: string[]): {
   attach?: boolean;
   verbose?: boolean;
   logFile?: string;
+  /** Numeric flags present but not a positive number — dispatch must refuse (#1770) */
+  invalidFlags: string[];
+  /** Unrecognized --flags — refused so budget typos can't silently launch an unbounded loop (#1770) */
+  unknownFlags: string[];
 } {
-  const result: ReturnType<typeof parseRalphArgs> = {};
+  const result: ReturnType<typeof parseRalphArgs> = { invalidFlags: [], unknownFlags: [] };
   let i = 0;
+
+  // Present-but-invalid numeric values are a hard usage error: an operator who
+  // typed --max-total-cost expects a ceiling to exist (#1770).
+  const positiveNumber = (flag: string, raw: string | undefined, integer = false): number | undefined => {
+    const value = parsePositiveLimit(raw, integer);
+    if (value === undefined) {
+      result.invalidFlags.push(`${flag} (got '${raw ?? ''}')`);
+      return undefined;
+    }
+    return value;
+  };
 
   while (i < args.length) {
     const arg = args[i];
@@ -63,13 +92,32 @@ function parseRalphArgs(args: string[]): {
     } else if (arg === '--completion' || arg === '-c') {
       result.completionCriteria = args[++i];
     } else if (arg === '--max-iterations') {
-      result.maxIterations = parseInt(args[++i], 10);
+      result.maxIterations = positiveNumber('--max-iterations', args[++i], true);
     } else if (arg === '--model') {
       result.model = args[++i];
     } else if (arg === '--budget') {
-      result.budget = parseFloat(args[++i]);
+      result.budget = positiveNumber('--budget', args[++i]);
+    } else if (arg === '--max-total-tokens') {
+      result.maxTotalTokens = positiveNumber('--max-total-tokens', args[++i], true);
+    } else if (arg === '--max-output-tokens') {
+      result.maxOutputTokens = positiveNumber('--max-output-tokens', args[++i], true);
+    } else if (arg === '--max-tool-calls') {
+      result.maxToolCalls = positiveNumber('--max-tool-calls', args[++i], true);
+    } else if (arg === '--max-total-cost') {
+      result.maxTotalCost = positiveNumber('--max-total-cost', args[++i]);
+    } else if (arg === '--max-wall-clock-minutes') {
+      result.maxWallClockMinutes = positiveNumber('--max-wall-clock-minutes', args[++i]);
+    } else if (arg === '--exploration-quota') {
+      result.explorationQuota = positiveNumber('--exploration-quota', args[++i], true);
+    } else if (arg === '--budget-stop-policy') {
+      const policy = args[++i];
+      if (policy === 'completion-wins' || policy === 'budget-wins') {
+        result.budgetStopPolicy = policy;
+      } else {
+        result.invalidFlags.push(`--budget-stop-policy (got '${policy ?? ''}', expected completion-wins|budget-wins)`);
+      }
     } else if (arg === '--timeout') {
-      result.timeout = parseInt(args[++i], 10);
+      result.timeout = positiveNumber('--timeout', args[++i], true);
     } else if (arg === '--mcp-config') {
       result.mcpConfig = args[++i];
     } else if (arg === '--gitea-issue') {
@@ -103,6 +151,10 @@ function parseRalphArgs(args: string[]): {
       result.logFile = args[++i];
     } else if (!arg.startsWith('-') && !result.objective) {
       result.objective = arg;
+    } else if (arg.startsWith('--')) {
+      // Unknown flags were previously dropped silently — an operator typo on a
+      // budget flag launched a detached loop with NO ceiling at all (#1770).
+      result.unknownFlags.push(arg);
     }
 
     i++;
@@ -123,7 +175,7 @@ export class RalphHandler implements CommandHandler {
   name = 'Agent Loop';
   description = 'Execute iterative task loop with automatic completion detection';
   category = 'ralph' as const;
-  aliases = ['ralph', '-ralph', '--ralph'];
+  aliases = ['agent-loop', '--agent-loop', 'ralph', '-ralph', '--ralph'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const parsed = parseRalphArgs(ctx.args);
@@ -157,6 +209,21 @@ export class RalphHandler implements CommandHandler {
       };
     }
 
+    // Refuse rather than launch a loop that is missing controls the operator
+    // believes are active (#1770)
+    if (parsed.invalidFlags.length > 0) {
+      return {
+        exitCode: 1,
+        message: `Error: Invalid numeric flag value(s): ${parsed.invalidFlags.join(', ')}. Budget/quota flags require positive numbers. Loop not launched.`,
+      };
+    }
+    if (parsed.unknownFlags.length > 0) {
+      return {
+        exitCode: 1,
+        message: `Error: Unknown flag(s): ${parsed.unknownFlags.join(', ')}. See 'aiwg ralph --help'. Loop not launched.`,
+      };
+    }
+
     // Launch external Ralph as detached background process
     try {
       const options: RalphLaunchOptions = {
@@ -165,6 +232,13 @@ export class RalphHandler implements CommandHandler {
         maxIterations: parsed.maxIterations,
         model: parsed.model,
         budget: parsed.budget,
+        maxTotalTokens: parsed.maxTotalTokens,
+        maxOutputTokens: parsed.maxOutputTokens,
+        maxToolCalls: parsed.maxToolCalls,
+        maxTotalCost: parsed.maxTotalCost,
+        maxWallClockMinutes: parsed.maxWallClockMinutes,
+        explorationQuota: parsed.explorationQuota,
+        budgetStopPolicy: parsed.budgetStopPolicy,
         timeout: parsed.timeout,
         mcpConfig: parsed.mcpConfig,
         giteaIssue: parsed.giteaIssue,
@@ -218,9 +292,23 @@ ARGUMENTS:
 OPTIONS:
   -c, --completion <str>  Completion criteria (required)
   --max-iterations <n>    Maximum iterations (default: 5)
-  --model <model>         Claude model (default: opus)
-  --budget <usd>          Budget per iteration in USD (default: 2.0)
+  --model <model>         Claude model (default: claude-sonnet-5)
+  --budget <usd>          Budget per iteration in USD (default: 5.0)
   --timeout <min>         Timeout per iteration in minutes (default: 60)
+
+LFD LOOP CONTROLS (hard cumulative ceilings; loop stops with a best-output report):
+  --max-total-tokens <n>      Hard total-token ceiling (when provider reports usage)
+  --max-output-tokens <n>     Hard output-token ceiling (when provider reports usage)
+  --max-tool-calls <n>        Hard tool-call ceiling (when provider reports usage)
+  --max-total-cost <usd>      Hard cumulative spend ceiling (when provider reports cost)
+  --max-wall-clock-minutes <m>  Hard cumulative wall-clock ceiling (always observable)
+  --exploration-quota <k>     Require a structural strategy variant after k flat
+                              (non-improving) cycles. OFF unless declared — there
+                              is no default k; each loop declares its own.
+  --budget-stop-policy <p>    completion-wins (default): a task completing on the
+                              ceiling-crossing iteration reports success with the
+                              crossing annotated. budget-wins: exhaustion always
+                              terminates as budget_exhausted.
   --mcp-config <json>     MCP server configuration JSON
   --gitea-issue           Create/link Gitea issue for tracking
   --loop-id <id>          Use specific loop ID
@@ -228,7 +316,8 @@ OPTIONS:
                           Spawnable: claude, opencode, codex, hermes
   --dangerous             Enable unrestricted mode for the selected provider.
                           Passes the provider's native flag (e.g. --dangerously-skip-permissions
-                          for claude/opencode, --full-auto for codex). No effect if the
+                          for claude/opencode,
+                          --dangerously-bypass-approvals-and-sandbox for codex). No effect if the
                           provider doesn't have a dangerous mode flag.
   --params "<args>"       Pass arbitrary args verbatim to the agent binary.
                           Appended after all other flags. Quoted segments preserved.
@@ -277,9 +366,12 @@ export class RalphStatusHandler implements CommandHandler {
   name = 'Ralph Status';
   description = 'Show Agent loop status and iteration history';
   category = 'ralph' as const;
-  aliases = ['ralph-status'];
+  aliases = ['agent-loop-status', 'ralph-status'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--workers')) {
+      return createScriptRunner(ctx.frameworkRoot).run('tools/ralph-external/index.mjs', ['--status', ...ctx.args]);
+    }
     const showAll = ctx.args.includes('--all') || ctx.args.includes('-a');
     const statuses = getLoopStatuses(process.cwd());
 
@@ -357,7 +449,7 @@ export class RalphAbortHandler implements CommandHandler {
   name = 'Ralph Abort';
   description = 'Abort currently running Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-abort'];
+  aliases = ['agent-loop-abort', 'ralph-abort'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse --loop-id if provided
@@ -387,7 +479,7 @@ export class RalphResumeHandler implements CommandHandler {
   name = 'Ralph Resume';
   description = 'Resume previously aborted Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-resume'];
+  aliases = ['agent-loop-resume', 'ralph-resume'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse arguments
@@ -398,8 +490,11 @@ export class RalphResumeHandler implements CommandHandler {
       const arg = ctx.args[i];
       if (arg === '--loop-id' && ctx.args[i + 1]) {
         loopId = ctx.args[++i];
-      } else if (arg === '--max-iterations' && ctx.args[i + 1]) {
-        maxIterations = parseInt(ctx.args[++i], 10);
+      } else if (arg === '--max-iterations') {
+        maxIterations = parsePositiveLimit(ctx.args[++i], true);
+        if (maxIterations === undefined) {
+          return { exitCode: 1, message: 'Error: --max-iterations requires a positive safe integer. Loop not resumed.' };
+        }
       }
     }
 
@@ -456,7 +551,7 @@ export const ralphExternalHandler: CommandHandler = {
   name: 'Agent Loop External',
   description: 'Crash-resilient external loop with state persistence and CI/CD integration',
   category: 'ralph',
-  aliases: ['ralph-external', '--ralph-external', '--agent-loop-ext'],
+  aliases: ['agent-loop-ext', '--agent-loop-ext', 'ralph-external', '--ralph-external'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -475,7 +570,7 @@ export const ralphMemoryHandler: CommandHandler = {
   name: 'Ralph Memory',
   description: 'Manage Ralph semantic memory entries (list, query, clear)',
   category: 'ralph',
-  aliases: ['--ralph-memory'],
+  aliases: ['--agent-loop-memory', '--ralph-memory'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -493,7 +588,7 @@ export const ralphConfigHandler: CommandHandler = {
   name: 'Ralph Config',
   description: 'View and configure Agent loop settings (show, set, reset, preset)',
   category: 'ralph',
-  aliases: ['--ralph-config'],
+  aliases: ['--agent-loop-config', '--ralph-config'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -512,7 +607,7 @@ export class RalphAttachHandler implements CommandHandler {
   name = 'Ralph Attach';
   description = 'Attach to a running Agent loop\'s live output stream';
   category = 'ralph' as const;
-  aliases = ['ralph-attach'];
+  aliases = ['agent-loop-attach', 'ralph-attach'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     let loopId: string | undefined;

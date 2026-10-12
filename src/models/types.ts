@@ -37,6 +37,8 @@ export interface ModelRouteRequest {
   unattended?: boolean;
   /** Highest tier allowed without confirmation. Defaults to 2 for supervised, 1 for unattended. */
   maxAutoTier?: RuntimeModelTier;
+  /** Invocation or project policy has already authorized premium routing. */
+  premiumAuthorized?: boolean;
 }
 
 export interface ModelRouteDecision {
@@ -56,7 +58,42 @@ export type ModelRole = 'reasoning' | 'coding' | 'efficiency';
 /**
  * AI provider identifier
  */
-export type Provider = 'claude' | 'openai' | 'factory' | 'copilot' | 'windsurf' | 'opencode';
+export type Provider =
+  | 'antigravity'
+  | 'claude'
+  | 'codex'
+  | 'copilot'
+  | 'cursor'
+  | 'factory'
+  | 'grokbot'
+  | 'grok-build'
+  | 'hermes'
+  | 'muse'
+  | 'opencode'
+  | 'openclaw'
+  | 'openhuman'
+  | 'omp'
+  | 'pi'
+  | 'openai'
+  | 'warp'
+  | 'windsurf';
+
+export type ModelEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export interface CanonicalModelPolicy {
+  role: ModelRole;
+  tier: ModelTier;
+  effort?: ModelEffort;
+  override?: string;
+}
+
+export type ModelCompilationOutcome =
+  | 'native'
+  | 'compiled'
+  | 'inherited'
+  | 'global-only'
+  | 'informational'
+  | 'unsupported';
 
 /**
  * Model capability flags
@@ -159,7 +196,94 @@ export interface AgentRoleAssignment {
 /**
  * Configuration defaults
  */
+export interface WorkerModelObservation {
+  version: 1;
+  recordId: string;
+  cliId: string;
+  family: string;
+  runtimeVersion: string;
+  accountScope: string;
+  endpointFingerprint: string;
+  observedAt: string;
+  verifiedAt: string;
+  releaseDate: string | null;
+  releaseDateKind: 'official' | 'reported' | 'unknown';
+  visibility: 'listed' | 'hidden' | 'unknown';
+  availability: 'accessible' | 'unavailable' | 'unknown';
+  lifecycle: 'active' | 'deprecated' | 'retired' | 'unverified';
+  sunsetAt?: string | null;
+  replacementModelId?: string;
+  contextTokens: number | null;
+  maxOutputTokens: number | null;
+  modalities: Array<'text' | 'image' | 'audio' | 'video'>;
+  efforts: Array<{ id: string; selfDelegates: boolean | null }>;
+  effortSupport: 'explicit' | 'not-applicable' | 'unknown';
+  pricing: { costClass: 'economy' | 'standard' | 'premium' | 'unknown'; billing: 'metered' | 'subscription' | 'local' | 'unknown'; currency: 'USD'; inputPerMillion: number | null; outputPerMillion: number | null };
+  dataUse: { processing: 'local' | 'remote' | 'unknown'; productImprovement: boolean | null; retentionDays: number | null };
+  qualification: { status: 'qualified' | 'unqualified'; roles: string[]; fixtureDigest?: string; verifiedAt?: string; evidenceRef?: string };
+  /** Stable digest of material source facts, independent of cache read time. */
+  evidenceDigest?: string;
+  conflicts?: Array<{
+    field: string;
+    evidence: Array<{ value: unknown; source: string; pointer: string; observedAt: string; digest: string }>;
+  }>;
+  provenance: Array<{ fields: string[]; source: string; kind: 'native' | 'official' | 'operator' | 'derived'; observedAt: string; digest: string; confidence: 'verified' | 'reported' | 'derived' | 'unknown' }>;
+  firstObservedAt: string;
+  fetchedAt: string;
+  retiredAt: string | null;
+  supersededBy?: string;
+}
+
+export interface WorkerDataPolicy {
+  allowedProcessing?: Array<'local' | 'remote'>;
+  allowProductImprovement?: boolean;
+  allowUnknown?: boolean;
+  maxRetentionDays?: number;
+}
+export interface WorkerRoleGuidance {
+  groups: string[];
+  tier: ModelTier;
+  initialEffort: string | null;
+  effortLadder: string[];
+  escalateAfter?: number;
+  maxEscalations?: number;
+  deescalateAfter?: number;
+  allowNotApplicableEffort?: boolean;
+}
+export interface WorkerSelectionPolicy {
+  roleGuidance?: Record<string, WorkerRoleGuidance>;
+  guards?: {
+    deniedEfforts?: string[];
+    deniedModels?: string[];
+    denySelfDelegation?: boolean;
+    requireExactModel?: boolean;
+    allowedVisibility?: Array<'listed' | 'hidden'>;
+    allowedLifecycle?: Array<'active' | 'deprecated'>;
+    minimumIdentityEvidence?: 'runtime-configured' | 'backend-attested';
+  };
+  dataPolicy?: WorkerDataPolicy;
+  dataClasses?: Record<string, WorkerDataPolicy>;
+  freshness?: { warnHours?: number; blockHours?: number; policyDays?: number };
+  taskClasses?: Record<string, string>;
+}
+export interface WorkerPolicyOrigin {
+  source: string;
+  pointer: string;
+  digest: string;
+  authority: 'builtin' | 'user' | 'project';
+  contribution: unknown;
+}
+export interface WorkerPolicyDiagnostic {
+  code: 'OG_POLICY_RELAXATION' | 'OG_CONFIG_REFERENCE' | 'OG_EFFORT_DENIED' | 'OG_MODEL_UNAPPROVED' | 'OG_DATA_POLICY' | 'OG_PIN_MISMATCH' | 'OG_ADAPTER_UNQUALIFIED' | 'OG_BUDGET_UNMEASURABLE';
+  pointer: string;
+  message: string;
+  /** Diagnostics block by default; optional evidence conflicts are advisory. */
+  blocking?: boolean;
+  origins?: WorkerPolicyOrigin[];
+}
+
 export interface ConfigDefaults {
+  workerSelection?: WorkerSelectionPolicy;
   tier: ModelTier;
   provider: Provider;
 }
@@ -254,6 +378,7 @@ export interface UserProjectConfig {
  * Merged configuration with precedence
  */
 export interface MergedModelConfig {
+  workerPolicyOrigins?: Record<string, WorkerPolicyOrigin[]>;
   defaults: ConfigDefaults;
   tiers: { [tier: string]: TierDefinition };
   providers: { [provider: string]: ProviderDefinition };

@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutApproval.v1.schema.json",
+  "title": "HeldoutApproval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "approved",
+    "study",
+    "runId",
+    "reviewer",
+    "approvalReference",
+    "sourceCommit",
+    "exactHeadCi",
+    "stagingHost",
+    "stagingWorkspace",
+    "model",
+    "servedModel",
+    "region",
+    "credentialRef",
+    "credentialResolverDigest",
+    "corpusDigest",
+    "preregistrationDigest",
+    "executionDigest",
+    "calibration",
+    "providerTermsReference",
+    "priceBound",
+    "budget",
+    "priorStudySpendUsd",
+    "priorPortfolioSpendUsd"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-approval/v1"
+    },
+    "approved": {
+      "const": true
+    },
+    "study": {
+      "enum": [
+        "D17",
+        "D29"
+      ]
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "approvalReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "sourceCommit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "exactHeadCi": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "stagingHost": {
+      "const": "titan"
+    },
+    "stagingWorkspace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "model": {
+      "const": "jev-1.13.0"
+    },
+    "servedModel": {
+      "const": "jev-1.13.0"
+    },
+    "region": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "credentialRef": {
+      "type": "string",
+      "pattern": "^openbao-approle\\.[a-z0-9][a-z0-9-]{0,62}\\.typesafe-jev$"
+    },
+    "credentialResolverDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "preregistrationDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "executionDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "gateBindingDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "Explicit digest of the preregistered GateBinding under evaluation (D29 v8 gate adoption; transitive via preregistration studyAnalysisDigest)."
+    },
+    "gatePackDigests": {
+      "type": "array",
+      "description": "Authored pack pins resolved for the gateBindingDigest binding.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "resolvedDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "providerTermsReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "priceBound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputUsdPerMTok",
+        "outputUsdPerMTok",
+        "perRequestUsd",
+        "evidenceReferences",
+        "approvalReference"
+      ],
+      "properties": {
+        "inputUsdPerMTok": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "outputUsdPerMTok": {
+          "const": 0
+        },
+        "perRequestUsd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "evidenceReferences": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "approvalReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "outputTokenBound": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "tokens",
+        "usd"
+      ],
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "usd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        }
+      }
+    },
+    "priorStudySpendUsd": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "priorPortfolioSpendUsd": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "calibration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "uncalibrated-diagnostic"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "phase"
+          ],
+          "properties": {
+            "mode": {
+              "const": "staged"
+            },
+            "phase": {
+              "const": "calibration"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "phase",
+            "calibrationArtifactDigest",
+            "calibrationPhaseRecordDigest",
+            "priorApprovalDigest"
+          ],
+          "properties": {
+            "mode": {
+              "const": "staged"
+            },
+            "phase": {
+              "const": "test"
+            },
+            "calibrationArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "calibrationPhaseRecordDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "priorApprovalDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "calibrationArtifactDigest"
+          ],
+          "properties": {
+            "mode": {
+              "const": "artifact"
+            },
+            "calibrationArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

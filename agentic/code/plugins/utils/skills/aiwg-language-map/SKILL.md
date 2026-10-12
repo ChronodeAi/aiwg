@@ -34,6 +34,50 @@ Each section opens with an explicit `aiwg discover "<phrase>"` example. Table ro
 
 ## Addon capability domains
 
+### Dataset intelligence, indexing & provenance
+
+When a user points AIWG at files, an API, a corpus, or another dataset and asks
+for search, indexing, traceability, provenance, lineage, synchronization, or
+safe retirement—even when they do not know those terms.
+
+Example: `aiwg discover "make this searchable"`. Phrases below pass straight to
+`aiwg discover`.
+
+| Need | Phrase | Bundle |
+|---|---|---|
+| Start from only a source and outcome | `use this data` | dataset-intelligence |
+| Recommend custom indexing safely | `make this searchable` | dataset-intelligence |
+| Add evidence-bearing traceability | `trace this dataset` | dataset-intelligence |
+| Explain record or field lineage | `where did this record come from` | dataset-intelligence |
+| Verify freshness and provenance | `verify this dataset` | dataset-intelligence |
+| Resume an incremental source | `sync this source` | dataset-intelligence |
+| Retire data and derived artifacts safely | `retire this dataset` | dataset-intelligence |
+
+The same governed intake and handoff envelopes serve SDLC, research,
+knowledge-base, media, marketing, ops, and project-local bundles. All execution
+delegates to `aiwg dataset`; the addon does not create a shadow runtime.
+
+### Schemas & data contracts
+
+When the user describes a record, configuration file, event, API payload,
+message, import/export, or other structured data—even when they do not know to
+ask for a schema.
+
+Example: `aiwg discover "define data shape"`. Phrases below pass straight to
+`aiwg discover`.
+
+| Need | Phrase | Bundle |
+|---|---|---|
+| Decide whether structured data needs a contract | `define data shape` | schema-governance |
+| Explain schemas and continue examples-first | `why do I need a schema` | schema-governance |
+| Author and register a canonical schema | `create a schema` | schema-governance |
+| Evolve an existing contract safely | `change an existing schema` | schema-governance |
+| Review correctness and readiness | `review a data contract` | schema-governance |
+
+The SDLC discovery track invokes this addon automatically for persistent or
+exchanged data. Users should describe the data need; they need not choose a
+dialect, identifier, lifecycle, or compatibility policy themselves.
+
 ### Loops & iteration
 
 When the user needs an iterative coding loop, recursive context decomposition, eval gates, or guided autonomous implementation.
@@ -51,6 +95,16 @@ Example: `aiwg discover "ralph loop"`. Phrases below pass straight to `aiwg disc
 | Inner generator/critic eval loop in a pipeline | `eval loop` | nlp-prod |
 | KAMI-based agent quality eval framework | `agent quality eval` | aiwg-evals |
 
+### Session history and exploration
+
+Use `aiwg discover "spelunk session data"` to find catalog exploration. Useful
+phrases include `search past conversations`, `trace session tool calls`,
+`compare provider sessions`, and `harvest session decisions`. `session-explore`
+handles search, timelines, analytics, citations and coverage; `session-harvest`
+handles candidate review and promotion. `session-analyst` and the
+`session-investigation` flow compose bounded evidence collection and synthesis.
+The singular `session` launcher and cost-history telemetry serve different needs.
+
 ### Memory & state
 
 When the user needs persistent agent memory, semantic ingestion, or context curation.
@@ -64,7 +118,10 @@ Example: `aiwg discover "memory ingest"`. Phrases below pass straight to `aiwg d
 | Capture / query memory | `memory query` | semantic-memory |
 | Filter context to remove distractors | `filter distractors from context` | context-curator |
 
-> Bundles `auto-memory` and `llm-wiki` ship as templates / topology only — they have no indexable skills today. For project-local memory bootstrapping, use `aiwg-utils` (`auto memory templates` lives there). The `llm-wiki` topology is consumed by the knowledge-base framework — see `knowledge-base-quickref`.
+> `llm-wiki` has a first-class discoverable driver for profile selection and
+> activation; its topology composes with the knowledge-base framework and
+> semantic-memory drivers. `auto-memory` remains a template bundle pending its
+> own operational driver.
 
 ### Voice & writing quality
 
@@ -188,7 +245,9 @@ Example: `aiwg discover "hitl patterns"`. Phrases below pass straight to `aiwg d
 | HITL gates (rule, ensemble review) | `hitl gates` | sdlc-complete (rule) |
 | Factory AI compat agent | `factory compat` | sdlc-complete (agent) |
 
-> The `aiwg-hooks`, `agent-persistence`, and `droid-bridge` addons ship templates / rules / MCP servers without indexable skills. Their content lives in `.claude/hooks/` (Claude Code lifecycle hooks), in HITL rules under sdlc-complete, and as a separate MCP server respectively. Use the curated phrases above to surface the rules; the hook scripts themselves are accessible via the `aiwg-hooks` addon README.
+> `aiwg-hooks`, `agent-persistence`, and `droid-bridge` now expose
+> discoverable activation drivers. Their low-level hooks, HITL gates, and MCP
+> server remain implementation artifacts reached through those drivers.
 
 ### Core meta-utilities
 

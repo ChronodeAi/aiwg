@@ -179,6 +179,10 @@ aiwg discover "mention report"                 # → mention-report
 aiwg discover "activity log"                   # → activity-log
 aiwg discover "create provenance record"       # → provenance-create
 aiwg discover "auto provenance"                # → auto-provenance
+aiwg discover "record an effect"               # → effect-ledger (aiwg effect record)
+aiwg discover "sign an effect"                 # → effect-ledger (signed intent + completed)
+aiwg discover "reconcile effect"               # → effect-ledger (aiwg effect reconcile)
+aiwg discover "did this PR merge"              # → effect-ledger (reconcile tracker.pr.merged)
 ```
 
 ### Steward & policy
@@ -189,6 +193,7 @@ aiwg discover "delivery policy"                # → delivery-policy rule (and r
 aiwg discover "start using local issues"       # → issue-workflow-guide
 aiwg discover "choose issue tracking backend"  # → issue-workflow-guide
 aiwg discover "project-local customization"     # → project-local quickstart / customization docs
+aiwg discover "set up jev"                   # → decision-offload (Jev token setup + bounded-decision offload)
 ```
 
 ### Feature domains the steward owns (expansion / persona / project)

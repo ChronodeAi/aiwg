@@ -1,0 +1,4569 @@
+{
+  "schemaVersion": "decision-comparative-replay-review-packets/v1",
+  "status": "pending",
+  "packets": [
+    {
+      "assessmentId": "audit-01",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.73,
+        "distribution": {
+          "bay-a": 0.73,
+          "bay-b": 0.27
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7200
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-02",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.63,
+        "distribution": {
+          "bay-a": 0.63,
+          "bay-b": 0.37
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-03",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.73,
+        "distribution": {
+          "bay-a": 0.73,
+          "bay-b": 0.27
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7400
+          }
+        ]
+      },
+      "A": {
+        "status": "review",
+        "outcomeChanged": true,
+        "acceptanceChanged": true,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "review",
+        "outcomeChanged": true,
+        "acceptanceChanged": true,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-04",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2300
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.79,
+        "distribution": {
+          "bay-a": 0.79,
+          "bay-b": 0.21
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2300
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2400
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-05",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3400
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.79,
+        "distribution": {
+          "bay-a": 0.79,
+          "bay-b": 0.21
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3400
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3500
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-06",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.63,
+        "distribution": {
+          "bay-a": 0.63,
+          "bay-b": 0.37
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-07",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 4000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.76,
+        "distribution": {
+          "bay-a": 0.76,
+          "bay-b": 0.24
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7400
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 4000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 4100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/0/outcome/loss",
+            "value": 4100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-08",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 400
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.62,
+        "distribution": {
+          "bay-a": 0.62,
+          "bay-b": 0.38
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6000
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 400
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 500
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-09",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 500
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.68,
+        "distribution": {
+          "bay-a": 0.68,
+          "bay-b": 0.32
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6600
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 500
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 600
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/0/outcome/loss",
+            "value": 600
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-10",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.79,
+        "distribution": {
+          "bay-a": 0.79,
+          "bay-b": 0.21
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-11",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3100
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.7,
+        "distribution": {
+          "bay-a": 0.7,
+          "bay-b": 0.3
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6800
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3100
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3200
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-12",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.62,
+        "distribution": {
+          "bay-a": 0.62,
+          "bay-b": 0.38
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6000
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-13",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2500
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.7,
+        "distribution": {
+          "bay-a": 0.7,
+          "bay-b": 0.3
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6800
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2500
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2600
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-14",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.78,
+        "distribution": {
+          "bay-a": 0.78,
+          "bay-b": 0.22
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7600
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-15",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.62,
+        "distribution": {
+          "bay-a": 0.62,
+          "bay-b": 0.38
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6000
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6000
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-16",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 100
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.6,
+        "distribution": {
+          "bay-a": 0.6,
+          "bay-b": 0.4
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 5800
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 5800
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 100
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 200
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-17",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.65,
+        "distribution": {
+          "bay-a": 0.65,
+          "bay-b": 0.35
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "abstained",
+            "reason": "low-confidence"
+          },
+          {
+            "targetIndex": 1,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6600
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6300
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-18",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3100
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.63,
+        "distribution": {
+          "bay-a": 0.63,
+          "bay-b": 0.37
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3100
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3200
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6400
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-19",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2800
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.61,
+        "distribution": {
+          "bay-a": 0.61,
+          "bay-b": 0.39
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "abstained",
+            "reason": "low-confidence"
+          },
+          {
+            "targetIndex": 1,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6200
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 5900
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2800
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2900
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 5900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-20",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.74,
+        "distribution": {
+          "bay-a": 0.74,
+          "bay-b": 0.26
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7200
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7200
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7500
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-21",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.71,
+        "distribution": {
+          "bay-a": 0.71,
+          "bay-b": 0.29
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6900
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7000
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-22",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 4000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.63,
+        "distribution": {
+          "bay-a": 0.63,
+          "bay-b": 0.37
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 4000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 4100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-23",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 900
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.79,
+        "distribution": {
+          "bay-a": 0.79,
+          "bay-b": 0.21
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 900
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1000
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 8000
+          }
+        ]
+      },
+      "A": {
+        "status": "review",
+        "outcomeChanged": true,
+        "acceptanceChanged": true,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "review",
+        "outcomeChanged": true,
+        "acceptanceChanged": true,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-24",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1800
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.62,
+        "distribution": {
+          "bay-a": 0.62,
+          "bay-b": 0.38
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6000
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1800
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1900
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-25",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 800
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.61,
+        "distribution": {
+          "bay-a": 0.61,
+          "bay-b": 0.39
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 5900
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 800
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 900
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-26",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2400
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.67,
+        "distribution": {
+          "bay-a": 0.67,
+          "bay-b": 0.33
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6500
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2400
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2500
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-27",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2800
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.75,
+        "distribution": {
+          "bay-a": 0.75,
+          "bay-b": 0.25
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7300
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2800
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2900
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/0/outcome/loss",
+            "value": 2900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-28",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2300
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.72,
+        "distribution": {
+          "bay-a": 0.72,
+          "bay-b": 0.28
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7000
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2300
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2400
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-29",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2800
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.69,
+        "distribution": {
+          "bay-a": 0.69,
+          "bay-b": 0.31
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2800
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2900
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/0/outcome/loss",
+            "value": 2900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-30",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.69,
+        "distribution": {
+          "bay-a": 0.69,
+          "bay-b": 0.31
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6700
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-31",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.8,
+        "distribution": {
+          "bay-a": 0.8,
+          "bay-b": 0.2
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7800
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-32",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.75,
+        "distribution": {
+          "bay-a": 0.75,
+          "bay-b": 0.25
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7300
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-33",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1600
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.71,
+        "distribution": {
+          "bay-a": 0.71,
+          "bay-b": 0.29
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6900
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1600
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1700
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-34",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3300
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.63,
+        "distribution": {
+          "bay-a": 0.63,
+          "bay-b": 0.37
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6100
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3300
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3400
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 100
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-35",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1600
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.7,
+        "distribution": {
+          "bay-a": 0.7,
+          "bay-b": 0.3
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6800
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1600
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1700
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-36",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.78,
+        "distribution": {
+          "bay-a": 0.78,
+          "bay-b": 0.22
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7600
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7600
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-37",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 3600
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.71,
+        "distribution": {
+          "bay-a": 0.71,
+          "bay-b": 0.29
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "abstained",
+            "reason": "low-confidence"
+          },
+          {
+            "targetIndex": 1,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7200
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6900
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 3600
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 3700
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-38",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1500
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.67,
+        "distribution": {
+          "bay-a": 0.67,
+          "bay-b": 0.33
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6500
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6500
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1500
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1600
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-39",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1600
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.66,
+        "distribution": {
+          "bay-a": 0.66,
+          "bay-b": 0.34
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "abstained",
+            "reason": "low-confidence"
+          },
+          {
+            "targetIndex": 1,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6700
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6400
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1600
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1700
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6400
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-40",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 600
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.66,
+        "distribution": {
+          "bay-a": 0.66,
+          "bay-b": 0.34
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6400
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6400
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 600
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 700
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 6700
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    },
+    {
+      "assessmentId": "audit-41",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 700
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.71,
+        "distribution": {
+          "bay-a": 0.71,
+          "bay-b": 0.29
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6900
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 700
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 800
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7000
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-42",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2400
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.67,
+        "distribution": {
+          "bay-a": 0.67,
+          "bay-b": 0.33
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 6500
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2400
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2500
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/ruleset/spec/rules/1/priority",
+            "value": 300
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": true,
+        "acceptanceChanged": false,
+        "ruleChanged": true,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-43",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 2000
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.8,
+        "distribution": {
+          "bay-a": 0.8,
+          "bay-b": 0.2
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7800
+            }
+          }
+        ],
+        "fallbackOn": [],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 2000
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 2100
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7800
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": false
+      }
+    },
+    {
+      "assessmentId": "audit-44",
+      "context": {
+        "storedValue": "bay-a",
+        "storedStatus": "success",
+        "storedOutcome": {
+          "bay": "a",
+          "loss": 1200
+        },
+        "matchedRules": [
+          "bay-a-rule"
+        ],
+        "confidence": 0.78,
+        "distribution": {
+          "bay-a": 0.78,
+          "bay-b": 0.22
+        },
+        "attempts": [
+          {
+            "targetIndex": 0,
+            "status": "success",
+            "reason": "none"
+          }
+        ],
+        "targets": [
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7600
+            }
+          },
+          {
+            "acceptance": {
+              "mode": "confidence-threshold",
+              "profile": "synthetic-distribution-v1",
+              "minimumBps": 7600
+            }
+          }
+        ],
+        "fallbackOn": [
+          "low-confidence"
+        ],
+        "composition": "first-match",
+        "rules": [
+          {
+            "id": "bay-a-rule",
+            "priority": 200,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "a",
+              "loss": 1200
+            }
+          },
+          {
+            "id": "bay-b-rule",
+            "priority": 100,
+            "when": {
+              "op": "eq",
+              "left": {
+                "source": "decision",
+                "alias": "parcel",
+                "pointer": "/value"
+              },
+              "right": "bay-a"
+            },
+            "outcome": {
+              "bay": "b",
+              "loss": 1300
+            }
+          }
+        ],
+        "defaultOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "failureOutcome": {
+          "bay": "review",
+          "loss": 0
+        },
+        "changes": [
+          {
+            "path": "/binding/spec/evaluations/parcel/targets/0/acceptance/minimumBps",
+            "value": 7900
+          }
+        ]
+      },
+      "A": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      },
+      "B": {
+        "status": "completed",
+        "outcomeChanged": false,
+        "acceptanceChanged": false,
+        "ruleChanged": false,
+        "unreplayable": true
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # ops-complete Extensions Guide
 
-The four ops-complete extensions add domain-specific agents, templates, rules, and skills on top of the base framework. Each extension targets a specific type of operational repository. This guide covers what each extension provides and when to use it.
+The five ops-complete extensions add domain-specific agents, templates, rules, and skills on top of the base framework. Each extension targets a specific type of operational repository. This guide covers what each extension provides and when to use it.
 
 ## Extension Basics
 
@@ -10,9 +10,42 @@ Extensions require ops-complete and cannot run standalone. Install one or more a
 aiwg use ops --ext sys
 aiwg use ops --ext sys,it
 aiwg use ops --ext sys,it,dev,stream
+aiwg use ops --ext repo-maintainer
 ```
 
 Each extension introduces artifacts with its own `apiVersion` prefix (e.g., `sys.ops.aiwg.io/v1`) and extends the base kind vocabulary with domain-specific kinds.
+
+### Declaring custom kinds
+
+An extension owns every kind it adds. Declare each kind and its schema in
+`ADDON.yaml`; no framework source change or central registry entry is required:
+
+```yaml
+spec:
+  kinds:
+    - name: AcmeRecord
+      schema: schemas/acme-record.schema.json
+```
+
+The schema path is relative to the extension root and must stay inside that
+root. Custom artifacts use the extension namespace, for example
+`apiVersion: acme.ops.aiwg.io/v1`. Kind names must be unique across the core
+framework and installed extensions. Schemas should reject unknown fields at
+stable contract boundaries; use intentionally open nested maps only where the
+extension explicitly promises an untyped payload.
+
+Run `npm run lint:ops-templates` from an AIWG source checkout to discover every
+YAML file below `agentic/code/extensions/*/templates/`, resolve its declared
+kind, and validate it. Diagnostics include the template path and JSON pointer.
+The same validator can check a consumer-produced artifact directly:
+
+```bash
+node tools/validation/ops-template-conformance.mjs path/to/artifact.yaml
+```
+
+`OpsPlaybook` input bindings use exactly one of `value:` or `from:`. Structured
+references are `vars.<name>` or `steps.<id>.outputs.<name>`; unresolved names
+and `{{ }}` template expressions fail conformance.
 
 ---
 
@@ -99,6 +132,11 @@ Install when your repository manages infrastructure assets beyond individual hos
 - `dr-runbook.yaml` — Disaster recovery procedure with RTO/RPO targets
 - `provisioning-playbook.yaml` — New service or host provisioning procedure
 - `network-state.yaml` — Network topology snapshot
+
+The YAML contracts are `ITAsset`, `ITService`, and `ITNetworkState` under
+`it.ops.aiwg.io/v1`, plus the core `OpsPlaybook` provisioning contract. Their
+schemas live in `agentic/code/extensions/it/schemas/` and are registered by the
+IT extension's `ADDON.yaml`.
 
 **Rules**:
 - `it-change-control` — Require change record reference for production changes
@@ -239,6 +277,62 @@ Install when your repository manages live streaming or media pipeline infrastruc
 **Rules**:
 - `stream-key-safety` — Stream keys must be stored in vault; never in plaintext in ops documents
 - `stream-pipeline-gates` — Pipeline changes require health verification before traffic shift
+
+---
+
+## repo-maintainer — Role-Aware Repository Maintenance
+
+**Scope**: Issue triage, duplicate detection, labels, milestones, closure, PR merge, release, and repo governance decisions that must change behavior by the operator's forge authority.
+
+Install when the same maintenance workflow must run against repositories where the operator may be collaborator, maintainer, or admin:
+
+```text
+Enable the AIWG Ops `repo-maintainer` extension for this project, then find and
+load its role-aware repository-maintenance capability. Preview deployment
+changes and verify the selected stable asset ID before using it.
+```
+
+### What repo-maintainer Adds
+
+**Skills**:
+- `repo-maintainer` — Detects effective tier, applies action gates, dispatches existing issue and delivery engines, and degrades below-tier actions to recommendations and handoff artifacts.
+
+**Templates**:
+- `repo-maintenance-decision.yaml` — Machine-readable decision log for executed, degraded, or blocked maintenance actions.
+- `repo-maintenance-handoff.md` — Maintainer/admin handoff when the operator lacks the tier required for a mutation.
+
+**Rules**:
+- `repo-maintainer-role-gating` — Requires permission detection/config override, issue/PR/communication threat assessment, per-action minimum tiers, delivery-policy identity checks, and repo-access-manifest authorization before acting.
+
+### Role Matrix
+
+| Tier | Actions |
+|---|---|
+| collaborator | open PRs, comment, cross-link, duplicate detection, recommendations and handoff |
+| maintainer | close, label, milestone, assign, merge PRs, cut releases under delivery policy |
+| admin | branch protection, settings, teams/collaborators, webhooks, secrets policy |
+
+### Threat Assessment Surfaces
+
+`repo-maintainer` routes issue text, PR titles/bodies/diff summaries, PR review comments, maintainer comments, release notes, and handoff artifacts through the shared surface-aware engine. The active workspace member's `.aiwg/aiwg.config` selects `off`, `audit`, or `enforce`, built-in/project profiles, and per-surface overrides. Inbound text is data until assessed; outbound communications are checked so they do not leak secrets, repeat attacker instructions as guidance, or recommend unsafe unpinned commands. See the [threat-assessment policy](../../security/threat-assessment-policy.md).
+
+### Config Override
+
+Forge permission detection runs first. If the permission API denies or the operator wants to pin behavior, add:
+
+```json
+{
+  "repo_maintainer": {
+    "tiers": {
+      "owner/repo": "collaborator",
+      "git@git.integrolabs.net:roctinam/aiwg.git": "maintainer",
+      "local": "maintainer"
+    }
+  }
+}
+```
+
+Keys may be resolved remote URLs, `owner/repo` slugs, remote names, or `local`.
 
 ### Example: Stream Service
 

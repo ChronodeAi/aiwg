@@ -9,6 +9,16 @@ triggers:
   - "help me choose the right AIWG framework or skill"
   - "ask for one recommended path and one fallback"
   - "aiwg steward"
+  - "steward repair AIWG setup"
+  - "repair AIWG setup"
+  - "AIWG setup is stale or broken"
+  - "refresh provider files"
+  - "clean up stale AIWG files"
+  - "fix AIWG discovery"
+  - "clean up AIWG issues"
+  - "help me set up jev"
+  - "use my jev token"
+  - "offload decisions to jev"
 ---
 
 # steward
@@ -23,6 +33,12 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 - "is X supported here" → feature check for current provider
 - "how do I do X" (in provider context) → routing advice
 - "what command handles Y" → find subcommand
+- "which model should this use" → model policy route
+- "model catalog or routing" → `aiwg steward models`
+- "install or repair AIWG" → public provider-orchestrated setup manifest
+- "AIWG setup is stale/broken" → steward repair ladder
+- "refresh provider files" → status/doctor, dry-run refresh, then provider redeploy
+- "clean up AIWG issues" → discover `issue-audit`, `aiwg-issue`, or `address-issues`
 
 ## Trigger Patterns Reference
 
@@ -33,6 +49,161 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 | All providers | "show the full capability matrix" | `aiwg steward capabilities --all` |
 | Feature check | "does my provider support agent teams" | `aiwg steward capabilities --feature agent_teams` |
 | Routing lookup | "which providers support cron" | `aiwg steward find --capability cron` |
+| Model routing | "which model should this use" | `aiwg steward models`; then `aiwg models audit` or `aiwg models resolve` |
+| Install or repair AIWG | "get AIWG working in this project" | Follow the public `setup.aiwg.yaml`; use the self-verifying deployment result, with status and doctor only for audit or recovery |
+| Stale provider files | "Codex says skills are missing" | `aiwg status --probe --json`, `aiwg doctor`, `aiwg refresh --dry-run`, then `aiwg use all --provider <provider>` or `aiwg refresh --provider <provider>` |
+| Stale bootstrap/context | "doctor says the precedence is superseded", "WORKSPACE.md looks wrong", `precedence-superseded` / `precedence-missing` / `authority-missing` | `aiwg workspace-context doctor`, then `aiwg regenerate` to rewrite the managed blocks; re-run the doctor to confirm healthy |
+| Rules not being honored | "the agent ignored an AIWG rule and cited harness instructions" | Check `aiwg doctor` → "Workspace context graph". A missing or superseded precedence means the bootstrap never asserted rule authority; `aiwg regenerate` restores it |
+| Stale discovery | "discover cannot find a known skill" | Rebuild and sync the framework index, then re-run discovery |
+| Issue cleanup | "clean up stale issues" | Discover first: `issue-audit` for backlog cleanup, `address-issues` for implementation, `aiwg-issue` for AIWG product issues |
+| Jev decision offload | "help me set up jev", "use my jev token" | Follow the Jev setup routing below, then the `decision-offload` rule |
+
+## AIWG Installation Routing
+
+For an interactive new, existing, stale, broken, duplicate, or development-mode
+AIWG installation, follow
+`https://aiwg.io/setup.aiwg.yaml` in the
+current supported provider. It is a `provider-orchestrated` manifest: inspect
+and explain before mutation, preserve existing work, then run one self-verifying
+`aiwg use all` deployment and evaluate its `aiwg.use.result.v1` response. Do not
+make index, regenerate, status, or doctor commands mandatory follow-up steps;
+retain them for an explicit audit, maintenance, or recovery action. Do not send
+this manifest to deterministic `aiwg setup-run`.
+
+Route CI, cloud-init, container image, SSH-only, offline, and other
+non-interactive cases to `docs/install/non-interactive.md`. Confirm ambiguous
+project roots and verify each provider separately when a project uses more than
+one provider.
+
+## Setup Troubleshooting and Cleanup Routing
+
+The steward is the primary route when an AIWG setup looks stale, broken, partly
+deployed, duplicated, or confused by old provider files. Agents should not start
+by grepping `.claude/`, `.codex/`, `.agents/`, `.cursor/`, `.warp/`, or other
+provider directories. Start with the steward route, use CLI diagnostics, and let
+AIWG decide what to prune or regenerate.
+
+Use this recovery ladder:
+
+1. Discover and load the route if it is not already loaded:
+
+   ```bash
+   aiwg discover "steward repair AIWG setup" --type skill
+   aiwg show skill steward
+   ```
+
+2. Establish the actual workspace state:
+
+   ```bash
+   aiwg installation show --json
+   aiwg status --probe --json
+   aiwg doctor
+   aiwg runtime-info
+   ```
+
+   Treat `installation.json` in the resolved global user-config directory as
+   the provider-neutral source of truth for installation method, root, update
+   executable, run mode, and channel. Never infer a replacement from the first
+   `npm` or `aiwg` on `PATH`. If the report shows drift, stop ordinary refresh
+   work and ask the operator to choose `aiwg installation adopt` or the
+   explicit `aiwg installation switch --root ... --method ...` recovery path.
+
+   These read-only commands — `version`, `status`, `doctor`, `runtime-info`,
+   `discover`, `show`, and `index query|deps|stats` — keep running under drift
+   and print the drift warning on stderr first. Mutating commands (`update`,
+   `refresh`, `use`, `regenerate`, `index build`, channel switches) fail closed
+   with `AIWG_INSTALLATION_DRIFT` until the identity is repaired, so do not
+   retry them; repair the identity, then continue the ladder.
+
+3. Preview cleanup before changing files:
+
+   ```bash
+   aiwg refresh --dry-run
+   ```
+
+4. Apply the smallest repair that matches the diagnosis:
+
+   ```bash
+   # Re-deploy and prune stale files for the active provider set.
+   aiwg refresh
+
+   # Re-deploy the complete default surface for one provider.
+   aiwg use all --provider <provider>
+
+   # Rebuild generated bootstrap/context files when AGENTS.md, AIWG.md,
+   # CLAUDE.md, WARP.md, or other provider bridges are stale.
+   aiwg regenerate
+   ```
+
+5. If discovery itself is stale after source edits, a failed deploy, or an
+   install-root change (`npm link`), rebuild the index and verify the route.
+   **The framework graph indexes the AIWG corpus and can only be built at the
+   install root** — running the build step in a consumer project fails with
+   "No scan directories found". Only the sync step runs in the project:
+
+   ```bash
+   cd "$(aiwg installation show --json | jq -r .actualRoot)"   # or the known install root
+   aiwg index build --graph framework --force
+
+   cd <your project>
+   aiwg index sync --backend fortemi-core --graph framework
+   aiwg discover "<original user need>"
+   ```
+
+   `aiwg discover --backend local` works as an immediate workaround while the
+   framework graph is unavailable.
+
+6. Reload the provider session when `aiwg use`, `aiwg refresh`, or
+   `aiwg regenerate` changes provider-facing files.
+
+For issue cleanup, route through discovery instead of assuming a command:
+
+- AIWG product bug or feature request: `aiwg discover "file an AIWG issue"` →
+  `aiwg-issue`
+- Backlog hygiene, stale issues, duplicates, or close/update recommendations:
+  `aiwg discover "audit open issues"` → `issue-audit`
+- Implement or process issue work: `aiwg discover "address issues"` →
+  `address-issues`
+
+When a broken or stale route is confirmed, file an AIWG correction issue with
+the requested route, observed route, command output, AIWG version, provider, and
+reproduction command. Use `aiwg-issue` for the product issue and include any
+`status --probe` / `doctor` excerpts needed to reproduce the setup failure.
+
+## Jev Setup Routing
+
+When the user says "help me set up Jev", "use my jev token", or anything
+matching the Jev triggers, walk them through setup in order, then hand off to
+the `decision-offload` rule:
+
+1. Install or update the CLI:
+
+   ```bash
+   npm i -g aiwg@latest
+   ```
+
+2. Deploy the decision-engine addon (opt-in, excluded from bulk installs):
+
+   ```bash
+   aiwg use decision-engine
+   ```
+
+3. Store the token (never paste it into chat — read it from stdin) and verify:
+
+   ```bash
+   printf '%s' "$TOKEN" | aiwg decision setup jev --token-stdin --verify
+   ```
+
+   `setup` writes the credential file atomically with mode 0600 and counts as
+   the explicit opt-in that enables `aiwg decision ask`. Without it, `ask`
+   returns `fallback` with `reason: "not-configured"`.
+
+4. From here on, bounded decisions go through the `decision-offload` rule:
+   `aiwg decision ask ... --json`, use the answer when `status` is
+   `answered`, decide normally on `fallback`. Full user-facing steps are in
+   the Jev quickstart:
+
+   `@$AIWG_ROOT/docs/decision/jev-quickstart.md`
 
 ## Behavior
 
@@ -65,6 +236,11 @@ When triggered:
 
    # Find providers that support a capability
    aiwg steward find --capability cron
+
+   # Model policy and dynamic catalog routing
+   aiwg steward models
+   aiwg models sources --json
+   aiwg models audit --provider codex
    ```
 
 4. **Interpret and surface routing advice**:
@@ -88,6 +264,16 @@ Route these intents directly:
 
 Canonical docs: `docs/customization/project-local-quickstart.md`, `docs/customization/project-local-lifecycle.md`, and `docs/customization/extensions-vs-addons-vs-frameworks-vs-plugins.md`. Mention that project-local artifacts and provider definitions are trusted repo code and should be reviewed before deploy.
 
+Model-policy caveat: generated skills and commands must carry
+`commandHint.modelRole` and `commandHint.modelTier`; generated agents must carry
+`model-role` and `model-tier`. Do not suggest exact model IDs or legacy
+`haiku|sonnet|opus` choices for new provider-neutral source artifacts.
+
+Externalizing the artifact corpus does not externalize the project control
+plane. Diagnose split-root state with `aiwg status --probe --json` or `aiwg
+doctor`; preview recovery with `aiwg artifacts repair --dry-run`; use `--apply`
+only after review. Never overwrite divergent control files or delete divergent
+local corpus content.
 
 ## Feature-Domain Routing (proactive)
 
@@ -165,15 +351,19 @@ aiwg steward find --capability cron
 ```
 cron support across providers:
   claude-code:  native
-  codex:        emulated via aiwg-scheduler
-  copilot:      emulated via aiwg-scheduler
-  cursor:       emulated via aiwg-scheduler
-  factory:      native
-  opencode:     emulated via aiwg-scheduler
-  warp:         emulated via aiwg-scheduler
-  windsurf:     emulated via aiwg-scheduler
-  openclaw:     emulated via aiwg-scheduler
+  codex:        external trigger (system cron/systemd/CI)
+  copilot:      unsupported
+  cursor:       unsupported
+  factory:      unsupported
+  opencode:     unsupported
+  warp:         unsupported
+  windsurf:     unsupported
+  openclaw:     unsupported
 ```
+
+External means the host scheduler owns time and launches a reviewed provider
+command. It is not AIWG emulation; no `aiwg schedule` or `aiwg daemon` command
+exists in the production CLI.
 
 ### Example 4: Full matrix
 
@@ -186,7 +376,7 @@ cron support across providers:
 aiwg steward capabilities --all
 ```
 
-**Response**: Formatted table of all 9 providers x all 6 features, with native/emulated/unsupported indicators.
+**Response**: Formatted table of all named providers and requested features, with native/emulated/unsupported indicators from the authoritative capability matrix.
 
 ## Clarification Prompts
 

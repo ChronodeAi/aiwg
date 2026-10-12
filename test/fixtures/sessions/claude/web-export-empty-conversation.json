@@ -1,0 +1,16 @@
+[
+  {
+    "uuid": "web-conversation-nonempty",
+    "name": "Has messages",
+    "created_at": "2026-08-06T09:00:00.000Z",
+    "chat_messages": [
+      { "uuid": "web-msg-ne-1", "sender": "human", "text": "Hello", "created_at": "2026-08-06T09:00:00.000Z" }
+    ]
+  },
+  {
+    "uuid": "web-conversation-empty",
+    "name": "Started, never messaged",
+    "created_at": "2026-08-06T09:05:00.000Z",
+    "chat_messages": []
+  }
+]

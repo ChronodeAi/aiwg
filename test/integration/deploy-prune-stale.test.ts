@@ -32,7 +32,7 @@ function runDeploy(): { status: number; out: string } {
     const out = execFileSync(
       process.execPath,
       [DEPLOY_SCRIPT, '--mode', 'sdlc', '--provider', 'claude', '--target', target, '--quiet'],
-      { cwd: REPO_ROOT, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf-8' },
+      { timeout: 60_000, cwd: REPO_ROOT, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf-8' },
     );
     return { status: 0, out };
   } catch (e: any) {

@@ -6,9 +6,11 @@ description: Resume an interrupted agent loop from last checkpoint
 commandHint:
   argumentHint: '[--max-iterations N] [--timeout M --interactive --guidance "text"]'
   allowedTools: "Task, Read, Write, Bash, Glob, Grep, TodoWrite, Edit"
-  model: opus
+  model: haiku
   category: automation
   orchestration: true
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -188,7 +190,7 @@ Continues from last checkpoint with original settings.
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/addons/ralph/README.md — Ralph addon overview and loop executor documentation
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/README.md — Ralph addon overview and loop executor documentation
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/vague-discretion.md — Loop termination and iteration limit rules
 - @$AIWG_ROOT/docs/cli-reference.md — CLI reference for ralph-resume and related commands
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md — Re-reading original task instructions on resume

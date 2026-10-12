@@ -1,0 +1,433 @@
+{
+  "revision": 1,
+  "checkpoint": "S0 wiring only; issue remains open through S5",
+  "testOwnerIssue": "roctinam/aiwg#2886",
+  "knownCheckpointIssues": {
+    "B-OG-01": "roctinam/aiwg#2876",
+    "B-OG-02": "roctinam/aiwg#2881",
+    "B-OG-04": "roctinam/aiwg#2883",
+    "B-OG-06": "roctinam/aiwg#2885",
+    "B-OG-27": "roctinam/aiwg#2877",
+    "B-OG-29": "roctinam/aiwg#2878",
+    "B-OG-30": "roctinam/aiwg#2879",
+    "B-OG-31": "roctinam/aiwg#2880",
+    "B-OG-19": "roctinam/aiwg#2886",
+    "B-OG-14": "roctinam/aiwg#2890"
+  },
+  "packs": {
+    "T-OG-01": {
+      "name": "Policy/schema/resolver",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-02",
+        "B-OG-04",
+        "B-OG-29"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/models/worker-resolution.test.ts",
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-health-resolution.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-02": {
+      "name": "Catalog/freshness",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-03"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/discovery-freshness.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics."
+    },
+    "T-OG-03": {
+      "name": "Adapter conformance",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-31",
+        "B-OG-14",
+        "B-OG-50"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/models/worker-capabilities.test.ts",
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/providers/grok-build-headless.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/conformance/orchestration-v1/worker-health-adapters.test.ts",
+        "test/unit/ralph-external/worker-health.test.ts"
+      ],
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
+    },
+    "T-OG-04": {
+      "name": "Isolation/verification",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-13",
+        "B-OG-14"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-isolation.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/ralph-external/worktree-preparation.test.ts",
+        "test/unit/ralph-external/trusted-verification.test.ts"
+      ],
+      "remaining": "Tier 0 argument construction, gate refusal, async degraded launch, guarded live OOM containment, conductor-owned worktree/base-digest preparation, claim-conflict serialize/fail, symlink/hardlink escape denial, and sandbox-vs-real-failure classification coverage; the live probe skips when a systemd user manager is unavailable. Qualification enforced/degraded recording, a registered Tier 1 isolated verifier executor, managed disk reservations and leases remain with the owning B-OG-13 checkpoint's S2+ slice."
+    },
+    "T-OG-05": {
+      "name": "Admission/budgets",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-10",
+        "B-OG-12",
+        "B-OG-32"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/tools/resource-preflight.test.js",
+        "test/unit/config/dispatch-thresholds.test.ts"
+      ],
+      "remaining": "Tier 0 dispatch gating against synthetic /proc fixtures only; shared enforced admission, budgets, and S4 host scope remain with the owning B-OG-10/12/32 checkpoints.",
+      "laterSlices": [
+        "S4"
+      ]
+    },
+    "T-OG-06": {
+      "name": "Recovery/chaos",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-11",
+        "B-OG-12"
+      ],
+      "status": "partial",
+      "testFiles": [],
+      "remaining": "#2898 adds S1 synthetic Muse quota/partial mapping only; managed cooldown and recovery remain B-OG-11 in S2+. No live inference qualification."
+    },
+    "T-OG-07": {
+      "name": "Guidance/lineage",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-17"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/models/worker-resolution.test.ts",
+        "test/unit/smiths/parallelism-section.test.ts",
+        "test/unit/lint/orchestration-guidance.test.ts"
+      ],
+      "remaining": "S1 resolver lineage only (#2883), plus generated group/check-in guidance mapping (#2893/#2914) and Jev checkpoint prose mapping (#2947); managed runtime assertions remain S2+ with their owners."
+    },
+    "T-OG-08": {
+      "name": "Mission/Flow/Ralph bindings",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-16",
+        "B-OG-30"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts"
+      ],
+      "remaining": "Owning checkpoint mechanism assertions and qualification; existing files prove only the scoped contracts or fixture mechanics.",
+      "laterSlices": [
+        "S3"
+      ]
+    },
+    "T-OG-09": {
+      "name": "Evidence/accounting",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S2",
+      "mechanismOwners": [
+        "B-OG-15"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/dispatch-evidence.test.ts"
+      ],
+      "remaining": "S1 direct/shared mapping only: optional direct receipts, 0700/0600 storage, prompt cleanup after confirmed stop, dirty/uncertain retention, disk-pressure admission, redacted export with retained usage confidence, and digest-only effect links through the existing ledger. Managed durability, required evidence and Tier 1 registration stay with S2+ (#2891)."
+    },
+    "T-OG-10": {
+      "name": "Security negatives",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-13",
+        "B-OG-15",
+        "B-OG-14"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/serve/executor-registry.test.ts",
+        "test/unit/ralph-external/installed-worker-adapter.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/ralph-external/trusted-verification.test.ts",
+        "test/unit/ralph-external/worktree-preparation.test.ts",
+        "test/conformance/orchestration-v1/dispatch-evidence.test.ts"
+      ],
+      "remaining": "S1 synthetic installation, registration and control mapping, plus protected-check/package-script-escape, env-allowlist and worktree-escape negatives, only; no live provider qualification. A registered Tier 1 qualified isolated verifier executor, managed runtime, authority/ledger/admission-credential exclusion proofs and retention controls remain deferred to S2+."
+    },
+    "T-OG-11": {
+      "name": "Local qualification",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-09"
+      ],
+      "status": "planned",
+      "testFiles": []
+    },
+    "T-OG-12": {
+      "name": "Doctor/steward/usability",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-18"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/models/worker-health-readiness.test.ts"
+      ],
+      "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-14": {
+      "name": "Package/platform/extension",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-30",
+        "B-OG-31"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/models/worker-installation-metadata.test.ts",
+        "test/unit/ralph-external/installed-worker-adapter.test.ts",
+        "test/unit/ralph-external/worker-single-invocation.test.ts"
+      ],
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2991 adds six-banner normalization, pin-change and defensive pattern coverage."
+    },
+    "T-OG-15": {
+      "name": "Direct command contract",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-33",
+        "B-OG-34"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-single-invocation.test.ts",
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
+        "test/conformance/orchestration-v1/worker-resolution.test.ts",
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
+      ],
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+. #3002/#2998 add bounded private artifact delivery/cleanup and adapter stdin frames; 14 other bundled process profiles retain frozen argv/stdin rendering. Workspace-relative artifacts and authenticated smoke runs remain open."
+    },
+    "T-OG-16": {
+      "name": "Conductor direct lifecycle",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-34"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/direct-lifecycle.test.ts",
+        "test/unit/ralph-external/session-launcher-direct-dispatch.test.ts",
+        "test/unit/ralph-external/worker-isolation.test.ts",
+        "test/unit/tools/resource-preflight.test.js"
+      ],
+      "remaining": "S1 synthetic self-counted caps, gate-then-launch composition and fake fixture-CLI finals only (success/exit-zero-error/missing-final/hang/EPERM, resolver-level 429 fallback-with-rationale); no live provider, no managed admission/receipts, no shared cross-conductor cap. Managed runtime lifecycle and chaos assertions remain with their owning S2+ checkpoint."
+    },
+    "T-OG-17": {
+      "name": "MCP worker transport",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-35",
+        "B-OG-14",
+        "B-OG-50"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
+        "test/conformance/orchestration-v1/worker-resolution.test.ts",
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-contracts.test.ts",
+        "test/unit/mcp/worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/worker-fixtures.test.ts",
+        "test/unit/ralph-external/worker-invocation.test.ts",
+        "test/integration/worker-adapter-package.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/unit/ralph-external/worker-finals.test.ts",
+        "test/unit/mission-protocol/worker-results.test.ts",
+        "test/unit/mcp/worker-invoke.test.ts",
+        "test/conformance/orchestration-v1/worker-health-mcp.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
+      ],
+      "remaining": "S1 MCP observer signal semantics only: initialize, ping, tools/list and cancel delivery are not execution start, progress or stop. The worker-invoke run/status/cancel bridge is delivered by #2892 (test/unit/mcp/worker-invoke.test.ts); wiring these observers into its documented health hook (native MCP health mapping) and registry operation pins remain open. No live version/account qualification; managed supervision and shared ownership remain S2+."
+    },
+    "T-OG-18": {
+      "name": "Direct security/qualification",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-06",
+        "B-OG-34",
+        "B-OG-35"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/direct-security.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
+      ],
+      "remaining": "S1 synthetic coverage only: unrelated-env non-inheritance, the workerClaims contract's lack of an executable field, resolver-level model-pin and role-coverage denial, the delegationAllowance schema lock, and a synthetic no-external-control capability denial. Mutable shared-dependency isolation (worktree hardlink/reflink tooling) and live provider/account qualification remain open; managed-runtime security assertions stay with their owning S2+ checkpoint."
+    },
+    "T-OG-19": {
+      "name": "Registry completeness/readiness",
+      "ownerIssue": "roctinam/aiwg#2886",
+      "slice": "S0",
+      "mechanismOwners": [
+        "B-OG-18",
+        "B-OG-27",
+        "B-OG-47",
+        "B-OG-50"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/cli/handlers/models-direct-invocation.test.ts",
+        "test/unit/cli/handlers/models-production-invocation.test.ts",
+        "test/conformance/orchestration-v1/worker-resolution.test.ts",
+        "test/unit/config/worker-policy.test.ts",
+        "test/conformance/mission-v1/worker-policy.test.ts",
+        "test/unit/cli/handlers/models-worker-contracts.test.ts",
+        "test/conformance/orchestration-v1/pack-registry.test.ts",
+        "test/unit/ralph-external/worker-installation.test.ts",
+        "test/unit/mcp/worker-qualification.test.ts",
+        "test/conformance/orchestration-v1/worker-health-registry.test.ts",
+        "test/conformance/orchestration-v1/provider-coverage.test.ts"
+      ],
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. B-OG-47 (#2911) normalized coverage rows and the source-only OpenHuman promotion are checked data, not live qualification; OpenHuman live qualification awaits an operator-authorized probe budget. Managed supervision, shared ownership and remediation remain S2+.",
+      "laterSlices": [
+        "S1"
+      ]
+    },
+    "T-OG-20": {
+      "name": "Run identity and signals",
+      "ownerIssue": "roctinam/aiwg#2895",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-49",
+        "B-OG-50"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-single-invocation.test.ts",
+        "test/conformance/orchestration-v1/worker-health-signals.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
+      ],
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-21": {
+      "name": "Stall/remediation",
+      "ownerIssue": "roctinam/aiwg#2896",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-50",
+        "B-OG-51"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/conformance/orchestration-v1/worker-health-stall.test.ts",
+        "test/unit/ralph-external/worker-health.test.ts",
+        "test/unit/lint/orchestration-guidance.test.ts"
+      ],
+      "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only, plus check-in cadence/threshold/remediation guidance mapping (#2914); automated retry/fallback and managed runtime remain S2+ with their existing owners."
+    },
+    "T-OG-23": {
+      "name": "Security/MCP/observer loss",
+      "ownerIssue": "roctinam/aiwg#2895",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-49",
+        "B-OG-50"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/ralph-external/worker-single-invocation.test.ts",
+        "test/conformance/orchestration-v1/worker-health-security.test.ts",
+        "test/conformance/orchestration-v1/worker-status.test.ts"
+      ],
+      "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+    },
+    "T-OG-24": {
+      "name": "Managed health mapping",
+      "ownerIssue": "roctinam/aiwg#2916",
+      "slice": "S1",
+      "mechanismOwners": [
+        "B-OG-54",
+        "B-OG-12",
+        "B-OG-16"
+      ],
+      "status": "partial",
+      "testFiles": [
+        "test/unit/mission-protocol/worker-health-mapping.test.ts",
+        "test/conformance/orchestration-v1/worker-health-lease-mapping.test.ts"
+      ],
+      "remaining": "S1 pure mapping only: direct health results with parent/lease absent, five/six-feature codec compatibility, quiet/stalled/uncertain trace projection with bounded/redacted summaries, and renewal/reconcile/release vectors against a mocked scheduler boundary. No managed imports or side effects. B-OG-12/16 must run these same vectors as mandatory S2 runtime gates against the actual scheduler/MC/Flow/Ralph crash/restart cases; managed activation, leases, required evidence and runtime integration remain S2+."
+    }
+  },
+  "qualificationResults": [
+    {
+      "id": "S0-fake-fixtures",
+      "qualification": "missing",
+      "result": "unqualified",
+      "evidence": {
+        "kind": "synthetic"
+      }
+    }
+  ]
+}

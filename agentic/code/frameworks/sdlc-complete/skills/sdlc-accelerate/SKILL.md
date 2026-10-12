@@ -6,8 +6,10 @@ description: End-to-end SDLC ramp-up from idea to construction-ready with automa
 commandHint:
   argumentHint: <description> [--from-codebase <path> --interactive --guidance "text" --auto --dry-run --skip-to <phase> --resume]
   allowedTools: Task, Read, Write, Glob, TodoWrite
-  model: opus
+  model: haiku
   category: sdlc-orchestration
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -156,4 +158,4 @@ With `--dry-run`: detect entry point, show planned phases with commands to invok
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/management/construction-ready-brief-template.md — Final brief template
 - @$AIWG_ROOT/src/cli/handlers/sdlc-accelerate.ts — CLI command handler
 - @$AIWG_ROOT/docs/cli-reference.md — CLI reference entry
-- @$AIWG_ROOT/agentic/code/addons/ralph/skills/ralph/SKILL.md — Agent loop pattern (used in doc generation refinement)
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/skills/ralph/SKILL.md — Agent loop pattern (used in doc generation refinement)

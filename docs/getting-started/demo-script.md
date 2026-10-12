@@ -1,5 +1,8 @@
 # Demo Script
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Use this script for a short zero-to-first-success demo.
 
 The first AIWG demo should show one path working, not a tour of every framework. The success metric is small on purpose: one disposable project, one wizard preview, one deploy, one status probe, and one recommended next action.

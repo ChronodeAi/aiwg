@@ -1,0 +1,11 @@
+export { PairedDifferenceError } from './error.js';
+export { normalQuantile } from './normal.js';
+export { wilsonScoreInterval } from './binomial.js';
+export { clopperPearsonInterval } from './clopper-pearson.js';
+export type { PairedBinaryCounts, PairedDifferenceInterval } from './paired.js';
+export { pairedBinaryDifferenceInterval, pairedNonInferiority } from './paired.js';
+export { pairedMeanDifferenceBootstrap } from './bootstrap.js';
+export type { QualificationSplit } from './splits.js';
+export { freezeQualificationSplit, verifyQualificationSplits } from './splits.js';
+export type { EvidenceDigestMode } from './digest.js';
+export { canonicalSha256, legacySha256, matchEvidenceDigest } from './digest.js';

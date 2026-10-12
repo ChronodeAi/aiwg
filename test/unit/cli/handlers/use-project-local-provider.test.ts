@@ -8,6 +8,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from '../../../../src/extensions/project-local-paths.js';
+
+const ARTIFACT_ENV_KEYS = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+  PROJECT_LOCAL_SEARCH_PATHS_ENV,
+  'AIWG_GROKBOT_SKILLS_DIR',
+] as const;
+
+let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>> = {};
 
 const state = vi.hoisted(() => ({
   frameworkRoot: '',
@@ -56,6 +67,11 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
   let frameworkRoot: string;
 
   beforeEach(() => {
+    originalEnv = {};
+    for (const key of ARTIFACT_ENV_KEYS) {
+      originalEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     projectDir = tmp();
     frameworkRoot = tmp();
     state.frameworkRoot = frameworkRoot;
@@ -64,6 +80,11 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
   });
 
   afterEach(() => {
+    for (const key of ARTIFACT_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(frameworkRoot, { recursive: true, force: true });
   });
@@ -87,35 +108,48 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     expect(state.run.mock.calls[0][1]).not.toContain('my-provider');
   });
 
-  it('resolves Devin Desktop aliases to the Windsurf deploy adapter', async () => {
-    const result = await useHandler.execute({
-      cwd: projectDir,
-      frameworkRoot,
-      rawArgs: ['use', 'sdlc', '--provider', 'devin-desktop', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
-      args: ['sdlc', '--provider', 'devin-desktop', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
-    });
+  it.each(['devin', 'devin-desktop', 'windsurf'])('resolves %s to the same Windsurf deploy adapter', async (selector) => {
+    const args = ['sdlc', '--provider', selector, '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
 
     expect(result.exitCode).toBe(0);
-    expect(state.run).toHaveBeenCalledWith(
-      'tools/agents/deploy-agents.mjs',
-      expect.arrayContaining(['--provider', 'windsurf']),
-      {},
-    );
-    expect(state.run.mock.calls[0][1]).not.toContain('devin-desktop');
+    expect(state.run).toHaveBeenCalledWith('tools/agents/deploy-agents.mjs', expect.arrayContaining(['--provider', 'windsurf']), {});
+    if (selector !== 'windsurf') expect(state.run.mock.calls[0][1]).not.toContain(selector);
   });
 
-  it('rejects bare Devin provider ids with Windsurf guidance', async () => {
+  it.each([
+    { framework: 'all', flags: ['--scope', 'user'] },
+    { framework: 'all', flags: ['--user'] },
+    { framework: 'agent-loop', flags: ['--scope', 'user'] },
+    { framework: 'agent-loop', flags: ['--user'] },
+  ])('forwards user scope to every Grokbot deploy for $framework $flags', async ({ framework, flags }) => {
+    process.env.AIWG_GROKBOT_SKILLS_DIR = join(projectDir, 'user-skills');
+    for (const [kind, id] of [['addons', 'agent-loop'], ['extensions', 'test-extension']]) {
+      const dir = join(frameworkRoot, 'agentic', 'code', kind, id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id, type: 'addon', name: id, version: '1.0.0' }));
+    }
+    const args = [framework, '--provider', 'grokbot', '--target', projectDir, '--dry-run', '--no-project-local', ...flags];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode).toBe(0);
+    const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
+    expect(calls.length).toBeGreaterThanOrEqual(framework === 'all' ? 3 : 1);
+    for (const [, deployArgs] of calls) {
+      expect(deployArgs[deployArgs.indexOf('--scope') + 1]).toBe('user');
+    }
+  });
+
+  it('rejects Devin CLI without conflating it with Devin Desktop', async () => {
     const result = await useHandler.execute({
       cwd: projectDir,
       frameworkRoot,
-      rawArgs: ['use', 'sdlc', '--provider', 'devin', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
-      args: ['sdlc', '--provider', 'devin', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
+      rawArgs: ['use', 'sdlc', '--provider', 'devin-cli', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
+      args: ['sdlc', '--provider', 'devin-cli', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local'],
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.message).toContain('Unsupported provider: devin');
-    expect(result.message).toContain('aiwg use sdlc --provider windsurf');
-    expect(result.message).toContain('does not emit .devin/ provider output yet');
+    expect(result.message).toContain('Unsupported provider: devin-cli');
+    expect(result.message).toContain('Use --provider devin for Devin Desktop');
     expect(state.run).not.toHaveBeenCalled();
   });
 

@@ -15,9 +15,25 @@ version: "1.0"
 providers:
   claude-code:
     display_name: Claude Code
+    aliases:
+      - claude
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: H
+      channel: "claude -p --output-format stream-json --verbose; terminal result extraction"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2900"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: claude 2.1.295 on titan (--version/--help only)"
+          - "tools/ralph-external/lib/claude-adapter.mjs"
     status: stable
-    daemon_tier: native
-    daemon_pty_adapter: true
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
     artifact_paths:
       agents: .claude/agents/
       commands: .claude/commands/
@@ -31,7 +47,7 @@ providers:
       mcp: true
       behaviors: false
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
       cron: native
       agent_teams: native
@@ -39,7 +55,7 @@ providers:
       mcp: native
       behaviors: hooks
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: true
       hook_file: AIWG.md
@@ -77,11 +93,25 @@ providers:
 
   codex:
     display_name: OpenAI Codex
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: H
+      channel: "codex debug models + exec --json -o F thread/turn/item/error event stream"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 50000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2897"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: codex-cli 0.161.0 on titan (--version/--help only); `codex mcp-server --help` still prints root help"
+          - "tools/ralph-external/lib/codex-adapter.mjs"
     aliases:
       - openai
     status: stable
-    daemon_tier: native
-    daemon_pty_adapter: true
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
     artifact_paths:
       agents: .codex/agents/
       commands: "~/.codex/prompts/"
@@ -100,15 +130,15 @@ providers:
       mcp: false
       behaviors: false
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: external-trigger
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
       behaviors: aiwg-mc
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: false
       hook_file: AIWG-codex.md
@@ -146,6 +176,21 @@ providers:
 
   copilot:
     display_name: GitHub Copilot
+    aliases:
+      - github-copilot
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "copilot -p --output-format json; scoped --allow-tool permissions"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2901"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference"
     status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
@@ -164,7 +209,7 @@ providers:
       mission_control: false
       daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
@@ -181,10 +226,25 @@ providers:
 
   factory:
     display_name: Factory AI
+    aliases:
+      - factory-ai
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "droid exec --output-format stream-json; terminal parser to qualify"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2902"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/factory-adapter.mjs"
     status: stable
     # droid CLI runs headless via `droid exec`; AIWG daemon provides persistence layer
-    daemon_tier: tier1
-    daemon_pty_adapter: true
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
     artifact_paths:
       agents: .factory/droids/
       commands: .factory/commands/
@@ -198,15 +258,15 @@ providers:
       mcp: true               # Native MCP support (stdio + HTTP transports)
       behaviors: false
       mission_control: true   # Factory Missions maps to MC concept
-      daemon: false           # No native persistent daemon; AIWG daemon wraps droid exec
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: null       # native Missions
       tasks: null             # native Task tool
       mcp: null               # native MCP
       behaviors: aiwg-mc
       mission_control: null   # native Missions
-      daemon: aiwg-daemon     # AIWG daemon provides persistence for headless droid exec
+      daemon: null
     hook_wiring:
       at_link_support: false
       hook_file: AIWG-factory.md
@@ -217,6 +277,20 @@ providers:
 
   cursor:
     display_name: Cursor IDE
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "agent -p --output-format json; sandbox/permission profile to qualify"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2903"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://cursor.com/docs/cli/overview"
+          - "https://cursor.com/docs/cli/reference/output-format"
     status: stable
     # Cursor requires a display server (VS Code extension host) — daemon not supported
     daemon_tier: unsupported
@@ -236,7 +310,7 @@ providers:
       mission_control: false
       daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
@@ -253,8 +327,22 @@ providers:
 
   opencode:
     display_name: OpenCode
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "opencode run --format json; JSONL framing to qualify"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2904"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/opencode-adapter.mjs"
+          - "https://opencode.ai/docs/cli/"
     status: stable
-    daemon_tier: native
+    daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
       agents: .opencode/agent/
@@ -269,15 +357,15 @@ providers:
       mcp: false
       behaviors: false
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
       behaviors: aiwg-mc
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: true
       hook_file: AIWG-opencode.md
@@ -288,8 +376,21 @@ providers:
 
   warp:
     display_name: Warp Terminal
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "oz agent run --prompt/--model/--cwd/--profile; stdout capture"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2905"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.warp.dev/agents/cli/oz-cli/"
     status: stable
-    daemon_tier: native
+    daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
       agents: .warp/agents/
@@ -305,15 +406,15 @@ providers:
       mcp: false
       behaviors: false
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
       behaviors: aiwg-mc
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: true
       hook_file: AIWG-warp.md
@@ -323,9 +424,31 @@ providers:
     aggregated_output: true
 
   windsurf:
-    display_name: Windsurf
-    status: experimental
-    # Windsurf is an IDE extension requiring VS Code host — daemon not supported
+    display_name: Devin Desktop
+    aliases:
+      - devin
+      - devin-desktop
+      - devin-local
+      - cascade
+    route_feasibility:
+      scope: out
+      identity: unavailable
+      evidence: R
+      channel: "none - no verified headless Desktop worker command; recheck B-OG-47"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 1, tokens: 0, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: null
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "src/providers/provider-definitions.ts#windsurf"
+          - "https://docs.devin.ai/cli/reference/commands.md"
+          - "https://docs.devin.ai/_llms/en/desktop.md"
+        exclusion_gap: "Devin Desktop documents no headless worker command and no worker-serving MCP tool; its MCP settings configure clients, IDE startup is not inference."
+        recheck: "Rechecked 2026-10-08: Desktop unchanged, still OUT. Devin CLI documents `devin -p/--print`, `--model`, `--prompt-file`, `--permission-mode` and `--sandbox` (no JSON output or effort flag found; `devin acp` is ACP, `devin mcp` manages client servers). Devin CLI stays a distinct future-provider surface, not a windsurf alias, until registry support exists."
+    status: stable
+    # Devin Desktop uses the Windsurf compatibility surface and requires a VS Code host — daemon not supported
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
@@ -344,7 +467,7 @@ providers:
       mission_control: false
       daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
@@ -359,10 +482,143 @@ providers:
     deploy_target: project
     aggregated_output: true
 
+  grokbot:
+    display_name: Grok Bot
+    route_feasibility:
+      scope: out
+      identity: unavailable
+      evidence: R
+      channel: "none - desktop CreateAgent is not a headless subprocess contract; recheck B-OG-47"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 1, tokens: 0, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: null
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "src/providers/provider-definitions.ts#grokbot"
+          - "https://docs.x.ai/grok-bot/overview.md"
+          - "https://docs.x.ai/grok-bot/skills-routines-and-automations.md"
+          - "https://docs.x.ai/grok-bot/computer-and-apps.md"
+          - "https://docs.x.ai/grok-bot/faq.md"
+        exclusion_gap: "Grok Bot runs Bots on xAI-hosted computers driven from desktop/mobile chat, routines and connectors; no documented local CLI, headless subprocess or worker-serving MCP tool."
+        recheck: "Rechecked 2026-10-08 against the official Grok Bot docs: no change, still OUT. Third-party bridges are not official interfaces and were not evaluated; desktop CreateAgent names are never synthesized into a command."
+    status: stable
+    # Multi-agent desktop assistant runtime. Distinct from Cursor IDE and from
+    # xAI Grok Build / API. Native skill root is operator-configured via
+    # AIWG_GROKBOT_SKILLS_DIR (fail-closed; no invented ~/.grokbot).
+    # ADR: docs/architecture/adr-grokbot-provider-target.md · epic #196.
+    # Optional natives (routines/CreateAgent/connectors) deferred #209 — does not block stable.
+    # #210: stable via Linux PUW + security + migration + maintainer waiver (no macOS/Windows gate).
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: "Indexed: aiwg discover / aiwg show agent"   # native CreateAgent teammates are Grok-owned (#209)
+      commands: "Indexed: aiwg discover / aiwg show command"
+      skills: "AIWG_GROKBOT_SKILLS_DIR when configured (fail-closed)"
+      skills_cross_agent: "AIWG_GROKBOT_SKILLS_DIR/.aiwg/skills with --copy-all"
+      rules: "Indexed: aiwg show rule + AGENTS.md discover-first bridge"
+      behaviors: "Unsupported as automatic AIWG artifact; map manually to Grok routines (#209)"
+    native_features:
+      cron: true            # Grok routines — capability present; AIWG does not own the clock
+      agent_teams: true     # CreateAgent/teammates — Grok-owned orchestration
+      tasks: false          # no verified separate task contract
+      mcp: true             # connectors/dynamic tools — capability; AIWG MCP install deferred #209
+      behaviors: false
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: null
+      agent_teams: null
+      tasks: aiwg-mc
+      mcp: null
+      behaviors: aiwg-mc
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      hook_file: null
+      fallback: full-inject
+      context_file: AGENTS.md
+    deploy_target: mixed
+    aggregated_output: false
+
+  grok-build:
+    display_name: Grok Build
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "grok -p --output-format streaming-json; bounded parser + model/effort pinning"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2906"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "src/providers/grok-build-headless.ts"
+    status: experimental
+    # xAI Grok Build CLI/TUI. Distinct from Grok Bot (`grokbot`).
+    # #2577: fixture-backed native subagents and background tasks; see
+    # test/unit/providers/grok-build-provider.test.ts and
+    # test/unit/providers/grok-build-dispatch.test.ts. MCP is independently
+    # covered by test/unit/providers/grok-build-native-integration.test.ts.
+    # Headless and ACP protocol contracts are tested in grok-build-headless.test.ts
+    # and grok-build-acp.test.ts. ACP does not establish a daemon lifecycle.
+    # No fixture supports native cron, multi-agent teams, mission control,
+    # or AIWG behavior registration; those claims remain false.
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .grok/agents/  # qualified AIWG model workers only
+      commands: null
+      skills: .grok/skills/
+      skills_cross_agent: .grok/.aiwg/skills/  # --copy-all opt-in mirror
+      rules: "Indexed: aiwg show rule + AGENTS.md / host .grok/rules (AIWG writer deferred #2577)"
+      behaviors: null
+    native_features:
+      cron: false
+      agent_teams: false # independent subagents do not imply native team orchestration
+      tasks: true        # native background subagents/tasks
+      mcp: true
+      behaviors: false
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: null
+      agent_teams: aiwg-mc
+      tasks: native
+      mcp: null
+      behaviors: aiwg-mc
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      hook_file: null
+      fallback: full-inject
+      context_file: AGENTS.md
+    deploy_target: mixed
+    aggregated_output: false
+
   hermes:
     display_name: Hermes
-    status: experimental
-    daemon_tier: native
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: H
+      channel: "hermes -z plain final + --usage-file; session-filtered log binding"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2912"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "host-help: hermes 0.20.6 on titan (2026-10-07 observation; not rechecked in this pass)"
+          - "/usr/local/lib/hermes-agent/mcp_serve.py"
+    status: stable
+    daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
       # MCP is OPTIONAL for Hermes (validated v2026.5.13, #1527): it integrates
@@ -370,7 +626,7 @@ providers:
       # bridge. The "MCP:" entries below are the optional enrichment path, not a
       # requirement. Broader MCP modernization: #1533.
       agents: AGENTS.md
-      commands: "AGENTS.md bridge + aiwg discover/show (MCP command-run optional)"
+      commands: "Indexed: aiwg discover / aiwg show command (MCP command-run optional)"
       skills: "~/.hermes/skills/"
       skills_cross_agent: "~/.hermes/skills/.aiwg/"
       rules: "AGENTS.md ### Rule sections + aiwg show rule (MCP rule-list/rule-show optional)"
@@ -382,15 +638,15 @@ providers:
       mcp: true
       behaviors: false
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: native
       behaviors: aiwg-mc
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: false
       hook_file: .hermes.md
@@ -399,10 +655,85 @@ providers:
     deploy_target: mixed
     aggregated_output: true
 
+  muse:
+    display_name: Muse Code
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: H
+      channel: "model-catalog JSON + exec --json invocation-bound session logs"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2898"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "host-help: Muse Code 1.4.4 (1.4.4-R5419.1) on titan (--version/--help only)"
+          - "tools/ralph-external/lib/muse-adapter.mjs"
+          - "test/fixtures/providers/muse/direct-manifest.json (synthetic only; strict finals/live controls remain unqualified)"
+          - "docs/providers/muse-ralph-exec.md (manual smoke run and S1 blockers)"
+    status: stable
+    # Meta's terminal/CI coding agent (Muse Spark-powered). Explicitly not a
+    # model-API surface: Glimmer/Image/Voice are out of scope.
+    # Skill writer (.agents/skills + XDG user root), discover-first AGENTS.md
+    # bridge, managed .muse/hooks.json, and opt-in MCP settings profile.
+    # ADR: docs/architecture/adr-muse-provider-target.md · epic #223.
+    # #231: promoted stable — Linux PUW + security review; maintainer Linux-only waiver 2026-10-02.
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: "Indexed: aiwg discover / aiwg show agent (native writer deferred)"
+      commands: null
+      # Project root is fixed; the user root resolves at deploy time from
+      # XDG_CONFIG_HOME (default ~/.config/muse/skills when unset). Never
+      # advertise ~/.muse as a skill root, and never silently mirror into
+      # ~/.agents/skills (#226).
+      skills: .agents/skills/
+      skills_cross_agent: null
+      rules: "Indexed: aiwg show rule + AGENTS.md discover-first bridge"
+      behaviors: null
+    native_features:
+      cron: false
+      agent_teams: false
+      tasks: false
+      mcp: true
+      behaviors: false
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: null
+      agent_teams: null
+      tasks: aiwg-mc
+      mcp: null
+      behaviors: aiwg-mc
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      hook_file: .muse/hooks.json
+      fallback: full-inject
+      context_file: AGENTS.md
+    deploy_target: mixed
+    aggregated_output: false
+
   openclaw:
     display_name: OpenClaw
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "openclaw agent exec --json; workspace/settings mapping to qualify"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2907"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://docs.openclaw.ai/cli/agent"
     status: stable
-    daemon_tier: native
+    daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
       agents: "~/.openclaw/agents/"
@@ -417,15 +748,15 @@ providers:
       mcp: true
       behaviors: true
       mission_control: false
-      daemon: true
+      daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: native
       behaviors: native
       mission_control: aiwg-mc
-      daemon: native
+      daemon: null
     hook_wiring:
       at_link_support: false
       context_file: "~/.openclaw/config.yaml"
@@ -434,6 +765,25 @@ providers:
 
   openhuman:
     display_name: OpenHuman
+    aliases:
+      - tinyhumansai
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: D
+      channel: "openhuman-core --model M call --method openhuman.agent_chat --params-stdin; conductor-framed params JSON on stdin to EOF, final JSON stdout, no event stream"
+      fanout: unknown
+      probe_budget: { status: proposed, calls: 3, tokens: 30000 }
+      coverage:
+        profile_issue: "roctinam/aiwg#2911"
+        source_date: "2026-10-08"
+        live_qualified: false
+        sources:
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/core/cli.rs"
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/agent/schemas.rs"
+          - "https://github.com/tinyhumansai/openhuman/blob/216ea322a3c1269dada70751ac5c08eac7dc7596/crates/openhuman-core/src/mcp/server/tools/specs.rs"
+          - "https://github.com/tinyhumansai/openhuman/releases/tag/v0.64.14"
+        recheck: "Rechecked 2026-10-08 and promoted into S1 (doc/source-only, unqualified): `openhuman-core --model M call --method openhuman.agent_chat --params-stdin` reads the `message`, `model_override` and `cwd` params as JSON from stdin until EOF, runs one in-process agent turn and prints the JSON result on stdout; the conductor frames the params from the brief so prompt text never enters argv. Profile pinned to 0.64.14; live qualification is an open S1 blocker (not installed on an authorized host, budget proposed). Effort, step cap, approval/sandbox mapping and child fan-out are unknown. Native `openhuman-core mcp` `agent.run_subagent` takes only `agent_id`/`prompt` (no model, effort or workspace pin) and may nest subagents, so it is not a qualifying worker MCP tool."
     status: experimental
     # tinyhumansai/openhuman — OSS personal-AI runtime (Rust core + Tauri shell).
     # AIWG-convention-aware out of the box (.agents/, AGENTS.md, .claude/, .codex/).
@@ -442,8 +792,8 @@ providers:
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
-      agents: ".agents/agents/"                          # markdown personas (workspace-scoped — the coding hosts OpenHuman drives); harness TOML is Tier-2 (#1559)
-      commands: "AGENTS.md bridge (no native command surface)"
+      agents: "Indexed: aiwg discover / aiwg show agent"   # native TOML harness agents are opt-in (#1559)
+      commands: "Indexed: aiwg discover / aiwg show command"
       skills: "~/.openhuman/skills/"                      # global/home-dir like OpenClaw — ungated user-scope native scan (ops_discover.rs); same root OpenHuman's own installer writes to (#1553)
       skills_cross_agent: "~/.openhuman/.aiwg/skills/"
       rules: "AGENTS.md ### Rule sections + aiwg show rule"
@@ -457,7 +807,7 @@ providers:
       mission_control: false
       daemon: false
     emulation:
-      cron: aiwg-schedule
+      cron: null
       agent_teams: aiwg-mc
       tasks: aiwg-mc
       mcp: null
@@ -470,6 +820,228 @@ providers:
     deploy_target: mixed
     aggregated_output: true
 
+  antigravity:
+    display_name: Google Antigravity CLI
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "agy -p stream-json per provider-contract; fixture-qualified flags only"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2908"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "agentic/code/providers/antigravity/provider-contract.v1.json"
+          - "https://antigravity.google/docs/cli/headless/"
+    aliases:
+      - agy
+    status: experimental
+    executable: agy
+    qualified_version: 1.1.26
+    qualification_evidence: agentic/code/providers/antigravity/provider-contract.v1.json
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/agents/
+      commands: "(not deployed; no qualified native command surface)"
+      skills: .agents/skills/
+      rules: AGENTS.md
+      behaviors: "(not supported)"
+      mcp_project: .agents/mcp_config.json
+      mcp_user: "~/.gemini/config/mcp_config.json"
+    native_features:
+      cron: false
+      agent_teams: false
+      tasks: false
+      mcp: true
+      behaviors: false
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: aiwg-mc
+      tasks: aiwg-mc
+      mcp: native
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: No stable structured-question tool contract was qualified for CLI 1.1.26.
+    deploy_target: project
+    aggregated_output: false
+
+  deepseek-harness:
+    display_name: DeepSeek Harness
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "dsh --profile headless + validated Cordis route patch; no guessed --model flag"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2909"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/deepseek-harness-adapter.mjs"
+    aliases:
+      - dsh
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/skills/
+      commands: null
+      skills: .agents/skills/
+      rules: AGENTS.md
+      behaviors: null
+      cordis_patch: .dsh/aiwg.cordis.patch.yml
+    native_features:
+      cron: false
+      agent_teams: true
+      tasks: true
+      mcp: true
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: native
+      tasks: native
+      mcp: native
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+      max_bytes: 65536
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: Headless and SDK profiles do not expose an interactive question UI.
+    deploy_target: project
+    aggregated_output: false
+
+  pi:
+    display_name: Pi Coding Agent
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "pi --mode json --model/--thinking/--tools; closed stdin, no RPC abort"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2910"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/pi-adapter.mjs"
+    aliases:
+      - pi-coding-agent
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/skills/
+      commands: .pi/prompts/
+      skills: .pi/skills/
+      skills_cross_agent: .agents/skills/
+      rules: AGENTS.md
+      behaviors: .pi/extensions/
+    native_features:
+      cron: false
+      agent_teams: false
+      tasks: false
+      mcp: false
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: aiwg-mc
+      tasks: aiwg-mc
+      mcp: null
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: Pi does not expose a built-in structured question tool.
+    deploy_target: project
+    aggregated_output: false
+
+  omp:
+    display_name: Oh My Pi
+    route_feasibility:
+      scope: in
+      identity: runtime-configured-only
+      evidence: R
+      channel: "omp --mode json --model/--thinking/--profile; --no-tools for text-only"
+      fanout: unknown
+      probe_budget: { status: authorized, calls: 3, tokens: 30000, authorized_by: operator, authorized_at: "2026-10-07", hosts: [titan, noodle] }
+      coverage:
+        profile_issue: "roctinam/aiwg#2910"
+        source_date: "2026-10-07"
+        live_qualified: false
+        sources:
+          - "tools/ralph-external/lib/omp-adapter.mjs"
+    aliases:
+      - oh-my-pi
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .omp/agents/
+      commands: .omp/prompts/
+      skills: .agents/skills/
+      skills_cross_agent: .agents/skills/
+      rules: .omp/rules/
+      behaviors: .omp/extensions/
+    native_features:
+      cron: false
+      agent_teams: true
+      tasks: true
+      mcp: true
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: null
+      tasks: null
+      mcp: null
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: true
+      fallback: full-inject
+      context_file: .omp/AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: OMP integration uses Markdown questions; native UI questions require an interactive runtime.
+    deploy_target: project
+    aggregated_output: false
+
 # Feature definitions — documents what each feature key means and
 # what emulation strategies are available when native support is absent.
 features:
@@ -477,7 +1049,7 @@ features:
     description: Scheduled task execution (recurring triggers)
     native_example: Claude Code CronCreate/CronList/CronDelete tools
     emulation_strategies:
-      aiwg-schedule: AIWG schedule CLI with remote triggers
+      external-trigger: System cron, systemd timers, or CI own time and launch a reviewed provider command
   agent_teams:
     description: Multi-agent orchestration with team coordination
     native_example: Claude Code native agent teams
@@ -505,10 +1077,7 @@ features:
       aiwg-mc: AIWG mc start/dispatch/status/watch CLI
   daemon:
     description: >
-      Persistent background process for headless/unattended operation.
-      Tier 1 (native): full daemon support via aiwg daemon start/stop/status.
-      Tier 2 (pty-adapter): PTY bridge for platforms with a TUI but no headless mode.
-      Tier 3 (unsupported): requires a display server or IDE host; daemon not applicable.
-    native_example: aiwg daemon start (Claude Code, OpenCode, Warp, OpenClaw, Codex)
-    emulation_strategies:
-      pty-adapter: node-pty bridge for TUI platforms (Claude Code, Codex secondary mode)
+      Resident AIWG daemon lifecycle. The current production CLI does not expose
+      a daemon command; bundled daemon sources are non-routable development artifacts.
+    native_example: null
+    emulation_strategies: {}

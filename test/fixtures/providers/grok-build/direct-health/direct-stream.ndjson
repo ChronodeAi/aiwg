@@ -1,0 +1,6 @@
+{"type":"thought","data":"synthetic reasoning"}
+{"type":"tool_call","toolCallId":"call_1","title":"Read","kind":"read","status":"in_progress","toolName":"read_file","rawInput":{},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_1","status":"completed","content":[],"rawOutput":{},"locations":[]}
+{"type":"text","data":"synthetic answer"}
+{"type":"usage","messageId":"resp_1","stopReason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}
+{"type":"end","stopReason":"end_turn","sessionId":"fixture-session"}

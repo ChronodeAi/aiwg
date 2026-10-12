@@ -31,6 +31,7 @@ import {
 } from 'fs';
 import { getProviderConfig } from '../agent-spawn.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
+import { projectAiwgPath } from '../../config/project-artifacts.js';
 
 /**
  * Options for launching an external agent loop
@@ -41,6 +42,13 @@ export interface RalphLaunchOptions {
   maxIterations?: number;
   model?: string;
   budget?: number;
+  maxTotalTokens?: number;
+  maxOutputTokens?: number;
+  maxToolCalls?: number;
+  maxTotalCost?: number;
+  maxWallClockMinutes?: number;
+  explorationQuota?: number;
+  budgetStopPolicy?: 'completion-wins' | 'budget-wins';
   timeout?: number;
   mcpConfig?: string;
   giteaIssue?: boolean;
@@ -104,7 +112,7 @@ export function getOrchestratorPath(frameworkRoot: string): string {
  * Get the registry directory path
  */
 export function getRegistryDir(projectRoot: string): string {
-  return join(projectRoot, '.aiwg', 'ralph-external');
+  return projectAiwgPath(projectRoot, 'ralph-external');
 }
 
 /**
@@ -143,6 +151,27 @@ export function buildArgs(options: RalphLaunchOptions): string[] {
   }
   if (options.budget) {
     args.push('--budget', String(options.budget));
+  }
+  if (options.maxTotalTokens) {
+    args.push('--max-total-tokens', String(options.maxTotalTokens));
+  }
+  if (options.maxOutputTokens) {
+    args.push('--max-output-tokens', String(options.maxOutputTokens));
+  }
+  if (options.maxToolCalls) {
+    args.push('--max-tool-calls', String(options.maxToolCalls));
+  }
+  if (options.maxTotalCost) {
+    args.push('--max-total-cost', String(options.maxTotalCost));
+  }
+  if (options.maxWallClockMinutes) {
+    args.push('--max-wall-clock-minutes', String(options.maxWallClockMinutes));
+  }
+  if (options.explorationQuota) {
+    args.push('--exploration-quota', String(options.explorationQuota));
+  }
+  if (options.budgetStopPolicy) {
+    args.push('--budget-stop-policy', options.budgetStopPolicy);
   }
   if (options.timeout) {
     args.push('--timeout', String(options.timeout));
@@ -676,7 +705,7 @@ export function cleanupInternalRalph(projectRoot: string): {
   cleaned: string[];
   preserved: string[];
 } {
-  const ralphDir = join(projectRoot, '.aiwg', 'ralph');
+  const ralphDir = projectAiwgPath(projectRoot, 'ralph');
   const cleaned: string[] = [];
   const preserved: string[] = [];
 

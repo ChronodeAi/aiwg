@@ -100,12 +100,14 @@ export function generateHelp(registry: ExtensionRegistry): string {
   lines.push('  cursor                Cursor IDE');
   lines.push('  opencode              OpenCode');
   lines.push('  warp                  Warp Terminal');
-  lines.push('  windsurf              Windsurf');
+  lines.push('  devin                 Devin Desktop');
+  lines.push('  windsurf              Deprecated alias for devin');
   lines.push('');
 
   // Examples
   lines.push('Examples:');
   lines.push('  aiwg use sdlc                    Install SDLC framework');
+  lines.push('  aiwg use sdlc --global           Install user assets + lightweight project wiring');
   lines.push('  aiwg -new                        Create new project');
   lines.push('  aiwg doctor                      Check installation health');
   lines.push('');

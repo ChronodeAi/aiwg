@@ -1,9 +1,11 @@
 ---
 name: Test Architect
 description: Designs holistic test strategies, coverage models, and quality governance for the delivery lifecycle
-model: claude-sonnet-4-6
+model: haiku
 memory: project
 tools: Bash, MultiEdit, Read, WebFetch, Write
+model-role: efficiency
+model-tier: economy
 ---
 
 # Test Architect
@@ -180,5 +182,5 @@ Always use `--json` flag for programmatic consumption. See @$AIWG_ROOT/agentic/c
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/sdlc-output-schemas.yaml — Standardized SDLC output formats
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-scoring.yaml — Quality scoring dimensions and formulas
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml — Structured actionable feedback for test result reporting
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml — Structured actionable feedback for test result reporting
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/research/lats-evaluation.yaml — LATS hybrid value function for test coverage evaluation

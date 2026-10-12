@@ -5,6 +5,11 @@ import path from 'path';
 import os from 'os';
 import type { AiwgConfig, CommandLogConfig } from '../config/aiwg-config.js';
 import { readAiwgConfig } from '../config/aiwg-config.js';
+import {
+  PROJECT_AIWG_LOCATION_FILE,
+  projectAiwgPath,
+  projectControlPath,
+} from '../config/project-artifacts.js';
 
 export type CommandLogScope = 'project' | 'global';
 
@@ -224,7 +229,13 @@ async function resolvePathContext(cwd: string): Promise<{
 async function findProjectRoot(startDir: string): Promise<string | null> {
   let current = path.resolve(startDir);
   while (current !== path.dirname(current)) {
-    if (existsSync(path.join(current, '.aiwg'))) return current;
+    if (
+      existsSync(path.join(current, '.aiwg')) ||
+      existsSync(path.join(current, PROJECT_AIWG_LOCATION_FILE)) ||
+      existsSync(projectControlPath(current, 'aiwg.config'))
+    ) {
+      return current;
+    }
     current = path.dirname(current);
   }
   return null;
@@ -237,7 +248,7 @@ function resolveLogPath(
 ): string | null {
   if (scope === 'project') {
     if (!projectRoot) return null;
-    return path.join(projectRoot, '.aiwg', 'telemetry', 'cli-commands.jsonl');
+    return projectAiwgPath(projectRoot, 'telemetry', 'cli-commands.jsonl');
   }
 
   const stateHome = env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');

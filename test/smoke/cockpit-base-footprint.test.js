@@ -2,7 +2,7 @@
 // The AIWG Cockpit (apps/cockpit/**) is an opt-in, separately-published unit. It
 // MUST NOT ship inside the base `aiwg` npm package. This test fails if a future
 // change to the `files` allowlist (or an .npmignore edit) ever leaks it in.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, inject } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
@@ -21,10 +21,7 @@ function parseNpmPackJson(stdout) {
 
 describe('cockpit base-npm footprint guard (#1593)', () => {
   it('publishes zero apps/cockpit files in the base aiwg tarball', () => {
-    const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-      encoding: 'utf8', cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024,
-    });
-    const files = (parseNpmPackJson(out)[0]?.files ?? []).map((f) => f.path);
+    const files = inject('basePackageManifest').files.map((file) => file.path);
     const leaked = files.filter((f) => f.startsWith('apps/cockpit'));
     expect(leaked, `apps/cockpit must not ship in base aiwg — leaked: ${leaked.slice(0, 5).join(', ')}`).toHaveLength(0);
   }, 120000); // npm pack walks the full base tarball (~6k files) — allow headroom
@@ -48,15 +45,26 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
     expect(cockpit.publishConfig?.access).toBe('public');
     expect(cockpit.files).toContain('bridge/');
     expect(cockpit.files).toContain('web/dist/');
+    expect(cockpit.files).toContain('LICENSE');
+    expect(cockpit.scripts?.['build:web:release']).toBe('node scripts/build-web-release.mjs');
+    expect(cockpit.scripts?.prepack).toBe('npm run build:web:release');
   });
 
   it('the cockpit tarball dry-run names @aiwg/cockpit and excludes node_modules', () => {
     const npmCache = '/tmp/aiwg-npm-cache';
     mkdirSync(npmCache, { recursive: true });
-    const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    const out = execFileSync('npm', ['pack', '--dry-run', '--json'], { timeout: 60_000,
       encoding: 'utf8',
       cwd: new URL('../../apps/cockpit', import.meta.url),
-      env: { ...process.env, npm_config_cache: npmCache },
+      env: {
+        ...process.env,
+        npm_config_cache: npmCache,
+        // Publish workflows point the outer npm process at a private
+        // non-proxying registry. The release builder must still install its
+        // public build dependencies from npmjs.org.
+        npm_config_registry: 'https://registry.invalid.example/',
+        npm_config_replace_registry_host: 'always',
+      },
       maxBuffer: 64 * 1024 * 1024,
     });
     const pack = parseNpmPackJson(out)[0];
@@ -65,5 +73,8 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
     expect(pack?.name).toBe('@aiwg/cockpit');
     expect(files.some((f) => f.startsWith('node_modules/')), 'cockpit tarball must not contain node_modules').toBe(false);
     expect(files).toContain('bridge/src/server.mjs');
+    expect(files).toContain('LICENSE');
+    expect(files).toContain('web/dist/index.html');
+    expect(files.some((f) => /^web\/dist\/assets\/.+\.js$/.test(f)), 'cockpit tarball must contain the compiled web bundle').toBe(true);
   }, 120000);
 });

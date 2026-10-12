@@ -1,5 +1,8 @@
 # First Success: Start A Project Intake
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Use this recipe when you have an idea, repo, or workstream and want AIWG to turn it into structured project context.
 
 ## Do This

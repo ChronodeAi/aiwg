@@ -2,7 +2,7 @@
 namespace: aiwg
 name: flow-release
 platforms: [all]
-description: Config-driven release orchestration — reads .aiwg/release.config and walks the project's declared gates (local build, CI green, doc-sync, changelog/announcement, README, release entry, post-release housekeeping)
+description: Config-driven release orchestration — reads .aiwg/release.config plus optional .aiwg/releases/<plan-id> sidecars and walks the selected release plan's gates
 triggers:
   - "help with CI builds or deployment"
   - "help me make the build or deployment path safer"
@@ -14,11 +14,13 @@ triggers:
   - "run the release flow"
   - "run release flow"
 commandHint:
-  argumentHint: '<version> [--channel <stable|rc|beta|alpha|nightly>] [--dry-run] [--skip-uat] [--no-mirror] [--config <path>] [--guidance "text"]'
+  argumentHint: '<version> [--plan <id>] [--channel <stable|rc|beta|alpha|nightly>] [--dry-run] [--skip-uat] [--no-mirror] [--config <path>] [--guidance "text"]'
   allowedTools: 'Task, Read, Write, Edit, Bash, Glob, Grep, mcp__git-gitea__*'
-  model: opus
+  model: sonnet
   category: sdlc-orchestration
   orchestration: true
+  modelRole: coding
+  modelTier: standard
 ---
 
 # Release Orchestration Flow (config-driven)
@@ -34,20 +36,49 @@ commandHint:
 
 **You are the Core Orchestrator** for the project's release sequence.
 
+## Artifact root resolution
+
+Treat every `.aiwg/...` path in this skill as a logical artifact path. Before
+reading or writing release configuration, sidecars, evidence, or reports, run
+`aiwg artifacts path` from the active workspace and use the returned absolute
+directory as `AIWG_ARTIFACT_ROOT`. An explicit `--config` path still wins.
+Never assume the repository-local `.aiwg/` directory is the artifact corpus:
+split-root projects may redirect it with `AIWG_ARTIFACTS_PATH` or
+`.aiwg-location`. Do not copy redirected payload back into the local control
+plane.
+
+## Threat-assessment gate
+
+Before publishing release notes, announcements, or forge release content,
+resolve the active workspace member's `.aiwg/aiwg.config`
+`security.threatAssessment` policy and assess the final content as
+`release-note` with `tools/security/threat-assessment.mjs`. Persist the
+machine-readable report with the release evidence. `audit` records without
+interrupting; enforce-mode `flag`/`require-authorization` pauses publication
+and `reject` blocks it. Off mode disables only this AIWG classifier.
+
 ## Your role
 
 You walk the gates declared in `.aiwg/release.config`, in order, enforcing `hard_stop` semantics. You do not hard-code which gates exist or what they do — the config does. This is what makes the skill portable across projects with different release policies (a CalVer + npm project like AIWG vs. a SemVer + container-only project will share this skill body but differ entirely in their config).
 
 When the user requests a release:
 
-1. **Read `.aiwg/release.config`** (or the path passed via `--config`). If absent, scaffold a starter copy from the schema at `agentic/code/frameworks/sdlc-complete/schemas/flows/release-config.yaml` and ask the operator to review before continuing.
-2. **Resolve the target channel** from `--channel` (default: `stable`).
-3. **Validate the version** against `version_policy.format` and the `versioning` rule (CalVer no-leading-zeros, semver, etc.).
-4. **Walk the `gates` array in order.** For each gate:
+1. **Resolve `AIWG_ARTIFACT_ROOT` with `aiwg artifacts path`, then read `$AIWG_ARTIFACT_ROOT/release.config`** (or the path passed via `--config`). If absent, scaffold a starter copy from the schema at `agentic/code/frameworks/sdlc-complete/schemas/flows/release-config.yaml` and ask the operator to review before continuing.
+2. **Discover release-plan sidecars** under `$AIWG_ARTIFACT_ROOT/releases/*.json`, `$AIWG_ARTIFACT_ROOT/releases/*.yaml`, and `$AIWG_ARTIFACT_ROOT/releases/*.yml`.
+   - If `--plan <id>` is passed, select that plan.
+   - If exactly one sidecar exists and no `--plan` is passed, select it.
+   - If multiple plans exist and no plan is selected, halt with an actionable error listing available plan ids.
+   - If duplicate plan ids exist, halt and require unique ids.
+   - If no sidecar exists, continue with `.aiwg/release.config` as the legacy project-wide plan.
+3. **Report the active release plan before actions.** Print the selected plan id, sidecar path, target, and effective delivery mode before executing build, validation, publish, tag, or post-release steps.
+4. **Apply sidecar precedence.** When a release plan is active, its `delivery.mode` is authoritative for this release and overrides broad project defaults such as `direct`, `pr`, or `pr-required` where they conflict.
+5. **Resolve the target channel** from `--channel` (default: `stable`).
+6. **Validate the version** against `version_policy.format` and the `versioning` rule (CalVer no-leading-zeros, semver, etc.).
+7. **Walk the selected plan's gates in order.** For a sidecar plan, use its `build.commands`, `validation_gates`, publish target policy, and `post_release_verification` commands. Without a sidecar, walk `.aiwg/release.config`'s `gates` array. For each gate:
    - Skip if `required_for_channels` is present and the target channel isn't in it.
    - Execute the gate's body (steps, invoke_skill, artifacts, review_diff, actions).
    - On failure: if `hard_stop: true`, **halt and report**. If false, log a warning and continue.
-5. **Report** with the release tag URL, CI run URL, and tracker actions taken.
+8. **Report** with the release tag URL, CI run URL, and tracker actions taken.
 
 ## Natural language triggers
 
@@ -61,9 +92,41 @@ When the user requests a release:
 - "ship it"
 - "tag a nightly"
 
+## Release plan sidecars
+
+Release plan sidecars are optional per-target release configs stored beside the
+main project config:
+
+```text
+.aiwg/aiwg.config
+.aiwg/release.config
+.aiwg/releases/<plan-id>.json
+.aiwg/releases/<plan-id>.yaml
+.aiwg/releases/<plan-id>.yml
+```
+
+Use sidecars when one repository has independent release tracks, such as an npm
+package, documentation site, plugin bundle, container image, or customer-specific
+distribution. The schema lives at
+`agentic/code/frameworks/sdlc-complete/schemas/flows/release-plan.schema.yaml`.
+
+Each sidecar can declare:
+
+- release identity: `id`, `name`, and `target`
+- build commands and validation gates
+- publish targets and registry/remote details
+- artifact, signing, SBOM, and provenance requirements
+- docs, changelog, and release-note expectations
+- post-release verification commands
+- `delivery.mode`, which overrides broad project delivery defaults while that plan is active
+
+Agents must fail closed on missing, ambiguous, or conflicting sidecars. Do not
+fall back silently to `.aiwg/release.config` when the user requested a specific
+plan and that plan cannot be resolved.
+
 ## Config-driven gate semantics
 
-The config schema (`release-config.yaml`) defines five gate shapes. Each gate has exactly one shape:
+The config schema (`release-config.yaml`) defines six gate shapes. Each gate has exactly one shape:
 
 ### Shape 1: `steps`
 
@@ -167,12 +230,76 @@ Declarative actions for post-release housekeeping.
     - update_release_entry: gitea
     - update_release_entry: github
       skip_when_flag: '--no-mirror'
+    - create_github_announcement_discussion:
+        category: Announcements
+        required_for_channels: [stable]
+        hard_stop: true
+        skip_when_flag: '--no-mirror'
+        links: [github_release, npm_version, release_notes, changelog]
+        style: conversational-impact-guidance
 ```
 
 Each action is interpreted by the skill:
 
 - `close_imported_issues_with_thanks: true` — find issues with the `imported` label closed by commits in this release, post a thank-you comment on the source tracker, then close on both sides. Mirrors the May-2026 jmagly→roctinam sweep pattern.
 - `update_release_entry: <tracker>` — create or update the release entry (Gitea/GitHub) with the announcement body.
+- `create_github_announcement_discussion` — after GitHub release publication
+  is verified, create one discussion in the configured category for stable
+  releases. **This action is tool-backed, not prose.** Draft the body, write it
+  to `{evidence_dir}/discussion.md`, then run the action's `run` command
+  (reference: `tools/release/publish-github-release-discussion.mjs`). The
+  publisher refuses to run until the GitHub release is published and not a
+  draft, validates the four required links and the `no_ai_attribution` policy
+  in the body, resolves the repository and category node IDs, searches the
+  category for an existing discussion titled `AIWG {version}…` and reuses it
+  so retries are idempotent (updating the body only when required links are
+  missing or `--update` is passed), issues GitHub's GraphQL `createDiscussion`
+  mutation, writes `discussion-preflight.json`, `discussion-request.json`, and
+  `discussion-result.json` beside the body, and finishes by running
+  `verify-github-release-discussion.mjs`. It fails with an actionable message
+  when Discussions are disabled, the category is absent, the release is
+  missing, or authentication lacks Discussions write access. Respect
+  `required_for_channels`, `hard_stop`, and `skip_when_flag`; the reference
+  release uses `hard_stop: true`, so a non-zero exit halts the flow and the
+  stable release is **not** reported complete without its discussion. Do not
+  substitute a hand-run GraphQL call or skip the step because the gate that
+  contains it is `hard_stop: false`; the action-level flag governs.
+
+  `{evidence_dir}` resolves to `<artifact_root>/releases/evidence/{version}`,
+  where `<artifact_root>` comes from `aiwg artifacts path --json`. Create it at
+  the start of the release run and write every gate's log there; a release run
+  that leaves no evidence directory is itself a defect to report.
+
+  The discussion is a companion to the durable release records, not another
+  copy of them. Its body must link to the GitHub release, the published npm
+  version, the release announcement/notes, and the matching CHANGELOG section.
+  Summarize the few changes with the greatest user impact; explain who each
+  helps, what it changes in practice, and one concrete way to try it. Use a
+  friendly, educational, professional voice, and close with specific questions
+  about how people are using the update or where they want more guidance. For
+  `style: conversational-impact-guidance`, prefer direct language, concrete
+  examples close to claims, varied sentence length, and useful analogies only
+  when they clarify the change. Avoid corporate filler, hype, and exhaustive
+  restatement. Keep raw install commands out of the body and point at the
+  release notes for upgrade steps; that keeps the `release-note` threat
+  assessment at `proceed`. Optional `voice_sources` refine that style when
+  readable; absence of a local voice file must not block an otherwise valid
+  release.
+
+## Completion gate: post-release verification is mandatory
+
+A stable release is **not complete** until every command in the active release
+plan sidecar's `post_release_verification` list has exited 0 (respecting
+`required_for_channels` and `skip_when_flag`). For AIWG that means both
+`release-publication-verify` and
+`node tools/release/verify-github-release-discussion.mjs --version {version}`.
+Run them after the `post-release` gate, record their output in
+`{evidence_dir}`, and only then report the release done or close release
+issues. If a verification command fails, apply the anti-laziness recovery
+protocol: fix the missing surface (for example, run the discussion publisher)
+and re-verify. Never report completion with a failing or unexecuted
+verification; 2026.9.7 and 2026.9.9 shipped without their announcement
+discussions because this gate was skipped.
 
 > **Verify publication before closing release-completion issues.** After the
 > `release` gate pushes the tag and the release workflows run, invoke the
@@ -239,14 +366,16 @@ This repository's `.aiwg/release.config` declares the gates AIWG uses today:
 4. **changelog-and-announcement** (CHANGELOG.md + docs/releases/ for stable)
 5. **readme-freshness** (diff prompt for stable)
 6. **release** (tag, push, mirror, npm dist-tag)
-7. **post-release** (tracker close-outs + reporter thanks)
+7. **post-release** (release entries, stable GitHub announcement discussion, tracker close-outs, and reporter thanks)
 
 That config IS the AIWG release checklist — what was previously prose in CLAUDE.md is now an executable spec.
 
 ## Related
 
 - Schema: `agentic/code/frameworks/sdlc-complete/schemas/flows/release-config.yaml`
+- Release plan schema: `agentic/code/frameworks/sdlc-complete/schemas/flows/release-plan.schema.yaml`
 - Config: `.aiwg/release.config` (per project)
+- Release plan sidecars: `.aiwg/releases/<plan-id>.yaml`, `.yml`, or `.json`
 - Rules: `versioning`, `no-attribution`, `ci-green-before-done`, `delivery-policy`, `anti-laziness`
 - Skills: `doc-sync` (called by gate 3), `release-publication-verify` (post-tag proof before closing release issues), `aiwg-pr` (when delivery.mode is pr-required for release prep), `aiwg-issue` (filing release-blocker issues)
 - Doc: CLAUDE.md "Release Documentation Requirements" + "Release Checklist"
@@ -260,4 +389,7 @@ That config IS the AIWG release checklist — what was previously prose in CLAUD
 - [ ] No AI attribution in commits, tags, or announcement
 - [ ] Original reporters thanked (if release closes imported issues)
 - [ ] Release entry created on Gitea (and GitHub mirror for stable)
+- [ ] One idempotent GitHub Announcements discussion created for stable
+      releases, linking the GitHub release, npm version, release notes, and
+      CHANGELOG
 - [ ] npm dist-tag updated correctly per channel

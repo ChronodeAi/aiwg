@@ -1148,7 +1148,7 @@ references:
     - "@.aiwg/research/findings/REF-013-metagpt.md"
   schemas:
     - "@agentic/code/frameworks/sdlc-complete/schemas/testing/regression.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
   agents:
     - "@.claude/agents/metrics-analyst.md"
   rules:

@@ -1,8 +1,8 @@
 /**
  * Vitest config for the executor-v1 conformance test suite.
  *
- * Scoped to test/conformance/executor-v1/ only.
- * Runs in forks pool with singleFork: true to prevent socket conflicts
+ * Includes offline executor, workload, activity and orchestration contracts.
+ * Runs in one non-isolated fork to prevent socket conflicts
  * with the registry tests.
  *
  * Usage:
@@ -15,12 +15,17 @@
 
 import { defineConfig } from 'vitest/config';
 import path from 'path';
+import { orchestrationConformanceFiles } from './test-lanes.mjs';
 
 export default defineConfig({
-  root: path.resolve(__dirname, '..'),
+  root: path.resolve(import.meta.dirname, '..'),
   test: {
     include: [
       'test/conformance/executor-v1/**/*.test.mjs',
+      'test/conformance/fleet-workload-v1/**/*.test.mjs',
+      'test/conformance/activity-v1/**/*.test.mjs',
+      'test/conformance/network-analysis-v1/**/*.test.ts',
+      ...orchestrationConformanceFiles,
     ],
     exclude: [
       'node_modules/**',
@@ -28,14 +33,12 @@ export default defineConfig({
     ],
     environment: 'node',
 
-    // forks pool + singleFork prevents socket-level conflicts with
+    // One non-isolated fork prevents socket-level conflicts with
     // the registry tests that may share port space
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    maxWorkers: 1,
+    fileParallelism: false,
+    isolate: false,
 
     // Conformance tests exercise I/O-bound fixture loading and can be slow
     // in live mode; use a generous timeout
@@ -48,12 +51,13 @@ export default defineConfig({
     mockReset: true,
     restoreMocks: true,
 
-    reporters: ['verbose'],
+    reporters: ['verbose', 'json'],
+    outputFile: { json: './test-results/conformance-fixtures.json' },
   },
 
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, '../src'),
+      '@': path.resolve(import.meta.dirname, '../src'),
     },
     extensions: ['.mjs', '.js', '.ts', '.json'],
   },

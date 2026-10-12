@@ -23,11 +23,13 @@ import {
   GRAPH_CONFIGS,
   BUILTIN_GRAPH_CONFIGS,
   getGraphIndexDir,
+  getProjectIndexRoot,
   loadGlobalGraphConfigs,
   loadUserGraphConfigs,
   type GraphConfigWarning,
   type GraphType,
   type ArtifactIndex,
+  resolveGraphBackendType,
 } from './types.js';
 import {
   getFortemiCoreSyncStatus,
@@ -35,6 +37,8 @@ import {
 } from './fortemi-core-sync.js';
 
 export interface GraphStatus {
+  /** Resolved active backend after graph/project/default precedence. */
+  backend: 'json' | 'graphology' | 'sqlite';
   /** Graph name (e.g. `framework`, `project`, or a user/module graph). */
   name: string;
   /** `builtin` (protected), `registered` (module- or operator-declared). */
@@ -126,6 +130,7 @@ export function collectIndexStatus(
     }
     graphs.push({
       name,
+      backend: resolveGraphBackendType(name as GraphType),
       origin: name in BUILTIN_GRAPH_CONFIGS ? 'builtin' : 'registered',
       shared: config.shared,
       defaultBuild: config.defaultBuild,
@@ -146,7 +151,7 @@ export function collectIndexStatus(
   const reservedIndexDirs = new Set(['fortemi-core']);
   const registeredNames = new Set(Object.keys(GRAPH_CONFIGS));
   const orphanIndexDirs: string[] = [];
-  const projectIndexRoot = path.join(cwd, '.aiwg', '.index');
+  const projectIndexRoot = getProjectIndexRoot(cwd);
   try {
     for (const d of fs.readdirSync(projectIndexRoot, { withFileTypes: true })) {
       if (
@@ -208,6 +213,7 @@ export async function showIndexStatus(
       'GRAPH'.padEnd(22) +
       'ORIGIN'.padEnd(12) +
       'STATE'.padEnd(10) +
+      'BACKEND'.padEnd(12) +
       'ENTRIES'.padEnd(9) +
       'AGE'.padEnd(10) +
       'LOCATION',
@@ -225,6 +231,7 @@ export async function showIndexStatus(
         g.name.padEnd(22) +
         g.origin.padEnd(12) +
         state.padEnd(10) +
+        g.backend.padEnd(12) +
         String(g.entries ?? '—').padEnd(9) +
         age.padEnd(10) +
         shortenPath(g.location, cwd),

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { parseFrontmatter, extractMentions, buildIndex, normalizeNamedCaptures, buildFilenameMetadataEntry } from '../../../src/artifacts/index-builder.js';
+import { parseFrontmatter, extractMentions, extractMarkdownLinks, buildIndex, normalizeNamedCaptures, buildFilenameMetadataEntry } from '../../../src/artifacts/index-builder.js';
 import { INDEX_DIR, GRAPH_CONFIGS, loadUserGraphConfigs, loadModuleGraphConfigs, loadGlobalGraphConfigs, normalizeEdge, normalizeEdges, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { TypedEdge, DependencyGraph } from '../../../src/artifacts/types.js';
 
@@ -73,6 +73,29 @@ index:
   it('should return empty array when config.yaml does not exist', () => {
     const loaded = loadUserGraphConfigs(tmpDir);
     expect(loaded).toEqual([]);
+  });
+
+  it('should load user-defined graphs from the local control config when the corpus is external', () => {
+    const artifactRoot = path.join(tmpDir, 'private-corpus', '.aiwg');
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.aiwg'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.aiwg-location'), 'private-corpus/.aiwg\n');
+    fs.writeFileSync(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      index: {
+        graphs: {
+          references: {
+            scanDirs: ['documentation/references'],
+            extensions: ['.md'],
+            defaultBuild: false,
+          },
+        },
+      },
+    }));
+
+    const loaded = loadUserGraphConfigs(tmpDir);
+
+    expect(loaded).toContain('references');
+    expect(GRAPH_CONFIGS['references'].scanDirs).toEqual(['documentation/references']);
   });
 });
 
@@ -172,6 +195,33 @@ describe('loadModuleGraphConfigs', () => {
 
     const loaded = loadModuleGraphConfigs(tmpDir);
     expect(loaded).toEqual([]);
+  });
+
+  it('should load module graph declarations from the configured artifact root registry', () => {
+    const artifactRoot = path.join(tmpDir, 'private-corpus', '.aiwg');
+    const registryDir = path.join(artifactRoot, 'frameworks');
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.aiwg-location'), 'private-corpus/.aiwg\n');
+    fs.writeFileSync(path.join(registryDir, 'registry.json'), JSON.stringify({
+      version: '1.0.0',
+      frameworks: [{ id: 'relocated-framework' }],
+    }));
+
+    const frameworkDir = path.join(tmpDir, 'agentic', 'code', 'frameworks', 'relocated-framework');
+    fs.mkdirSync(frameworkDir, { recursive: true });
+    fs.writeFileSync(path.join(frameworkDir, 'manifest.json'), JSON.stringify({
+      id: 'relocated-framework',
+      index: {
+        graphs: {
+          'relocated-docs': { scanDirs: ['docs/relocated'], extensions: ['.md'] },
+        },
+      },
+    }));
+
+    const loaded = loadModuleGraphConfigs(tmpDir);
+
+    expect(loaded).toContain('relocated-docs');
+    expect(GRAPH_CONFIGS['relocated-docs'].scanDirs).toEqual(['docs/relocated']);
   });
 
   it('should also check addons directory', () => {
@@ -336,6 +386,44 @@ describe('loadGlobalGraphConfigs', () => {
   });
 });
 
+describe('getGraphIndexDir', () => {
+  let tmpDir: string;
+  let prevHome: string | undefined;
+  let prevXdg: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-graph-index-dir-test-'));
+    prevHome = process.env.HOME;
+    prevXdg = process.env.XDG_DATA_HOME;
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdg;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('uses os.homedir when HOME and XDG_DATA_HOME are unset (#132)', () => {
+    delete process.env.HOME;
+    delete process.env.XDG_DATA_HOME;
+
+    expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
+      path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework'),
+    );
+    expect(getGraphIndexDir(tmpDir, 'framework')).not.toContain('undefined');
+  });
+
+  it('preserves an explicit XDG_DATA_HOME', () => {
+    process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg-data');
+
+    expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
+      path.join(tmpDir, 'xdg-data', 'aiwg', 'index', 'framework'),
+    );
+  });
+});
+
 describe('Artifact Index Builder', () => {
   describe('parseFrontmatter', () => {
     it('should parse valid YAML frontmatter', () => {
@@ -408,6 +496,30 @@ Ref @src/foo.ts and also @src/foo.ts again.
       const mentions = extractMentions(content);
       expect(mentions).toEqual([]);
     });
+
+    it('normalizes $AIWG_ROOT framework references to repo-relative paths', () => {
+      const content = `
+References:
+- @$AIWG_ROOT/agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/human-authorization.md
+`;
+      const mentions = extractMentions(content);
+      expect(mentions).toContain('agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md');
+      expect(mentions).toContain('agentic/code/addons/aiwg-utils/rules/human-authorization.md');
+    });
+  });
+
+  describe('extractMarkdownLinks', () => {
+    it('extracts relative Markdown links and excludes external, anchor-only, and image links', () => {
+      const content = `
+[target](./target.md)
+[parent](../parent.md#section)
+[external](https://example.test/doc.md)
+[anchor](#local)
+![image](./target.md)
+`;
+      expect(extractMarkdownLinks(content)).toEqual(['./target.md', '../parent.md']);
+    });
   });
 
   describe('buildIndex', () => {
@@ -470,6 +582,7 @@ New users can register.
       // Check metadata content
       const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
       expect(metadata.version).toBe('1.0.0');
+      expect(metadata.extractorVersion).toBe('2026.08.24.1');
       expect(Object.keys(metadata.entries)).toHaveLength(2);
 
       const uc001 = metadata.entries['.aiwg/requirements/UC-001.md'];
@@ -490,6 +603,231 @@ New users can register.
       expect(stats.totalArtifacts).toBe(2);
       expect(stats.byPhase.requirements).toBe(2);
       expect(stats.byType['use-case']).toBe(2);
+    });
+
+    it('normalizes allowlisted operational-state frontmatter into index metadata', async () => {
+      const issuePath = path.join(tmpDir, '.aiwg', 'issues', 'AIWG-1827.md');
+      fs.mkdirSync(path.dirname(issuePath), { recursive: true });
+      fs.writeFileSync(issuePath, `---
+title: Live-state provenance
+type: issue
+operational_state:
+  source_repo: roctinam/aiwg
+  source_kind: issue
+  source_id: aiwg#1827
+  observed_state: open
+  observed_at: 2026-07-21T10:00:00Z
+  source_updated_at: 2026-07-21T09:00:00Z
+  evidence_url: https://user:synthetic@git.example.test/roctinam/aiwg/issues/1827?token=synthetic
+  observer: gitea-mcp
+  classification: fresh
+  current_action_selector: true
+  bearer_token: synthetic-must-not-survive
+---
+# Live-state provenance
+`);
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildIndex(tmpDir, { force: true });
+      } finally {
+        consoleSpy.mockRestore();
+      }
+
+      const metadata = JSON.parse(fs.readFileSync(
+        path.join(tmpDir, INDEX_DIR, 'metadata.json'),
+        'utf-8',
+      ));
+      expect(metadata.entries['.aiwg/issues/AIWG-1827.md'].operationalState).toEqual({
+        source_repo: 'roctinam/aiwg',
+        source_kind: 'issue',
+        source_id: 'aiwg#1827',
+        observed_state: 'open',
+        observed_at: '2026-07-21T10:00:00.000Z',
+        source_updated_at: '2026-07-21T09:00:00.000Z',
+        evidence_url: 'https://git.example.test/roctinam/aiwg/issues/1827',
+        observer: 'gitea-mcp',
+        classification: 'fresh',
+        current_action_selector: true,
+      });
+      expect(JSON.stringify(metadata)).not.toContain('synthetic');
+    });
+
+    it('normalizes explicit state-transfer lifecycle without using operational state', async () => {
+      const artifactPath = path.join(tmpDir, '.aiwg', 'archive', 'retired.md');
+      fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+      fs.writeFileSync(artifactPath, `---
+title: Retired artifact
+state_transfer:
+  deleted_at: 2026-07-20T08:30:00-04:00
+---
+# Retired artifact
+`);
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildIndex(tmpDir, { force: true });
+      } finally {
+        consoleSpy.mockRestore();
+      }
+
+      const metadata = JSON.parse(fs.readFileSync(
+        path.join(tmpDir, INDEX_DIR, 'metadata.json'),
+        'utf-8',
+      ));
+      expect(metadata.entries['.aiwg/archive/retired.md'].stateTransfer).toEqual({
+        deletedAt: '2026-07-20T12:30:00.000Z',
+      });
+      expect(metadata.entries['.aiwg/archive/retired.md']).not.toHaveProperty(
+        'operationalState',
+      );
+    });
+
+    it('indexes every operational asset type from project-local bundle layouts', async () => {
+      const assets: Array<[string, string]> = [
+        ['.aiwg/extensions/local-review/skills/local-review/SKILL.md', [
+          '---', 'name: local-review', 'description: Run a local review.', '---',
+          '# Local Review',
+        ].join('\n')],
+        ['.aiwg/extensions/local-review/rules/local-review.md', '# Local Review Rule\n'],
+        ['.aiwg/addons/local-ops/agents/local-operator.md', '# Local Operator\n'],
+        ['.aiwg/addons/local-ops/commands/local-check.md', '# Local Check\n'],
+        ['.aiwg/frameworks/local-delivery/behaviors/local-safety.md', '# Local Safety\n'],
+        // Provider-native project templates were the gap: the project graph
+        // previously omitted non-Markdown/YAML extensions accepted upstream.
+        ['.aiwg/frameworks/local-delivery/templates/provider/config.toml', 'mode = "local"\n'],
+        ['.aiwg/frameworks/local-delivery/schemas/deploy.schema.json', JSON.stringify({
+          title: 'DeployConfig',
+          description: 'Schema for local deployment configuration.',
+          type: 'object',
+        })],
+        ['.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md', [
+          '---', 'type: runbook', 'description: Recover the local delivery service.', '---',
+          '# Recovery Runbook', '', '## Procedure', '', 'Restart the service.', '',
+          '## Verification', '', 'Confirm service health.',
+        ].join('\n')],
+        ['.aiwg/frameworks/local-delivery/flows/release.yaml', [
+          'apiVersion: flow.aiwg.io/v1', 'kind: FlowPlaybook', 'metadata:',
+          '  name: local-release', 'spec:', '  description: Release the local project.',
+          '  steps:', '    - id: verify', '      action: run-tests',
+        ].join('\n')],
+        ['.aiwg/plugins/local-tools/hooks/preflight.md', '# Local Preflight Hook\n'],
+      ];
+      for (const [relativePath, content] of assets) {
+        const fullPath = path.join(tmpDir, relativePath);
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, content);
+      }
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await buildIndex(tmpDir, { graph: 'project', force: true, explicit: true });
+      } finally {
+        consoleSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
+      }
+
+      const metadata = JSON.parse(fs.readFileSync(
+        path.join(tmpDir, INDEX_DIR, 'project', 'metadata.json'),
+        'utf-8',
+      ));
+      const byPath = metadata.entries as Record<string, { type: string; kind?: string }>;
+      expect(Object.fromEntries(
+        assets.map(([relativePath]) => [relativePath, byPath[relativePath]?.type]),
+      )).toEqual({
+        '.aiwg/extensions/local-review/skills/local-review/SKILL.md': 'skill',
+        '.aiwg/extensions/local-review/rules/local-review.md': 'rule',
+        '.aiwg/addons/local-ops/agents/local-operator.md': 'agent',
+        '.aiwg/addons/local-ops/commands/local-check.md': 'command',
+        '.aiwg/frameworks/local-delivery/behaviors/local-safety.md': 'behavior',
+        '.aiwg/frameworks/local-delivery/templates/provider/config.toml': 'template',
+        '.aiwg/frameworks/local-delivery/schemas/deploy.schema.json': 'schema',
+        '.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md': 'runbook',
+        '.aiwg/frameworks/local-delivery/flows/release.yaml': 'flow',
+        '.aiwg/plugins/local-tools/hooks/preflight.md': 'hook',
+      });
+      expect(byPath['.aiwg/frameworks/local-delivery/schemas/deploy.schema.json']).toMatchObject({
+        name: 'deploy',
+        title: 'DeployConfig',
+      });
+      expect(byPath['.aiwg/frameworks/local-delivery/flows/release.yaml']?.kind).toBe('FlowPlaybook');
+    });
+
+    it('re-extracts unchanged files when the index format version changes', async () => {
+      const templateDir = path.join(tmpDir, 'agentic', 'code', 'addons', 'ops', 'templates');
+      fs.mkdirSync(templateDir, { recursive: true });
+      const runbookPath = path.join(templateDir, 'rotation-runbook.md');
+      fs.writeFileSync(runbookPath, [
+        '# Rotation Runbook', '',
+        '## Purpose', '', 'Rotate credentials safely.', '',
+        '## Procedure', '', 'Install the replacement.', '',
+        '## Verification', '', 'Confirm clients authenticate.', '',
+        '## Rollback', '', 'Restore the prior credential.', '',
+      ].join('\n'));
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await buildIndex(tmpDir, { scope: 'agentic', outputDir: tmpDir, force: true });
+      const metadataPath = path.join(tmpDir, INDEX_DIR, 'metadata.json');
+      const stale = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      const entryPath = Object.keys(stale.entries)[0];
+      stale.extractorVersion = '2026.07.17.1';
+      stale.entries[entryPath].type = 'template';
+      delete stale.entries[entryPath].kind;
+      fs.writeFileSync(metadataPath, JSON.stringify(stale));
+
+      await buildIndex(tmpDir, { scope: 'agentic', outputDir: tmpDir });
+      logSpy.mockRestore();
+      const rebuilt = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      expect(rebuilt.version).toBe('1.0.0');
+      expect(rebuilt.extractorVersion).toBe('2026.08.24.1');
+      expect(rebuilt.entries[entryPath].type).toBe('runbook');
+      expect(rebuilt.entries[entryPath].kind).toBe('Runbook');
+    });
+
+    it('links framework skills to rules referenced through $AIWG_ROOT', async () => {
+      const skillDir = path.join(tmpDir, 'agentic/code/frameworks/forensics-complete/skills/evidence-preservation');
+      const ruleDir = path.join(tmpDir, 'agentic/code/frameworks/forensics-complete/rules');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.mkdirSync(ruleDir, { recursive: true });
+
+      fs.writeFileSync(path.join(ruleDir, 'evidence-integrity.md'), `---
+enforcement: critical
+---
+# Evidence Integrity
+`);
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---
+name: evidence-preservation
+description: Preserve forensic evidence.
+---
+# evidence-preservation
+
+## References
+
+- @$AIWG_ROOT/agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md
+`);
+
+      const oldXdgData = process.env.XDG_DATA_HOME;
+      process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg');
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        await buildIndex(tmpDir, { graph: 'framework', force: true, explicit: true });
+      } finally {
+        consoleSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
+        if (oldXdgData === undefined) delete process.env.XDG_DATA_HOME;
+        else process.env.XDG_DATA_HOME = oldXdgData;
+      }
+
+      const indexDir = path.join(tmpDir, 'xdg', 'aiwg', 'index', 'framework');
+      const deps = JSON.parse(fs.readFileSync(path.join(indexDir, 'dependencies.json'), 'utf-8')) as DependencyGraph;
+      const skillPath = 'agentic/code/frameworks/forensics-complete/skills/evidence-preservation/SKILL.md';
+      const rulePath = 'agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md';
+
+      expect(deps[skillPath].upstream).toEqual([{ path: rulePath, type: 'depends-on' }]);
+      expect(deps[rulePath].downstream).toEqual([{ path: skillPath, type: 'depends-on' }]);
     });
 
     it('should handle incremental builds', async () => {
@@ -663,6 +1001,52 @@ Depends on @.aiwg/requirements/UC-001.md
       expect(uc001).toBeDefined();
       expect(uc001.downstream).toHaveLength(1);
       expect(uc001.downstream[0]).toEqual({ path: '.aiwg/requirements/UC-002.md', type: 'depends-on' });
+    });
+
+    it('builds scoped markdown-link edges and reports their count (#147)', async () => {
+      const workingDir = path.join(tmpDir, '.aiwg', 'working');
+      const outsideDir = path.join(tmpDir, 'outside');
+      fs.mkdirSync(workingDir, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+
+      fs.writeFileSync(path.join(workingDir, 'target.md'), '# Target\n');
+      fs.writeFileSync(path.join(outsideDir, 'outside.md'), '# Outside\n');
+      fs.writeFileSync(path.join(workingDir, 'source.md'), `---
+title: Source
+---
+# Source
+
+[target](./target.md)
+[external](https://example.test/target.md)
+[anchor](#local)
+[outside](../../outside/outside.md)
+`);
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await buildIndex(tmpDir, { force: true, graph: 'project' });
+
+      consoleSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+
+      const indexDir = path.join(tmpDir, INDEX_DIR, 'project');
+      const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
+      const deps: DependencyGraph = JSON.parse(
+        fs.readFileSync(path.join(indexDir, 'dependencies.json'), 'utf-8')
+      );
+      const stats = JSON.parse(fs.readFileSync(path.join(indexDir, 'stats.json'), 'utf-8'));
+
+      const sourcePath = '.aiwg/working/source.md';
+      const targetPath = '.aiwg/working/target.md';
+      expect(metadata.entries[sourcePath].dependencies).toEqual([]);
+      expect(metadata.entries[sourcePath].markdownLinks).toEqual(['./target.md', '../../outside/outside.md']);
+      expect(deps[sourcePath].upstream).toEqual([{ path: targetPath, type: 'markdown-link' }]);
+      expect(deps[targetPath].downstream).toEqual([{ path: sourcePath, type: 'markdown-link' }]);
+      expect(Object.keys(deps).some(key => key.includes('outside.md'))).toBe(false);
+      expect(stats.graphMetrics.totalEdges).toBe(1);
+      expect(stats.graphMetrics.markdownLinkEdges).toBe(1);
+      expect(stats.graphMetrics.orphanedArtifacts).toBe(0);
     });
   });
 

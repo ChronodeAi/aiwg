@@ -1,0 +1,30 @@
+{
+  "id": "decision-engine",
+  "type": "addon",
+  "name": "Decision Engine",
+  "version": "1.0.0",
+  "description": "Normalized rulesets and decisions with interchangeable Jev and LLM-subagent execution bindings.",
+  "core": false,
+  "autoInstall": false,
+  "explicitInstall": true,
+  "author": "AIWG Contributors",
+  "license": "MIT",
+  "repository": "https://github.com/jmagly/aiwg",
+  "keywords": ["decision", "ruleset", "jev", "llm-subagent", "flow"],
+  "entry": {
+    "skills": "skills/",
+    "rules": "rules/",
+    "docs": "docs/",
+    "examples": "examples/",
+    "gatePacks": "gate-packs/"
+  },
+  "agents": [],
+  "commands": [],
+  "skills": ["decision-evaluate", "decision-playground", "decision-offload"],
+  "rules": ["decision-offload"],
+  "gatePacks": ["integrity-ceiling", "absolute-screening"],
+  "dependencies": {
+    "required": ["aiwg-utils", "composition-engine"],
+    "optional": []
+  }
+}

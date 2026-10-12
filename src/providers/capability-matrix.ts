@@ -9,7 +9,7 @@
  * @unblocks #597, #598, #599
  */
 
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { load as loadYaml } from 'js-yaml';
@@ -33,9 +33,9 @@ export type FeatureKey =
 /**
  * Daemon support tier for a provider.
  *
- * - `native`      — full headless daemon (aiwg daemon start/stop/status)
- * - `pty-adapter` — PTY bridge for TUI-based platforms (secondary/opt-in mode)
- * - `unsupported` — requires a display server or IDE host; daemon not applicable
+ * The current production CLI has no daemon lifecycle command, so bundled
+ * providers resolve to `unsupported`. Other values remain in the type for
+ * project-local provider manifests and future atomic CLI implementations.
  *
  * @issue #656
  */
@@ -47,7 +47,12 @@ export type EmulationStrategy =
   | 'aiwg-mc'
   | 'aiwg-schedule'
   | 'aiwg-daemon'
+  | 'external-trigger'
   | null;
+
+export function isExternalStrategy(strategy: EmulationStrategy): boolean {
+  return strategy === 'external-trigger';
+}
 
 export type DeployTarget = 'project' | 'home' | 'mixed';
 
@@ -68,9 +73,71 @@ export interface HookWiring {
   context_file: string;
 }
 
+/**
+ * S0 route-feasibility evidence (B-OG-27). One row per matrix provider:
+ * whether the target is in or out of MVP worker scope, the identity
+ * evidence class, the native evidence channel, hidden fan-out state, and
+ * the synthetic probe budget and its operator authorization provenance.
+ * Help text, flag acceptance and worker echoes never qualify; unknown fan-out blocks
+ * strict use. Final qualification stays with B-OG-07/08/09/28.
+ */
+export type RouteFeasibilityScope = 'in' | 'out';
+
+export type RouteIdentityClass =
+  | 'backend-attested'
+  | 'runtime-configured-only'
+  | 'unavailable';
+
+export type RouteEvidenceGrade = 'H' | 'R' | 'D';
+
+export type RouteFanout = 'none' | 'controlled' | 'unknown';
+
+export type RouteProbeBudget = {
+  calls: number;
+  tokens: number;
+} & (
+  | { status: 'proposed' }
+  | {
+    status: 'authorized';
+    authorized_by: string;
+    /** ISO calendar date (YYYY-MM-DD). */
+    authorized_at: `${number}-${number}-${number}`;
+    hosts: [string, ...string[]];
+  }
+);
+
+/**
+ * S1 coverage reconciliation (B-OG-47). One normalized row per matrix
+ * provider: the profile-qualification issue for IN rows, the date its
+ * evidence/sources were last checked, and whether authenticated live
+ * qualification exists (doc/help/source evidence never sets it). OUT rows
+ * carry the concrete interface gap; OUT and promoted rows carry the
+ * upstream recheck result. No row stores a fabricated command.
+ */
+export interface RouteCoverage {
+  profile_issue: `roctinam/aiwg#${number}` | null;
+  /** ISO calendar date (YYYY-MM-DD) the cited evidence was last checked. */
+  source_date: `${number}-${number}-${number}`;
+  live_qualified: boolean;
+  sources: [string, ...string[]];
+  exclusion_gap?: string;
+  recheck?: string;
+}
+
+export interface RouteFeasibility {
+  scope: RouteFeasibilityScope;
+  identity: RouteIdentityClass;
+  evidence: RouteEvidenceGrade;
+  channel: string;
+  fanout: RouteFanout;
+  probe_budget: RouteProbeBudget;
+  coverage?: RouteCoverage;
+}
+
 export interface ProviderCapabilities {
   display_name: string;
   aliases?: string[];
+  route_feasibility?: RouteFeasibility;
   status: ProviderStatus;
   /** Primary daemon support tier. @issue #656 */
   daemon_tier: DaemonTier;
@@ -174,8 +241,8 @@ let _cached: CapabilityMatrix | null = null;
 
 /**
  * Resolve the path to capability-matrix.yaml relative to the package root.
- * Works for both compiled (dist/src/providers/) and source (src/providers/)
- * layouts by walking up to find the aiwg package.json.
+ * The lightweight CLI embeds the matrix next to the compiled loader. Full and
+ * source layouts retain the canonical agentic path.
  *
  * @issue #1261
  */
@@ -187,6 +254,9 @@ function resolveMatrixPath(): string {
   const thisDir = typeof __dirname !== 'undefined'
     ? __dirname
     : dirname(fileURLToPath(import.meta.url));
+
+  const embeddedMatrix = resolve(thisDir, 'capability-matrix.yaml');
+  if (existsSync(embeddedMatrix)) return embeddedMatrix;
 
   const packageRoot = findPackageRoot(thisDir);
   if (!packageRoot) {
@@ -243,6 +313,17 @@ export function getProviderCapabilities(
   }
 
   return undefined;
+}
+
+/**
+ * Get the S0 route-feasibility row for a provider by key or alias.
+ * Returns undefined when the matrix carries no row (e.g. registry-only
+ * `generic`, which is not a matrix provider).
+ */
+export function getRouteFeasibility(
+  providerKey: string,
+): RouteFeasibility | undefined {
+  return getProviderCapabilities(providerKey)?.route_feasibility;
 }
 
 export function getAgentCapabilities(
@@ -455,6 +536,7 @@ export function formatCapabilityTable(): string {
     const cells = features.map((f) => {
       if (caps.native_features[f]) return padRight('NATIVE', 15);
       const emu = caps.emulation[f];
+      if (isExternalStrategy(emu)) return padRight('EXTERNAL', 15);
       if (emu) return padRight(emu, 15);
       return padRight('--', 15);
     });
@@ -462,7 +544,7 @@ export function formatCapabilityTable(): string {
   }
 
   lines.push('');
-  lines.push('Legend: NATIVE = built-in support, aiwg-* = AIWG emulation, -- = unsupported');
+  lines.push('Legend: NATIVE = built-in support, aiwg-* = AIWG emulation, EXTERNAL = host/CI owns the trigger, -- = unsupported');
 
   return lines.join('\n');
 }
@@ -489,9 +571,11 @@ export function formatFeatureSupport(feature: FeatureKey): string {
     const strategy = caps.emulation[feature];
     const status = native
       ? 'NATIVE'
-      : strategy
-        ? `emulated (${strategy})`
-        : 'unsupported';
+      : isExternalStrategy(strategy)
+        ? 'external trigger'
+        : strategy
+          ? `emulated (${strategy})`
+          : 'unsupported';
     lines.push(`  ${padRight(caps.display_name, 18)} ${status}`);
   }
 

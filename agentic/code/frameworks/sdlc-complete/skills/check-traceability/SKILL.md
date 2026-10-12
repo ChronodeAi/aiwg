@@ -6,11 +6,18 @@ description: Verify the full refinement chain from use cases through behavioral 
 commandHint:
   argumentHint: '[path-to-project] [--layer all|uc|behavioral|pseudo|code|test] [--format table|csv|json] [--interactive] [--guidance "text"]'
   allowedTools: 'Read, Write, Glob, Grep'
-  model: sonnet
+  model: haiku
   category: documentation-tracking
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Check Traceability
+
+This verification workflow remains active. Dataset Intelligence can project
+links into its ledger, but a mention is not verified traceability and a
+verified link without a run identity remains inferred. See the [dataset
+migration guide](../../../addons/dataset-intelligence/docs/migration-guide.md).
 
 ## Task
 

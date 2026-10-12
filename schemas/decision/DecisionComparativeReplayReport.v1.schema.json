@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayReport.v1.schema.json",
+  "title": "DecisionComparativeReplayReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "mode",
+    "semantics",
+    "actionAuthorization",
+    "preregistrationDigest",
+    "corpusDigest",
+    "goldDigest",
+    "splitDigest",
+    "accessedAt",
+    "integrity",
+    "integrityDigest",
+    "roots",
+    "metrics",
+    "diagnosticDecision",
+    "reviewStatus",
+    "findings",
+    "upstreamDecision",
+    "decision",
+    "digest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-report/v1"
+    },
+    "mode": {
+      "const": "shadow"
+    },
+    "semantics": {
+      "const": "associative-sensitivity-not-causal"
+    },
+    "actionAuthorization": {
+      "const": "not-authorized"
+    },
+    "preregistrationDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "goldDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "splitDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "accessedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sample_n",
+        "uncertainty",
+        "paired_baseline",
+        "integrity_mode",
+        "fresh_workspace_required",
+        "fresh_workspace_verified",
+        "integrity_state",
+        "trusted_score_source",
+        "compromise_labels",
+        "weak_signal_reason",
+        "release_gate"
+      ],
+      "properties": {
+        "sample_n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertainty": {},
+        "paired_baseline": {},
+        "integrity_mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fresh_workspace_required": {
+          "type": "boolean"
+        },
+        "fresh_workspace_verified": {
+          "type": "boolean"
+        },
+        "integrity_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trusted_score_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "compromise_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "weak_signal_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "reasons"
+          ],
+          "properties": {
+            "decision": {
+              "enum": [
+                "PROMOTE",
+                "HOLD",
+                "ROLLBACK"
+              ]
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "integrityDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "roots": {
+      "type": "array",
+      "maxItems": 6000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "slice",
+          "reportDigest",
+          "correct",
+          "falseNoChange",
+          "split"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "slice": {
+            "enum": [
+              "threshold-boundary",
+              "priority-loss",
+              "unchanged-control",
+              "unreplayable"
+            ]
+          },
+          "reportDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "correct": {
+            "type": "boolean"
+          },
+          "falseNoChange": {
+            "type": "boolean"
+          },
+          "split": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "testRoots",
+        "errors",
+        "falseNoChange",
+        "pairedLowerBps",
+        "errorUpperBps",
+        "slices",
+        "backendCalls",
+        "tokens",
+        "costMicros",
+        "exactReproduction"
+      ],
+      "properties": {
+        "testRoots": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "falseNoChange": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairedLowerBps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "errorUpperBps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "slices": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "threshold-boundary",
+            "priority-loss",
+            "unchanged-control",
+            "unreplayable"
+          ],
+          "properties": {
+            "threshold-boundary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roots",
+                "errors",
+                "errorUpperBps"
+              ],
+              "properties": {
+                "roots": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errorUpperBps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            },
+            "priority-loss": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roots",
+                "errors",
+                "errorUpperBps"
+              ],
+              "properties": {
+                "roots": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errorUpperBps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            },
+            "unchanged-control": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roots",
+                "errors",
+                "errorUpperBps"
+              ],
+              "properties": {
+                "roots": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errorUpperBps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            },
+            "unreplayable": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roots",
+                "errors",
+                "errorUpperBps"
+              ],
+              "properties": {
+                "roots": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "errorUpperBps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              }
+            }
+          }
+        },
+        "backendCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costMicros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exactReproduction": {
+          "type": "boolean"
+        }
+      }
+    },
+    "diagnosticDecision": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "reviewStatus": {
+      "const": "pending"
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 6000,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "upstreamDecision": {
+      "enum": [
+        "PROMOTE",
+        "HOLD",
+        "ROLLBACK"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "PROMOTE",
+        "HOLD",
+        "ROLLBACK"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

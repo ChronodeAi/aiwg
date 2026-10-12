@@ -3,15 +3,18 @@
 ## Overview
 
 `setup.aiwg.io/v1` is a Kubernetes-style YAML language for declaring cross-platform,
-script-first software installation. A SetupManifest declares a platform matrix,
+software installation. A SetupManifest declares a platform matrix,
 user-facing parameters, prerequisite checks, OS-level configuration entries, ordered
 installation steps, and named recovery procedures. Manifests are validated, executed,
 and authored by the **agentic-installer** addon.
 
-**Design philosophy**: scripts are the primary artifact. The `agentic` step type exists
-only for exception handling and adaptive recovery — not as a substitute for scripting
-known sequences. A well-written SetupManifest produces shell scripts that run
-standalone without AI tooling.
+The default `deterministic` execution mode is script-first: `agentic` steps are
+reserved for exception handling and adaptive recovery. The
+`provider-orchestrated` mode is for a manifest deliberately interpreted by a
+capable AI provider, such as AIWG's public install/repair flow. It may use
+reasoning steps as its primary workflow because inspection, authorization, and
+non-destructive repair vary by machine and project. `aiwg setup-run` executes
+only deterministic manifests.
 
 The authoritative JSON Schema lives at
 `agentic/code/addons/agentic-installer/schemas/v1/setup-manifest.schema.json`. This
@@ -20,9 +23,11 @@ document mirrors that schema; on conflict the schema wins.
 ## File Location and Discovery
 
 By convention manifests live at `setup.manifest.yaml` in the project root. The
-agentic-installer skills (`setup-generate`, `setup-validate`, `setup-run`) accept a
-path argument; otherwise they look for `setup.manifest.yaml` relative to the working
-directory.
+agentic-installer runtime commands (`setup-generate`, `setup-validate`,
+`setup-run`) are agent-facing CLI surfaces. `setup-validate` and `setup-run`
+accept a manifest path or `--manifest`; otherwise they look for
+`setup.manifest.yaml` relative to the working directory. `setup-generate` writes
+a starter manifest to `--output` or `setup.manifest.yaml`.
 
 ## Top-Level Structure
 
@@ -57,9 +62,16 @@ spec:
 | `description`  | string       | optional         | Free-form description.        |
 | `version`      | string       | optional         | Manifest version.             |
 | `install_type` | enum (below) | optional, `user` | Audience tag.                 |
+| `execution_mode` | enum (below) | optional, `deterministic` | Runtime contract. |
 
 `install_type` values: `user` (production deploy), `developer` (local dev environment),
 `ci` (headless pipeline setup). Only `developer` manifests may use `os_config`.
+
+`execution_mode` values:
+
+- `deterministic` — executable through `aiwg setup-run`; use scripts for known work.
+- `provider-orchestrated` — give the manifest URL or contents to a supported AI
+  provider. The CLI validates it but returns a handoff message instead of executing it.
 
 ### `spec`
 
@@ -272,27 +284,31 @@ spec:
 
 ## Tooling
 
-The agentic-installer addon ships three skills and one agent:
+The agentic-installer addon ships three agent-facing CLI entrypoints, three
+backing skills, one agent, two rules, and the canonical schema. These are
+agentic runtime assets: discovery and index automation should locate them by
+type (`skill`, `agent`, `rule`, `schema`) and by command name where applicable.
 
-- **`setup-generate`** — discover project artifacts, assemble manifest + script stubs.
-- **`setup-validate`** — schema + reference checks + agentic-step audit + `--fix`.
+- **`setup-generate`** — generate starter manifest and script assets.
+- **`setup-validate`** — schema + reference checks + agentic-step audit.
+  `--fix` is reserved for future safe autofixes and currently validates only.
 - **`setup-run`** — six-phase execution with platform detection, dry-run, and recovery
   confirmation gate.
 - **`installer-agent`** — specialized persona for manifest generation, validation, and
   execution.
 
 ```bash
-# Generate from a project
-aiwg setup-generate
+# Generate starter runtime assets
+aiwg setup-generate --output setup.manifest.yaml
 
 # Validate
 aiwg setup-validate setup.manifest.yaml
 
 # Dry run
-aiwg setup-run --dry-run
+aiwg setup-run --manifest setup.manifest.yaml --dry-run
 
-# Execute
-aiwg setup-run
+# Execute after reviewing the dry-run plan and obtaining authorization
+aiwg setup-run --manifest setup.manifest.yaml --confirm
 ```
 
 Two HIGH-severity rules govern manifest authoring and execution:

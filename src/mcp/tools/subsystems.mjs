@@ -17,6 +17,9 @@
 import { z } from 'zod';
 import { runAiwgCli, mcpError, mcpJson } from '../helpers.mjs';
 import { registerFlowToolset, registerMissionToolset } from './orchestration.mjs';
+import { registerWorkerInvokeToolset, WORKERS_TOOLSET_NAME } from './worker-invoke.mjs';
+import { registerAgenticSandboxToolset } from './agentic-sandbox.mjs';
+import { registerDecisionToolset } from './decision.mjs';
 
 /**
  * Wrap an `aiwg <subsystem> <verb>` CLI call as an MCP tool.
@@ -412,10 +415,38 @@ function registerMcToolset(server) {
       session_id: z.string().describe('Session id'),
       objective: z.string().describe('Mission objective'),
       completion: z.string().optional().describe('Completion criteria'),
+      max_iterations: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
+      max_total_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
+      max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
+      max_tool_calls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
+      max_total_cost: z.number().positive().finite().optional().describe('Hard cumulative provider-reported spend ceiling'),
+      max_wall_clock_minutes: z.number().positive().finite().optional().describe('Hard cumulative runtime ceiling'),
+      exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
+      budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
     },
-    buildArgs: ({ session_id, objective, completion }) => {
+    buildArgs: ({
+      session_id,
+      objective,
+      completion,
+      max_iterations,
+      max_total_tokens,
+      max_output_tokens,
+      max_tool_calls,
+      max_total_cost,
+      max_wall_clock_minutes,
+      exploration_quota,
+      budget_stop_policy,
+    }) => {
       const args = [session_id, objective];
       if (completion) args.push('--completion', completion);
+      if (max_iterations) args.push('--max-iterations', String(max_iterations));
+      if (max_total_tokens) args.push('--max-total-tokens', String(max_total_tokens));
+      if (max_output_tokens) args.push('--max-output-tokens', String(max_output_tokens));
+      if (max_tool_calls) args.push('--max-tool-calls', String(max_tool_calls));
+      if (max_total_cost) args.push('--max-total-cost', String(max_total_cost));
+      if (max_wall_clock_minutes) args.push('--max-wall-clock-minutes', String(max_wall_clock_minutes));
+      if (exploration_quota) args.push('--exploration-quota', String(exploration_quota));
+      if (budget_stop_policy) args.push('--budget-stop-policy', budget_stop_policy);
       return args;
     },
   });
@@ -542,6 +573,9 @@ function registerOpsToolset(server) {
 const TOOLSET_REGISTRY = {
   flows: registerFlowToolset,
   missions: registerMissionToolset,
+  // #2892: bounded direct worker run/status/cancel. Explicit opt-in name
+  // ONLY — see WILDCARD_EXCLUDED_TOOLSETS below for why `all` cannot reach it.
+  [WORKERS_TOOLSET_NAME]: registerWorkerInvokeToolset,
   memory: (server) => {
     registerStorageSubsystem(server, STORAGE_SUBSYSTEMS.find(s => s.name === 'memory'));
     registerStorageSubsystem(server, STORAGE_SUBSYSTEMS.find(s => s.name === 'reflections'));
@@ -558,7 +592,17 @@ const TOOLSET_REGISTRY = {
   ralph: registerRalphToolset,
   mc: registerMcToolset,
   ops: registerOpsToolset,
+  sandbox: registerAgenticSandboxToolset,
+  decision: registerDecisionToolset,
 };
+
+/**
+ * Toolsets that a bare `all` must NOT silently enable. Enabling these
+ * requires naming them explicitly in the AIWG_MCP_TOOLSETS list (#2892
+ * defect 4: a worker-invoke bridge must not become reachable just because
+ * an operator wanted "every read-only discovery toolset" via `all`).
+ */
+const WILDCARD_EXCLUDED_TOOLSETS = new Set([WORKERS_TOOLSET_NAME]);
 
 /**
  * Parse AIWG_MCP_TOOLSETS env or `--toolsets` CLI value into a Set.
@@ -569,18 +613,19 @@ const TOOLSET_REGISTRY = {
  * Examples:
  *   AIWG_MCP_TOOLSETS=flows,missions,ralph
  *   AIWG_MCP_TOOLSETS=core,memory          (core is implicit; harmless)
- *   AIWG_MCP_TOOLSETS=all                  (all known toolsets)
+ *   AIWG_MCP_TOOLSETS=all                  (all known toolsets EXCEPT `workers`,
+ *                                            which needs an explicit opt-in)
+ *   AIWG_MCP_TOOLSETS=all,workers          (explicit opt-in on top of `all`)
  */
 export function parseToolsets(value) {
   if (!value || typeof value !== 'string') return new Set();
   const items = value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (items.includes('all')) {
-    return new Set(Object.keys(TOOLSET_REGISTRY));
-  }
-  const out = new Set();
   const known = new Set(Object.keys(TOOLSET_REGISTRY));
+  const out = items.includes('all')
+    ? new Set([...known].filter((name) => !WILDCARD_EXCLUDED_TOOLSETS.has(name)))
+    : new Set();
   for (const item of items) {
-    if (item === 'core') continue;  // always on
+    if (item === 'core' || item === 'all') continue;  // 'core' always on; 'all' handled above
     if (!known.has(item)) {
       console.error(`[AIWG MCP] Unknown toolset: "${item}" — known: core, ${[...known].join(', ')}, all`);
       continue;
@@ -592,16 +637,34 @@ export function parseToolsets(value) {
 
 /**
  * Register all opt-in toolsets requested via env/flag.
+ *
+ * `options` is passed through to every registration function; only `workers`
+ * (#2892 B1) consumes it (`projectRoot`, pinned at registration — the served
+ * root must be resolved by the caller, e.g. `server.mjs`'s `findProjectRoot()`,
+ * never defaulted to `process.cwd()` here). Every other registration
+ * function in `TOOLSET_REGISTRY` is synchronous and ignores the extra arg.
+ *
+ * This function is `async` (returns a `Promise`) because `workers`'
+ * registration does real async work (realpath the root, resolve the default
+ * concurrency cap) before it calls `server.registerTool`. Calling it WITHOUT
+ * `await` is still safe for every other toolset: each registration function
+ * is invoked synchronously inside the loop below, so a purely-synchronous
+ * toolset's `server.registerTool` calls complete before this function's
+ * first (and only) `await` is ever reached — only `workers`'s own Promise is
+ * deferred into `pending`, and only an `await`ing caller needs to wait on it.
  */
-export function registerOptInToolsets(server, toolsets) {
+export async function registerOptInToolsets(server, toolsets, options = {}) {
   const enabled = [];
+  const pending = [];
   for (const name of toolsets) {
     const fn = TOOLSET_REGISTRY[name];
     if (fn) {
-      fn(server);
+      const result = fn(server, options);
+      if (result && typeof result.then === 'function') pending.push(result);
       enabled.push(name);
     }
   }
+  if (pending.length > 0) await Promise.all(pending);
   if (enabled.length > 0) {
     console.error(`[AIWG MCP] Opt-in toolsets enabled: ${enabled.join(', ')}`);
   } else {

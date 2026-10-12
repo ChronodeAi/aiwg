@@ -293,8 +293,8 @@ describe('OpsRegistry', () => {
       await mkdir(repoPath, { recursive: true });
       // Real git init so `git config` works
       const { execSync } = await import('child_process');
-      execSync('git init', { cwd: repoPath, stdio: 'pipe' });
-      execSync('git remote add origin https://example.com/owner/sysops.git', {
+      execSync('git init', { timeout: 60_000, cwd: repoPath, stdio: 'pipe' });
+      execSync('git remote add origin https://example.com/owner/sysops.git', { timeout: 60_000,
         cwd: repoPath,
         stdio: 'pipe',
       });

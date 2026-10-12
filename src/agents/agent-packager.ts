@@ -6,6 +6,8 @@
 
 import type { AgentInfo, Platform, PackagedAgent } from './types.js';
 import { getProviderDefinition } from '../providers/provider-definitions.js';
+import YAML from 'yaml';
+import { transformAgent as transformOmpAgent } from '../providers/omp-agent.mjs';
 
 type AgentFormatAdapter = (agent: AgentInfo) => string;
 
@@ -13,6 +15,8 @@ export class AgentPackager {
   private getAgentFormatAdapters(): Record<string, AgentFormatAdapter> {
     return {
       'claude-markdown': (agent) => this.convertToClaudeFormat(agent),
+      'antigravity-markdown': (agent) => this.convertToAntigravityFormat(agent),
+      'omp-markdown': (agent) => this.convertToOmpFormat(agent),
       'cursor-json': (agent) => this.convertToCursorFormat(agent),
       'codex-markdown': (agent) => this.convertToCodexFormat(agent),
       'copilot-markdown': (agent) => this.convertToGenericFormat(agent),
@@ -20,6 +24,22 @@ export class AgentPackager {
       'generic-markdown': (agent) => this.convertToGenericFormat(agent),
       'windsurf-markdown': (agent) => this.convertToWindsurfFormat(agent),
     };
+  }
+
+  /** Antigravity custom agents use Markdown with provider-native tool identifiers. */
+  convertToAntigravityFormat(agent: AgentInfo): string {
+    const lines = ['---', `name: ${agent.metadata.name}`, `description: ${agent.metadata.description}`];
+    const toolMap = new Map([
+      ['Read', 'view_file'],
+      ['Write', 'write_to_file'],
+      ['Edit', 'replace_file_content'],
+      ['Grep', 'grep_search'],
+      ['Bash', 'run_command'],
+    ]);
+    const tools = (agent.metadata.tools ?? []).map(tool => toolMap.get(tool)).filter((tool): tool is string => Boolean(tool));
+    if (tools.length) lines.push('tools:', ...tools.map(tool => `  - ${tool}`));
+    lines.push('---', '', agent.content);
+    return lines.join('\n');
   }
 
   /**
@@ -44,6 +64,12 @@ export class AgentPackager {
     };
   }
 
+  /** Preserve native OMP metadata without passing through another provider's serializer. */
+  convertToOmpFormat(agent: AgentInfo): string {
+    const metadata = { ...agent.metadata, model: agent.metadata.modelPriority ?? agent.metadata.model };
+    return transformOmpAgent(agent.filePath, `---\n${YAML.stringify(metadata)}---\n${agent.content}`);
+  }
+
   /**
    * Convert to Claude Code format (.md with YAML frontmatter)
    */
@@ -58,6 +84,12 @@ export class AgentPackager {
 
     if (metadata.model) {
       lines.push(`model: ${metadata.model}`);
+    }
+    if (metadata.modelRole) {
+      lines.push(`model-role: ${metadata.modelRole}`);
+    }
+    if (metadata.modelTier) {
+      lines.push(`model-tier: ${metadata.modelTier}`);
     }
 
     if (metadata.tools && metadata.tools.length > 0) {
@@ -100,6 +132,8 @@ export class AgentPackager {
       prompt: content,
       tools,
       ...(metadata.model && { model: metadata.model }),
+      ...(metadata.modelRole && { modelRole: metadata.modelRole }),
+      ...(metadata.modelTier && { modelTier: metadata.modelTier }),
       ...(metadata.category && { category: metadata.category }),
       ...(metadata.version && { version: metadata.version }),
       ...(metadata.dependencies && { dependencies: metadata.dependencies }),
@@ -129,6 +163,12 @@ export class AgentPackager {
 
     if (metadata.model) {
       lines.push(`preferred_model: ${metadata.model}`);
+    }
+    if (metadata.modelRole) {
+      lines.push(`model-role: ${metadata.modelRole}`);
+    }
+    if (metadata.modelTier) {
+      lines.push(`model-tier: ${metadata.modelTier}`);
     }
 
     if (metadata.category) {
@@ -176,6 +216,12 @@ export class AgentPackager {
     }
     if (metadata.model) {
       lines.push(`Preferred Model: ${metadata.model}`);
+    }
+    if (metadata.modelRole) {
+      lines.push(`Model Role: ${metadata.modelRole}`);
+    }
+    if (metadata.modelTier) {
+      lines.push(`Model Tier: ${metadata.modelTier}`);
     }
     if (metadata.tools && metadata.tools.length > 0) {
       lines.push(`Tools: ${metadata.tools.join(', ')}`);
@@ -225,6 +271,10 @@ export class AgentPackager {
     // Add model info if present
     if (metadata.model) {
       lines.push(`**Model**: ${metadata.model}`);
+      lines.push('');
+    }
+    if (metadata.modelRole || metadata.modelTier) {
+      lines.push(`**Model Policy**: ${metadata.modelRole ?? 'coding'}/${metadata.modelTier ?? 'standard'}`);
       lines.push('');
     }
 

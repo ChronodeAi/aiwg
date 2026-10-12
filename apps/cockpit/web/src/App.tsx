@@ -1,20 +1,24 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSession } from './useSession';
-import { api, TOKEN } from './api';
+import { api, sessionReady } from './api';
 import type { Approval, Instance, ResponseNeeded } from './types';
+import { runtimeFamily } from './util';
 import { Welcome } from './components/Welcome';
 import { Inventory } from './components/Inventory';
 import { Running } from './components/Running';
 import { Missions } from './components/Missions';
 import { Sessions } from './components/Sessions';
+import { Desktop } from './components/Desktop';
 import { Approvals } from './components/Approvals';
 import { Explore } from './components/Explore';
 import { Library } from './components/Library';
 import { Actions } from './components/Actions';
 import { Telemetry } from './components/Telemetry';
+import { Activity } from './components/Activity';
 import { Memory } from './components/Memory';
 import { StartSessionModal } from './components/StartSessionModal';
 import { LaunchInstanceModal } from './components/LaunchInstanceModal';
+import { registryResponseNeededItems, useSessionRegistry } from './sessionRegistry';
 
 const TABS = [
   { id: 'welcome', label: 'Home' },
@@ -26,10 +30,20 @@ const TABS = [
   { id: 'explore', label: 'Explore' },
   { id: 'library', label: 'Library' },
   { id: 'telemetry', label: 'Telemetry' },
+  { id: 'activity', label: 'Activity' },
   { id: 'memory', label: 'Memory' },
   { id: 'actions', label: 'Actions' },
 ] as const;
-type TabId = (typeof TABS)[number]['id'];
+// Desktop is a runtime-gated tab (#2547): listed only when the Bridge reports
+// both the identity verifier and the desktop backend configured.
+const DESKTOP_TAB = { id: 'desktop', label: 'Desktop' } as const;
+type TabId = (typeof TABS)[number]['id'] | typeof DESKTOP_TAB['id'];
+const ALL_TABS: ReadonlyArray<{ id: TabId; label: string }> = [...TABS, DESKTOP_TAB];
+function visibleTabs(desktopEnabled: boolean): ReadonlyArray<{ id: TabId; label: string }> {
+  if (!desktopEnabled) return TABS;
+  const index = TABS.findIndex((t) => t.id === 'sessions') + 1;
+  return [...TABS.slice(0, index), DESKTOP_TAB, ...TABS.slice(index)];
+}
 interface ChromeStatus {
   executor: string;
   instances: number;
@@ -39,17 +53,27 @@ interface ChromeStatus {
   container: boolean;
   vm: boolean;
 }
+type ConnectionState = 'checking' | 'live' | 'reconnecting';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 export function App() {
   const [tab, setTab] = useState<TabId>(() => {
     const hash = window.location.hash.replace(/^#/, '');
-    return TABS.some((t) => t.id === hash) ? hash as TabId : 'welcome';
+    return ALL_TABS.some((t) => t.id === hash) ? hash as TabId : 'welcome';
   });
+  const [desktopEnabled, setDesktopEnabled] = useState<boolean>(() => import.meta.env.VITE_COCKPIT_DESKTOP === '1');
+  const [desktopInstanceId, setDesktopInstanceId] = useState('');
+  const tabs = visibleTabs(desktopEnabled);
+  const requestOpenDesktop = (instanceId: string) => { setDesktopInstanceId(instanceId); setTab('desktop'); };
   const session = useSession();
+  const sessionRegistry = useSessionRegistry();
+  const registryResponses = registryResponseNeededItems(sessionRegistry).filter((response) => response.id !== `pty:${sessionRegistry.activeKey}`);
   const [composer, setComposer] = useState('');
   const [chrome, setChrome] = useState<ChromeStatus | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
+  const reconnectPendingRef = useRef(false);
+  const eventsDownRef = useRef(false);
   const [startOpen, setStartOpen] = useState(false);
   const [startInst, setStartInst] = useState<string | undefined>(undefined);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -57,52 +81,103 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
+    let retryMs = 1_000;
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(load, ms);
+    };
     const load = async () => {
       try {
         // Health + inventory decide "Bridge live". Running + approvals are
         // enrichment that a real executor may not expose (#1638) — degrade each
         // independently so the header stays live instead of "Bridge checking".
         const [health, inv] = await Promise.all([
-          api<{ executor_url: string }>('/api/health'),
+          api<{ executor_url: string; desktop?: { configured?: boolean } }>('/api/health'),
           api<{ instances: Instance[] }>('/api/inventory'),
         ]);
         if (cancelled) return;
+        if (health.desktop?.configured === true) setDesktopEnabled(true);
         const [run, apr] = await Promise.all([
           api<{ count: number }>('/api/running').catch(() => ({ count: 0 })),
           api<{ approvals: Approval[] }>('/api/approvals?status=pending').catch(() => ({ approvals: [] as Approval[] })),
         ]);
         if (cancelled) return;
-        const kinds = inv.instances.map((i) => i.runtime_posture.kind);
+        const families = inv.instances.map((i) => runtimeFamily(i.runtime_posture?.kind ?? i.runtime));
+        const attachedResponseCount = session.responseNeeded.needed ? 1 : 0;
         setChrome({
           executor: health.executor_url,
           instances: inv.instances.length,
           running: run.count,
-          responses: apr.approvals.length + (session.responseNeeded.needed ? 1 : 0),
-          host: kinds.includes('host'),
-          container: kinds.includes('container') || kinds.includes('docker'),
-          vm: kinds.includes('vm'),
+          responses: apr.approvals.length + registryResponses.length + attachedResponseCount,
+          host: families.includes('host'),
+          container: families.includes('container'),
+          vm: families.includes('vm'),
         });
+        if (!eventsDownRef.current) {
+          const recovered = reconnectPendingRef.current;
+          reconnectPendingRef.current = false;
+          setConnectionState('live');
+          // One recovery pulse refreshes every mounted live-data view. This is
+          // deliberately separate from their own polling/backoff, so Running,
+          // Missions, Sessions, and Inventory converge together after a blip.
+          if (recovered) setRefreshTick((t) => t + 1);
+        }
+        retryMs = 1_000;
+        if (!cancelled) schedule(15_000);
       } catch {
-        if (!cancelled) setChrome(null);
+        if (!cancelled) {
+          // Preserve last-known chrome while making its staleness explicit.
+          // Retry quickly, then back off to the normal 15 s poll ceiling.
+          reconnectPendingRef.current = true;
+          setConnectionState('reconnecting');
+          schedule(retryMs);
+          retryMs = Math.min(retryMs * 2, 15_000);
+        }
       }
     };
     load();
-    const timer = window.setInterval(load, 15_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [session.responseNeeded.needed, refreshTick]);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [session.responseNeeded.needed, refreshTick, registryResponses.length]);
 
   useEffect(() => {
-    if (typeof EventSource === 'undefined' || !TOKEN) return;
-    const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
-    events.addEventListener('cockpit.refresh', () => setRefreshTick((t) => t + 1));
-    events.onerror = () => undefined;
-    return () => events.close();
+    if (typeof EventSource === 'undefined') return;
+    let events: EventSource | undefined;
+    let cancelled = false;
+    const refresh = () => {
+      eventsDownRef.current = false;
+      setRefreshTick((t) => t + 1);
+    };
+    sessionReady().then(() => {
+      if (cancelled) return;
+      // Native EventSource carries the same-origin HttpOnly session cookie.
+      events = new EventSource('/api/events');
+      events.onopen = refresh;
+      events.addEventListener('cockpit.refresh', refresh);
+      events.onerror = () => {
+        eventsDownRef.current = true;
+        reconnectPendingRef.current = true;
+        setConnectionState('reconnecting');
+        // EventSource reconnects itself. Pulse the REST path now as well so a
+        // Bridge/executor drop does not wait for the normal poll interval.
+        setRefreshTick((t) => t + 1);
+      };
+    }).catch(() => {
+      eventsDownRef.current = true;
+      setConnectionState('reconnecting');
+    });
+    return () => {
+      cancelled = true;
+      events?.close();
+    };
   }, []);
 
   useEffect(() => {
     const onHash = () => {
       const hash = window.location.hash.replace(/^#/, '');
-      if (TABS.some((t) => t.id === hash)) setTab(hash as TabId);
+      if (ALL_TABS.some((t) => t.id === hash)) setTab(hash as TabId);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -115,22 +190,36 @@ export function App() {
   const requestStart = (instanceId?: string) => { setStartInst(instanceId); setStartOpen(true); };
   const handleLaunched = async (instanceId?: string, openSession?: boolean, operationId?: string) => {
     setRefreshTick((t) => t + 1);
-    if (openSession) {
-      const inst = await waitForSessionReady(instanceId, operationId);
-      const backend = inst.session_backends.find((b) => b.available !== false && b.drive !== false)
-        ?? inst.session_backends.find((b) => b.available !== false)
-        ?? inst.session_backends[0];
-      if (!backend || backend.available === false) throw new Error(backend?.reason ?? 'No available session backend for the new instance.');
-      const qs = new URLSearchParams({ mode: backend.mode, backend: backend.backend });
-      const s = await api<{ id: string; attach_url: string }>(
-        `/api/instances/${encodeURIComponent(inst.id)}/sessions?${qs}`, { method: 'POST' },
-      );
-      session.attach(s.attach_url, false, backend.drive === false ? 'observer' : 'controller');
-      setTab('sessions');
-    } else {
+    if (!openSession) {
       setTab('inventory');
+      setRefreshTick((t) => t + 1);
+      return;
     }
-    setRefreshTick((t) => t + 1);
+    // Readiness can take minutes for heavy loadouts (e.g. full-suite) or stall if the
+    // executor is degraded. Never block the launch modal on it: switch to the Sessions
+    // workspace now and run the wait+attach in the background. If it doesn't complete,
+    // the instance is still visible under Inventory to start a session from manually.
+    setTab('sessions');
+    void (async () => {
+      try {
+        const inst = await waitForSessionReady(instanceId, operationId);
+        const backend = inst.session_backends.find((b) => b.available !== false && b.drive !== false)
+          ?? inst.session_backends.find((b) => b.available !== false)
+          ?? inst.session_backends[0];
+        if (!backend || backend.available === false) throw new Error(backend?.reason ?? 'No available session backend for the new instance.');
+        const qs = new URLSearchParams({ mode: backend.mode, backend: backend.backend });
+        const s = await api<{ id: string; attach_url: string }>(
+          `/api/instances/${encodeURIComponent(inst.id)}/sessions?${qs}`, { method: 'POST' },
+        );
+        session.attach(s.attach_url, false, backend.drive === false ? 'observer' : 'controller', { instanceId: inst.id, sessionId: s.id });
+      } catch (e) {
+        // Non-blocking: surface via console; the instance remains in Inventory.
+        console.warn('auto-session after launch did not complete:', (e as Error).message);
+      } finally {
+        setRefreshTick((t) => t + 1);
+      }
+    })();
+    return;
   };
   const copyLaunchCommand = async () => {
     await navigator.clipboard?.writeText('aiwg cockpit');
@@ -143,8 +232,13 @@ export function App() {
           <span className="mark" aria-hidden="true">◆</span>
           <h1>AIWG&nbsp;Cockpit</h1>
         </div>
-        <div className="top-status" aria-label="Cockpit status">
-          <span className={`health-pill ${chrome ? 'ok' : 'warn'}`}>{chrome ? 'Bridge live' : 'Bridge checking'}</span>
+        <div className="top-status" aria-label="Cockpit status" aria-live="polite">
+          <span
+            className={`health-pill ${connectionState === 'live' ? 'ok' : 'warn'}`}
+            title={connectionState === 'reconnecting' && chrome ? 'Connection interrupted; showing last-known status while Cockpit retries.' : undefined}
+          >
+            {connectionState === 'live' ? 'Bridge live' : connectionState === 'reconnecting' ? 'Reconnecting…' : 'Bridge checking'}
+          </span>
           {chrome && (
             <>
               <span className="executor-pill" title={chrome.executor}>{chrome.executor}</span>
@@ -160,7 +254,7 @@ export function App() {
         <button className="meta" onClick={copyLaunchCommand}>Copy CLI</button>
       </header>
       <div role="tablist" aria-label="Cockpit views">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button key={t.id} role="tab" id={`tab-${t.id}`} aria-controls={`panel-${t.id}`}
             aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}>
             {t.label}
@@ -169,19 +263,33 @@ export function App() {
       </div>
       <main>
         <Panel id="welcome" tab={tab}><Welcome onStartSession={() => requestStart()} onLaunchInstance={() => setLaunchOpen(true)} goTo={(t) => setTab(t as TabId)} /></Panel>
-        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} /></Panel>
+        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} onOpenDesktop={desktopEnabled ? requestOpenDesktop : undefined} refreshTick={refreshTick} /></Panel>
         <Panel id="running" tab={tab}><Running refreshTick={refreshTick} /></Panel>
         <Panel id="missions" tab={tab}><Missions refreshTick={refreshTick} /></Panel>
+        {desktopEnabled && (
+          <Panel id="desktop" tab={tab}>
+            {desktopInstanceId
+              ? <Desktop instanceId={desktopInstanceId} onBack={() => setTab('inventory')} />
+              : (
+                <section className="empty-state">
+                  <h2>No desktop selected</h2>
+                  <p className="hint">Choose a running instance under Inventory and use Open Desktop.</p>
+                  <button className="cta" onClick={() => setTab('inventory')}>Go to Inventory</button>
+                </section>
+              )}
+          </Panel>
+        )}
         {/* Sessions stays mounted so the WebSocket survives tab switches */}
         <section id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" hidden={tab !== 'sessions'}>
-          <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} />
+          <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} refreshTick={refreshTick} />
         </section>
-        <Panel id="approvals" tab={tab}><Approvals refreshTick={refreshTick} responses={session.responseNeeded.needed ? [sessionResponse(session)] : []} goSessions={() => setTab('sessions')} /></Panel>
-        <Panel id="explore" tab={tab}><Explore /></Panel>
+        <Panel id="approvals" tab={tab}><Approvals refreshTick={refreshTick} responses={[...registryResponses, ...(session.responseNeeded.needed ? [sessionResponse(session)] : [])]} goSessions={() => setTab('sessions')} /></Panel>
+        <Panel id="explore" tab={tab}><Explore refreshTick={refreshTick} /></Panel>
         <Panel id="library" tab={tab}>
           <Library session={session} setComposer={setComposer} goSessions={() => setTab('sessions')} />
         </Panel>
         <Panel id="telemetry" tab={tab}><Telemetry refreshTick={refreshTick} /></Panel>
+        <Panel id="activity" tab={tab}><Activity /></Panel>
         <Panel id="memory" tab={tab}><Memory refreshTick={refreshTick} /></Panel>
         <Panel id="actions" tab={tab}>
           <Actions refreshTick={refreshTick} session={session} setComposer={setComposer} goSessions={() => setTab('sessions')} />
@@ -222,7 +330,7 @@ const SESSION_READY_TIMEOUT_S = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 150;
 })();
 
-async function waitForSessionReady(instanceId?: string, operationId?: string) {
+export async function waitForSessionReady(instanceId?: string, operationId?: string) {
   let last = '';
   let operationDetail = '';
   for (let i = 0; i < SESSION_READY_TIMEOUT_S; i += 1) {
@@ -238,10 +346,22 @@ async function waitForSessionReady(instanceId?: string, operationId?: string) {
       }
     }
     const inv = await api<{ instances: Instance[] }>('/api/inventory');
+    // Fast-fail: if the instance is visible but has settled into a terminal,
+    // non-running state (e.g. a container whose agent never enrolled → 'stopped'),
+    // its session will never come up. Abort instead of blocking the launch modal
+    // for the full readiness window. A short grace (>3s) avoids tripping on the
+    // transient 'provisioning'/'created' states a healthy instance passes through.
+    const TERMINAL = new Set(['stopped', 'failed', 'error', 'terminated', 'destroyed', 'exited', 'dead']);
+    const present = instanceId ? inv.instances.find((inst) => inst.id === instanceId) : null;
+    if (present && i > 3 && TERMINAL.has(String(present.state).toLowerCase())) {
+      throw new Error(
+        `Instance ${present.id} did not come online — it settled to '${present.state}' instead of running`
+        + (operationDetail ? ` (${operationDetail})` : '')
+        + '. Its agent likely failed to register; check the runtime and try again.',
+      );
+    }
     const candidates = inv.instances.filter((inst) => String(inst.state).toLowerCase() === 'running');
-    const selected = instanceId
-      ? candidates.find((inst) => inst.id === instanceId)
-      : candidates[0];
+    const selected = instanceId ? candidates.find((inst) => inst.id === instanceId) : null;
     if (selected) {
       const backend = selected.session_backends.find((b) => b.available !== false) ?? selected.session_backends[0];
       if (backend && backend.available !== false) return selected;
@@ -249,7 +369,7 @@ async function waitForSessionReady(instanceId?: string, operationId?: string) {
     } else {
       last = [
         operationDetail,
-        instanceId ? `instance ${instanceId} not visible in inventory yet` : 'no running instance visible in inventory yet',
+        instanceId ? `instance ${instanceId} not visible in inventory yet` : 'waiting for launch operation to report instance id',
       ].filter(Boolean).join('; ');
     }
     await sleep(1_000);

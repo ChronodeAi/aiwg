@@ -1,0 +1,19 @@
+apiVersion: gates.aiwg.io/v1alpha1
+kind: GatePack
+metadata:
+  id: aiwg:decision-engine/integrity-ceiling
+  version: 1.0.0
+  description: Eval-integrity ceiling for decision studies. Compromise rolls back through the ceiling; allowlist problems hold.
+spec:
+  metrics: {}
+  gates:
+    - id: integrity-ceiling
+      kind: upstream-ceiling
+      description: Eval-integrity ceiling. Mirrors the trusted upstream verdict; never upgrades HOLD or ROLLBACK.
+      scope:
+        mode: all
+      direction: higher-is-stricter
+      floor: true
+      onFail: HOLD
+  combine:
+    rule: max-severity

@@ -14,7 +14,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  CODEX_ADAPTER_MODEL,
+  CODEX_ADAPTER_MODELS,
+  FLAGSHIP_MODELS,
   OPENCODE_ADAPTER_MODEL,
   FACTORY_ADAPTER_MODELS,
 } from '../../fixtures/models.js';
@@ -30,6 +31,7 @@ let ClaudeAdapter: any;
 let CodexAdapter: any;
 let OpenCodeAdapter: any;
 let FactoryAdapter: any;
+let PiAdapter: any;
 
 beforeEach(async () => {
   const adapterMod = await import('../../../tools/ralph-external/lib/provider-adapter.mjs');
@@ -51,6 +53,7 @@ beforeEach(async () => {
 
   const factoryMod = await import('../../../tools/ralph-external/lib/factory-adapter.mjs');
   FactoryAdapter = factoryMod.FactoryAdapter;
+  PiAdapter = (await import('../../../tools/ralph-external/lib/pi-adapter.mjs')).PiAdapter;
 });
 
 // ============================================================================
@@ -81,7 +84,7 @@ describe('ProviderAdapter (base class)', () => {
 
 describe('Provider Registry', () => {
   it('has all core providers registered', () => {
-    const providers = ['claude', 'codex', 'opencode', 'factory'];
+    const providers = ['claude', 'codex', 'opencode', 'factory', 'pi'];
     for (const provider of providers) {
       expect(hasProvider(provider)).toBe(true);
     }
@@ -98,6 +101,7 @@ describe('Provider Registry', () => {
       { name: 'codex', Class: CodexAdapter, caseName: 'CODEX' },
       { name: 'opencode', Class: OpenCodeAdapter, caseName: 'OpenCode' },
       { name: 'factory', Class: FactoryAdapter, caseName: 'Factory' },
+      { name: 'pi', Class: PiAdapter, caseName: 'PI' },
     ];
 
     for (const { name, Class, caseName } of tests) {
@@ -138,6 +142,36 @@ describe('Provider Registry', () => {
     // Note: We can't reliably assert beforeRegistration === false because in test
     // environment the registration might complete synchronously. The key invariant is:
     // after ensureProvidersRegistered(), hasProvider() MUST work correctly.
+  });
+});
+
+describe('PiAdapter', () => {
+  it('uses strict headless JSON, explicit trust denial, and preserves model/thinking/session', () => {
+    const args = new PiAdapter().buildSessionArgs({ prompt: 'task', model: 'openrouter/code',
+      thinking: 'high', sessionId: '/tmp/session.jsonl', tools: ['read', 'bash'] });
+    expect(args).toEqual(['--mode', 'json', '--no-approve', '--model', 'openrouter/code',
+      '--thinking', 'high', '--session', '/tmp/session.jsonl', '--tools', 'read,bash', 'task']);
+  });
+  it('rejects malformed JSONL and distinguishes agent settlement', () => {
+    const adapter = new PiAdapter();
+    // Legacy Ralph-loop contract (test/unit/ralph/pi-adapter.test.mjs):
+    // parseOutput() is settlement-only -- exactly {events, settled}, no
+    // `text` key, no answer requirement (roctinam/aiwg#2910 fix round 2
+    // restored this after fix round 1 accidentally tightened it).
+    expect(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: true });
+    expect(Object.keys(adapter.parseOutput('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n'))).toEqual(['events', 'settled']);
+    expect(adapter.parseOutput('{bad}\n')).toBeNull();
+  });
+
+  it('parseDirectFinal() is the strict, text-requiring direct-worker-profile contract, separate from parseOutput()', () => {
+    const adapter = new PiAdapter();
+    // Settlement alone (agent_settled with no error signal) is not a
+    // success for the direct profile: a non-empty assistant answer is
+    // also required (roctinam/aiwg#2910 fix round 1).
+    const answer = '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}';
+    expect(adapter.parseDirectFinal(`${answer}\r\n{"type":"agent_settled"}\r\n`)).toMatchObject({ settled: true, text: 'ok' });
+    expect(adapter.parseDirectFinal('{"type":"agent_end"}\r\n{"type":"agent_settled"}\r\n')).toMatchObject({ settled: false, text: null });
+    expect(adapter.parseDirectFinal('{bad}\n')).toBeNull();
   });
 });
 
@@ -191,7 +225,9 @@ describe('ClaudeAdapter', () => {
   describe('buildSessionArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildSessionArgs({ prompt: 'test task' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('stream-json');
@@ -233,7 +269,9 @@ describe('ClaudeAdapter', () => {
   describe('buildAnalysisArgs', () => {
     it('includes required flags', () => {
       const args = adapter.buildAnalysisArgs({ prompt: 'analyze this' });
-      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
       expect(args).toContain('--print');
       expect(args).toContain('--output-format');
       expect(args).toContain('json');
@@ -336,13 +374,13 @@ describe('CodexAdapter', () => {
   });
 
   describe('model mapping', () => {
-    it('maps all generic aliases to codex model', () => {
+    it('maps generic aliases to the tier-equivalent codex model', () => {
       const mappings = [
-        { input: 'opus',   expected: CODEX_ADAPTER_MODEL },
-        { input: 'sonnet', expected: CODEX_ADAPTER_MODEL },
-        { input: 'haiku',  expected: CODEX_ADAPTER_MODEL },
-        { input: 'OPUS',   expected: CODEX_ADAPTER_MODEL },
-        { input: 'Sonnet', expected: CODEX_ADAPTER_MODEL },
+        { input: 'opus',   expected: CODEX_ADAPTER_MODELS.opus },
+        { input: 'sonnet', expected: CODEX_ADAPTER_MODELS.sonnet },
+        { input: 'haiku',  expected: CODEX_ADAPTER_MODELS.haiku },
+        { input: 'OPUS',   expected: CODEX_ADAPTER_MODELS.opus },
+        { input: 'Sonnet', expected: CODEX_ADAPTER_MODELS.sonnet },
       ];
 
       for (const { input, expected } of mappings) {
@@ -350,8 +388,15 @@ describe('CodexAdapter', () => {
       }
     });
 
+    it('never maps an alias to the user-elected flagship', () => {
+      for (const alias of ['opus', 'sonnet', 'haiku']) {
+        expect(adapter.mapModel(alias)).not.toBe(FLAGSHIP_MODELS.openai);
+      }
+      expect(adapter.mapModel(FLAGSHIP_MODELS.openai)).toBe(FLAGSHIP_MODELS.openai);
+    });
+
     it('passes through unknown model names', () => {
-      const models = [CODEX_ADAPTER_MODEL, 'custom-model'];
+      const models = [CODEX_ADAPTER_MODELS.opus, 'custom-model'];
       for (const model of models) {
         expect(adapter.mapModel(model)).toBe(model);
       }
@@ -375,7 +420,7 @@ describe('CodexAdapter', () => {
         model: 'opus',
       });
       expect(args).toContain('--model');
-      expect(args).toContain(CODEX_ADAPTER_MODEL);
+      expect(args).toContain(CODEX_ADAPTER_MODELS.opus);
     });
 
     it('injects system prompt into main prompt', () => {
@@ -425,7 +470,7 @@ describe('CodexAdapter', () => {
         agent: 'ralph-output-analyzer',
       });
       expect(args).toContain('--model');
-      expect(args).toContain(CODEX_ADAPTER_MODEL);
+      expect(args).toContain(CODEX_ADAPTER_MODELS.sonnet);
       expect(args).not.toContain('--agent');
     });
   });

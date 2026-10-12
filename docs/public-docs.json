@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 3,
+  "baseline": {
+    "issue": 1937,
+    "capturedFrom": "git HEAD at issue intake",
+    "coreJourneyCommandMentions": 51,
+    "homepageCommandChecklistItems": 3,
+    "publicCliNavigationEntries": 2
+  },
+  "audience": "end-user",
+  "publication": "docs.aiwg.io",
+  "exclude": [
+    "agents",
+    "CLI_USAGE.md",
+    "cli-reference.md",
+    "discovery-and-kernel-skills.md",
+    "cli/agent-usage.md",
+    "cli/discovery-and-retrieval.md",
+    "cli/capability-routing.md",
+    "cli/web-backed-resources.md",
+    "cli/non-interactive.md",
+    "cli/regenerate.md"
+  ],
+  "coreJourneys": [
+    "welcome.md",
+    "getting-started/README.md",
+    "getting-started/install-connect-verify.md",
+    "getting-started/start-here.md",
+    "getting-started/provider-handoff.md",
+    "getting-started/onboarding-validation.md",
+    "quickstart.md",
+    "quickstart-sdlc.md",
+    "quickstart-mmk.md"
+  ],
+  "agentOwnedCommands": [
+    "discover",
+    "show",
+    "index",
+    "ralph",
+    "mc",
+    "run skill",
+    "daemon",
+    "serve",
+    "session",
+    "sessions",
+    "storage",
+    "mcp",
+    "catalog",
+    "schedule",
+    "task",
+    "research",
+    "steward",
+    "config",
+    "regenerate",
+    "new",
+    "new-bundle",
+    "promote",
+    "remove",
+    "add-agent",
+    "add-command",
+    "add-skill",
+    "add-template",
+    "scaffold-addon",
+    "scaffold-extension",
+    "scaffold-framework"
+  ],
+  "directTouchCommands": [],
+  "operatorNotice": {
+    "marker": "<!-- aiwg-public-operator-guidance -->",
+    "text": "> **Prompt-first procedure:** Describe the outcome you want in your agent conversation. The agent should select and load the appropriate AIWG assets, explain material changes, request any needed approval, and report verification evidence. Exact commands and flags appear only in the [CLI reference](https://docs.aiwg.io/#/cli/reference)."
+  }
+}

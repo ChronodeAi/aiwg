@@ -14,7 +14,7 @@ function makeTmpRepo(): string {
   const dir = join(tmpdir(), `aiwg-topology-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
   // Init a real repo so `git remote get-url` works
-  execSync('git init --quiet', { cwd: dir });
+  execSync('git init --quiet', { timeout: 60_000, cwd: dir });
   return dir;
 }
 
@@ -51,7 +51,7 @@ describe('buildRemotesTopologyBlock (#998)', () => {
   });
 
   it('emits a topology block with primary URL when remote is reachable', () => {
-    execSync('git remote add origin https://example.com/owner/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://example.com/owner/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, { primary: 'origin' });
 
     const block = buildRemotesTopologyBlock(tmp);
@@ -71,8 +71,8 @@ describe('buildRemotesTopologyBlock (#998)', () => {
   });
 
   it('lists secondary remotes with purpose and push_on_release flag', () => {
-    execSync('git remote add origin https://primary.example/r.git', { cwd: tmp });
-    execSync('git remote add github https://github.com/org/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://primary.example/r.git', { timeout: 60_000, cwd: tmp });
+    execSync('git remote add github https://github.com/org/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       primary: 'origin',
       secondary: [{ name: 'github', purpose: 'public-mirror', push_on_release: true }],
@@ -85,7 +85,7 @@ describe('buildRemotesTopologyBlock (#998)', () => {
   });
 
   it('only emits issue_tracker / ci lines when they differ from primary', () => {
-    execSync('git remote add origin https://primary.example/r.git', { cwd: tmp });
+    execSync('git remote add origin https://primary.example/r.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, { primary: 'origin', issue_tracker: 'origin', ci: 'origin' });
     const block = buildRemotesTopologyBlock(tmp);
     expect(block).not.toContain('Issue tracker');

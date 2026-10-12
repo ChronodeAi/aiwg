@@ -102,6 +102,34 @@ describe('ExecutorRegistry', () => {
       expect(summary?.a2a_instance_id).toBe('sandbox-inst-1');
     });
 
+    it('records the negotiated A2A interface in status and clears it on re-registration', () => {
+      registry.register(VALID_REGISTER_REQUEST);
+      expect(registry.recordA2AProtocolSelection(VALID_EXECUTOR_ID, {
+        policy: 'auto',
+        selectedVersion: '1.0',
+        interface: {
+          url: 'https://sandbox.test/agents/one',
+          protocolBinding: 'HTTP+JSON',
+          protocolVersion: '1.0',
+          preference: 0,
+          legacy: false,
+        },
+        fallbackReason: 'version probe selected 1.0',
+        selectedAt: '2026-08-23T12:00:00Z',
+      })).toBe(true);
+      expect(registry.get(VALID_EXECUTOR_ID)?.a2a_protocol).toEqual({
+        policy: 'auto',
+        selected_version: '1.0',
+        protocol_binding: 'HTTP+JSON',
+        interface_url: 'https://sandbox.test/agents/one',
+        fallback_reason: 'version probe selected 1.0',
+        selected_at: '2026-08-23T12:00:00Z',
+      });
+
+      registry.register({ ...VALID_REGISTER_REQUEST, version: '0.4.0' });
+      expect(registry.get(VALID_EXECUTOR_ID)?.a2a_protocol).toBeUndefined();
+    });
+
     it('issues unique tokens for different executor_ids', () => {
       const r1 = registry.register(VALID_REGISTER_REQUEST) as { token: string };
       const r2 = registry.register({ ...VALID_REGISTER_REQUEST, executor_id: VALID_EXECUTOR_ID_2 }) as { token: string };
@@ -395,6 +423,21 @@ describe('ExecutorRegistry', () => {
       const result = registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID });
       expect(result!.executor.executorId).toBe(VALID_EXECUTOR_ID);
     });
+
+    it.each(['x-filesystem:workspace-only', 'x-network:denied', 'x-nested-agents:bounded', 'x-fallback:disabled'])(
+      'T-OG-10 pinned executor cannot bypass missing %s control', capability => {
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
+        expect(registry.pickByFilter({ capabilities: [capability] })).toBeNull();
+        registry.register({ ...VALID_REGISTER_REQUEST, capabilities: [...VALID_REGISTER_REQUEST.capabilities, capability] });
+        registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })?.executor.executorId)
+          .toBe(VALID_EXECUTOR_ID);
+        // Re-registration with weaker controls immediately invalidates the same pin.
+        registry.register(VALID_REGISTER_REQUEST);
+        registry.setConnected(VALID_EXECUTOR_ID, true, { readyState: 1, send() {}, close() {} });
+        expect(registry.pickByFilter({ executor_id: VALID_EXECUTOR_ID, capabilities: [capability] })).toBeNull();
+      },
+    );
 
     it('returns null when pinned executor not found', () => {
       const result = registry.pickByFilter({ executor_id: '00000000-0000-0000-0000-000000000000' });

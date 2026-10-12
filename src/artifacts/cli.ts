@@ -18,8 +18,59 @@
  */
 
 import type { GraphType } from './types.js';
-import { GRAPH_CONFIGS, loadUserGraphConfigs, loadGlobalGraphConfigs } from './types.js';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  GRAPH_CONFIGS,
+  OPERATIONAL_DISCOVERY_TYPES,
+  OPERATIONAL_SHOW_TYPES,
+  isOperationalShowType,
+  loadUserGraphConfigs,
+  loadGlobalGraphConfigs,
+  orderedGraphEntries,
+} from './types.js';
 import { SUPPORTED_VIEWS } from './corpus-views/renderers.js';
+import {
+  parseResourceSelector,
+  readVerifiedRegularFile,
+  type ResourceSource,
+  type WebReleaseOptions,
+} from '../resources/web-release.js';
+import { findPackageRoot } from '../cli/find-package-root.js';
+import { createResourceCredentialProvider } from '../auth/resource-credentials.js';
+
+const MAX_RESOURCE_TRUST_ROOT_BYTES = 64 * 1024;
+
+function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
+  const baseUrl = process.env.AIWG_RESOURCE_BASE_URL;
+  const cacheRoot = process.env.AIWG_RESOURCE_CACHE_ROOT;
+  const trustRootFile = process.env.AIWG_RESOURCE_TRUST_ROOT_FILE;
+  let publicKeyPem: Buffer | undefined;
+
+  if (trustRootFile !== undefined) {
+    if (trustRootFile.trim().length === 0) {
+      throw new Error('AIWG_RESOURCE_TRUST_ROOT_FILE must name a non-empty public PEM file');
+    }
+    publicKeyPem = readVerifiedRegularFile(path.resolve(trustRootFile), {
+      label: 'AIWG_RESOURCE_TRUST_ROOT_FILE public PEM',
+      maxBytes: MAX_RESOURCE_TRUST_ROOT_BYTES,
+    });
+    if (publicKeyPem.toString('utf8').trim().length === 0) {
+      throw new Error('AIWG_RESOURCE_TRUST_ROOT_FILE public PEM is empty');
+    }
+  }
+
+  return {
+    credentialProvider: createResourceCredentialProvider(process.env),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(cacheRoot === undefined ? {} : { cacheRoot }),
+    ...(publicKeyPem === undefined ? {} : { publicKeyPem }),
+    ...(process.env.AIWG_RESOURCE_ALLOW_INSECURE_LOOPBACK_HTTP === '1'
+      ? { allowInsecureLoopbackHttp: true }
+      : {}),
+  };
+}
 
 /** Parse --graph flag from args, returns undefined for "all graphs" */
 function parseGraphFlag(args: string[]): GraphType | undefined {
@@ -52,6 +103,64 @@ function parseBackendFlag(args: string[]): 'local' | 'fortemi-core' | undefined 
 
 function parseSearchBackendFlag(args: string[]): 'local' | 'fortemi-core' {
   return parseBackendFlag(args) ?? 'fortemi-core';
+}
+
+/**
+ * The full `aiwg` package owns a local corpus, while `@aiwg/cli` intentionally
+ * ships only executable code and embedded runtime metadata. Select web
+ * resources automatically for the lightweight distribution so a normal
+ * `aiwg discover` / `aiwg show` invocation works immediately after install.
+ *
+ * Resolve from this module rather than process.argv so the exported API gets
+ * the same package-aware default as the npm binary.
+ */
+function defaultResourceSource(): ResourceSource {
+  const packageRoot = findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
+  if (!packageRoot) return 'local';
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+    return manifest.name === '@aiwg/cli' ? 'web' : 'local';
+  } catch {
+    return 'local';
+  }
+}
+
+function parseResourceSourceFlag(args: string[]): ResourceSource {
+  const indices = args
+    .map((arg, index) => arg === '--resource-source' ? index : -1)
+    .filter((index) => index >= 0);
+  if (indices.length > 1) {
+    console.error('Error: --resource-source may be specified only once');
+    process.exit(1);
+  }
+  if (indices.length === 0) return defaultResourceSource();
+  const value = args[indices[0] + 1];
+  if (value === 'local' || value === 'web' || value === 'auto') return value;
+  console.error('Error: --resource-source must be local, web, or auto');
+  process.exit(1);
+}
+
+function parseAiwgVersionFlag(args: string[]): string | undefined {
+  const indices = args
+    .map((arg, index) => arg === '--aiwg-version' ? index : -1)
+    .filter((index) => index >= 0);
+  if (indices.length > 1) {
+    console.error('Error: --aiwg-version may be specified only once');
+    process.exit(1);
+  }
+  if (indices.length === 0) return undefined;
+  const value = args[indices[0] + 1];
+  if (!value || value.startsWith('--')) {
+    console.error('Error: --aiwg-version requires an exact calendar-semver version, SemVer range, sha256 digest, or channel name');
+    process.exit(1);
+  }
+  try {
+    parseResourceSelector(value);
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  return value;
 }
 
 function firstPositionalArg(args: string[], valueFlags: string[]): string | undefined {
@@ -186,6 +295,10 @@ export async function main(args: string[]): Promise<void> {
       await handleDedup(subcommandArgs);
       break;
 
+    case 'eval-discovery':
+      await handleEvalDiscovery(subcommandArgs);
+      break;
+
     case 'watch':
       await handleWatch(subcommandArgs);
       break;
@@ -217,7 +330,7 @@ export async function main(args: string[]): Promise<void> {
 
     default:
       console.error(`Error: Unknown index subcommand '${subcommand}'`);
-      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, watch');
+      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, eval-discovery, watch');
       process.exit(1);
   }
 }
@@ -228,8 +341,8 @@ function printIndexUsage(): void {
   console.log('Available subcommands:');
   console.log('  build      Build/rebuild the artifact index');
   console.log('  query      Search artifacts by keyword, type, phase, tags');
-  console.log('  discover   Capability search across skills/agents/commands/rules (#1214)');
-  console.log('  show       Print the full text of a specific skill/agent/command/rule');
+  console.log('  discover   Capability search across operational asset types (#1214)');
+  console.log('  show       Print the full text of a specific operational asset');
   console.log('  export     Export a browser-consumable index contract');
   console.log('  sync       Materialize the Fortemi Core static index cache');
   console.log('  migrate-legacy  Move legacy root indexes into graph sidecar indexes');
@@ -241,6 +354,7 @@ function printIndexUsage(): void {
   console.log('  embed      Build the semantic embedding index for a graph (opt-in deps)');
   console.log('  similar    Semantic neighbors of a node (requires embed)');
   console.log('  dedup-report  Near-duplicate node pairs above a similarity threshold');
+  console.log('  eval-discovery  Benchmark operational capability discovery relevance');
   console.log('  watch      Start a filesystem watcher for automatic incremental index updates');
   console.log('');
   console.log('Options:');
@@ -263,11 +377,62 @@ function printIndexUsage(): void {
   console.log('  aiwg index query "authentication" --type use-case');
   console.log('  aiwg index query "security rules" --graph framework --json');
   console.log('  aiwg index query "mixture of experts" --fulltext --graph papers   # body text, BM25');
+  console.log('  aiwg index embed --graph papers --embed-body                       # body-granularity vectors');
   console.log('  aiwg index deps .aiwg/requirements/UC-001.md');
   console.log('  aiwg index stats --json');
   console.log('  aiwg index stats --graph project');
+  console.log('  aiwg index eval-discovery --queries test/fixtures/artifacts/discovery-relevance.jsonl --backend local --strategy lexical');
   console.log('  aiwg index neighbors --graph citation-network --node REF-008 --direction in --edge-type cites');
   console.log('  aiwg index set --graph citation-network --op intersection --node-a REF-008 --node-b REF-016 --direction in');
+}
+
+async function handleEvalDiscovery(args: string[]): Promise<void> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: aiwg index eval-discovery --queries <jsonl> --backend <local|fortemi-core> --strategy <lexical|dense|hybrid-rrf|rerank|chunk-multivector> [options]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --queries <path>   Versioned relevance JSONL fixture (required)');
+    console.log('  --backend <name>   local or fortemi-core (required)');
+    console.log('  --strategy <name>  lexical, dense, hybrid-rrf, rerank, or chunk-multivector');
+    console.log('  --out <path>       Write the JSON report to a file');
+    console.log('  --json             Emit JSON instead of the readable summary');
+    return;
+  }
+  const queries = parseFlagValue(args, '--queries', 'Error: --queries requires a JSONL path');
+  if (!queries) {
+    console.error('Error: --queries is required');
+    process.exit(1);
+  }
+  const backend = parseFlagValue(args, '--backend', 'Error: --backend requires local or fortemi-core');
+  if (backend !== 'local' && backend !== 'fortemi-core') {
+    console.error('Error: --backend must be local or fortemi-core');
+    process.exit(1);
+  }
+  const strategy = parseFlagValue(args, '--strategy', 'Error: --strategy requires a value') ?? 'lexical';
+  const { DISCOVERY_EVAL_STRATEGIES, evaluateDiscovery, formatDiscoveryEvalSummary } = await import('./discovery-eval.js');
+  if (!(DISCOVERY_EVAL_STRATEGIES as readonly string[]).includes(strategy)) {
+    console.error(`Error: --strategy must be ${DISCOVERY_EVAL_STRATEGIES.join(', ')}`);
+    process.exit(1);
+  }
+  try {
+    const report = await evaluateDiscovery({
+      cwd: process.cwd(),
+      fixturePath: path.resolve(queries),
+      backend,
+      strategy: strategy as import('./discovery-eval.js').DiscoveryEvalStrategy,
+    });
+    const serialized = `${JSON.stringify(report, null, 2)}\n`;
+    const out = parseFlagValue(args, '--out', 'Error: --out requires a path');
+    if (out) {
+      const fs = await import('node:fs');
+      fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+      fs.writeFileSync(path.resolve(out), serialized);
+    }
+    console.log(args.includes('--json') ? serialized.trimEnd() : formatDiscoveryEvalSummary(report));
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 /**
@@ -377,7 +542,8 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('User-defined graphs: configure under index.graphs in .aiwg/aiwg.config');
     console.log('');
     console.log('Default behavior (no --graph): builds all graphs with defaultBuild: true');
-    console.log('  Built-in defaults: project (always), codebase (skipped if src/test/tools absent)');
+    console.log('Multi-graph builds run by buildOrder/buildTier (refs → citations → bibliography before heavy graphs)');
+    console.log('  Built-in defaults: project (always), codebase (auto-detects JavaScript/TypeScript and Python layouts)');
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index build');
@@ -388,6 +554,7 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  aiwg index build --graph references            # user-defined graph');
     console.log('  aiwg index build --scope documentation/references');
     console.log('  aiwg index build --all');
+    console.log('  aiwg index sync --all');
     return;
   }
 
@@ -414,24 +581,28 @@ async function handleBuild(args: string[]): Promise<void> {
   loadGlobalGraphConfigs();
 
   let jsonBuilt = false;
+  const builtGraphs = new Set<GraphType>();
   if (graph) {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
       await buildIndex(cwd, { force, verbose, scope, graph, explicit: true });
       jsonBuilt = true;
+      builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
-    for (const name of Object.keys(GRAPH_CONFIGS)) {
+    for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       await buildIndex(cwd, { force, verbose, graph: name, explicit: false });
+      builtGraphs.add(name);
     }
     jsonBuilt = true;
   } else {
     // Default: build graphs with defaultBuild=true; skip gracefully if their dirs don't exist
-    for (const [name, config] of Object.entries(GRAPH_CONFIGS)) {
+    for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
         await buildIndex(cwd, { force, verbose, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
+        builtGraphs.add(name);
       }
     }
     jsonBuilt = true;
@@ -464,6 +635,33 @@ async function handleBuild(args: string[]): Promise<void> {
   // Mirror build.py: an unsupported view name in the manifest fails the build.
   if (viewResults.some((r) => r.status === 'unsupported')) {
     process.exit(1);
+  }
+
+  if (builtGraphs.size > 0) {
+    await syncFortemiCoreCachesAfterBuild(cwd, builtGraphs, verbose);
+  }
+}
+
+async function syncFortemiCoreCachesAfterBuild(
+  cwd: string,
+  graphs: Iterable<GraphType>,
+  verbose: boolean,
+): Promise<void> {
+  const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
+  const { loadGraphIndexFile } = await import('./index-reader.js');
+  for (const graph of graphs) {
+    // Some default-build graphs skip cleanly when their scan roots are absent.
+    // Only materialize a cache when this build left an actual source index.
+    if (!loadGraphIndexFile(cwd, 'metadata.json', graph)) continue;
+    try {
+      const manifest = syncFortemiCoreIndex(cwd, { graph });
+      if (verbose) {
+        console.log(`Fortemi Core ${graph} sync: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+      }
+    } catch (err) {
+      console.error(`Warning: Fortemi Core ${graph} sync failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`Run \`aiwg index sync --graph ${graph}\` before using Fortemi-backed commands for '${graph}' artifacts.`);
+    }
   }
 }
 
@@ -580,7 +778,7 @@ async function requireEmbeddingIndex(cwd: string, graph: GraphType | undefined):
   if (!deps.available) {
     console.error(`Error: semantic search needs optional dependencies: ${deps.missing.join(', ')}`);
     console.error('Install them to enable semantic features:');
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     return null;
   }
   const dir = resolveIndexDir(cwd, graph);
@@ -656,11 +854,12 @@ async function runSemanticQuery(
 
   const dir = await requireEmbeddingIndex(cwd, graph);
   if (!dir) process.exit(1);
-  const { semanticQuery } = await import('./embedding-index.js');
+  const { semanticQuery, loadEmbeddingManifest } = await import('./embedding-index.js');
   const { loadGraphIndexFile } = await import('./index-reader.js');
   const index = loadGraphIndexFile<{
     entries: Record<string, { type: string; phase: string; title: string; summary: string }>;
   }>(cwd, 'metadata.json', graph);
+  const manifest = loadEmbeddingManifest(dir!);
   const results = await semanticQuery(text, dir!, topK);
   if (json) {
     console.log(
@@ -669,6 +868,10 @@ async function runSemanticQuery(
           query: { text },
           mode: 'semantic',
           graph: graph ?? null,
+          embedding: {
+            granularity: manifest?.granularity ?? 'title-summary',
+            model: manifest?.model ?? null,
+          },
           results: results.map((r) => ({
             path: r.nodeId,
             score: Math.round(r.score * 100) / 100,
@@ -683,7 +886,7 @@ async function runSemanticQuery(
     );
     return;
   }
-  console.log(`Semantic results for "${text}" (${results.length}):`);
+  console.log(`Semantic results for "${text}" (${results.length}, granularity: ${manifest?.granularity ?? 'title-summary'}):`);
   console.log('');
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
@@ -763,17 +966,25 @@ async function runHybridQuery(
   }
 }
 
-/** `aiwg index embed [--graph X] [--model M]` — build the embedding index for a graph's metadata. */
+/** `aiwg index embed [--graph X] [--model M] [--granularity title-summary|body]` — build the embedding index. */
 async function handleEmbed(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const graph = parseGraphFlag(args);
   const model = args.indexOf('--model') !== -1 ? args[args.indexOf('--model') + 1] : undefined;
+  const requestedGranularity = args.includes('--embed-body')
+    ? 'body'
+    : parseFlagValue(args, '--granularity', 'Error: --granularity requires title-summary, metadata, or body') ?? 'title-summary';
+  if (!['title-summary', 'metadata', 'body'].includes(requestedGranularity)) {
+    console.error('Error: --granularity must be title-summary, metadata, or body');
+    process.exit(1);
+  }
+  const granularity = requestedGranularity === 'metadata' ? 'title-summary' : requestedGranularity;
   const { checkEmbeddingDeps, buildEmbeddingIndex, DEFAULT_EMBEDDING_MODEL } = await import('./embedding-index.js');
   const { resolveIndexDir, loadGraphIndexFile } = await import('./index-reader.js');
   const deps = await checkEmbeddingDeps();
   if (!deps.available) {
     console.error(`Error: embedding needs optional dependencies: ${deps.missing.join(', ')}`);
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     process.exit(1);
   }
   const index = loadGraphIndexFile<{ entries: Record<string, unknown> }>(cwd, 'metadata.json', graph);
@@ -782,9 +993,12 @@ async function handleEmbed(args: string[]): Promise<void> {
     process.exit(1);
   }
   const dir = resolveIndexDir(cwd, graph);
-  console.log(`Embedding ${Object.keys(index.entries).length} nodes (model: ${model ?? DEFAULT_EMBEDDING_MODEL})…`);
+  console.log(`Embedding ${Object.keys(index.entries).length} nodes (model: ${model ?? DEFAULT_EMBEDDING_MODEL}, granularity: ${granularity})…`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const n = await buildEmbeddingIndex(index.entries as any, dir, model);
+  const n = await buildEmbeddingIndex(index.entries as any, dir, model, {
+    granularity: granularity as 'title-summary' | 'body',
+    cwd,
+  });
   console.log(`Embedded ${n} nodes → ${dir}/embeddings/`);
 }
 
@@ -822,15 +1036,24 @@ async function handleDedup(args: string[]): Promise<void> {
   const json = args.includes('--json');
   const dir = await requireEmbeddingIndex(cwd, graph);
   if (!dir) process.exit(1);
-  const { dedupReport } = await import('./embedding-index.js');
+  const { dedupReport, loadEmbeddingManifest } = await import('./embedding-index.js');
   const { loadGraphIndexFile } = await import('./index-reader.js');
   const index = loadGraphIndexFile<{ entries: Record<string, { title: string }> }>(cwd, 'metadata.json', graph);
+  const manifest = loadEmbeddingManifest(dir!);
   const pairs = await dedupReport(dir!, threshold);
   if (json) {
-    console.log(JSON.stringify({ graph: graph ?? null, threshold, pairs: pairs.map((p) => ({ ...p, score: Math.round(p.score * 1000) / 1000 })) }, null, 2));
+    console.log(JSON.stringify({
+      graph: graph ?? null,
+      threshold,
+      embedding: {
+        granularity: manifest?.granularity ?? 'title-summary',
+        model: manifest?.model ?? null,
+      },
+      pairs: pairs.map((p) => ({ ...p, score: Math.round(p.score * 1000) / 1000 })),
+    }, null, 2));
     return;
   }
-  console.log(`Near-duplicate pairs (cosine ≥ ${threshold}): ${pairs.length}`);
+  console.log(`Near-duplicate pairs (cosine ≥ ${threshold}, granularity: ${manifest?.granularity ?? 'title-summary'}): ${pairs.length}`);
   console.log('');
   for (const p of pairs) {
     const ta = index?.entries[p.a]?.title ?? '';
@@ -845,26 +1068,35 @@ async function handleDedup(args: string[]): Promise<void> {
  */
 async function handleExport(args: string[]): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: aiwg index export --format fortemi [options]');
+    console.log('Usage: aiwg index export --format fortemi|fortemi-shard [options]');
     console.log('');
     console.log('Options:');
     console.log('  --format fortemi       Export the AIWG/Fortemi browser contract (required)');
+    console.log('  --format fortemi-shard Export a portable Fortemi Knowledge Shard');
     console.log('  --graph <name>         Graph to export (default: project)');
-    console.log('  --out <path>           Write JSON to a file instead of stdout');
+    console.log('  --out <path>           Write JSON or .shard output to a file');
     console.log('  --repo <name>          Source repository label (default: cwd basename)');
     console.log('  --privacy <level>      private, sanitized, or public (default: private)');
-    console.log('  --schema-version <v>   Export contract version: v1 or v2 (default: v1)');
+    console.log('  --schema-version <v>   Browser: v1|v2; shard: 2.0.0|1.2.0');
+    console.log('  --profile <name>       Shard profile: full-v1 (default) or core-v1');
+    console.log('  --fail-on-loss         Reject a full-v1 conversion that reports any loss');
+    console.log('  --dry-run              Build and report without writing the shard');
+    console.log('  --force                Replace an existing output path');
+    console.log('  --migrate-from <path>  Diagnose a source-less legacy shard (dry-run only)');
+    console.log('  --json                 Emit the machine-readable conversion report');
     console.log('  --generated-at <iso>   Override generated timestamp for deterministic fixtures');
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index export --format fortemi --graph project --out aiwg-fortemi-index.json');
+    console.log('  aiwg index export --format fortemi-shard --graph project --schema-version 2.0.0 --profile full-v1 --fail-on-loss --out aiwg-index.shard');
+    console.log('  aiwg index export --format fortemi-shard --migrate-from legacy.shard --dry-run --json');
     console.log('  aiwg index export --format fortemi --privacy sanitized --generated-at 2026-01-01T00:00:00.000Z');
     return;
   }
 
-  const format = parseFlagValue(args, '--format', 'Error: index export requires --format fortemi');
-  if (format !== 'fortemi') {
-    console.error('Error: index export requires --format fortemi');
+  const format = parseFlagValue(args, '--format', 'Error: index export requires --format fortemi or fortemi-shard');
+  if (format !== 'fortemi' && format !== 'fortemi-shard') {
+    console.error('Error: index export requires --format fortemi or fortemi-shard');
     process.exit(1);
   }
 
@@ -877,14 +1109,74 @@ async function handleExport(args: string[]): Promise<void> {
     process.exit(1);
   }
   const generatedAt = parseFlagValue(args, '--generated-at', 'Error: --generated-at requires an ISO timestamp value');
-  const schemaVersion = parseFlagValue(args, '--schema-version', 'Error: --schema-version must be v1 or v2');
-  if (schemaVersion && !['v1', 'v2'].includes(schemaVersion)) {
-    console.error('Error: --schema-version must be v1 or v2');
+  const schemaVersion = parseFlagValue(args, '--schema-version', 'Error: --schema-version requires a value');
+  const profile = parseFlagValue(args, '--profile', 'Error: --profile requires a value');
+  const migrateFrom = parseFlagValue(args, '--migrate-from', 'Error: --migrate-from requires a shard path');
+  const dryRun = args.includes('--dry-run');
+  const json = args.includes('--json');
+  if (format === 'fortemi' && schemaVersion && !['v1', 'v2'].includes(schemaVersion)) {
+    console.error('Error: browser export --schema-version must be v1 or v2');
+    process.exit(1);
+  }
+  if (format === 'fortemi-shard' && schemaVersion && !['1.2.0', '2.0.0'].includes(schemaVersion)) {
+    console.error('Error: shard --schema-version must be 2.0.0 or 1.2.0');
+    process.exit(1);
+  }
+  if (format === 'fortemi-shard' && profile && !['full-v1', 'core-v1'].includes(profile)) {
+    console.error('Error: shard --profile must be full-v1 or core-v1');
+    process.exit(1);
+  }
+  if (format === 'fortemi-shard' && !out && !migrateFrom) {
+    console.error('Error: --format fortemi-shard requires --out <path>');
     process.exit(1);
   }
 
-  const { buildAiwgFortemiIndexExport, writeAiwgFortemiIndexExport } = await import('./browser-export.js');
   try {
+    if (format === 'fortemi-shard') {
+      const {
+        diagnoseAiwgFortemiShardMigration,
+        writeAiwgFortemiKnowledgeShard,
+      } = await import('./fortemi-shard-export.js');
+      if (migrateFrom) {
+        if (!dryRun) {
+          throw new Error(
+            '--migrate-from is diagnostic-only and requires --dry-run; '
+            + 'source-less core-v1 artifacts cannot be promoted losslessly.',
+          );
+        }
+        const diagnosis = diagnoseAiwgFortemiShardMigration(process.cwd(), migrateFrom);
+        if (json) console.log(JSON.stringify(diagnosis, null, 2));
+        else {
+          console.log(`Migration supported: no`);
+          console.log(`Diagnostic: ${diagnosis.diagnostic}`);
+          console.log(`Action: ${diagnosis.action}`);
+        }
+        return;
+      }
+      const result = await writeAiwgFortemiKnowledgeShard(process.cwd(), out!, {
+        graph,
+        repo,
+        privacy: privacy as 'private' | 'sanitized' | 'public' | undefined,
+        generatedAt,
+        schemaVersion: schemaVersion as '1.2.0' | '2.0.0' | undefined,
+        profile: profile as 'core-v1' | 'full-v1' | undefined,
+        failOnLoss: args.includes('--fail-on-loss'),
+        dryRun,
+        overwrite: args.includes('--force'),
+      });
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else {
+        const action = result.written ? 'Exported' : 'Would export';
+        console.log(
+          `${action} ${result.items} AIWG records as `
+          + `${result.conversion.schemaVersion}/${result.conversion.profile} `
+          + `to ${result.outPath} (${result.bytes} bytes; `
+          + `${result.conversion.losses.length} losses)`,
+        );
+      }
+      return;
+    }
+    const { buildAiwgFortemiIndexExport, writeAiwgFortemiIndexExport } = await import('./browser-export.js');
     const exported = buildAiwgFortemiIndexExport(process.cwd(), {
       graph,
       repo,
@@ -909,6 +1201,7 @@ async function handleSync(args: string[]): Promise<void> {
     console.log('Options:');
     console.log('  --backend fortemi-core  Materialize the Fortemi Core static index cache (default)');
     console.log('  --graph <name>          Graph to sync (default: project)');
+    console.log('  --all                   Sync all built graph caches in build-order');
     console.log('  --repo <name>           Source repository label (default: cwd basename)');
     console.log('  --privacy <level>       private, sanitized, or public (default: private)');
     console.log('  --generated-at <iso>    Override generated timestamp for deterministic fixtures');
@@ -923,6 +1216,11 @@ async function handleSync(args: string[]): Promise<void> {
   }
 
   const graph = parseGraphFlag(args);
+  const all = args.includes('--all');
+  if (graph && all) {
+    console.error('Error: pass either --graph or --all, not both');
+    process.exit(1);
+  }
   const repo = parseFlagValue(args, '--repo', 'Error: --repo requires a value');
   const privacy = parseFlagValue(args, '--privacy', 'Error: --privacy must be private, sanitized, or public');
   if (privacy && !['private', 'sanitized', 'public'].includes(privacy)) {
@@ -934,11 +1232,34 @@ async function handleSync(args: string[]): Promise<void> {
 
   const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
   try {
-    const manifest = syncFortemiCoreIndex(process.cwd(), {
-      graph,
+    const cwd = process.cwd();
+    loadUserGraphConfigs(cwd);
+    loadGlobalGraphConfigs();
+    const options = {
       repo,
       privacy: privacy as 'private' | 'sanitized' | 'public' | undefined,
       generatedAt,
+    };
+    if (all) {
+      const { loadGraphIndexFile } = await import('./index-reader.js');
+      const manifests = [];
+      for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
+        if (!loadGraphIndexFile(cwd, 'metadata.json', name)) continue;
+        manifests.push(syncFortemiCoreIndex(cwd, { ...options, graph: name }));
+      }
+      if (json) {
+        console.log(JSON.stringify({ manifests }, null, 2));
+        return;
+      }
+      console.log(`Fortemi Core sync: ${manifests.length} graph(s)`);
+      for (const manifest of manifests) {
+        console.log(`  ${manifest.graph}: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+      }
+      return;
+    }
+    const manifest = syncFortemiCoreIndex(cwd, {
+      ...options,
+      graph,
     });
     if (json) {
       console.log(JSON.stringify(manifest, null, 2));
@@ -1266,13 +1587,18 @@ async function handleSetQuery(args: string[]): Promise<void> {
   });
 }
 
+/** `index discover` flags that consume the following argument as a value. */
+const DISCOVER_VALUE_FLAGS = new Set([
+  '--type', '--limit', '--format', '--graph', '--backend', '--resource-source', '--aiwg-version',
+]);
+
 /**
- * Handle 'index discover' command — capability-search for AIWG skills,
- * agents, commands, and rules.
+ * Handle 'index discover' command — capability-search for AIWG operational
+ * assets.
  *
  * Like `query` but tuned for capability lookups: ranks by trigger
  * phrase + capability description first, falls back to title/tag/path
- * matches. Defaults to AIWG artifact kinds (skill/agent/command/rule),
+ * matches. Defaults to the operational discovery surface,
  * narrowable via `--type`.
  *
  * Returns a token-tight format intended for in-context agent
@@ -1284,14 +1610,25 @@ async function handleDiscover(args: string[]): Promise<void> {
   const { discoverCapability } = await import('./query-engine.js');
   const cwd = process.cwd();
 
-  // Parse positional phrase (everything before flags)
+  // Parse the positional phrase. Flags may appear before or after it — the
+  // documented local-backend fallback is written flag-first
+  // (`aiwg discover --backend local "<phrase>"`, #2530), so a phrase after a
+  // value flag must not be swallowed as that flag's argument (#2559).
   const textParts: string[] = [];
   const flags: string[] = [];
-  let inFlags = false;
-  for (const arg of args) {
-    if (arg.startsWith('--')) inFlags = true;
-    if (inFlags) flags.push(arg);
-    else textParts.push(arg);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith('--')) {
+      textParts.push(arg);
+      continue;
+    }
+    flags.push(arg);
+    const bare = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+    const next = args[index + 1];
+    if (DISCOVER_VALUE_FLAGS.has(bare) && !arg.includes('=') && next !== undefined && !next.startsWith('--')) {
+      flags.push(next);
+      index += 1;
+    }
   }
 
   const phrase = textParts.join(' ').trim();
@@ -1299,14 +1636,15 @@ async function handleDiscover(args: string[]): Promise<void> {
     console.error('Error: aiwg index discover requires a search phrase');
     console.log('');
     console.log(
-      'Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json|--format json|text] [--pretty|--compact] [--graph <name>] [--backend local|fortemi-core]',
+      'Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json|--format json|text] [--pretty|--compact] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
     );
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index discover "create intake"');
     console.log('  aiwg index discover "deploy production" --limit 5');
-    console.log('  aiwg index discover "audit security" --type skill,agent');
+    console.log(`  aiwg index discover "audit security" --type ${OPERATIONAL_DISCOVERY_TYPES.join(',')}`);
     console.log('  aiwg index discover "intake" --format json --pretty');
+    console.log('  aiwg discover "intake" --resource-source web --aiwg-version stable');
     process.exit(1);
   }
 
@@ -1331,6 +1669,12 @@ async function handleDiscover(args: string[]): Promise<void> {
 
   const graph = parseGraphFlag(flags);
   const backend = parseSearchBackendFlag(flags);
+  const resourceSource = parseResourceSourceFlag(flags);
+  const aiwgVersion = parseAiwgVersionFlag(flags);
+  const offline = flags.includes('--offline');
+  const webReleaseOptions = resourceSource === 'local'
+    ? undefined
+    : webReleaseOptionsFromEnvironment();
 
   await discoverCapability(cwd, {
     phrase,
@@ -1340,6 +1684,10 @@ async function handleDiscover(args: string[]): Promise<void> {
     jsonPretty,
     graph,
     backend,
+    resourceSource,
+    aiwgVersion,
+    offline,
+    webReleaseOptions,
     includePaths: false,
   });
 }
@@ -1352,7 +1700,7 @@ async function handleDiscover(args: string[]): Promise<void> {
  *   aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]
  *
  * Type is positional (not a flag) so the verb reads as
- * "show <kind> <name>". `<type>` is one of: skill, agent, command, rule.
+ * "show <kind> <name>". `<type>` is one of the operational show types.
  *
  * Companion to `discover`: where discover ranks candidates, show fetches
  * the artifact body so consumers don't need to navigate the filesystem.
@@ -1370,21 +1718,24 @@ async function handleShow(args: string[]): Promise<void> {
     else positional.push(arg);
   }
 
-  const ALLOWED_TYPES = ['skill', 'agent', 'command', 'rule'];
   const HELP_TEXT = [
     '',
-    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
-    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
+    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
+    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
     '       aiwg index show <type> <name> ...',
     '',
-    'Types: skill | agent | command | rule',
+    `Types: ${OPERATIONAL_SHOW_TYPES.join(' | ')}`,
     '',
     'Examples:',
     '  aiwg show skill intake-wizard',
     '  aiwg show skill flow-deploy-to-production --json',
+    '  aiwg show flow flow-release --json',
+    '  aiwg show behavior quiet-bot --json',
+    '  aiwg show template config.toml --json',
     '  aiwg show metadata aiwg:skill:4840fa441622f676 --json',
     '  aiwg show agent aiwg-steward',
     '  aiwg show command discover',
+    '  aiwg show skill intake-wizard --resource-source web --aiwg-version stable',
     '',
     'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',
   ].join('\n');
@@ -1415,7 +1766,7 @@ async function handleShow(args: string[]): Promise<void> {
       console.error(HELP_TEXT);
       process.exit(1);
     }
-  } else if (ALLOWED_TYPES.includes(firstLower)) {
+  } else if (isOperationalShowType(firstLower)) {
     type = firstLower;
     name = positional.slice(1).join(' ').trim();
     if (!name) {
@@ -1444,6 +1795,12 @@ async function handleShow(args: string[]): Promise<void> {
 
   const graph = parseGraphFlag(flags);
   const backend = parseSearchBackendFlag(flags);
+  const resourceSource = parseResourceSourceFlag(flags);
+  const aiwgVersion = parseAiwgVersionFlag(flags);
+  const offline = flags.includes('--offline');
+  const webReleaseOptions = resourceSource === 'local'
+    ? undefined
+    : webReleaseOptionsFromEnvironment();
 
   const params = {
     name,
@@ -1452,6 +1809,10 @@ async function handleShow(args: string[]): Promise<void> {
     first,
     graph,
     backend,
+    resourceSource,
+    aiwgVersion,
+    offline,
+    webReleaseOptions,
   };
 
   if (metadataMode) await showMetadata(cwd, params);

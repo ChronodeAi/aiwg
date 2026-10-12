@@ -11,12 +11,16 @@ script:
   argsHint: '[--update-cli] [--all] [--provider <name>] [--dry-run] [--channel <name>]'
 ---
 
-> **Deterministic execution (#1267)**: this skill has a `script:` entrypoint.
-> Prefer `aiwg run skill aiwg-refresh -- <flags>` over agent-mediated invocation.
-> When invoked as a slash command on platforms without a deployed command stub
-> (e.g. hermes), the agent MUST run only `aiwg refresh <flags>` and report its
-> output — no exploratory permission requests, no multi-step planning. The
-> deterministic CLI is the source of truth.
+> **Deterministic execution (#1267)**: this skill has a `script:` entrypoint
+> that shells out to `aiwg refresh "$@"`. Prefer
+> `aiwg run skill aiwg-refresh -- <flags>` when a platform supports it; on
+> platforms without a deployed command stub (e.g. hermes) invoke the CLI
+> directly. The CLI owns the deterministic execution step: version/channel
+> resolution, CLI update, framework redeploy, provider detection, and exit
+> codes. The skill owns the agentic layer around that step: intent alignment,
+> output formatting, workspace-state reconciliation, summary, next actions,
+> gates, and recovery. Do not reimplement the refresh manually or add
+> redundant permission prompts before calling the CLI for execution.
 
 # Refresh AIWG Deployment
 
@@ -277,6 +281,13 @@ New capabilities available:
 Session ready - new features are now available!
 ```
 
+If the installation update fails but re-deployment completes, do not use the
+unqualified `AIWG Refresh Complete` summary above. Report **AIWG Refresh
+Partial Recovery**, repeat the update failure, and warn that AIWG may remain on
+the previous version. When relaying quiet output, preserve the CLI status
+`refreshed-with-update-failure` so automation can distinguish this result from
+a successful package update.
+
 ## Examples
 
 ```bash
@@ -332,7 +343,7 @@ This command should activate when user says:
 | Condition | Action |
 |-----------|--------|
 | AIWG CLI not found | Error: "AIWG CLI not installed. Run: curl -fsSL ... \| bash" |
-| Network error on update | Warn and continue with existing version |
+| Network or package error on update | Warn, continue re-deployment, and report partial recovery with `refreshed-with-update-failure` |
 | Framework not installed | Offer to install: "SDLC not installed. Install now? [y/N]" |
 | Permission denied | Error with specific file/directory that failed |
 | Invalid provider | Error listing valid providers |

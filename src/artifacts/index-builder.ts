@@ -2,7 +2,7 @@
  * Artifact Index Builder
  *
  * Scans .aiwg/ directories, extracts metadata from artifact frontmatter,
- * computes checksums, extracts @-mention dependencies, and builds a
+ * computes checksums, extracts @-mention and Markdown-link dependencies, and builds a
  * structured index at .aiwg/.index/.
  *
  * @implements #415
@@ -14,11 +14,33 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
+import { validateDecisionDocument } from '../decision/validate.js';
+import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
+import { validateGateDocument } from '../gates/schema.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
-import { INDEX_VERSION, INDEX_DIR, PHASE_DIRECTORIES, GRAPH_CONFIGS, loadUserGraphConfigs, loadGlobalGraphConfigs } from './types.js';
+import {
+  DEFAULT_INDEX_EXTENSIONS,
+  INDEX_EXTRACTOR_VERSION,
+  INDEX_VERSION,
+  INDEX_DIR,
+  OPERATIONAL_DISCOVERY_TYPES,
+  PHASE_DIRECTORIES,
+  GRAPH_CONFIGS,
+  TEMPLATE_INDEX_EXTENSIONS,
+  resolveGraphScanDir,
+  loadUserGraphConfigs,
+  loadGlobalGraphConfigs,
+} from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
 import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
+import { normalizeOperationalState } from './operational-state.js';
+import {
+  DEFAULT_PROJECT_AIWG_DIR,
+  resolveProjectAiwgDir,
+} from '../config/project-artifacts.js';
+import { normalizeStateTransferProjection } from './state-transfer.js';
+import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
 
 export interface BuildOptions {
   force?: boolean;
@@ -29,23 +51,21 @@ export interface BuildOptions {
   explicit?: boolean; // true when graph was requested via --graph flag; false for auto-selected defaultBuild graphs
 }
 
-function expandScanDir(cwd: string, scanDir: string): string {
-  if (scanDir === '~') return process.env.HOME ?? scanDir;
-  if (scanDir.startsWith('~/')) {
-    return path.join(process.env.HOME ?? '', scanDir.slice(2));
+function absoluteEntryPath(cwd: string, entryPath: string, graph?: GraphType): string {
+  if ((!graph || graph === 'project') && entryPath.startsWith(`${DEFAULT_PROJECT_AIWG_DIR}/`)) {
+    return path.join(resolveProjectAiwgDir(cwd), entryPath.slice(DEFAULT_PROJECT_AIWG_DIR.length + 1));
   }
-  if (path.isAbsolute(scanDir)) return scanDir;
-  return path.join(cwd, scanDir);
-}
-
-function indexPathFor(cwd: string, fullPath: string): string {
-  const rel = path.relative(cwd, fullPath);
-  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
-  return fullPath;
-}
-
-function absoluteEntryPath(cwd: string, entryPath: string): string {
   return path.isAbsolute(entryPath) ? entryPath : path.join(cwd, entryPath);
+}
+
+function loadIndexFromDir<T>(indexDir: string, filename: string): T | null {
+  const filePath = path.join(indexDir, filename);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -67,13 +87,73 @@ export function parseFrontmatter(content: string): { data: Record<string, unknow
  */
 export function extractMentions(content: string): string[] {
   const mentions = new Set<string>();
-  // Match @path/to/file.ext and @.aiwg/path patterns
-  const pattern = /@(\.?aiwg\/[\w./-]+|[a-zA-Z][\w./-]+\.\w+)/g;
+  // Match @path/to/file.ext, @.aiwg/path, and framework references rooted at
+  // @$AIWG_ROOT/. The latter must normalize to repo-relative paths so framework
+  // skill references resolve to their rule files in the graph index.
+  const pattern = /@(?:\$AIWG_ROOT\/)?(\.?aiwg\/[\w./-]+|[a-zA-Z][\w./-]+\.\w+)/g;
   let match;
   while ((match = pattern.exec(content)) !== null) {
     mentions.add(match[1]);
   }
   return Array.from(mentions);
+}
+
+/**
+ * Extract relative Markdown links that may resolve to graph-local artifacts.
+ *
+ * External URLs, absolute paths, and anchor-only links are intentionally absent
+ * from the accepted pattern. Resolution still happens later against indexed
+ * nodes, so a parsed link outside the active graph cannot create an edge.
+ */
+export function extractMarkdownLinks(content: string): string[] {
+  const links = new Set<string>();
+  const pattern = /(!?)\[[^\]]+\]\((\.\/?[^)#\s]+)(?:#[^)]+)?\)/g;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    if (match[1] === '!') continue;
+    links.add(match[2]);
+  }
+  return Array.from(links);
+}
+
+function resolveMarkdownLinkDependency(
+  cwd: string,
+  sourcePath: string,
+  rawLink: string,
+  entries: Record<string, MetadataEntry>,
+  graph?: GraphType,
+): string | null {
+  const target = rawLink.split('#')[0]?.trim();
+  if (!target) return null;
+  const sourceFullPath = absoluteEntryPath(cwd, sourcePath, graph);
+  const targetFullPath = path.resolve(path.dirname(sourceFullPath), target);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetFullPath);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  const indexedPath = indexPathFor(cwd, targetFullPath, graph);
+  return entries[indexedPath] ? indexedPath : null;
+}
+
+function addDependencyEdge(
+  depGraph: DependencyGraph,
+  entries: Record<string, MetadataEntry>,
+  sourcePath: string,
+  targetPath: string,
+  type: TypedEdge['type'],
+): boolean {
+  if (sourcePath === targetPath) return false;
+  if (!depGraph[sourcePath]) depGraph[sourcePath] = { upstream: [], downstream: [] };
+  if (!depGraph[targetPath]) depGraph[targetPath] = { upstream: [], downstream: [] };
+  if (depGraph[sourcePath].upstream.some(edge => edge.path === targetPath)) return false;
+
+  depGraph[sourcePath].upstream.push({ path: targetPath, type });
+  depGraph[targetPath].downstream.push({ path: sourcePath, type });
+  if (entries[targetPath]) entries[targetPath].dependents.push(sourcePath);
+  return true;
 }
 
 /**
@@ -103,12 +183,12 @@ function extractCanonicalName(data: Record<string, unknown>, relativePath: strin
     return data.name.trim();
   }
   const filename = path.basename(relativePath);
-  // For skill/agent/command/rule layouts: <type>s/<name>/<TYPE>.md
-  const isCanonicalLayout = /^(SKILL|AGENT|COMMAND|RULE)\.md$/i.test(filename);
+  // For slug layouts: <type>s/<name>/<TYPE>.md
+  const isCanonicalLayout = /^(SKILL|AGENT|COMMAND|RULE|BEHAVIOR)\.md$/i.test(filename);
   if (isCanonicalLayout) {
     return path.basename(path.dirname(relativePath));
   }
-  return filename.replace(/\.md$/i, '');
+  return path.basename(filename, path.extname(filename));
 }
 
 /**
@@ -119,6 +199,131 @@ function extractSummary(data: Record<string, unknown>, body: string): string {
   // Skip headings, get first paragraph
   const lines = body.split('\n').filter(l => l.trim() && !l.startsWith('#'));
   return lines.slice(0, 5).join(' ').slice(0, 500).trim();
+}
+
+interface SchemaDocMetadata {
+  title?: string;
+  name?: string;
+  capability?: string;
+  searchTerms: string[];
+}
+
+interface DecisionDocMetadata {
+  type: 'decision-definition' | 'decision-ruleset' | 'decision-binding';
+  kind: 'DecisionDefinition' | 'DecisionRuleset' | 'DecisionBinding';
+  name: string;
+  description: string;
+  capability: string;
+  tags: string[];
+  searchTerms: string[];
+}
+
+interface GatePackDocMetadata {
+  type: 'gate-pack';
+  kind: 'GatePack';
+  name: string;
+  description: string;
+  capability: string;
+  tags: string[];
+  searchTerms: string[];
+}
+
+/** Classify and schema-check authored decision-system documents. */
+export function parseDecisionDoc(content: string, relativePath: string): DecisionDocMetadata | null {
+  if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
+  let document: unknown;
+  try {
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
+    validateDecisionDocument(document);
+  } catch {
+    return null;
+  }
+  const value = document as {
+    kind: DecisionDocMetadata['kind'];
+    metadata: { id: string; version: string; description: string };
+    spec: Record<string, unknown>;
+  };
+  if (!['DecisionDefinition', 'DecisionRuleset', 'DecisionBinding'].includes(value.kind)) return null;
+  const type = ({
+    DecisionDefinition: 'decision-definition',
+    DecisionRuleset: 'decision-ruleset',
+    DecisionBinding: 'decision-binding',
+  } as const)[value.kind];
+  const purpose = typeof value.spec.purpose === 'string' ? value.spec.purpose : value.metadata.description;
+  const terms = new Set<string>([
+    value.kind, value.metadata.id, value.metadata.version, purpose,
+    ...Object.keys(value.spec),
+  ]);
+  return {
+    type, kind: value.kind, name: value.metadata.id, description: value.metadata.description,
+    capability: purpose.slice(0, 240), tags: ['decision-system', value.kind], searchTerms: [...terms],
+  };
+}
+
+/**
+ * Classify and schema-check authored gate-pack documents (#2830).
+ *
+ * Packs live in `<bundle>/gate-packs/*.gatepack.yaml|json` (never `gates/`,
+ * which agent-persistence HITL uses). The `.gatepack.` extension is the
+ * boundary: HITL `gates/*.yaml` files must never classify as `gate-pack`.
+ * Invalid packs return null so they are never discoverable; the bundle
+ * loader rejects them at load with a diagnostic.
+ */
+export function parseGatePackDoc(content: string, relativePath: string): GatePackDocMetadata | null {
+  if (!/\.gatepack\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
+  let document: unknown;
+  try {
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
+    validateGateDocument(document);
+  } catch {
+    return null;
+  }
+  const value = document as {
+    kind: string;
+    metadata: { id: string; version: string; description: string };
+    spec: { gates?: Array<{ id?: string }>; metrics?: Record<string, unknown> };
+  };
+  if (value.kind !== 'GatePack') return null;
+  const description = value.metadata.description;
+  const terms = new Set<string>([
+    value.kind, value.metadata.id, value.metadata.version, description,
+    ...(value.spec.gates ?? []).map(gate => String(gate.id ?? '')).filter(Boolean),
+    ...Object.keys(value.spec.metrics ?? {}),
+  ]);
+  return {
+    type: 'gate-pack', kind: 'GatePack', name: value.metadata.id, description,
+    capability: description.slice(0, 240), tags: ['gates', value.kind], searchTerms: [...terms],
+  };
+}
+
+function parseSchemaDoc(content: string, relativePath: string): SchemaDocMetadata | null {
+  if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  let parsed: unknown;
+  try {
+    parsed = /\.json$/i.test(relativePath) ? JSON.parse(content) : loadYaml(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const schema = parsed as Record<string, unknown>;
+  const title = typeof schema.title === 'string' && schema.title.trim()
+    ? schema.title.trim()
+    : undefined;
+  const id = typeof schema.$id === 'string' && schema.$id.trim()
+    ? schema.$id.trim()
+    : undefined;
+  const description = typeof schema.description === 'string' && schema.description.trim()
+    ? schema.description.trim().slice(0, 240)
+    : undefined;
+  const filename = path.basename(relativePath, path.extname(relativePath)).replace(/\.schema$/i, '');
+  return {
+    title: title ?? filename,
+    name: filename,
+    capability: description ?? (id ? `Schema definition for ${title ?? filename}` : undefined),
+    searchTerms: [id, title, filename, 'schema'].filter((term): term is string => Boolean(term)),
+  };
 }
 
 /**
@@ -139,8 +344,6 @@ function inferPhase(filePath: string): string {
  * always lands as `type: 'skill'` regardless of frontmatter.
  */
 function inferType(data: Record<string, unknown>, filePath: string): string {
-  if (typeof data.type === 'string') return data.type;
-
   // Normalize separators so matchers are cross-platform.
   const normalized = filePath.replace(/\\/g, '/');
   const basename = path.basename(filePath, path.extname(filePath)).toLowerCase();
@@ -167,7 +370,10 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
   // nested layout uniformly.
   const segments = normalized.split('/');
   const skipBasenames = new Set(['readme', 'rules-index', 'index']);
-  if (!skipBasenames.has(basename) && filePath.match(/\.md$/i)) {
+  const isMarkdown = /\.md$/i.test(filePath);
+  const isTemplateAsset = TEMPLATE_INDEX_EXTENSIONS.some(ext => normalized.endsWith(ext));
+  const isSchemaAsset = /\.(json|ya?ml|md)$/i.test(filePath);
+  if (!skipBasenames.has(basename) && (isMarkdown || isTemplateAsset || isSchemaAsset)) {
     // Look at directory segments only (exclude the file itself).
     for (let i = segments.length - 2; i >= 0; i--) {
       const seg = segments[i];
@@ -188,22 +394,32 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
           break;
         }
         case 'agents':
-          return 'agent';
+          if (isMarkdown) return 'agent';
+          break;
         case 'commands':
-          return 'command';
+          if (isMarkdown) return 'command';
+          break;
         case 'rules':
           // Rules/RULES-INDEX.md is a curated index file, not a rule.
           if (basename === 'rules-index' || basename === 'index') break;
-          return 'rule';
+          if (isMarkdown) return 'rule';
+          break;
+        case 'schemas':
+          if (isSchemaAsset) return 'schema';
+          break;
         case 'templates':
           return 'template';
         case 'behaviors':
-          return 'behavior';
+          if (isMarkdown) return 'behavior';
+          break;
         case 'hooks':
-          return 'hook';
+          if (isMarkdown) return 'hook';
+          break;
       }
     }
   }
+
+  if (typeof data.type === 'string') return data.type;
 
   // Legacy SDLC artifact heuristics (existing behavior preserved).
   if (basename.startsWith('uc-') || basename.includes('use-case')) return 'use-case';
@@ -218,13 +434,110 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
   return 'document';
 }
 
+interface RunbookDocMetadata {
+  kind: 'Runbook';
+  capability?: string;
+  searchTerms: string[];
+}
+
+interface MarkdownSection {
+  heading: string;
+  body: string;
+}
+
+const RUNBOOK_ACTION_HEADING = /\b(procedure|steps?|recovery steps?|installation|setup|start|stop|containment|remediation|response actions?|execution)\b/i;
+const RUNBOOK_CONTROL_HEADING = /\b(prerequisites?|verification|validation|rollback|health check|troubleshooting|monitoring|escalation|post-recovery|evidence|postmortem|diagnosis)\b/i;
+
+function markdownSections(body: string): MarkdownSection[] {
+  const matches = [...body.matchAll(/^#{2,4}\s+(.+)$/gm)];
+  return matches.map((match, index) => ({
+    heading: match[1].replace(/\s+#+\s*$/, '').trim(),
+    body: body.slice(
+      (match.index ?? 0) + match[0].length,
+      matches[index + 1]?.index ?? body.length,
+    ).trim(),
+  }));
+}
+
+function compactSectionText(text: string, maxLength = 240): string | undefined {
+  const blocks = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split(/\n\s*\n/)
+    .map(block => block
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\|.*\|\s*$/gm, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim())
+    .filter(Boolean);
+  const first = blocks.find(block => !block.startsWith('#'));
+  return first ? first.slice(0, maxLength) : undefined;
+}
+
+/**
+ * Detect procedural Markdown runbooks without promoting every runbook-shaped
+ * template. Explicit `type: runbook` is authoritative; otherwise a runbook
+ * marker must be accompanied by both an action section and a control/validation
+ * section. The extracted terms favor the operational sections people search
+ * for (procedure, verification, rollback, diagnosis, remediation, and so on).
+ */
+export function parseRunbookDoc(
+  data: Record<string, unknown>,
+  body: string,
+  filePath: string,
+): RunbookDocMetadata | null {
+  if (!/\.md$/i.test(filePath)) return null;
+  const title = extractTitle(data, body);
+  const explicit = typeof data.type === 'string' && data.type.toLowerCase() === 'runbook';
+  const hasMarker = /\brun[- ]?book\b/i.test(`${filePath} ${title}`);
+  const sections = markdownSections(body);
+  const headings = sections.map(section => section.heading);
+  const hasAction = headings.some(heading => RUNBOOK_ACTION_HEADING.test(heading));
+  const hasControl = headings.some(heading => RUNBOOK_CONTROL_HEADING.test(heading));
+  if (!explicit && !(hasMarker && hasAction && hasControl)) return null;
+
+  const preferredCapability = sections.find(section =>
+    /\b(purpose|overview|objective|intent|scope)\b/i.test(section.heading),
+  );
+  const lifecycleHeadings = sections
+    .map(section => section.heading)
+    .filter(heading => RUNBOOK_ACTION_HEADING.test(heading) || RUNBOOK_CONTROL_HEADING.test(heading));
+  const lifecycleCapability = lifecycleHeadings.length > 0
+    ? `${title}: ${lifecycleHeadings.slice(0, 8).join('; ')}`.slice(0, 240)
+    : undefined;
+  const capability =
+    (typeof data.description === 'string' ? data.description.trim().slice(0, 240) : undefined)
+    ?? (preferredCapability ? compactSectionText(preferredCapability.body) : undefined)
+    ?? lifecycleCapability
+    ?? extractCapability(data, body);
+
+  const terms = new Set<string>(['runbook']);
+  const relevantHeading = new RegExp(
+    `${RUNBOOK_ACTION_HEADING.source}|${RUNBOOK_CONTROL_HEADING.source}|\\b(purpose|overview|objective|intent|scope|incident classification|communication|monitoring|symptoms?)\\b`,
+    'i',
+  );
+  for (const section of sections) {
+    if (!relevantHeading.test(section.heading)) continue;
+    terms.add(section.heading);
+    const compact = compactSectionText(section.body, 320);
+    if (compact) terms.add(compact);
+    if (terms.size >= 40) break;
+  }
+
+  return {
+    kind: 'Runbook',
+    capability,
+    searchTerms: [...terms],
+  };
+}
+
 /**
  * Extract trigger phrases from a SKILL.md / agent body.
  *
- * Skills declare alternate activation phrases under a `## Triggers`
- * heading; the body typically lists them as bullet points. This
- * function pulls each bullet's leading phrase (the part before any
- * `→` arrow or em-dash explanation), lowercased and trimmed.
+ * Skills declare alternate activation phrases in `triggers`, `aliases`,
+ * `deprecated_names`, or under a `## Triggers` heading. This function pulls
+ * those names plus each bullet's leading phrase (the part before any `→`
+ * arrow or em-dash explanation), lowercased and trimmed.
  *
  * Returns an empty array when no `## Triggers` section is found —
  * non-skill artifacts get `triggers: undefined` after this is wired.
@@ -234,15 +547,17 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
 export function extractTriggers(body: string, frontmatter?: Record<string, unknown>): string[] {
   const phrases: string[] = [];
 
-  const declaredTriggers = Array.isArray(frontmatter?.triggers)
-    ? frontmatter.triggers
-    : [];
-  for (const trigger of declaredTriggers) {
-    if (typeof trigger !== 'string') continue;
-    const phrase = trigger.trim().toLowerCase();
-    if (phrase.length === 0) continue;
-    if (phrase.length > 200) continue;
-    phrases.push(phrase);
+  for (const field of ['triggers', 'aliases', 'deprecated_names']) {
+    const declaredValues = Array.isArray(frontmatter?.[field])
+      ? frontmatter[field]
+      : [];
+    for (const value of declaredValues) {
+      if (typeof value !== 'string') continue;
+      const phrase = value.trim().toLowerCase();
+      if (phrase.length === 0) continue;
+      if (phrase.length > 200) continue;
+      phrases.push(phrase);
+    }
   }
 
   // Find a triggers heading (case-insensitive). Accepted variants:
@@ -468,30 +783,6 @@ function applyMetadataSupplements(
 }
 
 /**
- * Recursively find all indexable files under a directory
- */
-function findArtifactFiles(dir: string, extensions: string[] = ['.md', '.yaml', '.json']): string[] {
-  const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
-
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isSymbolicLink() && !fs.existsSync(fullPath)) {
-      continue;
-    }
-    if (entry.isDirectory()) {
-      // Skip hidden dirs and .index
-      if (entry.name.startsWith('.')) continue;
-      results.push(...findArtifactFiles(fullPath, extensions));
-    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-}
-
-/**
  * Build the artifact index
  */
 /**
@@ -507,7 +798,15 @@ function findArtifactFiles(dir: string, extensions: string[] = ['.md', '.yaml', 
 export function parseFlowDoc(
   content: string,
   filePath: string
-): { name?: string; description?: string; tags: string[] } | null {
+): {
+  type: 'flow' | 'runbook';
+  kind: string;
+  name?: string;
+  description?: string;
+  capability?: string;
+  tags: string[];
+  searchTerms: string[];
+} | null {
   if (!/\.ya?ml$/i.test(filePath)) return null;
   let doc: unknown;
   try {
@@ -523,17 +822,84 @@ export function parseFlowDoc(
   // namespace ending in one of those.
   const isFlow = /(^|\.)(workflow|flow|ops)\.aiwg\.io\/v1$/.test(api);
   if (!isFlow) return null;
+  const kind = typeof d.kind === 'string' ? d.kind.trim() : '';
+  // The namespace alone is insufficient: other domain schemas may end in an
+  // `ops.aiwg.io` suffix. Accept only the workflow metalanguage resource
+  // families and their Workflow/Flow/Ops aliases.
+  const isFlowKind = /^(?:(?:Workflow|Flow|Ops)?(?:Capability|Playbook|Inventory|Target|Gate|Role|Extension|Runbook))$/.test(kind);
+  if (!isFlowKind) return null;
   const meta = (d.metadata && typeof d.metadata === 'object' ? d.metadata : {}) as Record<string, unknown>;
   const spec = (d.spec && typeof d.spec === 'object' ? d.spec : {}) as Record<string, unknown>;
-  const labels =
-    meta.labels && typeof meta.labels === 'object'
-      ? Object.values(meta.labels as Record<string, unknown>).map(String)
-      : [];
-  return {
-    name: typeof meta.name === 'string' ? meta.name : undefined,
-    description: typeof spec.description === 'string' ? spec.description : undefined,
-    tags: labels,
+  const labelMap = meta.labels && typeof meta.labels === 'object'
+    ? meta.labels as Record<string, unknown>
+    : {};
+  const labels = Object.values(labelMap).map(String);
+  const name = typeof meta.name === 'string' ? meta.name : undefined;
+  const description = typeof spec.description === 'string' ? spec.description : undefined;
+  const searchTerms = new Set<string>([kind, ...Object.keys(labelMap), ...labels]);
+  const excludedKeys = new Set(['body', 'content', 'script', 'source', 'template']);
+  const collectTerms = (value: unknown, key = '', depth = 0): void => {
+    if (depth > 7 || searchTerms.size >= 80) return;
+    if (typeof value === 'string') {
+      const compact = value.replace(/\s+/g, ' ').trim();
+      if (compact && compact.length <= 320) searchTerms.add(compact);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) collectTerms(item, key, depth + 1);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      if (excludedKeys.has(childKey.toLowerCase())) continue;
+      if (/^(id|name|kind|agent|capability|command|action|expect|description|role|inventory|target|group|schema|rollback[_-]?capability)$/i.test(childKey)) {
+        searchTerms.add(childKey.replace(/[_-]+/g, ' '));
+      }
+      collectTerms(childValue, childKey, depth + 1);
+    }
   };
+  collectTerms(spec);
+  const fallbackTerms = [...searchTerms]
+    .filter(term => term !== kind && term !== name)
+    .slice(0, 4);
+  const capability = description
+    ?? `${kind.replace(/([a-z])([A-Z])/g, '$1 $2')} ${name ?? ''}${fallbackTerms.length > 0 ? `: ${fallbackTerms.join('; ')}` : ''}`
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
+  return {
+    type: /Runbook$/.test(kind) ? 'runbook' : 'flow',
+    kind,
+    name,
+    description,
+    capability,
+    tags: labels,
+    searchTerms: [...searchTerms],
+  };
+}
+
+/**
+ * Best-effort absolute path to the AIWG install root, for error text that must
+ * name where the framework graph can actually be built (#2530).
+ */
+function resolveInstallRootHint(): string {
+  try {
+    // The running module lives under the install root; walk up to the package.
+    let dir = path.dirname(new URL(import.meta.url).pathname);
+    for (let i = 0; i < 10; i += 1) {
+      const pkg = path.join(dir, 'package.json');
+      if (fs.existsSync(pkg)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string };
+          if (content.name === 'aiwg' || content.name === '@aiwg/cli') return dir;
+        } catch { /* keep walking */ }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* fall through */ }
+  return '<aiwg install root>';
 }
 
 export async function buildIndex(
@@ -555,14 +921,14 @@ export async function buildIndex(
   if (scope) {
     // Explicit scope overrides graph config
     scanDirs = [path.join(cwd, scope)];
-    fileExtensions = ['.md', '.yaml', '.json'];
+    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   } else if (graphConfig) {
-    scanDirs = graphConfig.scanDirs.map(d => expandScanDir(cwd, d));
+    scanDirs = graphConfig.scanDirs.map(d => resolveGraphScanDir(cwd, d));
     fileExtensions = graphConfig.extensions;
   } else {
     // Default: scan .aiwg/ (backward compatible)
-    scanDirs = [path.join(cwd, '.aiwg')];
-    fileExtensions = ['.md', '.yaml', '.json'];
+    scanDirs = [resolveProjectAiwgDir(cwd)];
+    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   }
 
   // Verify at least one scan directory exists
@@ -577,7 +943,21 @@ export async function buildIndex(
       return;
     }
     console.error(`Error: No scan directories found: ${scanDirs.join(', ')}`);
-    console.log('Run this command from a project with the required directories.');
+    // The framework graph scans the AIWG corpus, which only exists at the install
+    // root — never in a consumer project. Saying "run from a project with the
+    // required directories" sends the operator looking in the wrong place (#2530).
+    if (graph === 'framework') {
+      const installRoot = resolveInstallRootHint();
+      console.log('The framework graph indexes the AIWG corpus and can only be built at the');
+      console.log('install root, not in a consumer project. Build it there, then sync here:');
+      console.log('');
+      console.log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
+      console.log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
+      console.log('');
+      console.log("As an immediate workaround, discovery also works with '--backend local'.");
+    } else {
+      console.log('Run this command from a project with the required directories.');
+    }
     process.exit(1);
   }
 
@@ -591,7 +971,7 @@ export async function buildIndex(
   } else if (graph) {
     indexOutputDir = resolveIndexDir(cwd, graph);
   } else {
-    indexOutputDir = path.join(cwd, INDEX_DIR);
+    indexOutputDir = resolveIndexDir(cwd);
   }
   fs.mkdirSync(indexOutputDir, { recursive: true });
   // effectiveOutputCwd is used for backward-compat loadMetadataIndex calls
@@ -612,12 +992,18 @@ export async function buildIndex(
   }
 
   // Load existing index for incremental updates
-  const existingIndex = force ? null : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
-  const existingEntries = existingIndex?.entries ?? {};
+  const existingIndex = force
+    ? null
+    : outputDir
+      ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
+      : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
+  const canReuseExisting = existingIndex?.version === INDEX_VERSION
+    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION;
+  const existingEntries = canReuseExisting ? existingIndex.entries : {};
 
   // Load checksum manifest for fast stat-based change detection (#794).
   // When --force is set we skip the manifest entirely and rebuild everything.
-  const manifest: ChecksumManifest = force
+  const manifest: ChecksumManifest = force || !canReuseExisting
     ? { version: 1, generated: '', entries: {} }
     : loadManifest(indexOutputDir);
   const nextManifestEntries: Record<string, import('./checksum-manifest.js').ManifestEntry> = {};
@@ -630,10 +1016,9 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files: string[] = [];
-  for (const dir of existingDirs) {
-    files.push(...findArtifactFiles(dir, fileExtensions));
-  }
+  const files = scope
+    ? existingDirs.flatMap(dir => findArtifactFiles(dir, fileExtensions))
+    : await collectGraphIndexFiles(cwd, graph);
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -645,7 +1030,7 @@ export async function buildIndex(
   const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
 
   for (const fullPath of files) {
-    const relativePath = indexPathFor(cwd, fullPath);
+    const relativePath = indexPathFor(cwd, fullPath, graph);
 
     let entry: MetadataEntry;
 
@@ -674,7 +1059,17 @@ export async function buildIndex(
 
       // Phase 1: stat-based quick filter — skip content read if mtime+size match manifest.
       // This is the fast path: unchanged files don't touch the filesystem beyond fs.statSync.
-      const stat = fs.statSync(fullPath);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          manifestStats.pruned++;
+          if (verbose) console.log(`  skipped missing: ${relativePath}`);
+          continue;
+        }
+        throw err;
+      }
       const manifestEntry = manifest.entries[relativePath];
 
       if (!force && statMatches(stat, manifestEntry) && existingEntries[relativePath]?.checksum === manifestEntry?.checksum) {
@@ -710,33 +1105,49 @@ export async function buildIndex(
       // markdown+frontmatter — detect them up front so they classify and
       // become discoverable (#1540).
       const flow = parseFlowDoc(content, relativePath);
-      const title = flow?.name ?? extractTitle(data, body);
+      const decision = flow ? null : parseDecisionDoc(content, relativePath);
+      const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
+      const inferredType = inferType(data, relativePath);
+      const physicalType = inferType({ ...data, type: undefined }, relativePath);
+      const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
+      const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
+      const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
       const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow ? 'flow' : inferType(data, relativePath);
-      const tags = flow ? flow.tags : (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? extractSummary(data, body);
+      const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
+      const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+      const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
       const dependencies = extractMentions(content);
+      const markdownLinks = extractMarkdownLinks(content);
 
-      // Discovery metadata (#1214, #1540) — meaningful for AIWG artifact
-      // kinds + Flow documents. Kept undefined on other types so the index
-      // file stays small for the common case.
-      const isDiscoverable =
-        type === 'skill' || type === 'agent' || type === 'command' || type === 'rule' || type === 'flow';
-      // Flows have no trigger phrases — they rely on the capability description.
+      // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
+      // AIWG artifact kinds. Kept undefined on document types so the index file
+      // stays small for the common case.
+      const isDiscoverable = OPERATIONAL_DISCOVERY_TYPES.includes(
+        type as typeof OPERATIONAL_DISCOVERY_TYPES[number],
+      );
+      // Declarative processes have no trigger phrases — they rely on their
+      // capability and structure-aware search terms.
       const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow ? flow.description : (isDiscoverable ? extractCapability(data, body) : undefined);
+      const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+      const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
+      const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
+      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
       const kernel =
         data.kernel === true || data.kernel === 'true' ? true : undefined;
       // Script entrypoint metadata is meaningful for skills only (#1227).
       const script = type === 'skill' ? extractSkillScript(data) : undefined;
+      const operationalState = normalizeOperationalState(data.operational_state);
+      const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
       // Canonical short name (#1233) — used by the scorer to floor exact-name
       // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
       // remain searchable even when the rendered title strips the hyphen.
-      const name = flow ? flow.name : (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+      const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
       entry = {
         path: relativePath,
         type,
+        ...(kind ? { kind } : {}),
+        ...(sourceType ? { sourceType } : {}),
         phase,
         title,
         tags,
@@ -745,12 +1156,16 @@ export async function buildIndex(
         checksum,
         summary,
         dependencies,
+        ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
         dependents: [], // Computed after all entries are processed
         ...(name ? { name } : {}),
         ...(triggers && triggers.length > 0 ? { triggers } : {}),
         ...(capability ? { capability } : {}),
+        ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
         ...(kernel ? { kernel } : {}),
         ...(script ? { script } : {}),
+        ...(operationalState ? { operationalState } : {}),
+        ...(stateTransfer ? { stateTransfer } : {}),
       };
     }
 
@@ -779,6 +1194,7 @@ export async function buildIndex(
   }
 
   // Build dependency graph and compute dependents
+  let markdownLinkEdgeCount = 0;
   for (const entry of Object.values(entries)) {
     if (!depGraph[entry.path]) {
       depGraph[entry.path] = { upstream: [], downstream: [] };
@@ -790,29 +1206,31 @@ export async function buildIndex(
         p => p === dep || p.endsWith(dep)
       );
       if (normalizedDep && normalizedDep !== entry.path) {
-        const upEdge: TypedEdge = { path: normalizedDep, type: 'depends-on' };
-        depGraph[entry.path].upstream.push(upEdge);
+        addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'depends-on');
+      }
+    }
 
-        if (!depGraph[normalizedDep]) {
-          depGraph[normalizedDep] = { upstream: [], downstream: [] };
-        }
-        const downEdge: TypedEdge = { path: entry.path, type: 'depends-on' };
-        depGraph[normalizedDep].downstream.push(downEdge);
-
-        // Also update the dependents field on the target entry
-        if (entries[normalizedDep]) {
-          entries[normalizedDep].dependents.push(entry.path);
-        }
+    for (const link of entry.markdownLinks ?? []) {
+      const normalizedDep = resolveMarkdownLinkDependency(cwd, entry.path, link, entries, graph);
+      if (normalizedDep && addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'markdown-link')) {
+        markdownLinkEdgeCount++;
       }
     }
   }
 
   // Run citation sidecar edge extraction if configured
+  let citationMetrics: {
+    canonicalEdges: number;
+    outgoingDeclarations: number;
+    incomingDeclarations: number;
+    unmirroredOutgoing: number;
+    unmirroredIncoming: number;
+  } | null = null;
   if (graphConfig?.edgeExtraction?.parser === 'citation-sidecar') {
     // Build REF-XXX → path map from all entries with ref frontmatter
     const entryFrontmatter = new Map<string, Record<string, unknown>>();
     for (const entryPath of Object.keys(entries)) {
-      const fullPath = absoluteEntryPath(cwd, entryPath);
+      const fullPath = absoluteEntryPath(cwd, entryPath, graph);
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath, 'utf-8');
         const { data } = parseFrontmatter(content);
@@ -823,13 +1241,26 @@ export async function buildIndex(
 
     // Parse each entry as a citation sidecar and extract edges
     let citationEdgeCount = 0;
+    let outgoingDeclarations = 0;
+    let incomingDeclarations = 0;
+    const canonicalOutgoing = new Set<string>();
+    const declaredIncoming = new Set<string>();
     for (const entryPath of Object.keys(entries)) {
-      const fullPath = absoluteEntryPath(cwd, entryPath);
+      const fullPath = absoluteEntryPath(cwd, entryPath, graph);
       if (!fs.existsSync(fullPath)) continue;
 
       const content = fs.readFileSync(fullPath, 'utf-8');
       const result = parseCitationSidecar(content);
       if (!result) continue;
+
+      outgoingDeclarations += result.cites.length;
+      incomingDeclarations += result.citedBy.length;
+      for (const targetRef of result.cites) {
+        canonicalOutgoing.add(`${result.ref}\0${targetRef}`);
+      }
+      for (const sourceRef of result.citedBy) {
+        declaredIncoming.add(`${sourceRef}\0${result.ref}`);
+      }
 
       const edges = citationResultToEdges(result, refToPath);
 
@@ -860,6 +1291,16 @@ export async function buildIndex(
       }
     }
 
+    citationMetrics = {
+      canonicalEdges: canonicalOutgoing.size,
+      outgoingDeclarations,
+      incomingDeclarations,
+      unmirroredOutgoing: [...canonicalOutgoing]
+        .filter(edge => !declaredIncoming.has(edge)).length,
+      unmirroredIncoming: [...declaredIncoming]
+        .filter(edge => !canonicalOutgoing.has(edge)).length,
+    };
+
     if (verbose && citationEdgeCount > 0) {
       console.log(`  citation edges: ${citationEdgeCount}`);
     }
@@ -875,6 +1316,7 @@ export async function buildIndex(
   // Write index files
   const index: ArtifactIndex = {
     version: INDEX_VERSION,
+    extractorVersion: INDEX_EXTRACTOR_VERSION,
     builtAt: new Date().toISOString(),
     buildTimeMs,
     entries,
@@ -883,6 +1325,20 @@ export async function buildIndex(
   writeIndexFile(effectiveOutputCwd, 'metadata.json', index, indexOutputDir);
   writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, indexOutputDir);
   writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, indexOutputDir);
+
+  // Materialize the configured backend and always retain dependencies.json as
+  // the stable compatibility/export contract.
+  const { createGraphBackend } = await import('./graph-backend.js');
+  const { resolveGraphBackendType } = await import('./types.js');
+  const backendType = resolveGraphBackendType(graph);
+  const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
+  let selectedBackend;
+  try {
+    selectedBackend = await createGraphBackend(backendType, persistentPath);
+    selectedBackend.deserialize(depGraph);
+  } finally {
+    await selectedBackend?.close?.();
+  }
 
   // Update and persist the checksum manifest for faster future builds (#794).
   // The next manifest contains entries for every file we processed this build.
@@ -898,9 +1354,13 @@ export async function buildIndex(
   writeManifest(indexOutputDir, nextManifest);
 
   // Write stats
-  const totalEdges = Object.values(depGraph).reduce(
+  const downstreamEdges = Object.values(depGraph).reduce(
     (sum, node) => sum + node.downstream.length, 0
   );
+  const adjacencyEntries = Object.values(depGraph).reduce(
+    (sum, node) => sum + node.upstream.length + node.downstream.length, 0
+  );
+  const totalEdges = citationMetrics?.canonicalEdges ?? downstreamEdges;
   const orphaned = Object.entries(depGraph).filter(
     ([, node]) => node.upstream.length === 0 && node.downstream.length === 0
   ).length;
@@ -922,6 +1382,7 @@ export async function buildIndex(
 
   writeIndexFile(effectiveOutputCwd, 'stats.json', {
     version: INDEX_VERSION,
+    extractorVersion: INDEX_EXTRACTOR_VERSION,
     builtAt: new Date().toISOString(),
     buildTimeMs,
     totalArtifacts: Object.keys(entries).length,
@@ -929,7 +1390,17 @@ export async function buildIndex(
     byType,
     tagDistribution: tagDist,
     graphMetrics: {
+      backend: backendType,
       totalEdges,
+      markdownLinkEdges: markdownLinkEdgeCount,
+      ...(citationMetrics ? {
+        canonicalEdges: citationMetrics.canonicalEdges,
+        outgoingDeclarations: citationMetrics.outgoingDeclarations,
+        incomingDeclarations: citationMetrics.incomingDeclarations,
+        adjacencyEntries,
+        unmirroredOutgoing: citationMetrics.unmirroredOutgoing,
+        unmirroredIncoming: citationMetrics.unmirroredIncoming,
+      } : {}),
       orphanedArtifacts: orphaned,
       mostReferenced,
     },

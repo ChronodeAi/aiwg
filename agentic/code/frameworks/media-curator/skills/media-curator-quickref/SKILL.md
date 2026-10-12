@@ -72,8 +72,9 @@ aiwg discover "quality filter media"           # → quality-filtering
 
 ```bash
 aiwg discover "transcribe media"               # → transcribe-media
+aiwg discover "speaker diarization audio"      # → diarize-media
 aiwg discover "media research handoff"         # → induct-media (research-complete)
-aiwg discover "video audio research induction" # → transcribe-media / induct-media
+aiwg discover "video audio research induction" # → transcribe-media / diarize-media / induct-media
 ```
 
 ### Metadata & assembly
@@ -90,6 +91,15 @@ aiwg discover "assemble compilation"           # → assemble
 ```bash
 aiwg discover "check collection completeness"  # → check-completeness
 aiwg discover "gap documentation"              # → gap-documentation
+```
+
+### Open-weight model archival
+
+```bash
+aiwg discover "archive open-weight language models"   # → llm-model-archivist (agent)
+aiwg discover "preserve original model weights"       # → llm-model-archivist (agent)
+aiwg discover "archive huggingface model weights"      # → llm-model-archivist / archive-acquisition
+aiwg discover "rank open models by benchmarks"        # → llm-model-archivist (agent)
 ```
 
 ### Integrity & export

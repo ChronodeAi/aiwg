@@ -1,0 +1,5 @@
+{"session_id":"unrelated-session","marker":"turn_started"}
+{"session_id":"fixture-session","marker":"turn_started"}
+{"session_id":"fixture-session","marker":"tool_completed","tool_call_id":"hermes-tool-1"}
+{"session_id":"unrelated-session","marker":"tool_completed","tool_call_id":"unrelated-tool"}
+{"session_id":"fixture-session","marker":"turn_completed"}

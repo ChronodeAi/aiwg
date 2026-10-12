@@ -23,7 +23,7 @@ const REPO_ROOT = path.resolve(__dirname, '../..');
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-cursor-git-check-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmpDir, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -95,7 +95,7 @@ function runAiwg(args: string[], cwd = TEST_PROJECT_DIR): string {
   };
 
   // Use bin/aiwg.mjs which properly awaits async operations
-  return execFileSync(process.execPath, [path.join(REPO_ROOT, 'bin/aiwg.mjs'), ...args], {
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, 'bin/aiwg.mjs'), ...args], { timeout: 60_000,
     cwd,
     env,
     encoding: 'utf-8',
@@ -113,7 +113,7 @@ function runScript(scriptPath: string, args: string[] = []): string {
     USERPROFILE: TEST_HOME_DIR,
   };
 
-  return execFileSync(process.execPath, [path.join(REPO_ROOT, scriptPath), ...args], {
+  return execFileSync(process.execPath, [path.join(REPO_ROOT, scriptPath), ...args], { timeout: 60_000,
     cwd: TEST_PROJECT_DIR,
     env,
     encoding: 'utf-8',
@@ -128,7 +128,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Cursor Integration', () => {
     await fs.mkdir(path.join(TEST_HOME_DIR, '.cursor'), { recursive: true });
 
     // Initialize as git repo (Cursor requires this)
-    execFileSync('git', ['init'], { cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
   });
 
   afterEach(async () => {
@@ -283,7 +283,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Cursor Integration', () => {
       expect(parsed.mcpServers.aiwg.args).toContain('serve');
     });
 
-    it.skipIf(!TSX_AVAILABLE)('does not duplicate MCP config on re-run', async () => {
+    it.skipIf(!TSX_AVAILABLE)('does not duplicate MCP config on re-run', { timeout: 15000 }, async () => {
       // Create initial config
       await fs.writeFile(
         path.join(TEST_CURSOR_DIR, 'mcp.json'),
@@ -303,7 +303,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Cursor Integration', () => {
       // Should have exactly one aiwg entry
       expect(Object.keys(parsed.mcpServers)).toContain('aiwg');
       expect(Object.keys(parsed.mcpServers).filter(k => k === 'aiwg').length).toBe(1);
-    }, { timeout: 15000 });
+    });
   });
 
   describe('Dry Run', () => {

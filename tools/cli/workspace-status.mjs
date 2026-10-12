@@ -20,13 +20,20 @@
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const packageRoot = path.resolve(__dirname, '../..');
+const runtimeRoot = existsSync(path.join(packageRoot, 'src')) ? 'src' : 'dist/src';
+const [{ resolveProjectAiwgDir }, { auditProjectArtifactHealth }] = await Promise.all([
+  import(pathToFileURL(path.join(packageRoot, runtimeRoot, 'config/project-artifacts-runtime.mjs')).href),
+  import(pathToFileURL(path.join(packageRoot, runtimeRoot, 'config/project-artifacts-health.mjs')).href),
+]);
 
 // ===========================
 // CLI Helpers
@@ -286,9 +293,10 @@ function parseActivityLogLine(line) {
 }
 
 async function collectActivityLog(projectRoot, hours) {
+  const aiwgRoot = resolveProjectAiwgDir(projectRoot);
   const candidates = [
-    path.join(projectRoot, '.aiwg', 'activity.log'),
-    path.join(projectRoot, '.aiwg', 'activity-log', 'activity.log')
+    path.join(aiwgRoot, 'activity.log'),
+    path.join(aiwgRoot, 'activity-log', 'activity.log')
   ];
   let content = null;
   let source = null;
@@ -315,10 +323,11 @@ async function collectActivityLog(projectRoot, hours) {
 }
 
 async function collectActiveOperations(projectRoot) {
+  const aiwgRoot = resolveProjectAiwgDir(projectRoot);
   const checks = [
-    { name: 'mission-control', path: path.join(projectRoot, '.aiwg', 'mc') },
-    { name: 'ralph', path: path.join(projectRoot, '.aiwg', 'ralph') },
-    { name: 'daemon', path: path.join(projectRoot, '.aiwg', 'daemon') }
+    { name: 'mission-control', path: path.join(aiwgRoot, 'mc') },
+    { name: 'ralph', path: path.join(aiwgRoot, 'ralph') },
+    { name: 'daemon', path: path.join(aiwgRoot, 'daemon') }
   ];
   const operations = [];
   for (const check of checks) {
@@ -340,7 +349,8 @@ async function collectActiveOperations(projectRoot) {
 }
 
 async function buildWorkspaceStatus(projectRoot) {
-  const aiwgPath = path.join(projectRoot, '.aiwg');
+  const aiwgPath = resolveProjectAiwgDir(projectRoot);
+  const artifactHealth = auditProjectArtifactHealth(projectRoot);
   const result = {
     workspace: {
       path: aiwgPath,
@@ -358,8 +368,18 @@ async function buildWorkspaceStatus(projectRoot) {
     migration: {
       status: 'unknown',
       backupsAvailable: 0
-    }
+    },
+    artifactHealth,
   };
+
+  if (artifactHealth.severity !== 'ok') {
+    result.health.issues.push({
+      severity: artifactHealth.severity,
+      message: `External artifact corpus: ${artifactHealth.classification}.`,
+      action: artifactHealth.action,
+    });
+    result.health.overall = artifactHealth.severity;
+  }
 
   try {
     await fs.access(aiwgPath);
@@ -501,31 +521,51 @@ async function buildVerificationProbe(projectRoot) {
   const frameworkCount = workspace.frameworks.length;
   const providerCount = workspace.providerDeployments.length;
   const malformedConfig = workspace.health.issues.some((issue) => /could not be parsed/.test(issue.message));
+  const artifactNeedsRepair = workspace.artifactHealth.external_configured && workspace.artifactHealth.severity !== 'ok';
   const ready = workspace.workspace.exists && frameworkCount > 0 && providerCount > 0;
   const partial = workspace.workspace.exists && (frameworkCount > 0 || providerCount > 0 || malformedConfig);
+
+  const userRegistryOverride = Boolean(process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim());
+  if (userRegistryOverride) {
+    workspace.health.issues.push({
+      severity: 'warning',
+      message: 'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json',
+      action: 'unset AIWG_USER_REGISTRY_PATH',
+    });
+    if (workspace.health.overall !== 'error') {
+      workspace.health.overall = 'warning';
+    }
+  }
 
   return {
     schema: 'aiwg.status.probe.v1',
     generated_at: new Date().toISOString(),
     project_root: path.resolve(projectRoot),
-    engaged: ready,
-    status: malformedConfig ? 'needs-repair' : ready ? 'ready' : partial ? 'partial' : 'not-configured',
+    engaged: ready && !artifactNeedsRepair,
+    status: malformedConfig || artifactNeedsRepair ? 'needs-repair' : ready ? 'ready' : partial ? 'partial' : 'not-configured',
     checks: {
       workspace_exists: workspace.workspace.exists,
       framework_count: frameworkCount,
       provider_deployment_count: providerCount,
       health: workspace.health.overall,
       malformed_config: malformedConfig,
+      artifact_health: workspace.artifactHealth.classification,
+      external_artifact_reachable: workspace.artifactHealth.external_reachable,
+      user_registry_path_override: userRegistryOverride,
     },
     verification: {
       required: true,
-      action: ready
+      action: artifactNeedsRepair
+        ? workspace.artifactHealth.action
+        : ready
         ? 'AIWG workspace and provider deployment are detected.'
         : malformedConfig
           ? 'Repair the malformed AIWG config or registry, then run this probe again.'
         : 'Run the guided path, deploy one framework, then run this probe again.',
       command: 'aiwg status --probe --json',
-      next_command: ready ? null : malformedConfig ? 'aiwg doctor --project-local' : 'aiwg wizard --dry-run',
+      next_command: artifactNeedsRepair
+        ? 'aiwg artifacts repair --dry-run'
+        : ready ? null : malformedConfig ? 'aiwg doctor --project-local' : 'aiwg wizard --dry-run',
     },
     agent_response_guidance: {
       when_asked_if_aiwg_is_engaged:

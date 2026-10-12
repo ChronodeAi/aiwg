@@ -3,9 +3,11 @@ id: concierge
 name: Concierge
 role: interaction
 tier: reasoning
-model: claude-sonnet-4-6
+model: haiku
 description: Front-facing daemon interface — routes user intent, composes responses, maintains session memory with professional warmth
 allowed-tools: Read, Glob, Grep, Bash, Task, Write
+model-role: efficiency
+model-tier: economy
 ---
 
 # Concierge
@@ -28,7 +30,7 @@ Identify what the user needs and route to the right capability:
 | Architecture question | Architecture Designer agent |
 | Test execution | Test Engineer agent or `/ralph` loop |
 | Project status | `/project-status` command |
-| Issue management | `/issue-list`, `/issue-create`, etc. |
+| Issue management | Discover and load `issue-list`, `issue-create`, or the matching issue skill |
 | Security concern | Security Architect agent |
 | Deployment | `/flow-deploy-to-production` |
 | `teach:` / `remember that` / `note that` | Teach mode — persist to memory (see §5) |

@@ -15,6 +15,7 @@ Paths are verified from platform source code where available, or from official d
 - OpenClaw (confirmed from `src/agents/skills/workspace.ts`)
 - Warp Terminal (also scans alongside `.warp/skills/`)
 - GitHub Copilot / VS Code (also scans alongside `.github/skills/`)
+- Muse Code (project skills root; AIWG's canonical deploy target for `muse`)
 
 Deploying to `.agents/skills/` is the most portable option if you need a single directory that works across providers.
 
@@ -47,6 +48,15 @@ Deploying to `.agents/skills/` is the most portable option if you need a single 
   skills to `~/.agents/skills/`. The legacy `~/.codex/skills/` home dir is no
   longer written; AIWG-managed dirs left there by pre-fix versions are pruned
   on every codex skill deploy.
+- Project-local addon skills deployed via `aiwg use <addon> --provider codex`
+  also land in `.agents/skills/`; `.codex/.aiwg/skills/` remains the indexed
+  artifact tier, not the Codex native runtime discovery path.
+- Each deployed native skill includes `agents/openai.yaml` with a display name
+  and short description for Codex UI discovery. Kernel skills are copied by
+  default; use `--copy-all` only when standard skills must also be native.
+- `aiwg use ... --provider codex` treats `.codex/` and `.agents/` as generated
+  provider trees and adds them to `.gitignore` unless already covered. Existing
+  tracked files remain tracked, and `--dry-run` does not mutate the ignore file.
 - **Duplicate-listing regression (fixed):** #766's first fix *added* the
   `.agents/skills/` write but never *removed* the legacy `~/.codex/skills/`
   write. codex-rs scans both, so every kernel skill appeared twice in the
@@ -150,13 +160,50 @@ Deploying to `.agents/skills/` is the most portable option if you need a single 
 
 | Scope | Path | Source |
 |-------|------|--------|
-| User-global | `~/.hermes/skills/` | `agent/skill_commands.py`, `agent/skill_utils.py`, `tools/skills_tool.py` |
+| User-global | `$HERMES_HOME/skills/` (default `~/.hermes/skills/`) | `hermes_constants.py`, `agent/skill_utils.py`, `tools/skills_tool.py` |
 
 - Source repo: https://github.com/NousResearch/hermes-agent (full Python)
-- Discovery: `rglob("SKILL.md")` — unlimited recursion confirmed
+- Discovery: recursive `SKILL.md` scan under the active profile's skills directory
 - NOT MCP-only for skills; file-based discovery is the primary mechanism
+- Managed Agent Skills imports deployed with `aiwg skills deploy <name>
+  --target hermes` land at `$HERMES_HOME/skills/<name>` as strict Agent Skills
+  bundles with AIWG ownership sidecars. This is separate from `aiwg use
+  --provider hermes`, which deploys framework/kernel skills and provider bridge
+  files.
 
 ---
+
+
+### Grok Bot
+
+| Scope | Path | Notes |
+|-------|------|-------|
+| User (when configured) | `$AIWG_GROKBOT_SKILLS_DIR/` | Absolute override required; AIWG does **not** invent `~/.grokbot` |
+| User standard (optional) | `$AIWG_GROKBOT_SKILLS_DIR/.aiwg/skills/` | Only with `--copy-all` |
+| Project | Indexed via `aiwg discover` / `aiwg show` | Discover-first bridge in `AGENTS.md` |
+
+Fail-closed until `AIWG_GROKBOT_SKILLS_DIR` is set. Never deploys to `.cursor/`.
+See `docs/architecture/adr-grokbot-provider-target.md`.
+
+### Muse Code
+
+| Scope | Path | Source | Notes |
+| ----- | ---- | ------ | ----- |
+| Project | `.agents/skills/` | Official docs | **Primary (use this)** — AIWG kernel deploys here |
+| Project | `.agents/.aiwg/skills/` | AIWG-managed mirror | Standard tier, only with `--copy-all` |
+| User-global | `$XDG_CONFIG_HOME/muse/skills/` (default `~/.config/muse/skills`) | Official docs | Resolved at deploy time; fail-closed on bad XDG metadata |
+| User-global | `~/.agents/skills/` | Official docs | Muse reads it; AIWG **never writes here** |
+
+- Source: <https://dev.meta.ai/docs/muse-code/> (docs only)
+- Muse natively reads project `.agents/skills/` plus the XDG user root. AIWG
+  must never write to `~/.agents/skills` silently: a second AIWG-owned copy
+  would make Muse list every kernel skill twice (the Codex #766 regression).
+- AIWG never invents `~/.muse`, siblings of `muse/skills` under the XDG
+  config home, or foreign provider paths (no `.cursor/`).
+- Muse Code 1.4.0 also reads `~/.claude/skills` and `~/.codex/skills` as
+  foreign personal skills (disable with `--no-foreign-personal-context`), so
+  user-scope AIWG deploys for Claude Code or Codex are visible in Muse too.
+
 
 ## Distribution Mechanism by Provider
 
@@ -173,7 +220,9 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 | **Warp Terminal** | File-deploy adapter | `aiwg use sdlc --provider warp` |
 | **Windsurf** | File-deploy adapter | `aiwg use sdlc --provider windsurf` |
 | **OpenClaw** | File-deploy adapter | `aiwg use sdlc --provider openclaw` |
-| **Hermes** | File-deploy adapter | `aiwg use sdlc --provider hermes` |
+| **Hermes** | File-deploy adapter; managed Agent Skills target | `aiwg use sdlc --provider hermes`; `aiwg skills deploy <name> --target hermes` |
+| **Grok Bot** | File-deploy adapter; fail-closed user skill root | `aiwg use sdlc --provider grokbot`; set `AIWG_GROKBOT_SKILLS_DIR` for user-scope |
+| **Muse Code** | File-deploy adapter | `aiwg use sdlc --provider muse` |
 
 **Marketplace vs. file-deploy distinction:**
 
@@ -195,6 +244,7 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 | warp | `.warp/skills/` | `.warp/skills/` (also `.agents/skills/`) | Partial |
 | windsurf | `.windsurf/skills/` | `.windsurf/skills/` | Unverified |
 | openclaw | `~/.openclaw/skills/` | `~/.openclaw/skills/` | Yes |
+| muse | `.agents/skills/` | `.agents/skills/` | Yes (user root `$XDG_CONFIG_HOME/muse/skills`; never `~/.agents/skills`) |
 
 ---
 
@@ -216,4 +266,4 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 
 ---
 
-*Last verified: 2026-04-06. Re-verify before implementing path changes — source repos move fast.*
+*Last verified: 2026-07-28. Re-verify before implementing path changes — source repos move fast.*

@@ -11,14 +11,17 @@
  * Issue: #61 - Write characterization tests for existing CLI behavior
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { execSync, spawn, ChildProcess } from 'child_process';
 import { resolve, join } from 'path';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 
 const PROJECT_ROOT = resolve(__dirname, '../..');
 const BIN_PATH = join(PROJECT_ROOT, 'bin/aiwg.mjs');
+const TEST_CONFIG_DIR = mkdirSync(join(tmpdir(), `aiwg-cli-router-config-${process.pid}`), { recursive: true }) || join(tmpdir(), `aiwg-cli-router-config-${process.pid}`);
+
+afterAll(() => rmSync(TEST_CONFIG_DIR, { recursive: true, force: true }));
 
 /**
  * Helper to run CLI command and capture output
@@ -37,6 +40,12 @@ function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}
       cwd,
       timeout,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        AIWG_CONFIG: TEST_CONFIG_DIR,
+        NO_UPDATE_NOTIFIER: '1',
+        AIWG_NO_UPDATE_CHECK: '1',
+      },
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (error: any) {
@@ -57,10 +66,27 @@ describe('CLI Router Characterization Tests', () => {
 
     describe('project setup aliases', () => {
       it('new command should be accessible via --new', () => {
-        const result = runCli(['--new', '--help']);
+        const workspacePath = join(PROJECT_ROOT, 'WORKSPACE.md');
+        const workspaceBefore = existsSync(workspacePath)
+          ? readFileSync(workspacePath, 'utf-8')
+          : null;
+        const tempDir = join(tmpdir(), `aiwg-new-alias-${Date.now()}`);
+        mkdirSync(tempDir, { recursive: true });
+
+        let result: ReturnType<typeof runCli>;
+        try {
+          result = runCli(['--new', '--help'], { cwd: tempDir });
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true });
+        }
+
         // Should either succeed or fail with a known error (not crash)
         expect(result.exitCode).toBeDefined();
         expect(typeof result.exitCode).toBe('number');
+        expect(existsSync(workspacePath)).toBe(workspaceBefore !== null);
+        if (workspaceBefore !== null) {
+          expect(readFileSync(workspacePath, 'utf-8')).toBe(workspaceBefore);
+        }
       });
     });
 
@@ -92,14 +118,17 @@ describe('CLI Router Characterization Tests', () => {
       });
 
       it('-doctor should be equivalent to --doctor and doctor', () => {
-        const result1 = runCli(['-doctor']);
-        const result2 = runCli(['--doctor']);
-        const result3 = runCli(['doctor']);
-        // All should attempt to run doctor
+        const result1 = runCli(['-doctor', '--help']);
+        const result2 = runCli(['--doctor', '--help']);
+        const result3 = runCli(['doctor', '--help']);
+        // All should route to the doctor handler. A full doctor scan is
+        // intentionally not used here because it validates installation
+        // health, not alias mapping, and can exceed a 30s characterization
+        // budget when run three times in sequence.
         expect(result1.stdout + result1.stderr).toMatch(/doctor|health|check|error/i);
         expect(result2.stdout + result2.stderr).toMatch(/doctor|health|check|error/i);
         expect(result3.stdout + result3.stderr).toMatch(/doctor|health|check|error/i);
-      });
+      }, 90_000);
     });
 
     describe('help aliases', () => {
@@ -234,12 +263,19 @@ describe('CLI Router Characterization Tests', () => {
       expect(helpOutput).toMatch(/warp/);
     });
 
-    it('should have Ralph Loop section', () => {
-      expect(helpOutput).toMatch(/(Ralph Loop|RALPH LOOP)/);
-      expect(helpOutput).toMatch(/ralph.*--completion/);
-      expect(helpOutput).toMatch(/ralph-status/);
-      expect(helpOutput).toMatch(/ralph-abort/);
-      expect(helpOutput).toMatch(/ralph-resume/);
+    it('should have Agent Loop section', () => {
+      expect(helpOutput).toMatch(/(Agent Loop|AGENT LOOP)/);
+      expect(helpOutput).toMatch(/agent-loop.*--completion/);
+      expect(helpOutput).toMatch(/agent-loop-status/);
+      expect(helpOutput).toMatch(/agent-loop-abort/);
+      expect(helpOutput).toMatch(/agent-loop-resume/);
+    });
+
+    it('should still advertise the legacy ralph* names as accepted aliases', () => {
+      // The commands were renamed to agent-loop*; the ralph* spellings stay
+      // routable so existing scripts keep working. Help must say so, or the
+      // rename reads as a removal to anyone with a ralph* command in CI.
+      expect(helpOutput).toMatch(/ralph\*? *names? +remain +accepted/i);
     });
 
     it('should have Examples section', () => {
@@ -385,6 +421,6 @@ describe('CLI Router Characterization Tests', () => {
       const result = runCli(['use', 'sdlc', '--dry-run']);
       // Should pass --dry-run to deploy handler
       expect(result.stdout + result.stderr).toMatch(/dry.?run|preview/i);
-    });
+    }, 60_000);
   });
 });

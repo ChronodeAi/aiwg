@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayMembers.v1.schema.json",
+  "title": "DecisionComparativeReplayMembers",
+  "type": "array",
+  "maxItems": 6000,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "slice",
+      "split",
+      "sourceResultDigest",
+      "payloadDigest",
+      "planDigest"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "slice": {
+        "enum": [
+          "threshold-boundary",
+          "priority-loss",
+          "unchanged-control",
+          "unreplayable"
+        ]
+      },
+      "split": {
+        "enum": [
+          "tuning",
+          "calibration",
+          "test"
+        ]
+      },
+      "sourceResultDigest": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "payloadDigest": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "planDigest": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    }
+  }
+}

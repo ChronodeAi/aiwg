@@ -1,0 +1,58 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GateBinding",
+  "metadata": {
+    "id": "test-gates/invalid-param",
+    "version": "1.0.0",
+    "description": "Binding that sets an unqualified parameter name instead of the namespaced pack parameter."
+  },
+  "spec": {
+    "packs": [
+      {
+        "id": "aiwg:test-gates/conformance-v1",
+        "version": "1.0.0",
+        "digest": "sha256:38a59f70033bf01a7395b776f2b44849254127508ef4b5816a73ed6be450daed",
+        "resolvedDigest": "sha256:38a59f70033bf01a7395b776f2b44849254127508ef4b5816a73ed6be450daed"
+      }
+    ],
+    "parameters": {
+      "falseReadyMaxBps": 100
+    },
+    "slices": [
+      "a",
+      "b"
+    ],
+    "references": [
+      {
+        "name": "always-review",
+        "kind": "always-review"
+      }
+    ],
+    "metricProviders": [
+      {
+        "id": "test.proportion/v1",
+        "version": "1.0.0",
+        "sourceDigest": "sha256:8e533b21822c74d7eded47528bd1c65d4ea2466e157e63fca5093ca0f412e737"
+      },
+      {
+        "id": "test.paired/v1",
+        "version": "1.0.0",
+        "sourceDigest": "sha256:f9ec7b3f4c3bb42967e2ce6ab7d1f371c89100a5d08f573004a6fda9a3265b58"
+      },
+      {
+        "id": "test.scalar/v1",
+        "version": "1.0.0",
+        "sourceDigest": "sha256:860560783009be16b08b079dfb3dfadd732bb4d93bf27f3b372772212bc96391"
+      },
+      {
+        "id": "test.evidence/v1",
+        "version": "1.0.0",
+        "sourceDigest": "sha256:4c8b2c0ba53d60f6a53ce97d7a3a8909a9df6295a01e0f07d51eed6a9d704271"
+      }
+    ],
+    "ceiling": "PROMOTE",
+    "registeredAt": "2026-09-01T00:00:00.000Z",
+    "frozenAt": "2026-09-02T00:00:00.000Z",
+    "holdoutAccessedAt": null
+  }
+}

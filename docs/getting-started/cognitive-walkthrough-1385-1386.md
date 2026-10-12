@@ -1,5 +1,8 @@
 # Cognitive Walkthrough: Issues 1385 and 1386
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Date: 2026-05-18
 
 Scope: beginner documentation MVP for Start Here, first-success recipes, and entry-point cross-links.

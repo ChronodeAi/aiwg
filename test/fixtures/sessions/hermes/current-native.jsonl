@@ -1,0 +1,1 @@
+{"id":"hermes-current-native","source":"cli","user_id":null,"model":"synthetic/model","started_at":1788487200,"ended_at":1788487260,"archived":0,"inactive":1,"messages":[{"id":1,"role":"user","content":"Synthetic native export","tool_call_id":null,"token_count":null,"finish_reason":null,"reasoning":null,"reasoning_content":null,"tool_name":null,"timestamp":1788487201}]}

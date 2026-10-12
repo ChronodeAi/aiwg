@@ -3,20 +3,43 @@
  *
  * Validates that:
  *   - `aiwg use all` deploys every addon except those in the disallow list
- *   - `aiwg use aiwg-dev` is rejected with a useful error
+ *   - `aiwg use aiwg-dev` remains available as an explicit contributor install
  *   - `aiwg use <any-valid-addon>` works without being in a hardcoded list
  *   - New addons added to agentic/code/addons/ are auto-discovered
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import fs from 'fs/promises';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync, spawnSync } from 'child_process';
+// @ts-expect-error — .mjs provider module without type declarations
+import {
+  listOnDemandRuleFiles,
+  onDemandRuleNames,
+} from '../../tools/agents/providers/base.mjs';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const BIN = path.join(REPO_ROOT, 'bin/aiwg.mjs');
+const TEST_HOME = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-cli-home-'));
+
+afterAll(() => {
+  rmSync(TEST_HOME, { recursive: true, force: true });
+});
+
+function isolatedCliEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: TEST_HOME,
+    USERPROFILE: TEST_HOME,
+    XDG_CACHE_HOME: path.join(TEST_HOME, '.cache'),
+    XDG_CONFIG_HOME: path.join(TEST_HOME, '.config'),
+    XDG_DATA_HOME: path.join(TEST_HOME, '.local', 'share'),
+    NO_UPDATE_NOTIFIER: '1',
+    ...overrides,
+  };
+}
 
 function runAiwg(
   args: string[],
@@ -29,7 +52,27 @@ function runAiwg(
     cwd,
     encoding: 'utf-8',
     timeout: 60_000,
-    env: { ...process.env },
+    // Do not inherit the operator's ~/.aiwg/channel.json. A dev/edge pointer
+    // can otherwise route this release-candidate test through another checkout.
+    env: isolatedCliEnv(),
+  });
+  return {
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    exitCode: result.status ?? 1,
+  };
+}
+
+function runAiwgWithEnv(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): { stdout: string; stderr: string; exitCode: number } {
+  const result = spawnSync(process.execPath, [BIN, ...args], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 60_000,
+    env: isolatedCliEnv(env),
   });
   return {
     stdout: result.stdout ?? '',
@@ -41,7 +84,7 @@ function runAiwg(
 function canInitGit(): boolean {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'aiwg-git-check-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmp, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -52,6 +95,24 @@ function canInitGit(): boolean {
 
 const GIT_AVAILABLE = canInitGit();
 
+const EXPECTED_ON_DEMAND_RULE_NAMES: string[] = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
+const ISSUE_1784_MISSING_EXAMPLES = [
+  'activity-log',
+  'context-budget',
+  'diagram-generation',
+  'voice-framework',
+  'prose-bridge',
+  'scoped-reasoning',
+];
+const TESTING_QUALITY_SKILLS = [
+  'tdd-enforce',
+  'mutation-test',
+  'flaky-detect',
+  'flaky-fix',
+  'generate-factory',
+  'test-sync',
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -59,7 +120,7 @@ const GIT_AVAILABLE = canInitGit();
 async function makeProject(): Promise<string> {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-'));
   if (GIT_AVAILABLE) {
-    execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: dir, stdio: 'pipe' });
   }
   return dir;
 }
@@ -73,23 +134,45 @@ async function cleanProject(dir: string) {
 // ---------------------------------------------------------------------------
 
 describe('aiwg use — disallow list', () => {
+  let projectDir: string;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-disallow-'));
+  });
+
+  afterEach(async () => {
+    await cleanProject(projectDir);
+  });
+
   it('accepts aiwg-dev as an explicit install (contributor workflow)', () => {
     // aiwg-dev is excluded from `use all` but must be installable explicitly
-    const result = runAiwg(['use', 'aiwg-dev', '--dry-run']);
-    expect(result.exitCode).toBe(0);
+    const result = runAiwg(['use', 'aiwg-dev', '--dry-run'], projectDir);
+    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
   });
 
   it('rejects unknown addon names', () => {
-    const result = runAiwg(['use', 'this-does-not-exist-abc123']);
+    const result = runAiwg(['use', 'this-does-not-exist-abc123'], projectDir);
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout + result.stderr).toMatch(/unknown target|not found/i);
   });
 
   it('accepts a real addon by name without it being in a hardcoded list', () => {
     // auto-memory is new and was NOT in the old VALID_ADDONS hardcoded list
-    const result = runAiwg(['use', 'auto-memory', '--dry-run']);
+    const result = runAiwg(['use', 'auto-memory', '--dry-run'], projectDir);
     // dry-run exit code 0 means the addon was recognised and would be deployed
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+  });
+
+  it('keeps every bundled addon manifest identity aligned with its directory', async () => {
+    const addonsRoot = path.join(REPO_ROOT, 'agentic/code/addons');
+    const entries = await fs.readdir(addonsRoot, { withFileTypes: true });
+
+    for (const entry of entries.filter(candidate => candidate.isDirectory())) {
+      const manifestPath = path.join(addonsRoot, entry.name, 'manifest.json');
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      expect(manifest.id, manifestPath).toBe(entry.name);
+    }
   });
 });
 
@@ -97,7 +180,7 @@ describe('aiwg use — disallow list', () => {
 // aiwg use all — deployment coverage
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', () => {
+describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeout: 60_000 }, () => {
   let projectDir: string;
   const fullUseAllArgs = (target: string) => ['use', 'all', '--target', target];
 
@@ -116,14 +199,15 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', () => {
     expect(existsSync(skillsDir)).toBe(true);
   });
 
-  it('reports native and discoverable skill counts separately', () => {
+  it('reports deployed and indexed skill counts in separate sections', () => {
     const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
     expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
     expect(result.stdout).toMatch(/Installing complete AIWG surface/);
-    expect(result.stdout).toMatch(/Skills\s+\d+ deployed/);
-    expect(result.stdout).toMatch(/Discoverable skills\s+\d+ deployed/);
-  });
+    expect(result.stdout).toMatch(/Deployed to Claude Code \(claude\)[\s\S]*\bSkills \d+\b/);
+    expect(result.stdout).toMatch(/Indexed for discovery[\s\S]*\bskill \d+\b/);
+    expect(result.stdout).not.toMatch(/Discoverable skills\s+\d+ deployed/);
+  }, 60_000);
 
   it('deploys more skills than the old hardcoded 4-addon set would produce', async () => {
     const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
@@ -219,6 +303,167 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', () => {
       expect(existsSync(path.join(commandsDir, file)), `${file} should be copied in as a Claude bootstrap command`).toBe(true);
     }
   });
+
+  it('keeps Codex bulk deployment kernel-only by default', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-codex-home-'));
+    try {
+      const agentsDir = path.join(projectDir, '.codex', 'agents');
+      await fs.mkdir(agentsDir, { recursive: true });
+      await fs.writeFile(path.join(agentsDir, 'stale-aiwg.toml'), '# aiwg:managed v0 test\nname = "stale"\n');
+      await fs.writeFile(path.join(agentsDir, 'operator.toml'), 'name = "operator"\n');
+      const result = runAiwgWithEnv(
+        ['use', 'all', '--provider', 'codex', '--target', projectDir],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use all --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+
+      const regenerateSkill = path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md');
+      expect(existsSync(regenerateSkill), 'Codex should retain $aiwg-regenerate in .agents/skills after addon deploys').toBe(true);
+      const regenerateMetadata = await fs.readFile(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'agents', 'openai.yaml'), 'utf-8');
+      expect(regenerateMetadata).toContain('display_name: "AIWG Regenerate"');
+      expect(existsSync(path.join(projectDir, '.agents', 'skills', 'voice-apply', 'SKILL.md')), 'Codex default deploy should not copy standard skills into the native $ search path').toBe(false);
+
+      const skillDirs = await fs.readdir(path.join(projectDir, '.agents', 'skills'), { withFileTypes: true });
+      expect(skillDirs.filter(entry => entry.isDirectory()).length).toBeLessThan(100);
+
+      const codexAgentsDir = path.join(projectDir, '.codex', 'agents');
+      const codexAgents = existsSync(codexAgentsDir)
+        ? (await fs.readdir(codexAgentsDir)).filter(name => name.endsWith('.toml'))
+        : [];
+      expect(codexAgents).toEqual(['operator.toml']);
+
+      const gitignore = await fs.readFile(path.join(projectDir, '.gitignore'), 'utf-8');
+      expect(gitignore).toContain('.codex/');
+      expect(gitignore).toContain('.agents/');
+      expect(result.stdout).toMatch(/Deployed to OpenAI Codex \(codex\)[\s\S]*\bSkills [1-9]\d*\b/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'all', '--provider', 'pi', '--target', projectDir],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use all --provider pi failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, '.pi', 'prompts', 'address-issues.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, 'AGENTS.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, '.pi', 'settings.json'))).toBe(false);
+      expect(result.stdout).toMatch(/Deployed to Pi Coding Agent \(pi\)[\s\S]*\bCommands [1-9]\d*\b[\s\S]*\bSkills [1-9]\d*\b/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('mirrors Pi user-scope resources through PI_CODING_AGENT_DIR', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
+    const agentDir = path.join(homeDir, 'custom-pi-agent');
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'sdlc', '--provider', 'pi', '--target', projectDir, '--scope', 'user'],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir, PI_CODING_AGENT_DIR: agentDir },
+      );
+      expect(result.exitCode, `Pi user-scope deployment failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(agentDir, 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(true);
+      expect(existsSync(path.join(agentDir, 'prompts', 'address-issues.md'))).toBe(true);
+      expect(existsSync(path.join(homeDir, '.agents', 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(false);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('keeps Claude bulk deployment kernel-only by default', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-claude-home-'));
+    try {
+      const agentsDir = path.join(projectDir, '.claude', 'agents');
+      await fs.mkdir(agentsDir, { recursive: true });
+      await fs.writeFile(path.join(agentsDir, 'stale-aiwg.md'), '<!-- aiwg:managed v0 test -->\n# stale\n');
+      await fs.writeFile(path.join(agentsDir, 'operator.md'), '# operator\n');
+      const result = runAiwgWithEnv(
+        ['use', 'all', '--provider', 'claude', '--target', projectDir],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use all --provider claude failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(projectDir, '.claude', 'skills', 'aiwg-utils-quickref', 'SKILL.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, '.claude', 'skills', 'voice-apply', 'SKILL.md'))).toBe(false);
+      const agents = existsSync(agentsDir)
+        ? (await fs.readdir(agentsDir)).filter(name => name.endsWith('.md'))
+        : [];
+      expect(agents).toEqual(['operator.md']);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('keeps managed bulk artifacts intact during a kernel-only dry run', async () => {
+    const agentsDir = path.join(projectDir, '.codex', 'agents');
+    await fs.mkdir(agentsDir, { recursive: true });
+    const staleAgent = path.join(agentsDir, 'stale-aiwg.toml');
+    await fs.writeFile(staleAgent, '# aiwg:managed v0 test\nname = "stale"\n');
+
+    const result = runAiwgWithEnv(
+      ['use', 'all', '--provider', 'codex', '--target', projectDir, '--dry-run'],
+      projectDir,
+      {},
+    );
+    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+    expect(existsSync(staleAgent)).toBe(true);
+  }, 60_000);
+
+  it('deploys explicit testing-quality skills to the Codex native skill surface', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-testing-quality-codex-home-'));
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'testing-quality', '--provider', 'codex', '--target', projectDir],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use testing-quality --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+
+      for (const skill of TESTING_QUALITY_SKILLS) {
+        expect(
+          existsSync(path.join(projectDir, '.agents', 'skills', skill, 'SKILL.md')),
+          `${skill} should be deployed to .agents/skills for Codex when testing-quality is explicitly installed`,
+        ).toBe(true);
+      }
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // One bounded CLI child per case; each provider gets an isolated project and
+  // a distinct failure identity instead of sharing a 90s budget for two calls.
+  it.each(['claude', 'codex'])('writes complete RULES-ONDEMAND indexes for %s after real aiwg use all (#1784)', async (provider) => {
+    const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
+    expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+
+    const rulesDir = provider === 'claude'
+      ? path.join(projectDir, '.claude', 'rules')
+      : path.join(projectDir, '.codex', 'rules');
+    const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
+    const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
+
+    // Every MEDIUM/LOW rule is listed. Claude additionally lists the HIGH rules
+    // the inline budget moved on demand (#2562), under their own heading, so the
+    // index is a superset there rather than an exact match.
+    expect(actual).toEqual(expect.arrayContaining(EXPECTED_ON_DEMAND_RULE_NAMES));
+    expect(actual).toEqual(expect.arrayContaining(ISSUE_1784_MISSING_EXAMPLES));
+    const budgetDemoted = actual.filter((name) => !EXPECTED_ON_DEMAND_RULE_NAMES.includes(name));
+    if (provider === 'claude') {
+      const [, demotedSection = ''] = body.split('## Binding rules moved on demand to fit the inline budget');
+      for (const name of budgetDemoted) expect(demotedSection, `${name} must be listed as budget-demoted`).toContain(`\`${name}\``);
+    } else {
+      expect(budgetDemoted).toEqual([]);
+    }
+  }, 90_000);
 });
 
 // ---------------------------------------------------------------------------

@@ -1,123 +1,48 @@
-# SDLC Complete Framework - Quick Start
+# SDLC Quick Start
 
-Build software with AI-assisted lifecycle management: Inception → Elaboration → Construction → Transition.
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](getting-started/install-connect-verify.md).
+This guide assumes AIWG is already installed and connected to the target project.
 
----
-
-## Install & Deploy
-
-### Option A: Claude Code Marketplace (Recommended)
-
-Native Claude Code integration - no npm required:
-
-```bash
-# Add AIWG marketplace (one-time)
-/plugin marketplace add jmagly/ai-writing-guide
-
-# Install SDLC framework
-/plugin install sdlc@aiwg        # Full SDLC framework
-/plugin install utils@aiwg       # Core utilities (recommended)
-```
-
-> **No account required** - Plugin distribution is decentralized. No registry signup, no approval process.
-
-### Option B: npm + CLI (Multi-Platform)
-
-For CLI tools and deploying to other platforms:
-
-```bash
-npm install -g aiwg
-```
-
-Deploy to your project:
-
-```bash
-cd /path/to/your/project
-
-# New project? Scaffold first:
-aiwg -new
-
-# Then deploy framework:
-aiwg use sdlc
-```
-
----
-
-## After Installation
-
-**1. Open in your AI platform**
-
-```bash
-claude .                   # Claude Code
-cursor .                   # Cursor
-droid .                    # Factory AI
-```
-
-**2. Integrate with platform context**
+Tell the agent the product outcome and the current project state:
 
 ```text
-/aiwg-setup-project
+Use AIWG's SDLC framework for this project. Determine whether we need intake,
+requirements, architecture, implementation, or a release path. Recommend one
+next workflow, explain the expected artifacts, and ask before material changes.
 ```
 
-**3. Regenerate for intelligent integration**
+The agent should inspect the project, select the current lifecycle phase, and
+propose one bounded next action. It may ask about scope, stakeholders, delivery
+policy, security constraints, or acceptance evidence. Answer only the questions
+that materially change the path.
+
+## What to expect
+
+- A short explanation of the selected lifecycle phase and workflow.
+- A preview of files, tracker items, or repository state that may change.
+- An approval request where project policy requires one.
+- Progress updates during longer workflows.
+- A final report naming produced artifacts, tests or gates, unresolved risks,
+  and the next recommended action.
+
+## Useful asks
 
 ```text
-/aiwg-regenerate-claude
+Turn this product idea into a validated inception plan.
+Bring this existing codebase into the SDLC workflow without discarding its conventions.
+Review whether the project is ready to move from elaboration into construction.
+Implement this approved change and verify its acceptance criteria.
+Prepare this release and tell me which gate evidence is still missing.
 ```
 
-This step is critical - it enables natural language command mapping ("run security review" → workflow). Without it, advanced features won't work correctly. See the [Regenerate Guide](#regenerate-guide) for details.
+## Verify success
 
-**4. You're ready.** See the [Intake Guide](#intake-guide) for starting projects.
+Ask the agent to map the result back to your original goal and identify the
+authoritative artifacts and checks. A workflow is not complete merely because
+documents were generated; required feedback, tests, traceability, and gates
+must be addressed.
 
----
-
-## Artifacts Location
-
-All documents generated in `.aiwg/`:
-
-```text
-.aiwg/
-├── intake/        # Project definition
-├── requirements/  # User stories, use cases
-├── architecture/  # SAD, ADRs
-├── testing/       # Test plans, results
-├── security/      # Threat models
-└── deployment/    # Runbooks
-```
-
----
-
-## Voice Profiles for Documentation
-
-For consistent voice across your SDLC documentation:
-
-```bash
-aiwg use writing           # Add Voice Framework
-```
-
-**Built-in profiles**: `technical-authority`, `friendly-explainer`, `executive-brief`, `casual-conversational`
-
----
-
-## Iterative Task Execution with Al
-
-For tasks that need multiple attempts or long-running operations:
-
-```bash
-# Fix all failing tests (internal loop)
-/ralph "Fix all failing tests" --completion "npm test passes"
-
-# Long-running migration with crash recovery (external loop)
-/ralph-external "Migrate to TypeScript" --completion "npx tsc --noEmit exits 0"
-```
-
-See the [Al Guide](ralph-guide.md) for detailed documentation.
-
----
-
-## What's Next?
-
-- [Intake Guide](intake-guide.md) - Starting your first project
-- [Al Guide](ralph-guide.md) - Iterative task execution
-- [CLI Usage](CLI_USAGE.md) - Full command reference
-- [SDLC Framework Docs](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/README.md) - Complete agent catalog
+If AIWG is not yet installed or engaged, begin with the
+[Install, Connect, and Verify guide](getting-started/install-connect-verify.md). Agents and advanced operators can retrieve
+deterministic command and flag contracts from the
+[agent reference corpus](https://github.com/jmagly/aiwg/tree/main/docs/agents/).

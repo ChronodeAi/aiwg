@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "value": {
+    "rows": [
+      {
+        "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        "name": "Release planning",
+        "description": "synthetic",
+        "title": "Release planning",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000012000,
+        "lastMessageId": "evt-13"
+      }
+    ]
+  }
+}

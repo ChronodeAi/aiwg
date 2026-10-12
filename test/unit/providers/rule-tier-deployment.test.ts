@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
@@ -18,15 +18,31 @@ import {
   onDemandRuleNames,
   renderOnDemandRuleSection,
   interpolateContextTokens,
+  applyInlineRuleBudget,
+  resolveRulesInlineBudgetTokens,
+  DEFAULT_RULES_INLINE_BUDGET_TOKENS,
+  reconcileInlineRuleBudget,
+  readRuleBudgetSidecar,
+  RULE_BUDGET_SIDECAR,
 } from '../../../tools/agents/providers/base.mjs';
 // @ts-expect-error — .mjs provider module without type declarations
 import { generateAgentsMd as hermesAgentsMd } from '../../../tools/agents/providers/hermes.mjs';
+// @ts-expect-error — .mjs provider module without type declarations
+import { createAgentsMd as openhumanAgentsMd } from '../../../tools/agents/providers/openhuman.mjs';
 
 const REPO_ROOT = resolve(__dirname, '../../..');
 const levelOf = (f: string): string | null => ruleEnforcementLevel(readFileSync(f, 'utf8'));
 
+// `tmpFile()`'s directories were never removed (#3018), leaking one per call; module-level so
+// it covers every describe block in this file, not just the ones that already track their own.
+const fileRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(fileRoots.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+
 async function tmpFile(name: string, content: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'aiwg-tier-'));
+  fileRoots.push(dir);
   const p = join(dir, name);
   await writeFile(p, content);
   return p;
@@ -63,6 +79,7 @@ describe('rule tier deployment (#1673)', () => {
   describe('writeOnDemandRuleIndex', () => {
     it('writes a managed index listing the on-demand rules with fetch hints', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'aiwg-od-'));
+      fileRoots.push(dir);
       await mkdir(dir, { recursive: true });
       const n = writeOnDemandRuleIndex(dir, [join('x', 'diagram-generation.md'), join('y', 'activity-log.md')], {});
       expect(n).toBe(2);
@@ -75,6 +92,7 @@ describe('rule tier deployment (#1673)', () => {
 
     it('removes a stale index when there are no on-demand rules', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'aiwg-od-'));
+      fileRoots.push(dir);
       await writeFile(join(dir, 'RULES-ONDEMAND.md'), 'stale');
       const n = writeOnDemandRuleIndex(dir, [], {});
       expect(n).toBe(0);
@@ -112,6 +130,27 @@ describe('rule tier deployment (#1673)', () => {
       expect(od.every((f) => ['medium', 'low'].includes(levelOf(f) as string))).toBe(true);
       // a known MEDIUM rule is present
       expect(od.some((f) => f.endsWith('diagram-generation.md'))).toBe(true);
+    });
+
+    it('listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)', () => {
+      const rootNames = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
+      const addonNames = onDemandRuleNames(
+        listOnDemandRuleFiles(join(REPO_ROOT, 'agentic/code/addons/aiwg-utils')),
+      );
+      const extensionNames = onDemandRuleNames(
+        listOnDemandRuleFiles(join(REPO_ROOT, 'agentic/code/extensions/sys')),
+      );
+
+      expect(addonNames).toEqual(rootNames);
+      expect(extensionNames).toEqual(rootNames);
+      expect(addonNames).toEqual(expect.arrayContaining([
+        'activity-log',
+        'context-budget',
+        'diagram-generation',
+        'voice-framework',
+        'prose-bridge',
+        'scoped-reasoning',
+      ]));
     });
   });
 });
@@ -206,7 +245,7 @@ describe('on-demand index propagation (#1675)', () => {
             '--rules-only', '--mode', 'all',
             '--provider', provider, '--force',
           ],
-          { cwd: REPO_ROOT, stdio: 'ignore' },
+          { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
         );
         const indexPath = join(target, ruleDir, 'RULES-ONDEMAND.md');
         expect(existsSync(indexPath)).toBe(true);
@@ -216,6 +255,48 @@ describe('on-demand index propagation (#1675)', () => {
         await rm(target, { recursive: true, force: true });
       }, 60_000);
     }
+
+    it('keeps the complete index after an aiwg-use-all-style addon pass (#1784)', async () => {
+      const target = await mkdtemp(join(tmpdir(), 'aiwg-od-multipass-'));
+      const expected = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
+
+      execFileSync(
+        'node',
+        [
+          'tools/agents/deploy-agents.mjs',
+          '--source', REPO_ROOT,
+          '--target', target,
+          '--rules-only', '--mode', 'all',
+          '--provider', 'codex', '--force',
+        ],
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
+      );
+      execFileSync(
+        'node',
+        [
+          'tools/agents/deploy-agents.mjs',
+          '--source', join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'),
+          '--target', target,
+          '--deploy-rules',
+          '--provider', 'codex', '--force',
+        ],
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
+      );
+
+      const body = await readFile(join(target, '.codex/rules/RULES-ONDEMAND.md'), 'utf8');
+      const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
+      expect(actual).toEqual(expected);
+      expect(actual).toEqual(expect.arrayContaining([
+        'activity-log',
+        'context-budget',
+        'diagram-generation',
+        'voice-framework',
+        'prose-bridge',
+        'scoped-reasoning',
+      ]));
+
+      await rm(target, { recursive: true, force: true });
+    }, 60_000);
   });
 
   // Aggregated providers note the tier in their single bridge file.
@@ -230,17 +311,196 @@ describe('on-demand index propagation (#1675)', () => {
       await rm(target, { recursive: true, force: true });
     });
 
+    it('openhuman AGENTS.md substitutes the {{ON_DEMAND_RULES}} token (#1785)', async () => {
+      const target = await mkdtemp(join(tmpdir(), 'aiwg-od-openhuman-'));
+      openhumanAgentsMd(target, REPO_ROOT, false);
+      const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
+      expect(body).toContain('On-Demand Rules');
+      expect(body).toContain('aiwg show rule ');
+      expect(body).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect(body).not.toContain('{{ON_DEMAND_RULES}}');
+
+      openhumanAgentsMd(target, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'), false);
+      const addonPassBody = await readFile(join(target, 'AGENTS.md'), 'utf8');
+      expect(addonPassBody).toContain('On-Demand Rules');
+      expect(addonPassBody).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect(addonPassBody).not.toContain('{{ON_DEMAND_RULES}}');
+
+      await rm(target, { recursive: true, force: true });
+    });
+
+    it('openhuman deploy creates the AGENTS.md bridge on a full deploy (#1785)', async () => {
+      const target = await mkdtemp(join(tmpdir(), 'aiwg-od-openhuman-deploy-'));
+      execFileSync(
+        'node',
+        [
+          'tools/agents/deploy-agents.mjs',
+          '--source', REPO_ROOT,
+          '--target', target,
+          '--mode', 'sdlc',
+          '--provider', 'openhuman',
+          '--force',
+          '--quiet',
+        ],
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
+      );
+      const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
+      expect(body).toContain('OpenHuman');
+      expect(body).toContain('On-Demand Rules');
+      expect(body).toContain('aiwg show rule ');
+      expect(body).not.toContain('{{ON_DEMAND_RULES}}');
+      await rm(target, { recursive: true, force: true });
+    }, 60_000);
+
     it('warp WARP.md aggregates the on-demand section', async () => {
       const target = await mkdtemp(join(tmpdir(), 'aiwg-od-warp-'));
       execFileSync(
         'node',
         ['tools/warp/setup-warp.mjs', '--source', REPO_ROOT, '--target', target, '--mode', 'all', '--force'],
-        { cwd: REPO_ROOT, stdio: 'ignore' },
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
       const body = await readFile(join(target, 'WARP.md'), 'utf8');
       expect(body).toContain('## On-Demand Rules');
       expect(body).toContain('aiwg show rule ');
       await rm(target, { recursive: true, force: true });
     }, 60_000);
+  });
+});
+
+describe('inline rule budget (#2562)', () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  });
+
+  async function ruleFile(root: string, name: string, level: string | null, bytes: number, inBody = false) {
+    const header = level === null ? '' : inBody ? `# ${name}\n\n**Enforcement Level**: ${level.toUpperCase()}\n` : `---\nenforcement: ${level}\n---\n`;
+    const file = join(root, `${name}.md`);
+    await writeFile(file, header + 'x'.repeat(bytes));
+    return file;
+  }
+
+  it('reads the enforcement level from the body header when frontmatter is absent', async () => {
+    expect(ruleEnforcementLevel('# Ops\n\n**Enforcement Level**: CRITICAL\n')).toBe('critical');
+    expect(ruleEnforcementLevel('---\nenforcement: high\n---\n**Enforcement Level**: LOW\n')).toBe('high');
+  });
+
+  it('defaults to 64K tokens and honors the environment override', () => {
+    expect(resolveRulesInlineBudgetTokens({})).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
+    expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '10000' })).toBe(10_000);
+    expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '0' })).toBe(0);
+    expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: 'nope' })).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
+  });
+
+  it('keeps every rule inline when the set fits the budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const files = [await ruleFile(root, 'a', 'high', 400), await ruleFile(root, 'b', 'critical', 400)];
+    const result = applyInlineRuleBudget(files, 1_000);
+    expect(result.inline).toEqual(files);
+    expect(result.demoted).toEqual([]);
+  });
+
+  it('demotes HIGH rules largest-first and never demotes CRITICAL rules or indexes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const critical = await ruleFile(root, 'critical-big', 'critical', 4_000, true);
+    const highBig = await ruleFile(root, 'high-big', 'high', 4_000);
+    const highSmall = await ruleFile(root, 'high-small', 'high', 400);
+    const unlabelled = await ruleFile(root, 'unlabelled', null, 400);
+    const index = join(root, 'RULES-INDEX.md');
+    await writeFile(index, '# index\n' + 'y'.repeat(4_000));
+    // 5 files ≈ 3.2K tokens; a 2.3K budget forces exactly one demotion — the largest HIGH.
+    const result = applyInlineRuleBudget([critical, highBig, highSmall, unlabelled, index], 2_300);
+    expect(result.demoted).toEqual([highBig]);
+    expect(result.inline).toEqual([critical, highSmall, unlabelled, index]);
+  });
+
+  it('demotes unlabelled rules only after every HIGH rule, and leaves CRITICAL over-budget sets intact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const critical = await ruleFile(root, 'critical', 'critical', 8_000);
+    const high = await ruleFile(root, 'high', 'high', 400);
+    const unlabelled = await ruleFile(root, 'unlabelled', null, 4_000);
+    const result = applyInlineRuleBudget([critical, high, unlabelled], 1_000);
+    expect(result.demoted).toEqual([high, unlabelled]);
+    expect(result.inline).toEqual([critical]);
+  });
+
+  it('is disabled when the budget is zero', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const files = [await ruleFile(root, 'a', 'high', 40_000)];
+    expect(applyInlineRuleBudget(files, 0)).toEqual({ inline: files, demoted: [] });
+  });
+
+  it('lists demoted HIGH rules in RULES-ONDEMAND.md under their own heading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const dest = join(root, '.claude', 'rules');
+    await mkdir(dest, { recursive: true });
+    const medium = await ruleFile(root, 'activity-log', 'medium', 10);
+    const demoted = await ruleFile(root, 'ops-safety', 'high', 10);
+    const count = writeOnDemandRuleIndex(dest, [medium], { demotedFiles: [demoted], inlineBudgetTokens: 64_000 });
+    expect(count).toBe(2);
+    const content = await readFile(join(dest, 'RULES-ONDEMAND.md'), 'utf8');
+    expect(content).toContain('- `activity-log` — `aiwg show rule activity-log`');
+    expect(content).toContain('## Binding rules moved on demand to fit the inline budget');
+    expect(content).toContain('64,000-token inline budget');
+    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety`');
+    // The demoted rule is not also listed as a MEDIUM/LOW rule.
+    expect(content.split('ops-safety').length).toBe(3);
+  });
+
+  it('reconciles a deployed rule directory against the budget across passes and records the sidecar', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const dest = join(root, '.claude', 'rules');
+    await mkdir(dest, { recursive: true });
+    const managed = async (name: string, level: string, bytes: number) => {
+      await writeFile(join(dest, `${name}.md`), `---\n# aiwg:managed v1.0.0 bundled\nenforcement: ${level}\n---\n${'x'.repeat(bytes)}`);
+    };
+    await managed('critical', 'critical', 4_000);
+    await managed('high-big', 'high', 4_000);
+    await managed('high-small', 'high', 400);
+    await writeFile(join(dest, 'operator.md'), `---\nenforcement: high\n---\n${'o'.repeat(8_000)}`); // unmanaged: never touched
+    await writeFile(join(dest, 'RULES-INDEX.md'), '# index');
+
+    // Pass 1: ~2.1K managed tokens over a 1.5K budget → the largest HIGH leaves.
+    const first = reconcileInlineRuleBudget(dest, 1_500);
+    expect(first.removed).toEqual(['high-big']);
+    expect(first.demoted).toEqual(['high-big']);
+    expect(existsSync(join(dest, 'high-big.md'))).toBe(false);
+    expect(existsSync(join(dest, 'critical.md'))).toBe(true);
+    expect(existsSync(join(dest, 'operator.md'))).toBe(true);
+    expect(readRuleBudgetSidecar(dest)).toEqual({ budgetTokens: 1_500, demoted: ['high-big'] });
+
+    // Pass 2 adds another HIGH rule that fits: nothing else is removed, the sidecar carries.
+    await managed('high-late', 'high', 400);
+    const second = reconcileInlineRuleBudget(dest, 1_500);
+    expect(second.removed).toEqual([]);
+    expect(second.demoted).toEqual(['high-big']);
+
+    // A different budget recomputes from what is on disk (~1.23K managed tokens).
+    const third = reconcileInlineRuleBudget(dest, 1_150);
+    expect(third.removed).toEqual(['high-late']);
+    expect(third.demoted).toEqual(['high-late']);
+
+    // Disabling the budget clears the sidecar.
+    reconcileInlineRuleBudget(dest, 0);
+    expect(existsSync(join(dest, RULE_BUDGET_SIDECAR))).toBe(false);
+  });
+
+  it('lists sidecar-demoted names in RULES-ONDEMAND.md', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
+    roots.push(root);
+    const dest = join(root, '.claude', 'rules');
+    await mkdir(dest, { recursive: true });
+    const count = writeOnDemandRuleIndex(dest, [], { demotedNames: ['ops-safety', 'god-session'], inlineBudgetTokens: 64_000 });
+    expect(count).toBe(2);
+    const content = await readFile(join(dest, 'RULES-ONDEMAND.md'), 'utf8');
+    expect(content).toContain('## Binding rules moved on demand to fit the inline budget');
+    expect(content).toContain('- `god-session` — `aiwg show rule god-session`');
+    expect(content).toContain('- `ops-safety` — `aiwg show rule ops-safety`');
   });
 });

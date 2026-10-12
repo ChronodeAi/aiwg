@@ -1,0 +1,250 @@
+[
+  {
+    "id": "old-consumer-with-no-features",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "matching-consumer",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "supported"
+  },
+  {
+    "id": "unknown-required-worker-metadata",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker.future.v2"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "changed-definition-bundle",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "incompatible-revision",
+    "consumer": {
+      "revision": 2,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "lossy-codec",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": false
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "health-missing-from-historical-consumer",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1",
+      "worker-health.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "flow-values-missing",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1",
+      "worker-flow-values.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "absent-consumer-feature-metadata",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "unknown-required-feature-even-if-advertised",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1",
+        "worker.future.v2"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker.future.v2"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "OG_CONTRACT_UNSUPPORTED"
+  },
+  {
+    "id": "health-capable-consumer",
+    "consumer": {
+      "revision": 1,
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [
+        "worker-dispatch.v1",
+        "worker-policy-origins.v1",
+        "worker-admission-fencing.v1",
+        "worker-claims.v1",
+        "worker-activation.v1",
+        "worker-health.v1"
+      ],
+      "lossless": true
+    },
+    "requiredFeatures": [
+      "worker-dispatch.v1",
+      "worker-policy-origins.v1",
+      "worker-admission-fencing.v1",
+      "worker-claims.v1",
+      "worker-activation.v1",
+      "worker-health.v1"
+    ],
+    "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "supported"
+  }
+]

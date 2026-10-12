@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutCorpus.v1.schema.json",
+  "title": "HeldoutCorpus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "study",
+    "syntheticOnly",
+    "provenance",
+    "definitions",
+    "rows"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-corpus/v1"
+    },
+    "study": {
+      "enum": [
+        "D17",
+        "D29"
+      ]
+    },
+    "syntheticOnly": {
+      "const": true
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "generatorDigest",
+        "seed",
+        "goldDigest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "authored-synthetic"
+        },
+        "generatorDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "seed": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        "goldDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "definitions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object"
+      }
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "familyId",
+          "split",
+          "slice",
+          "input",
+          "requests",
+          "localOutcome",
+          "provenance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "familyId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "split": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          },
+          "slice": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "payload"
+            ],
+            "properties": {
+              "payload": {}
+            }
+          },
+          "requests": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "arm",
+                "definitionId"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                },
+                "arm": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                },
+                "definitionId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                }
+              }
+            }
+          },
+          "localOutcome": {},
+          "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "generatorId",
+              "seed",
+              "outputDigest"
+            ],
+            "properties": {
+              "generatorId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "seed": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}:[0-9]{1,5}:(example|single|local)(:(tuning|calibration|test))?$"
+              },
+              "outputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

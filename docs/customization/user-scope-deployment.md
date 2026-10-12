@@ -42,13 +42,42 @@ aiwg remove sdlc --scope user
 aiwg remove sdlc --user --provider claude --dry-run
 ```
 
+## Global Bootstrap Without Project Artifacts
+
+Use `--global` when the provider supports native user-level discovery and you
+do not want each project to carry its own deployed agents, commands, skills,
+and rules:
+
+```bash
+cd /path/to/project
+aiwg use sdlc --provider claude --global
+```
+
+AIWG stages the normal deployment temporarily, mirrors framework and kernel
+skills into the provider's user-level paths, records them in
+`~/.aiwg/installed.json`, and removes the stage. The current project receives
+only the lightweight context graph and provider bootstrap files, such as
+`WORKSPACE.md`, `AIWG.md`, `CLAUDE.md`, or `AGENTS.md`. It does not retain a
+project `.claude/`, `.codex/`, or equivalent artifact deployment.
+
+Run `aiwg regenerate --provider <name>` in another project to generate or
+refresh those context-only hooks against the existing user-level installation.
+Providers without a verified filesystem-based user loader still require their
+documented project adapter; `--global` does not make an unsupported global
+loader appear.
+
+`--scope user` remains the additive compatibility mode described below: it
+keeps the project deployment and mirrors it to user scope. `--global` is the
+explicit no-project-artifact contract.
+
 ## Supported Providers
 
 | Provider | User-scope path | Status |
 |----------|-----------------|--------|
 | Claude Code | `~/.claude/{agents,commands,skills,rules}/` | **Verified** ([docs](https://code.claude.com/docs/en/skills)) |
 | OpenClaw | `~/.openclaw/{agents,commands,skills,rules,behaviors}/` | Always user-scope (no `--scope project`) |
-| OpenHuman | `~/.openhuman/skills/` for kernel skills; `~/.openhuman/.aiwg/{skills,rules}/` for AIWG payload; agents remain project `.agents/agents/` | **Verified** against OpenHuman induction ADR; home-dir provider with AGENTS.md command/rule bridge |
+| OpenHuman | `~/.openhuman/skills/` for kernel skills; `~/.openhuman/.aiwg/rules/` for rule bodies; optional native agents in `~/.openhuman/agents/`; project `AGENTS.md` bridge | **Verified** against OpenHuman induction ADR; home-dir payload plus project context bridge |
+| Grok Bot | Absolute `AIWG_GROKBOT_SKILLS_DIR` only (never invents `~/grokbot-skills` / `~/.grokbot`) | **Fail-closed** until env set ([ADR](../architecture/adr-grokbot-provider-target.md)) |
 | Hermes | `~/.hermes/skills/` | Always user-scope (skills only) |
 | Codex | `~/.agents/skills/` (skills); `~/.codex/prompts/` (commands; deploy-for-visibility, not auto-scanned) | **Verified** ([`codex-rs/core-skills/src/loader.rs`](https://github.com/openai/codex)) |
 | Cursor | `~/.cursor/{agents,skills,commands,rules}/` (harmless mirror; not auto-scanned) | **Non-applicable** — Cursor's "User Rules" feature is in-app settings, not filesystem-discovered; only project-scope `.cursor/rules/*.mdc` is confirmed. See [#1159](https://git.integrolabs.net/roctinam/aiwg/issues/1159) |
@@ -57,6 +86,7 @@ aiwg remove sdlc --user --provider claude --dry-run
 | Copilot | `~/.config/github-copilot/{agents,prompts,instructions}/` (harmless mirror; not auto-scanned) | **Non-applicable** — VS Code Copilot's user-scope customization is `settings.json` + Settings Sync, not filesystem discovery. See [#1160](https://git.integrolabs.net/roctinam/aiwg/issues/1160) |
 | Warp | `~/.warp/{agents,commands,rules}/` (harmless mirror; not auto-scanned) | **Non-applicable** — Warp's user-scope mechanism is Warp Drive (cloud-synced), not filesystem discovery. WARP.md aggregation is the project-scope path. See [#1162](https://git.integrolabs.net/roctinam/aiwg/issues/1162) |
 | Windsurf | `~/.windsurf/{agents,skills,workflows,rules}/` (harmless mirror; not auto-scanned) | **Non-applicable** — Windsurf's user-scope mechanism is Cascade Memories (in-app, agent-managed) + global rules in the settings UI, not filesystem discovery. See [#1163](https://git.integrolabs.net/roctinam/aiwg/issues/1163) |
+| Muse Code | `$XDG_CONFIG_HOME/muse/skills` (default `~/.config/muse/skills`); never `~/.muse`, never `~/.agents/skills` | **Verified** ([Muse Code docs](https://dev.meta.ai/docs/muse-code/)) — resolves at deploy time, fail-closed on bad `XDG_CONFIG_HOME` ([ADR](../architecture/adr-muse-provider-target.md)) |
 
 `aiwg use ... --scope user --provider <unknown>` errors fast rather
 than silently falling back to project scope.
@@ -74,7 +104,7 @@ commands. Same applies at project scope (`.codex/prompts/`).
 
 ## How It Works
 
-A user-scope deploy is **additive**: it doesn't replace the project
+A `--scope user` deploy is **additive**: it doesn't replace the project
 deploy, it copies alongside it.
 
 1. `aiwg use sdlc --provider claude --scope user` runs the normal
@@ -192,8 +222,9 @@ OpenHuman is also home-dir-oriented for skills. `aiwg use ... --provider
 openhuman --scope user` records the OpenHuman home-rooted payload in the
 user registry so `aiwg list --scope user`, `aiwg doctor --scope user`, and
 `aiwg remove --scope user --provider openhuman` can reason about it from
-any cwd. Markdown agents remain workspace-scoped at `.agents/agents/` by
-design, and commands/rules are bridged through `AGENTS.md`.
+any cwd. The default deploy does not copy markdown personas. It writes a
+project-root `AGENTS.md` bridge for commands and indexed rules; optional curated
+native harness agents are TOML files under `~/.openhuman/agents/`.
 
 Hermes is similar (skills-only at user scope by design).
 

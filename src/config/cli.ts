@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
+import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,7 +63,7 @@ export async function main(args: string[]): Promise<void> {
       break;
 
     case 'validate':
-      await handleValidate(config);
+      await handleValidate(config, subArgs);
       break;
 
     case 'reset':
@@ -101,7 +102,7 @@ export async function main(args: string[]): Promise<void> {
 
 async function handleGet(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project' && a !== '--user');
+  const positional = configPositionals(args);
   const key = positional[0];
   if (!key) {
     throw new AiwgError({
@@ -129,7 +130,7 @@ async function handleGet(config: UserConfig, args: string[]): Promise<void> {
 
 async function handleSet(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project' && a !== '--user');
+  const positional = configPositionals(args);
   const key = positional[0];
   const value = positional[1];
 
@@ -160,7 +161,19 @@ async function handleSet(config: UserConfig, args: string[]): Promise<void> {
 //   aiwg config get --project remotes.primary
 //
 // Set validates enum membership for known fields (delivery.mode,
-// delivery.merge_style, delivery.force_push_policy) before writing.
+// delivery.merge_style, delivery.force_push_policy, remotes.issue_provider)
+// before writing.
+
+/** Deprecated values accepted on `set` and normalized to their current spelling. */
+const ENUM_ALIASES: Record<string, Record<string, string>> = {
+  'delivery.force_push_policy': { 'main-only-blocked': 'own-branch-only' },
+};
+
+/** Extra context printed alongside an alias normalization, where semantics also changed. */
+const ENUM_ALIAS_NOTES: Record<string, string> = {
+  'delivery.force_push_policy':
+    "The permission also narrowed: the old value allowed force-push on any feature branch, the new one only on the agent's own branch.",
+};
 
 const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.mode': ['direct', 'feature-branch', 'pr-required'],
@@ -168,7 +181,17 @@ const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.force_push_policy': ['never', 'own-branch-only', 'allowed'],
   'delivery.signing.format': ['openpgp', 'ssh', 'x509'],
   'delivery.signing.enforce': ['commits', 'tags', 'all'],
+  'delivery.release_signing.format': ['openpgp', 'ssh', 'x509'],
+  'delivery.release_signing.enforce': ['commits', 'tags', 'all'],
+  'remotes.issue_provider': ['gitea', 'github', 'local'],
+  'remotes.customer_issue_provider': ['gitea', 'github', 'local'],
   'remotes.tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
+  'remotes.customer_tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
+  'remotes.transport.protocol': ['ssh', 'https'],
+  'repo_maintainer.tiers.local': ['collaborator', 'maintainer', 'admin'],
+  'security.threatAssessment.mode': ['off', 'audit', 'enforce'],
+  'artifact_outputs.canonical': ['aiwg'],
+  'artifact_outputs.provider_native': ['disabled', 'explicit-only', 'project-default'],
 };
 
 const BOOLEAN_FIELDS = new Set([
@@ -178,11 +201,15 @@ const BOOLEAN_FIELDS = new Set([
   'delivery.auto_close_issues',
   'delivery.issue_comment_on_cycle',
   'command_log.enabled',
+  'telemetry.skill_usage.enabled',
 ]);
 
 const STRING_ARRAY_FIELDS = new Set([
+  'providers',
   'remotes.tracker_actor.forbid_actors',
+  'remotes.customer_tracker_actor.forbid_actors',
   'command_log.scopes',
+  'telemetry.skill_usage.scopes',
 ]);
 
 // Integer fields with valid range constraints. Validated at `aiwg config set`.
@@ -192,21 +219,38 @@ const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
   'parallelism.max_parallel_ralph_loops': { min: 1, max: 20 },
   'parallelism.max_parallel_mc_missions': { min: 1, max: 20 },
   'command_log.max_bytes': { min: 1024, max: 104_857_600 },
+  'telemetry.skill_usage.max_bytes': { min: 1024, max: 104_857_600 },
 };
 
 async function projectConfigGet(key: string, args: string[]): Promise<void> {
+  assertSafeConfigPath(key);
   const { readAiwgConfig, getProjectDir } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
   }
 
+  // Model preferences keep their existing file owner. Inspection uses the same
+  // merged policy and pre-merge origins as worker resolution, never aiwg.config.
+  if (key === 'defaults.workerSelection' || key.startsWith('defaults.workerSelection.')) {
+    const { ConfigLoader } = await import('../models/config-loader.js');
+    const loader = new ConfigLoader(projectDir);
+    const models = await loader.load(cfg.parallelism);
+    const value = getDottedPath(models as unknown as Record<string, unknown>, key);
+    const pointer = `/${key.split('.').join('/')}`;
+    const origins = Object.fromEntries(Object.entries(models.workerPolicyOrigins ?? {})
+      .filter(([field]) => field === pointer || field.startsWith(`${pointer}/`)));
+    console.log(args.includes('--origins')
+      ? JSON.stringify({ value: value ?? null, origins, digests: loader.getInputDigests() }, null, 2)
+      : value === undefined ? '(not set)' : JSON.stringify(value, null, 2));
+    return;
+  }
   const value = getDottedPath(cfg as unknown as Record<string, unknown>, key);
   if (value === undefined) {
     console.log('(not set)');
@@ -218,11 +262,35 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
 }
 
 async function projectConfigSet(key: string, raw: string, args: string[]): Promise<void> {
-  const { readAiwgConfig, writeAiwgConfig, getProjectDir, emptyConfig } = await import('./aiwg-config.js');
+  assertSafeConfigPath(key);
+  if (key === 'defaults' || key.startsWith('defaults.')) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_KEY',
+      message: `Project model preferences '${key}' belong in models.json, not aiwg.config.`,
+      hint: 'Edit project-root models.json to change defaults, including defaults.workerSelection.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  const {
+    readAiwgConfig,
+    writeAiwgConfig,
+    getProjectDir,
+    emptyConfig,
+    validateExternalLinks,
+  } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
 
-  // Validate enum fields before writing
+  // Validate enum fields before writing. Deprecated spellings normalize forward with a
+  // notice rather than failing, so a config written before a rename stays settable (#2532).
   const allowed = ENUM_RULES[key];
+  const aliased = ENUM_ALIASES[key]?.[raw];
+  if (aliased) {
+    process.stderr.write(
+      `Note: '${raw}' is a deprecated alias for '${aliased}'; writing '${aliased}'.\n`
+      + (ENUM_ALIAS_NOTES[key] ? `      ${ENUM_ALIAS_NOTES[key]}\n` : ''),
+    );
+    raw = aliased;
+  }
   if (allowed && !allowed.includes(raw)) {
     throw new AiwgError({
       code: 'ERR_INVALID_VALUE',
@@ -234,6 +302,23 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
+  if (key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+    try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
+  }
+  if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new AiwgError({
+        code: 'ERR_INVALID_VALUE',
+        message: `${key} must be a valid JSON object`,
+        hint: key === 'security.threatAssessment'
+          ? `Try: aiwg config set --project ${key} '{"schemaVersion":"1","mode":"audit","defaultProfile":"balanced"}'`
+          : `Try: aiwg config set --project ${key} '{"label":"Project docs","url":"https://example.com/docs"}'`,
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+  }
   if (BOOLEAN_FIELDS.has(key)) {
     if (raw === 'true') value = true;
     else if (raw === 'false') value = false;
@@ -248,11 +333,24 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   }
 
   if (STRING_ARRAY_FIELDS.has(key)) {
-    value = raw
-      .split(',')
-      .map(item => item.trim())
-      .filter(Boolean);
-    if (key === 'command_log.scopes') {
+    let items: unknown = raw.split(',');
+    if (raw.trimStart().startsWith('[')) {
+      try {
+        items = JSON.parse(raw);
+      } catch {
+        items = undefined;
+      }
+      if (!Array.isArray(items) || items.some(item => typeof item !== 'string')) {
+        throw new AiwgError({
+          code: 'ERR_INVALID_VALUE',
+          message: `${key} must be a comma-separated list or a JSON array of strings`,
+          hint: `Try: aiwg config set --project ${key} '["a","b"]' (or a,b)`,
+          exitCode: EXIT_CODES.USAGE,
+        });
+      }
+    }
+    value = (items as string[]).map(item => item.trim()).filter(Boolean);
+    if (key === 'command_log.scopes' || key === 'telemetry.skill_usage.scopes') {
       const invalid = (value as string[]).filter(item => item !== 'project' && item !== 'global');
       if (invalid.length > 0) {
         throw new AiwgError({
@@ -284,6 +382,25 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   // base shape when no config file exists yet (e.g. brand-new project).
   const cfg = (await readAiwgConfig(projectDir)) ?? emptyConfig();
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
+  const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
+  if (externalLinkErrors.length > 0) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Invalid external link configuration: ${externalLinkErrors.join('; ')}`,
+      hint: 'Each link needs a stable key, non-empty label, and absolute HTTP(S) URL without embedded credentials.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  const { validateThreatAssessmentConfig } = await import('../security/threat-assessment-config.js');
+  const threatErrors = validateThreatAssessmentConfig(cfg.security?.threatAssessment);
+  if (threatErrors.length > 0) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Invalid threat-assessment configuration: ${threatErrors.join('; ')}`,
+      hint: 'Use a built-in profile or correct the referenced profile, rule pack, threshold, or regex.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
   await writeAiwgConfig(projectDir, cfg);
   console.log(`Set --project ${key} = ${raw}`);
 }
@@ -301,6 +418,7 @@ function getDottedPath(obj: Record<string, unknown>, key: string): unknown {
 
 /** Write a dotted path into a nested record, creating intermediate objects. */
 function setDottedPath(obj: Record<string, unknown>, key: string, value: unknown): void {
+  assertSafeConfigPath(key);
   const parts = key.split('.');
   const last = parts.pop()!;
   let cur: Record<string, unknown> = obj;
@@ -312,6 +430,23 @@ function setDottedPath(obj: Record<string, unknown>, key: string, value: unknown
     cur = cur[p] as Record<string, unknown>;
   }
   cur[last] = value;
+}
+
+function assertSafeConfigPath(key: string): void {
+  if (key.split('.').some(part => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new AiwgError({ code: 'ERR_INVALID_KEY', message: 'Unsafe configuration path', exitCode: EXIT_CODES.USAGE });
+  }
+}
+
+/** Scope/inspection flags are not dotted keys, irrespective of flag order. */
+function configPositionals(args: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (['--target', '--prefix'].includes(args[i])) { i++; continue; }
+    if (['--project', '--user', '--origins'].includes(args[i])) continue;
+    result.push(args[i]);
+  }
+  return result;
 }
 
 async function handleList(config: UserConfig): Promise<void> {
@@ -330,7 +465,11 @@ async function handleList(config: UserConfig): Promise<void> {
   }
 }
 
-async function handleValidate(config: UserConfig): Promise<void> {
+async function handleValidate(config: UserConfig, args: string[]): Promise<void> {
+  if (args.includes('--project')) {
+    await handleProjectValidate(args);
+    return;
+  }
   const issues = await config.validate();
 
   console.log(`Config directory: ${config.getPath()}\n`);
@@ -362,9 +501,91 @@ async function handleValidate(config: UserConfig): Promise<void> {
   }
 }
 
+async function handleProjectValidate(args: string[]): Promise<void> {
+  const {
+    getProjectDir,
+    readAiwgConfig,
+    resolveIssueLabels,
+    validateExternalLinks,
+    validateIndexConfig,
+    validateIssueLabels,
+    validateWorkerConfigCandidate,
+  } = await import('./aiwg-config.js');
+  const projectDir = getProjectDir(undefined, args);
+  const cfg = await readAiwgConfig(projectDir);
+  if (!cfg) {
+    throw new AiwgError({
+      code: 'ERR_NO_PROJECT_CONFIG',
+      message: 'No project AIWG config found at the resolved artifact root.',
+      hint: 'Run `aiwg init`, then configure project policy.',
+      exitCode: EXIT_CODES.CONFIG,
+    });
+  }
+  await validateWorkerConfigCandidate(projectDir, cfg);
+
+  const providerIndex = args.indexOf('--provider');
+  const providerArg = providerIndex >= 0 ? args[providerIndex + 1] : undefined;
+  const allowedProviders = ['gitea', 'github', 'local'] as const;
+  if (providerArg && !allowedProviders.includes(providerArg as typeof allowedProviders[number])) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Unsupported issue label provider '${providerArg}'.`,
+      hint: 'Use --provider gitea, --provider github, or --provider local.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  const provider = providerArg as typeof allowedProviders[number] | undefined;
+  const availableLabels: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--available-label' && args[i + 1]) availableLabels.push(args[++i]);
+  }
+
+  const indexErrors = validateIndexConfig(cfg.index).map((message) => ({
+    severity: 'error' as const,
+    code: 'index',
+    message,
+  }));
+  const externalLinkErrors = validateExternalLinks(cfg.externalLinks).map((message) => ({
+    severity: 'error' as const,
+    code: 'external-links',
+    message,
+  }));
+  const labelDiagnostics = provider
+    ? validateIssueLabels(cfg.issues, {
+        provider,
+        ...(availableLabels.length ? { availableLabels } : {}),
+      })
+    : cfg.issues?.labels
+      ? validateIssueLabels(cfg.issues)
+      : resolveIssueLabels(undefined, 'local').diagnostics;
+  const diagnostics = [...indexErrors, ...externalLinkErrors, ...labelDiagnostics];
+
+  console.log(`Project config: ${projectControlPath(projectDir, 'aiwg.config')}`);
+  console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
+  if (diagnostics.length === 0) {
+    console.log('✓ Project config valid');
+    return;
+  }
+  for (const diagnostic of diagnostics) {
+    const icon = diagnostic.severity === 'error' ? '✗' : '!';
+    console.log(`  ${icon} [${diagnostic.code}] ${diagnostic.message}`);
+  }
+  const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning');
+  console.log(`\n${errors.length} error(s), ${warnings.length} warning(s)`);
+  if (errors.length) {
+    throw new AiwgError({
+      code: 'ERR_CONFIG_VALIDATION',
+      message: `Project config validation failed with ${errors.length} error(s)`,
+      hint: 'Fix the reported taxonomy or index configuration. Missing tracker labels must be provisioned explicitly.',
+      exitCode: EXIT_CODES.CONFIG,
+    });
+  }
+}
+
 async function handleReset(config: UserConfig, args: string[]): Promise<void> {
   const isProject = args.includes('--project');
-  const positional = args.filter(a => a !== '--project');
+  const positional = configPositionals(args);
   const key = positional[0];
 
   if (isProject) {
@@ -405,13 +626,14 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       exitCode: EXIT_CODES.USAGE,
     });
   }
+  assertSafeConfigPath(key);
 
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to establish project policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -433,6 +655,18 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
   }
 
   if (key.startsWith('parallelism.')) {
+    const workerField = key.split('.')[1];
+    if (['worker_dispatch', 'worker_mode', 'clis', 'groups', 'admission', 'budgets', 'retry', 'health', 'activation'].includes(workerField)) {
+      const parts = key.split('.').slice(1);
+      const last = parts.pop()!;
+      let current = cfg.parallelism as Record<string, any> | undefined;
+      for (const part of parts) current = current?.[part];
+      if (current) delete current[last];
+      await writeAiwgConfig(projectDir, cfg);
+      console.log(`Reset --project ${key}`);
+      return;
+    }
+
     const field = key.slice('parallelism.'.length) as keyof typeof defaults;
     if (field in defaults) {
       cfg.parallelism = cfg.parallelism ?? {};
@@ -512,7 +746,7 @@ For project-level config: aiwg config show --project [--json]
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -534,6 +768,9 @@ For project-level config: aiwg config show --project [--json]
   const remotesView = {
     primary: { name: resolvedRemotes.primary, url: getUrl(resolvedRemotes.primary) },
     issue_tracker: { name: resolvedRemotes.issue_tracker, url: getUrl(resolvedRemotes.issue_tracker) },
+    customer_issue_tracker: resolvedRemotes.customer_issue_tracker
+      ? { name: resolvedRemotes.customer_issue_tracker, url: getUrl(resolvedRemotes.customer_issue_tracker) }
+      : null,
     ci: { name: resolvedRemotes.ci, url: getUrl(resolvedRemotes.ci) },
     secondary: resolvedRemotes.secondary.map((s) => ({
       ...s,
@@ -549,13 +786,15 @@ For project-level config: aiwg config show --project [--json]
       providers: cfg.providers,
       installed: cfg.installed,
       scripts: cfg.scripts,
+      externalLinks: cfg.externalLinks ?? {},
       remotes: remotesView,
     }, null, 2));
     return;
   }
 
   // Human-readable view
-  console.log(`Project config: ${projectDir}/.aiwg/aiwg.config\n`);
+  console.log(`Project config: ${projectControlPath(projectDir, 'aiwg.config')}`);
+  console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
   console.log(`Schema version: ${cfg.version}`);
   console.log(`Providers:      ${cfg.providers.join(', ') || '(none)'}`);
   console.log('');
@@ -570,6 +809,18 @@ For project-level config: aiwg config show --project [--json]
     }
   }
   console.log('');
+  console.log('External links:');
+  const externalLinks = Object.entries(cfg.externalLinks ?? {});
+  if (externalLinks.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const [key, link] of externalLinks) {
+      const metadata = [link.category, link.audience].filter(Boolean).join(', ');
+      console.log(`  - ${key}: ${link.label} — ${link.url}${metadata ? ` [${metadata}]` : ''}`);
+      if (link.description) console.log(`    ${link.description}`);
+    }
+  }
+  console.log('');
   console.log('Remote topology:');
   if (!remotesView.has_remotes_block) {
     console.log('  (no `remotes` block — defaults: origin is primary, issue tracker, and CI)');
@@ -580,7 +831,10 @@ For project-level config: aiwg config show --project [--json]
   };
   console.log(fmt('Primary       ', remotesView.primary));
   if (remotesView.issue_tracker.name !== remotesView.primary.name) {
-    console.log(fmt('Issue tracker ', remotesView.issue_tracker));
+    console.log(fmt('Internal issues', remotesView.issue_tracker));
+  }
+  if (remotesView.customer_issue_tracker) {
+    console.log(fmt('Customer issues', remotesView.customer_issue_tracker));
   }
   if (remotesView.ci.name !== remotesView.primary.name) {
     console.log(fmt('CI            ', remotesView.ci));
@@ -612,12 +866,15 @@ function printUsage(): void {
 
 Subcommands:
   get <key>                       Read a user config value
-  get --project <key>             Read a project config value (.aiwg/aiwg.config)
+  get --project <key>             Read a project config value or merged defaults.workerSelection
+    [--origins]                  Include model policy sources, pointers and input digests
   set <key> <value>               Write a user config value
   set --project <key> <value>     Write a project config value (validates enums)
   list                Show all user config
-  show --project      Show resolved project config (.aiwg/aiwg.config)
-  validate            Validate all config files
+  show --project      Show resolved project config and artifact root
+  validate            Validate user config files
+  validate --project  Validate resolved project config taxonomy/index semantics
+    [--provider gitea|github|local] [--available-label NAME ...]
   reset [<key>]       Reset key or all config to defaults
   path                Print config directory path
   edit                Open config in $EDITOR
@@ -637,6 +894,7 @@ Examples:
   aiwg config set --project delivery.mode pr-required
   aiwg config set --project delivery.merge_style squash
   aiwg config get --project parallelism
+  aiwg config get --project defaults.workerSelection --origins
   aiwg config set --project parallelism.max_parallel_subagents 6
   aiwg config reset --project parallelism
   aiwg config validate

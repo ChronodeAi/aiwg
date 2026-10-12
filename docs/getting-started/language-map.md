@@ -1,5 +1,8 @@
 # Beginner Language Map
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
+
 Use this guide when you know what you want in plain language but do not know the AIWG term for it.
 
 You stay in the conversation with your AI tool. The agent translates your goal into AIWG-native concepts and runs the lookups for you. You do not need to memorize AIWG terminology, command names, or skill identifiers — they are the agent's job.

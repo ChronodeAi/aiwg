@@ -20,6 +20,7 @@
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
+const staticModelCatalog = _require('../../../agentic/code/providers/model-catalog.v1.json');
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
@@ -48,9 +49,11 @@ import {
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
   cleanupOldRuleFiles,
+  loadRuntimeModelCatalog,
   filterCommandsAgainstSkills,
   deploySoulCompanions
 } from './base.mjs';
+const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 // ============================================================================
 // Provider Configuration
@@ -177,9 +180,9 @@ export function mapToolsToFactory(toolsString, agentName) {
 
 // Default Factory models (fallback if config not loaded)
 const DEFAULT_FACTORY_MODELS = {
-  reasoning: 'claude-opus-4-6',
-  coding: 'claude-sonnet-4-6',
-  efficiency: 'claude-haiku-4-5-20251001'
+  reasoning: modelCatalog.providers.factory.roles.reasoning.id,
+  coding: modelCatalog.providers.factory.roles.coding.id,
+  efficiency: modelCatalog.providers.factory.roles.efficiency.id
 };
 
 /**
@@ -268,7 +271,7 @@ export function mapModel(originalModel, modelCfg, modelsConfig) {
   }
 
   // Prefer factory-specific shorthand over shared shorthand
-  const factoryModels = modelsConfig?.factory_shorthand || modelsConfig?.shorthand || {
+  const factoryModels = modelsConfig?.factory_shorthand || {
     'opus': defaultReasoning,
     'sonnet': defaultCoding,
     'haiku': defaultEfficiency,
@@ -276,11 +279,12 @@ export function mapModel(originalModel, modelCfg, modelsConfig) {
   };
 
   const clean = (originalModel || 'sonnet').toLowerCase().replace(/['"]/g, '');
-
-  // Match to Factory model
   for (const [key, value] of Object.entries(factoryModels)) {
     if (clean.includes(key)) return value;
   }
+  if (/opus/i.test(clean)) return defaultReasoning;
+  if (/haiku/i.test(clean)) return defaultEfficiency;
+  if (/sonnet/i.test(clean)) return defaultCoding;
 
   return defaultCoding; // default
 }
@@ -781,8 +785,16 @@ export function deployFactoryHooks(dryRun) {
       fs.mkdirSync(settingsDir, { recursive: true });
     }
 
-    // Since we've successfully parsed the JSON, safe to write back
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+    // Parsed successfully, so the merge is safe to write back. It is written
+    // as canonical JSON, which drops operator comments and formatting, so
+    // keep a timestamped copy of a hand-edited user-global file first.
+    const updatedContent = JSON.stringify(settings, null, 2) + '\n';
+    if (hasExistingFile && originalContent !== JSON.stringify(JSON.parse(stripJsonComments(originalContent)), null, 2) + '\n') {
+      const backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      fs.copyFileSync(settingsPath, backupPath);
+      console.log(`Backed up ${settingsPath} to ${backupPath} (comments and formatting are not preserved)`);
+    }
+    fs.writeFileSync(settingsPath, updatedContent, 'utf8');
     console.log(`Deployed SessionStart hook to ${settingsPath}`);
     console.log('Hook: aiwg sync --dry-run --quiet (runs on every new Factory session)');
   }

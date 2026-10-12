@@ -1,0 +1,61 @@
+{
+  "schema": "aiwg.grok-build.qualification.v1",
+  "platform": "linux",
+  "version": "1.0.38",
+  "publicSourceCommit": "4247f661689354b831191f11eeeac8424993fe3d",
+  "upstreamSourceRevision": "9bb727ccdff0a793ee73bcde4e2e09cbef6b5387",
+  "recordedAt": "2026-09-21T22:19:51.246Z",
+  "reviewedAt": "2026-09-21T23:08:38Z",
+  "authenticationMode": "unverified",
+  "inspect": "pass",
+  "buildVerify": "ready",
+  "surfaces": {
+    "instructions": "pass",
+    "skills": "pass"
+  },
+  "evidence": {
+    "instructions": {
+      "kind": "live",
+      "reference": "docs/providers/grok-build-evidence/linux.json"
+    },
+    "skills": {
+      "kind": "live",
+      "reference": "docs/providers/grok-build-evidence/linux.json"
+    }
+  },
+  "checks": {
+    "clean-install": "pass",
+    "existing-config": "pass",
+    "update": "pass",
+    "deploy": "pass",
+    "verify": "pass",
+    "refresh": "pass",
+    "uninstall": "pass",
+    "operator-content": "pass",
+    "idempotence": "pass",
+    "path-safety": "pass",
+    "rollback": "pass",
+    "no-secret-leakage": "pass",
+    "compatibility": "pass"
+  },
+  "distribution": {
+    "package": "@xai-official/grok-linux-x64@1.0.38",
+    "integrity": "sha512-8NRoj3kQhQllbmTvOxtkwl+KGb6vBKpdCb8+wIif9p1wISmllYWcuwMoWdJWxK1SOrsyOd6Ev8AfOgnljZIuhQ==",
+    "binarySha256": "d09092c50f1bf1cd686a0ecd3489aedd83ec2d16b27a821ca9f0994a4b605ef9"
+  },
+  "notes": [
+    "Released binary package archive integrity matched npm registry metadata before extraction. The public source commit and internal SOURCE_REV are from the reviewed public tree, not proven binary build provenance.",
+    "An isolated npm install of @xai-official/grok@1.0.38 succeeded; the reviewed postinstall was invoked explicitly because the local npm allowScripts policy deferred it. The installed binary hash matched the independently extracted package binary.",
+    "The same isolated npm prefix was updated to @xai-official/grok@1.0.40 with its unchanged reviewed postinstall; the canonical binary reported 1.0.40, the prior 1.0.38 binary remained available, operator config and user skill survived, and project inspection still found trusted instructions and skills.",
+    "grok inspect --json in an isolated trusted Linux project reported one AGENTS.md instruction, 20 skills including AIWG and operator content, and six agents.",
+    "Grok Build 1.0.38 reported 1.0.40 available through grok update --check before the isolated package update.",
+    "Repeat AIWG project deployment preserved hashes of generated context, AIWG skill, and operator files; reviewed project removal then removed AIWG-owned files and retained operator config, skill, and AGENTS.md.",
+    "aiwg refresh --skip-update --provider grok-build --frameworks sdlc completed in the isolated project and build-verify remained ready.",
+    "Project and user scopes were exercised separately. aiwg use all --provider grok-build --scope user deployed into the isolated GROK_HOME; aiwg remove all --scope user --provider grok-build removed all AIWG user skills and preserved the operator user skill.",
+    "A symlinked .grok root in a second isolated project was refused by both Grok Build deployment and reviewed removal, with the outside operator file unchanged. A linked user-scope skills root was also refused before mirroring, without writes to its outside target.",
+    "A controlled refresh failure and exact backup-based recovery are recorded in docs/providers/grok-build-evidence/linux-rollback.md. This is operator recovery, not automatic transactional rollback.",
+    "A synthetic canary in operator-owned .grok/config.toml remained private through deploy, inspect, regenerate, refresh, verify, removal preview, and removal output; operator config and native/compatibility skills were preserved.",
+    "AGENTS.md loaded WORKSPACE.md before AIWG.md; CLAUDE.md retained its operator note and exactly one AIWG hook after alternating provider regeneration.",
+    "No credentialed model call or other platform qualification occurred; those checks remain pending."
+  ]
+}

@@ -19,10 +19,12 @@
  */
 
 import { spawnSync } from 'child_process';
+import { existsSync } from 'node:fs';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { ensureRuntimeHome, writeProfileConfig, launchWithProfile } from '../../mcp/adapters/codex-runtime.js';
 import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { forceUpdateCheck } from '../../update/checker.mjs';
+import { updateInstallation } from '../../update/service.mjs';
 import {
   readAiwgConfig,
   getDeploymentSummary,
@@ -35,6 +37,7 @@ import {
 } from '../agent-spawn.js';
 import { useHandler as useFrameworkHandler } from './use.js';
 import { debug } from '../log.js';
+import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 
 // ── Provider resolution ──────────────────────────────────────────────────────
 
@@ -47,13 +50,11 @@ async function resolveProvider(
   cwd: string,
 ): Promise<string> {
   if (explicitProvider) {
-    if (!VALID_PROVIDERS.includes(explicitProvider as never)) {
-      console.warn(
-        `  WARN  Unknown provider '${explicitProvider}' — falling back to 'claude'`,
-      );
-      return 'claude';
+    const normalized = normalizeProviderDefinitionId(explicitProvider);
+    if (!normalized || normalized === 'generic' || !VALID_PROVIDERS.includes(normalized as never)) {
+      throw new Error(`Unsupported provider '${explicitProvider}'`);
     }
-    return explicitProvider;
+    return normalized;
   }
 
   const config = await readAiwgConfig(cwd);
@@ -118,8 +119,10 @@ async function checkAndUpdateVersion(noRepair: boolean): Promise<boolean> {
     debug('cli:session:update', 'forceUpdateCheck failed', err);
     if (!noRepair) {
       console.log('  Version check failed — attempting sync...');
-      const r = spawnSync('npm', ['install', '-g', 'aiwg@latest'], { stdio: 'inherit' });
-      if (r.status !== 0) {
+      try {
+        await updateInstallation();
+      } catch (updateError) {
+        debug('cli:session:update', 'canonical installation update failed', updateError);
         console.warn('  WARN  Could not update aiwg — continuing with current version.');
         return false;
       }
@@ -143,14 +146,14 @@ function runDoctor(_frameworkRoot: string, cwd: string): boolean {
 
 /**
  * Attempt to repair a failed doctor result.
- * Strategy: `aiwg sync` first; if that fails, offer full reinstall.
+ * Strategy: `aiwg sync`; package repair remains bound to the canonical update
+ * strategy and never falls through to an arbitrary npm on PATH.
  * Returns true if repair succeeded (doctor now passes).
  */
 function repairInstallation(
   frameworkRoot: string,
   cwd: string,
   provider: string,
-  installedFrameworks: string[],
 ): boolean {
   // Strategy 1: sync (update + redeploy)
   console.log('\n  Attempting auto-repair via `aiwg sync`...');
@@ -169,40 +172,13 @@ function repairInstallation(
     }
   }
 
-  // Strategy 2: full reinstall
-  console.log('\n  Sync did not fully resolve the issue. Attempting full reinstall...');
-  const reinstallResult = spawnSync(
-    'npm',
-    ['install', '-g', 'aiwg@latest'],
-    { stdio: 'inherit' },
-  );
-
-  if (reinstallResult.status === 0 && installedFrameworks.length > 0) {
-    // Redeploy all installed frameworks for this provider
-    console.log(`\n  Redeploying frameworks to ${provider}...`);
-    for (const fw of installedFrameworks) {
-      spawnSync(
-        process.execPath,
-        [process.argv[1]!, 'use', fw, '--provider', provider],
-        { stdio: 'inherit', cwd },
-      );
-    }
-
-    // Final doctor check
-    const finalOk = runDoctor(frameworkRoot, cwd);
-    if (finalOk) {
-      console.log('  OK  Full reinstall + redeploy succeeded.');
-      return true;
-    }
-  }
-
   // Could not auto-repair
   console.log(`
   ✗  Auto-repair could not resolve all issues.
 
   Manual options:
-    aiwg sync                       — sync and redeploy
-    npm install -g aiwg@latest      — reinstall package
+    aiwg installation show          — inspect canonical install drift
+    aiwg refresh                    — update and redeploy canonically
     aiwg use all --provider ${provider.padEnd(10)} — redeploy all frameworks
 
   Report this issue:
@@ -274,16 +250,22 @@ function injectMcp(provider: string, cwd: string): boolean {
  * Profile-aware inject (#891).
  * Default is ephemeral (no persistent config mutation).
  *
- * For Claude: returns the ephemeral config path (for claude --mcp-config).
+ * For Claude: returns the ephemeral MCP config and permission settings paths.
  * For Codex: sets up the runtime home via the codex-runtime adapter (#892).
  * Returns null for persistent mode or on failure.
  */
+interface EphemeralProfileConfig {
+  mcpConfigPath: string;
+  settingsPath: string | null;
+}
+
 function injectMcpProfile(
   provider: string,
   profileName: string,
   cwd: string,
   persist: boolean,
-): string | null {
+  hasClaudePermissions = false,
+): EphemeralProfileConfig | null {
   console.log(`\n  Resolving profile "${profileName}" for ${provider}...`);
 
   if (persist) {
@@ -294,6 +276,9 @@ function injectMcpProfile(
       { stdio: 'inherit', cwd },
     );
     if (result.status !== 0) {
+      if (provider === 'codex' || provider === 'openai' || provider === 'claude' || provider === 'claude-code') {
+        throw new Error(`${provider} profile injection failed; refusing to launch.`);
+      }
       console.warn('  WARN  Profile inject failed — continuing without profile.');
     }
     return null; // persistent mode, no ephemeral path
@@ -317,15 +302,29 @@ function injectMcpProfile(
       '--ephemeral',
       '--out', tmpPath,
     ],
-    { stdio: 'inherit', cwd },
+    { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf-8', cwd },
   );
 
+  if (result.stdout) process.stdout.write(result.stdout);
+
   if (result.status !== 0) {
+    if (provider === 'claude' || provider === 'claude-code') {
+      throw new Error('Claude profile injection failed; refusing to launch.');
+    }
     console.warn('  WARN  Ephemeral profile inject failed — launching without profile MCP config.');
     return null;
   }
 
-  return tmpPath;
+  const reportedSettingsPath = result.stdout?.match(/^\s*Tool permissions: (.+)$/m)?.[1]?.trim();
+  const settingsPath = reportedSettingsPath && existsSync(reportedSettingsPath) ? reportedSettingsPath : null;
+  if (hasClaudePermissions && !settingsPath) {
+    throw new Error('Claude profile permission settings were not generated; refusing to launch.');
+  }
+
+  return {
+    mcpConfigPath: tmpPath,
+    settingsPath,
+  };
 }
 
 // ── Launch ────────────────────────────────────────────────────────────────────
@@ -339,6 +338,7 @@ function launchProvider(
   mcpInjected: boolean,
   mcpConfigPath?: string | null,
   profile?: string | null,
+  settingsPath?: string | null,
 ): HandlerResult {
   const cfg = getProviderConfig(provider);
 
@@ -369,11 +369,15 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
     return { exitCode: result.status ?? 0 };
   }
 
-  // Claude: if we have an ephemeral MCP config, pass it via --mcp-config
+  // Claude: load both the ephemeral MCP config and any permission settings.
   const binaryArgs: string[] = [];
   if (mcpConfigPath && (provider === 'claude' || provider === 'claude-code')) {
     binaryArgs.push('--mcp-config', mcpConfigPath);
     console.log(`  Using ephemeral MCP config: ${mcpConfigPath}`);
+    if (settingsPath) {
+      binaryArgs.push('--settings', settingsPath);
+      console.log(`  Using ephemeral permission settings: ${settingsPath}`);
+    }
   }
 
   const result = spawnSync(cfg.binary!, binaryArgs, {
@@ -417,11 +421,7 @@ export const sessionHandler: CommandHandler = {
     const doctorOk = runDoctor(frameworkRoot, cwd);
 
     if (!doctorOk && !noRepair) {
-      // Read installed frameworks before attempting repair (needed for redeploy)
-      const config = await readAiwgConfig(cwd);
-      const installedFrameworks = Object.keys(config?.installed ?? {});
-
-      const repaired = repairInstallation(frameworkRoot, cwd, provider, installedFrameworks);
+      const repaired = repairInstallation(frameworkRoot, cwd, provider);
       if (!repaired) {
         // Repair failed — still continue (user was already informed)
       }
@@ -443,37 +443,82 @@ export const sessionHandler: CommandHandler = {
     // ── Step 4: MCP inject ────────────────────────────────────────
     let mcpInjected = false;
     let mcpConfigPath: string | null = null;
+    let settingsPath: string | null = null;
 
     if (profile) {
       // Profile-aware injection (#891) — ephemeral by default
 
-      // For codex: set up the runtime home and write profile config (#892)
-      if ((provider === 'codex' || provider === 'openai') && !persist) {
+      // Codex profiles must pass policy and setup before any launch (#892)
+      if (provider === 'codex' || provider === 'openai') {
         try {
-          console.log(`\n  Setting up Codex runtime home for profile "${profile}"...`);
+          console.log(`\n  Setting up Codex ${persist ? 'persistent config' : 'runtime home'} for profile "${profile}"...`);
           // Import server list for this profile
           const { McpProfileRegistry } = await import('../../mcp/profiles.js');
           const { McpServerRegistry } = await import('../../mcp/registry.js');
           const profiles = new McpProfileRegistry();
           const registry = new McpServerRegistry();
           const resolvedServers = await profiles.resolveServers(profile, registry) as import('../../mcp/registry.js').McpServerDefinition[];
-          await ensureRuntimeHome(profile);
-          await writeProfileConfig(profile, resolvedServers);
-          console.log(`  Runtime home ready. Profile servers: ${resolvedServers.map((s) => s.name).join(', ') || '(none)'}`);
+          const { resolveToolFilters } = await import('../../mcp/tool-filters.mjs');
+          const { assertCredentialPolicy, resolveCredentialPolicy } = await import('../../mcp/credentials.mjs');
+          const registryPolicy = await registry.getCredentialPolicy();
+          const floorPolicy = await registry.getCredentialPolicyFloor();
+          const floorSource = await registry.getCredentialPolicyFloorSource();
+          let credentialPolicy;
+          try {
+            credentialPolicy = resolveCredentialPolicy({ registryPolicy, floorPolicy, floorSource });
+            assertCredentialPolicy(resolvedServers, credentialPolicy);
+          } catch (err) {
+            console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+            return { exitCode: 1 };
+          }
+          if (persist) {
+            injectMcpProfile(provider, profile, cwd, true);
+          } else {
+            await ensureRuntimeHome(profile);
+            // writeProfileConfig re-resolves and re-enforces the floor itself (so a
+            // direct API call cannot bypass it); passing it here too keeps this
+            // call's diagnostics consistent with the one already performed above.
+            const warnings = await writeProfileConfig(profile, resolvedServers, {
+              credentialPolicy, floorPolicy,
+              toolFilters: resolveToolFilters(await profiles.resolve(profile), 'codex'),
+            });
+            for (const warning of warnings) console.warn(`  WARN  codex: ${warning}`);
+            console.log(`  Runtime home ready. Profile servers: ${resolvedServers.map((s) => s.name).join(', ') || '(none)'}`);
+          }
           mcpInjected = true;
         } catch (err) {
           console.warn(`  WARN  Codex runtime home setup failed: ${err instanceof Error ? err.message : String(err)}`);
-          console.warn('  Falling back to standard launch.');
+          return { exitCode: 1 };
         }
       } else {
-        mcpConfigPath = injectMcpProfile(provider, profile, cwd, persist);
-        mcpInjected = mcpConfigPath !== null || persist;
+        try {
+          let hasClaudePermissions = false;
+          if (provider === 'claude' || provider === 'claude-code') {
+            const { McpProfileRegistry } = await import('../../mcp/profiles.js');
+            const { McpServerRegistry } = await import('../../mcp/registry.js');
+            const { resolveToolFilters, planToolFilters } = await import('../../mcp/tool-filters.mjs');
+            const profiles = new McpProfileRegistry();
+            const servers = await profiles.resolveServers(profile, new McpServerRegistry()) as
+              import('../../mcp/registry.js').McpServerDefinition[];
+            const plan = planToolFilters(provider, servers.map(server => server.name),
+              resolveToolFilters(await profiles.resolve(profile), provider));
+            hasClaudePermissions = plan.claudePermissions !== null;
+          }
+          const ephemeral = injectMcpProfile(provider, profile, cwd, persist, hasClaudePermissions);
+          mcpConfigPath = ephemeral?.mcpConfigPath ?? null;
+          settingsPath = ephemeral?.settingsPath ?? null;
+          mcpInjected = ephemeral !== null || persist;
+        } catch (err) {
+          console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+          return { exitCode: 1 };
+        }
       }
     } else if (mcp) {
       mcpInjected = injectMcp(provider, cwd);
     }
 
     // ── Step 5: Launch ────────────────────────────────────────────
-    return launchProvider(provider, mcpInjected, mcpConfigPath, profile);
+    return launchProvider(provider, mcpInjected, mcpConfigPath,
+      persist && (provider === 'codex' || provider === 'openai') ? null : profile, settingsPath);
   },
 };

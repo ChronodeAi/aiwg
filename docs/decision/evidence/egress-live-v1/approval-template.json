@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "egress-live-approval/v1",
+  "approved": false,
+  "issue": 2680,
+  "securityReviewer": "roctinam",
+  "privacyOwner": "roctinam",
+  "approvalReference": "<tracker comment URL recording the operator approval line>",
+  "stagingHost": "titan",
+  "stagingWorkspace": "<disposable workspace name>",
+  "runId": "egress-2680-live-02",
+  "sourceCommit": "<exact clean commit of the runner>",
+  "exactHeadCi": "<green exact-head CI run URL>",
+  "model": "<requested Jev model>",
+  "servedModel": "<served model identity every response must report>",
+  "apiRevision": "v1",
+  "origin": "https://api.typesafe.ai",
+  "region": "<operator-declared deployment region>",
+  "credential": {
+    "secretService": "openbao-kv-v2 approle aiwg-jev-reader",
+    "scopedRef": "jev-api-scoped",
+    "decoyRef": "jev-api-decoy",
+    "resolverConfigDigest": "<sha256 of the host-only resolver config file>"
+  },
+  "budget": {
+    "requests": 600,
+    "tokens": 2400000,
+    "usd": 0.5,
+    "wallClockMs": 3600000
+  },
+  "priorRunsReservedUsd": 0,
+  "minDispatchIntervalMs": 250,
+  "providerTerms": {
+    "retention": "unknown",
+    "residency": "unknown",
+    "zeroDataRetention": "unknown",
+    "evidenceReference": null,
+    "deploymentRestriction": "Synthetic qualification data only. No production, personal, customer or credential-bearing state may be projected to Jev until provider retention, residency and zero-data-retention terms are evidenced and accepted by the privacy owner."
+  },
+  "priceBound": {
+    "inputUsdPerMillionTokens": 0.042,
+    "outputUsdPerMillionTokens": 0,
+    "perRequestUsd": null,
+    "evidenceReferences": [
+      "https://www.eesel.ai/blog/typesafe-jev-pricing",
+      "https://www.mindstudio.ai/blog/jev-pricing-cost-per-token",
+      "roctinam/aiwg#2613 comment 153093 (live smoke usage record)"
+    ],
+    "approvalReference": "<tracker comment URL recording the operator-attested price bound>"
+  },
+  "corpusDigest": "sha256:b587619e5e65f288d9f0d391dddd24c38e507d9ee05484b6d73ceb78068421b1",
+  "preregistrationDigest": "sha256:d0ed541a990fea4bbba2036de07fee96aec39a2f65f56b9fbba66ebbc6df4f07"
+}

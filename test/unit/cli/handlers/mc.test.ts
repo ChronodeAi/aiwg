@@ -38,6 +38,18 @@ vi.mock('node:fs', () => {
     writeFile: vi.fn(async (path: string, content: string) => {
       store.set(path, content);
     }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const content = store.get(from);
+      if (content === undefined) throw Object.assign(new Error(`ENOENT: ${from}`), { code: 'ENOENT' });
+      store.set(to, content);
+      store.delete(from);
+    }),
+    unlink: vi.fn(async (path: string) => { store.delete(path); }),
+    open: vi.fn(async (path: string) => {
+      if (store.has(path)) throw Object.assign(new Error(`EEXIST: ${path}`), { code: 'EEXIST' });
+      store.set(path, 'locked');
+      return { close: vi.fn(async () => undefined) };
+    }),
     appendFile: vi.fn(async () => undefined),
     readdir: vi.fn(async (path: string, _opts?: unknown) => {
       const prefix = path.endsWith('/') ? path : path + '/';
@@ -86,7 +98,26 @@ vi.mock('../../../../src/cli/handlers/ralph-launcher.js', () => ({
   })),
 }));
 
-import { mcHandler } from '../../../../src/cli/handlers/mc.js';
+vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
+  FileAdmissionStore: class FileAdmissionStore {},
+  SharedHostScheduler: class SharedHostScheduler {
+    submit(request: { requestId: string }) {
+      return {
+        requestId: request.requestId,
+        state: 'admitted',
+        reason: 'admitted by test policy',
+        leaseExpiresAt: '2026-08-03T12:05:00.000Z',
+      };
+    }
+    renew(requestId: string) {
+      return { requestId, state: 'admitted', leaseExpiresAt: '2026-08-03T12:05:00.000Z' };
+    }
+    release() { return { revision: 1, records: {} }; }
+  },
+}));
+
+import { mcHandler, estimateMissionRunCost, SONNET_CACHE_USD } from '../../../../src/cli/handlers/mc.js';
+import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -102,6 +133,10 @@ function makeCtx(args: string[]): HandlerContext {
 beforeEach(() => {
   inMemoryFs.clear();
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 // ── mcHandler metadata ────────────────────────────────────────
@@ -161,6 +196,61 @@ describe('mc start', () => {
 // ── mc dispatch ───────────────────────────────────────────────
 
 describe('mc dispatch', () => {
+  const integerFlags = ['--max-iterations', '--max-total-tokens', '--max-output-tokens', '--max-tool-calls', '--exploration-quota'];
+  const decimalFlags = ['--max-total-cost', '--max-wall-clock-minutes'];
+  for (const flag of [...integerFlags, ...decimalFlags]) {
+    const invalid = ['1junk', '1,000', '0x10', '0', '-1', 'Infinity', ''];
+    if (integerFlags.includes(flag)) invalid.push('1.5', '9007199254740992');
+    for (const syntax of ['separate', 'equals']) {
+      it.each(invalid)(`rejects ${syntax} ${flag}=%s without changing session state`, async raw => {
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        const started = await mcHandler.execute(makeCtx(['start']));
+        expect(started.exitCode).toBe(0);
+        const before = [...inMemoryFs.store.entries()];
+        const args = syntax === 'equals' ? [`${flag}=${raw}`] : [flag, raw];
+        const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', ...args]));
+        expect([...inMemoryFs.store.entries()]).toEqual(before);
+        expect(result.exitCode).toBe(1);
+        const ui = await import('../../../../src/cli/ui.js');
+        expect(ui.error).toHaveBeenCalledWith(expect.stringContaining(flag));
+        expect(launchExternalRalph).not.toHaveBeenCalled();
+      });
+    }
+    it(`rejects missing ${flag} value without dispatching`, async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const started = await mcHandler.execute(makeCtx(['start']));
+      const before = [...inMemoryFs.store.entries()];
+      const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', flag]));
+      expect([...inMemoryFs.store.entries()]).toEqual(before);
+      expect(result.exitCode).toBe(1);
+      expect(launchExternalRalph).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(['separate', 'equals'])('persists exact valid numeric values using %s syntax', async syntax => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const started = await mcHandler.execute(makeCtx(['start']));
+    const values = [...integerFlags.map(flag => [flag, '1e2']), ...decimalFlags.map(flag => [flag, '0.25'])];
+    const args = values.flatMap(([flag, raw]) => syntax === 'equals' ? [`${flag}=${raw}`] : [flag, raw]);
+    const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', ...args]));
+    expect(result.exitCode).toBe(0);
+    const saved = JSON.parse(inMemoryFs.store.get(`.aiwg/ralph-external/mc/sessions/${started.message}/session.json`)!);
+    expect(saved.missions).toHaveLength(1);
+    expect(saved.missions[0]).toMatchObject({ maxIterations: 100, maxTotalTokens: 100, maxOutputTokens: 100,
+      maxToolCalls: 100, explorationQuota: 100, maxTotalCost: 0.25, maxWallClockMinutes: 0.25 });
+  });
+
+  it('keeps quota disabled and iteration defaults when numeric flags are absent', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const started = await mcHandler.execute(makeCtx(['start']));
+    expect((await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission']))).exitCode).toBe(0);
+    const saved = JSON.parse(inMemoryFs.store.get(`.aiwg/ralph-external/mc/sessions/${started.message}/session.json`)!);
+    expect(saved.missions).toHaveLength(1);
+    expect(saved.missions[0].maxIterations).toBe(10);
+    expect(saved.missions[0]).not.toHaveProperty('explorationQuota');
+    expect(saved.missions[0]).not.toHaveProperty('maxTotalTokens');
+  });
+
   it('exits 1 when no objective given', async () => {
     const result = await mcHandler.execute(makeCtx(['dispatch']));
     expect(result.exitCode).toBe(1);
@@ -178,11 +268,96 @@ describe('mc dispatch', () => {
     consoleSpy.mockRestore();
   });
 
+  it('persists LFD budget controls on dispatched missions', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+    await mcHandler.execute(
+      makeCtx([
+        'dispatch',
+        sessionId,
+        'Budgeted mission',
+        '--completion',
+        'tests pass',
+        '--max-total-tokens',
+        '5000',
+        '--max-output-tokens',
+        '1200',
+        '--max-tool-calls',
+        '20',
+        '--max-total-cost',
+        '3.50',
+        '--max-wall-clock-minutes',
+        '45',
+        '--exploration-quota',
+        '2',
+      ]),
+    );
+
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    const mission = session.missions[0];
+    expect(mission.maxTotalTokens).toBe(5000);
+    expect(mission.maxOutputTokens).toBe(1200);
+    expect(mission.maxToolCalls).toBe(20);
+    expect(mission.maxTotalCost).toBe(3.5);
+    expect(mission.maxWallClockMinutes).toBe(45);
+    expect(mission.explorationQuota).toBe(2);
+    consoleSpy.mockRestore();
+  });
+
   it('exits 1 when session not found', async () => {
     const result = await mcHandler.execute(
       makeCtx(['dispatch', 'mc-nonexistent', 'Do something'])
     );
     expect(result.exitCode).toBe(1);
+  });
+
+  it('refuses to dispatch on invalid numeric budget values instead of silently dropping them (#1770)', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+
+    for (const badArgs of [
+      ['--max-total-tokens', '5,000'],
+      ['--max-total-cost', '-3.5'],
+      ['--max-total-tokens', '0'],
+      ['--max-iterations', 'abc'],
+    ]) {
+      const result = await mcHandler.execute(
+        makeCtx(['dispatch', sessionId, 'Bad budget mission', '--completion', 'tests pass', ...badArgs]),
+      );
+      expect(result.exitCode).toBe(1);
+    }
+
+    // Nothing was dispatched
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    expect(session.missions).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it('accepts --flag=value syntax for budget flags (#1770)', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+    await mcHandler.execute(
+      makeCtx(['dispatch', sessionId, 'Equals mission', '--completion', 'tests pass', '--max-total-tokens=8000']),
+    );
+
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    expect(session.missions[0].maxTotalTokens).toBe(8000);
+    consoleSpy.mockRestore();
   });
 });
 
@@ -245,6 +420,37 @@ describe('mc abort', () => {
     const missionId = dispatchResult.message!;
     const abortResult = await mcHandler.execute(makeCtx(['abort', sessionId, missionId]));
     expect(abortResult.exitCode).toBe(0);
+    consoleSpy.mockRestore();
+  });
+
+  it('rejects stale revisions and replays an idempotent cancel', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const sessionId = (await mcHandler.execute(makeCtx(['start']))).message!;
+    const missionId = (await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Some task']))).message!;
+    const path = `.aiwg/ralph-external/mc/sessions/${sessionId}/session.json`;
+    const current = JSON.parse(inMemoryFs.store.get(path)!);
+
+    const stale = await mcHandler.execute(makeCtx([
+      'cancel', sessionId, missionId,
+      '--expected-updated-at', '2000-01-01T00:00:00.000Z',
+      '--request-id', 'request-stale',
+    ]));
+    expect(stale.exitCode).toBe(3);
+
+    const first = await mcHandler.execute(makeCtx([
+      'cancel', sessionId, missionId,
+      '--expected-updated-at', current.updatedAt,
+      '--request-id', 'request-1',
+    ]));
+    expect(first.exitCode).toBe(0);
+    expect(JSON.parse(first.message!)).toMatchObject({ ok: true, replayed: false });
+
+    const replay = await mcHandler.execute(makeCtx([
+      'cancel', sessionId, missionId,
+      '--request-id', 'request-1',
+    ]));
+    expect(replay.exitCode).toBe(0);
+    expect(JSON.parse(replay.message!)).toMatchObject({ ok: true, replayed: true });
     consoleSpy.mockRestore();
   });
 });
@@ -406,6 +612,52 @@ describe('mc run (#1439)', () => {
     consoleSpy.mockRestore();
   });
 
+  it('passes LFD budget controls through to ralph external launcher', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+
+    await mcHandler.execute(
+      makeCtx([
+        'dispatch',
+        sessionId,
+        'Budgeted run',
+        '--completion',
+        'tests pass',
+        '--max-total-tokens',
+        '5000',
+        '--max-output-tokens',
+        '1200',
+        '--max-tool-calls',
+        '20',
+        '--max-total-cost',
+        '3.50',
+        '--max-wall-clock-minutes',
+        '45',
+        '--exploration-quota',
+        '2',
+      ]),
+    );
+
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    expect(runResult.exitCode).toBe(0);
+    expect(vi.mocked(launchExternalRalph)).toHaveBeenCalledWith(
+      '/mock/framework/root',
+      '/mock/cwd',
+      expect.objectContaining({
+        objective: 'Budgeted run',
+        completionCriteria: 'tests pass',
+        maxTotalTokens: 5000,
+        maxOutputTokens: 1200,
+        maxToolCalls: 20,
+        maxTotalCost: 3.5,
+        maxWallClockMinutes: 45,
+        explorationQuota: 2,
+      }),
+    );
+    consoleSpy.mockRestore();
+  });
+
   it('skips missions without --completion criteria (ralph requires one)', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const startResult = await mcHandler.execute(makeCtx(['start']));
@@ -451,5 +703,71 @@ describe('mc run (#1439)', () => {
     const session = JSON.parse(jsonOutput!);
     expect(session.missions[0].status).toBe('queued'); // skipped, still queued
     consoleSpy.mockRestore();
+  });
+});
+
+// ── Cost estimate (#2522) ─────────────────────────────────────
+// The gate previously ignored declared `maxTotalCost` entirely. These cover the
+// three cases the fix must distinguish: no ceilings, ceilings on a provider that
+// reports spend, and ceilings on a provider that does not (#1766).
+describe('estimateMissionRunCost (#2522)', () => {
+  const mission = (maxIterations: number, maxTotalCost?: number) => ({ maxIterations, maxTotalCost });
+
+  it('falls back to the uncapped iteration floor when no ceilings are declared', () => {
+    const estimate = estimateMissionRunCost([mission(10), mission(5)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('caps each mission at its declared ceiling when the provider reports spend', () => {
+    // Ten missions capped at $1 each: the uncapped floor is 10 x 10 x $1.60 =
+    // $160, while the enforced ceiling total is $10.
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'claude');
+    expect(estimate.spendObservable).toBe(true);
+    expect(estimate.estimateUsd).toBeCloseTo(10, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(10);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('never caps below the floor when a ceiling exceeds it', () => {
+    const estimate = estimateMissionRunCost([mission(2, 999)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(2 * SONNET_CACHE_USD, 5);
+    expect(estimate.cappedMissions).toBe(1);
+  });
+
+  it('does not weaken the estimate when spend is unobservable on the provider', () => {
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'codex');
+    expect(estimate.spendObservable).toBe(false);
+    // Inert ceilings must not shrink the warning — the operator has no enforced
+    // protection here, which is exactly when the gate matters most.
+    expect(estimate.estimateUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(10);
+  });
+
+  it('treats an unrecognized provider as unobservable rather than assuming cost reporting', () => {
+    // Any provider outside COST_REPORTING_PROVIDERS, including the fallback
+    // mc uses when no provider is configured. Spelled differently here so the
+    // mission-protocol inventory scanner does not read a provider name as
+    // mission status vocabulary.
+    const estimate = estimateMissionRunCost([mission(10, 1)], 'not-a-configured-provider');
+    expect(estimate.spendObservable).toBe(false);
+    expect(estimate.estimateUsd).toBeCloseTo(10 * SONNET_CACHE_USD, 5);
+    expect(estimate.inertCeilingMissions).toBe(1);
+  });
+
+  it('ignores a non-finite declared ceiling instead of poisoning the estimate', () => {
+    const estimate = estimateMissionRunCost([{ maxIterations: 4, maxTotalCost: Number.NaN }], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(4 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
   });
 });

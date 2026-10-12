@@ -1,8 +1,8 @@
 ---
 namespace: aiwg
-name: al
-aliases: [ralph, agent-loop]
-deprecated_names: [ralph]
+name: ralph
+aliases: [al, agent-loop]
+deprecated_names: [al]
 platforms: [all]
 description: Execute iterative task loop until completion criteria are met - iteration beats perfection
 triggers:
@@ -13,9 +13,11 @@ triggers:
 commandHint:
   argumentHint: '"<task>" [--completion "<criteria>"] [--max-iterations N] [--timeout M] [--interactive --guidance "text"] [--auto-criteria | --no-infer-completion]'
   allowedTools: "Task, Read, Write, Bash, Glob, Grep, TodoWrite, Edit"
-  model: opus
+  model: haiku
   category: automation
   orchestration: true
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Agent Loop

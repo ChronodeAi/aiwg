@@ -129,11 +129,11 @@ export const capabilities = {
 };
 
 // ============================================================================
-// Model Mapping (passthrough — OpenClaw uses its own model config)
+// Model Mapping (global inheritance)
 // ============================================================================
 
 export function mapModel(shorthand, modelCfg, modelsConfig) {
-  return shorthand;
+  return undefined;
 }
 
 // ============================================================================
@@ -141,7 +141,11 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 // ============================================================================
 
 export function transformAgent(srcPath, content, opts) {
-  return content;
+  // AIWG's catalog intentionally records configured/<role> placeholders for
+  // OpenClaw because the exact provider/model namespace is installation
+  // specific. Omit the portable Markdown pin and inherit the configured
+  // OpenClaw subagent model rather than emitting a misleading Claude alias.
+  return content.replace(/^model:\s*.+\n/m, '');
 }
 
 export function transformCommand(srcPath, content, opts) {
@@ -205,10 +209,13 @@ function deploySkills(skillDirs, opts) {
     ? skillDirs
     : skillDirs.filter(d => isKernelSkill(d));
   if (crossAgentSkills.length > 0) {
-    const crossAgentDir = path.join(process.cwd(), '.agents', 'skills');
+    // Honor the deployment target selected by `aiwg use --target`. Provider
+    // subprocesses execute from AIWG_ROOT so process.cwd() would otherwise
+    // mutate the framework checkout during isolated/project-targeted deploys.
+    const crossAgentDir = path.join(opts.target || process.cwd(), '.agents', 'skills');
     ensureDir(crossAgentDir, opts.dryRun);
     if (!opts.dryRun) {
-      console.log(`Deploying cross-agent skills to ${path.relative(process.cwd(), crossAgentDir)}...`);
+      console.log(`Deploying cross-agent skills to ${path.relative(opts.target || process.cwd(), crossAgentDir)}...`);
     } else {
       console.log(`[dry-run] Would deploy cross-agent skills to .agents/skills/`);
     }

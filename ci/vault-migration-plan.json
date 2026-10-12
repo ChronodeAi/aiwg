@@ -1,0 +1,157 @@
+{
+  "repository": "roctinam/aiwg",
+  "reader_approle": "ci-aiwg",
+  "bootstrap_tracker_secrets": [
+    "VAULT_CI_ROLE_ID",
+    "VAULT_CI_SECRET_ID"
+  ],
+  "tracker_variables": [
+    "VAULT_ADDR",
+    "GT_NPM_TOKEN_VAULT_PATH",
+    "GT_NPM_TOKEN_VAULT_FIELD",
+    "GT_RELEASE_TOKEN_VAULT_PATH",
+    "GT_RELEASE_TOKEN_VAULT_FIELD",
+    "GH_MIRROR_TOKEN_VAULT_PATH",
+    "GH_MIRROR_TOKEN_VAULT_FIELD",
+    "AIWG_IO_DISPATCH_TOKEN_VAULT_PATH",
+    "AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD",
+    "DOCSITE_DEPLOY_KEY_VAULT_PATH",
+    "DOCSITE_DEPLOY_KEY_VAULT_FIELD",
+    "CLOUDFLARE_API_TOKEN_VAULT_PATH",
+    "CLOUDFLARE_API_TOKEN_VAULT_FIELD",
+    "RELEASE_SIGNING_KEY_VAULT_PATH",
+    "RELEASE_SIGNING_KEY_VAULT_FIELD",
+    "RELEASE_SIGNING_PASSPHRASE_VAULT_PATH",
+    "RELEASE_SIGNING_PASSPHRASE_VAULT_FIELD",
+    "AIWG_POSTGRES_LIVE_URL_VAULT_PATH",
+    "AIWG_POSTGRES_LIVE_URL_VAULT_FIELD",
+    "AIWG_POSTGREST_LIVE_URL_VAULT_PATH",
+    "AIWG_POSTGREST_LIVE_URL_VAULT_FIELD",
+    "AIWG_POSTGREST_AUTHORIZATION_VAULT_PATH",
+    "AIWG_POSTGREST_AUTHORIZATION_VAULT_FIELD",
+    "AIWG_FORTEMI_LIVE_URL_VAULT_PATH",
+    "AIWG_FORTEMI_LIVE_URL_VAULT_FIELD",
+    "AIWG_FORTEMI_LIVE_TOKEN_VAULT_PATH",
+    "AIWG_FORTEMI_LIVE_TOKEN_VAULT_FIELD",
+    "XAI_API_KEY_VAULT_PATH",
+    "XAI_API_KEY_VAULT_FIELD",
+    "DOCSITE_DEPLOY_HOST",
+    "DOCSITE_DEPLOY_PORT",
+    "DOCSITE_DEPLOY_USER",
+    "DOCSITE_DEPLOY_PATH"
+  ],
+  "routes": [
+    {
+      "id": "gitea-npm-token",
+      "path_variable": "GT_NPM_TOKEN_VAULT_PATH",
+      "field_variable": "GT_NPM_TOKEN_VAULT_FIELD",
+      "env": "NODE_AUTH_TOKEN",
+      "type": "api-token",
+      "purpose": "Gitea package publish token"
+    },
+    {
+      "id": "gitea-release-token",
+      "path_variable": "GT_RELEASE_TOKEN_VAULT_PATH",
+      "field_variable": "GT_RELEASE_TOKEN_VAULT_FIELD",
+      "env": "GITEA_TOKEN",
+      "type": "api-token",
+      "purpose": "Gitea release and release-asset token"
+    },
+    {
+      "id": "github-mirror-token",
+      "path_variable": "GH_MIRROR_TOKEN_VAULT_PATH",
+      "field_variable": "GH_MIRROR_TOKEN_VAULT_FIELD",
+      "env": "GH_TOKEN",
+      "type": "api-token",
+      "purpose": "GitHub mirror release token"
+    },
+    {
+      "id": "aiwg-io-dispatch-token",
+      "path_variable": "AIWG_IO_DISPATCH_TOKEN_VAULT_PATH",
+      "field_variable": "AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD",
+      "env": "AIWG_IO_DISPATCH_TOKEN",
+      "type": "api-token",
+      "purpose": "Site deploy dispatch token"
+    },
+    {
+      "id": "docsite-deploy-key",
+      "path_variable": "DOCSITE_DEPLOY_KEY_VAULT_PATH",
+      "field_variable": "DOCSITE_DEPLOY_KEY_VAULT_FIELD",
+      "env": "DOCSITE_DEPLOY_KEY_FILE",
+      "type": "ssh-private-key",
+      "purpose": "Docsite deploy SSH key"
+    },
+    {
+      "id": "cloudflare-api-token",
+      "path_variable": "CLOUDFLARE_API_TOKEN_VAULT_PATH",
+      "field_variable": "CLOUDFLARE_API_TOKEN_VAULT_FIELD",
+      "env": "CLOUDFLARE_API_TOKEN",
+      "type": "api-token",
+      "purpose": "Cloudflare cache purge token"
+    },
+    {
+      "id": "release-signing-key",
+      "path_variable": "RELEASE_SIGNING_KEY_VAULT_PATH",
+      "field_variable": "RELEASE_SIGNING_KEY_VAULT_FIELD",
+      "env": "GPG_SIGNING_KEY_FILE",
+      "type": "gpg-private-key",
+      "purpose": "Release signing private key"
+    },
+    {
+      "id": "release-signing-passphrase",
+      "path_variable": "RELEASE_SIGNING_PASSPHRASE_VAULT_PATH",
+      "field_variable": "RELEASE_SIGNING_PASSPHRASE_VAULT_FIELD",
+      "env": "GPG_PASSPHRASE_FILE",
+      "type": "passphrase",
+      "purpose": "Release signing passphrase"
+    },
+    {
+      "id": "storage-postgres-live-url",
+      "path_variable": "AIWG_POSTGRES_LIVE_URL_VAULT_PATH",
+      "field_variable": "AIWG_POSTGRES_LIVE_URL_VAULT_FIELD",
+      "env": "AIWG_POSTGRES_LIVE_URL",
+      "type": "service-credential",
+      "purpose": "Direct PostgreSQL storage qualification endpoint"
+    },
+    {
+      "id": "storage-postgrest-live-url",
+      "path_variable": "AIWG_POSTGREST_LIVE_URL_VAULT_PATH",
+      "field_variable": "AIWG_POSTGREST_LIVE_URL_VAULT_FIELD",
+      "env": "AIWG_POSTGREST_LIVE_URL",
+      "type": "service-credential",
+      "purpose": "PostgREST storage qualification endpoint"
+    },
+    {
+      "id": "storage-postgrest-authorization",
+      "path_variable": "AIWG_POSTGREST_AUTHORIZATION_VAULT_PATH",
+      "field_variable": "AIWG_POSTGREST_AUTHORIZATION_VAULT_FIELD",
+      "env": "AIWG_POSTGREST_AUTHORIZATION",
+      "type": "api-token",
+      "purpose": "Authenticated PostgREST and RLS storage qualification"
+    },
+    {
+      "id": "storage-fortemi-live-url",
+      "path_variable": "AIWG_FORTEMI_LIVE_URL_VAULT_PATH",
+      "field_variable": "AIWG_FORTEMI_LIVE_URL_VAULT_FIELD",
+      "env": "AIWG_FORTEMI_LIVE_URL",
+      "type": "service-credential",
+      "purpose": "Fortemi live MCP storage qualification endpoint"
+    },
+    {
+      "id": "storage-fortemi-live-token",
+      "path_variable": "AIWG_FORTEMI_LIVE_TOKEN_VAULT_PATH",
+      "field_variable": "AIWG_FORTEMI_LIVE_TOKEN_VAULT_FIELD",
+      "env": "AIWG_FORTEMI_LIVE_TOKEN",
+      "type": "api-token",
+      "purpose": "Optional authenticated Fortemi live MCP storage qualification"
+    },
+    {
+      "id": "grok-build-api-key",
+      "path_variable": "XAI_API_KEY_VAULT_PATH",
+      "field_variable": "XAI_API_KEY_VAULT_FIELD",
+      "env": "XAI_API_KEY",
+      "type": "api-token",
+      "purpose": "Optional Grok Build live qualification"
+    }
+  ]
+}

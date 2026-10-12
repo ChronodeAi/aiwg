@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import type {
   ArtifactIndex,
   DependencyGraph,
@@ -11,6 +12,10 @@ import type {
 } from "./browser-export.js";
 import { bm25Rank, type FullTextDoc } from "./fulltext.js";
 import { getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } from "./fortemi-core-sync.js";
+import {
+  operationalStateQueryProjection,
+  type OperationalStateQueryProjection,
+} from "./operational-state.js";
 
 export interface FortemiCoreLoadResult {
   entries: MetadataEntry[];
@@ -47,6 +52,7 @@ export interface FortemiCoreStaticSearchResult {
   summary?: string;
   score: number;
   matched: string[];
+  operational_state?: OperationalStateQueryProjection;
 }
 
 export interface FortemiCoreStaticFulltextResult extends FortemiCoreStaticSearchResult {
@@ -60,6 +66,17 @@ export interface FortemiCoreAiwgDiscoveryOptions {
   text: string;
   limit?: number;
   types?: string[];
+  sourcePaths?: FortemiCoreVerifiedSourcePaths;
+}
+
+/** Explicit paths produced by the signed web-release resolver. */
+export interface FortemiCoreVerifiedSourcePaths {
+  manifestPath: string;
+  exportPath: string;
+  manifestSha256: string;
+  manifestSize: number;
+  exportSha256: string;
+  exportSize: number;
 }
 
 export interface FortemiCoreAiwgDiscoveryResult {
@@ -84,7 +101,7 @@ function includesAny(text: string, terms: string[]): number {
   return matches;
 }
 
-function scoreStaticRecord(
+export function scoreStaticRecord(
   record: AiwgFortemiRecord,
   terms: string[],
 ): { score: number; matched: string[] } {
@@ -135,6 +152,9 @@ function recordToStaticResult(
     summary: record.summary ?? record.search?.summary,
     score: Math.round(score * 1000) / 1000,
     matched,
+    ...(record.operational_state
+      ? { operational_state: operationalStateQueryProjection(record.operational_state) }
+      : {}),
   };
 }
 
@@ -166,12 +186,118 @@ function matchesPath(recordPath: string, pattern: string): boolean {
   return recordPath.includes(pattern);
 }
 
+function readVerifiedRegularFile(
+  pathname: string,
+  expectedSize: number,
+  expectedSha256: string,
+  label: string,
+): Buffer {
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+    throw new Error(`${label} has an invalid signed size`);
+  }
+  const pathStat = fs.lstatSync(pathname);
+  if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
+    throw new Error(`${label} must be a regular file and may not be a symlink`);
+  }
+  if (pathStat.size !== expectedSize) {
+    throw new Error(`${label} size does not match the signed release descriptor`);
+  }
+
+  const noFollow = typeof fs.constants.O_NOFOLLOW === "number"
+    ? fs.constants.O_NOFOLLOW
+    : 0;
+  const fd = fs.openSync(
+    pathname,
+    fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | noFollow,
+  );
+  try {
+    const openedStat = fs.fstatSync(fd);
+    if (!openedStat.isFile() || openedStat.size !== expectedSize) {
+      throw new Error(`${label} changed before it could be read safely`);
+    }
+    const bytes = Buffer.alloc(expectedSize + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset !== expectedSize) {
+      throw new Error(`${label} changed size while being read`);
+    }
+    const verified = bytes.subarray(0, expectedSize);
+    const digest = createHash("sha256").update(verified).digest("hex");
+    if (digest !== expectedSha256) {
+      throw new Error(`${label} does not match the signed release descriptor`);
+    }
+    return verified;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function loadFortemiCoreExport(
   cwd: string,
   graph: GraphType = "project",
+  sourcePaths?: FortemiCoreVerifiedSourcePaths,
 ): FortemiCoreExportLoadResult {
+  if (sourcePaths) {
+    try {
+      const manifestBytes = readVerifiedRegularFile(
+        sourcePaths.manifestPath,
+        sourcePaths.manifestSize,
+        sourcePaths.manifestSha256,
+        "Verified Fortemi Core manifest",
+      );
+      const exportBytes = readVerifiedRegularFile(
+        sourcePaths.exportPath,
+        sourcePaths.exportSize,
+        sourcePaths.exportSha256,
+        "Verified Fortemi Core export",
+      );
+      const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
+      const exportSha256 = createHash("sha256").update(exportBytes).digest("hex");
+      if (
+        manifestSha256 !== sourcePaths.manifestSha256 ||
+        exportSha256 !== sourcePaths.exportSha256
+      ) {
+        return { reason: "Verified Fortemi Core source bytes do not match the signed release descriptor." };
+      }
+      const manifest = JSON.parse(
+        manifestBytes.toString("utf-8"),
+      ) as Record<string, unknown>;
+      const exported = JSON.parse(exportBytes.toString("utf-8")) as AiwgFortemiIndexExport;
+      if (
+        manifest.schema_version !== "aiwg.fortemi.prebuilt.v1" ||
+        manifest.backend !== "fortemi-core" ||
+        manifest.graph !== graph ||
+        manifest.export_path !== "aiwg-fortemi-index-v2.json" ||
+        manifest.export_schema_version !== "aiwg.fortemi.index.export.v2"
+      ) {
+        return { reason: "Verified Fortemi Core source manifest is incompatible with the requested graph." };
+      }
+      if (
+        manifest.export_checksum !== exportSha256 ||
+        exported.schema_version !== "aiwg.fortemi.index.export.v2" ||
+        exported.source?.graph !== graph ||
+        !Array.isArray(exported.items) ||
+        manifest.item_count !== exported.items.length
+      ) {
+        return { reason: "Verified Fortemi Core source export does not match its manifest." };
+      }
+      return { exported };
+    } catch (err) {
+      return {
+        reason: `Verified Fortemi Core source could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
   let status = getFortemiCoreSyncStatus(cwd, graph);
-  if ((!status.optedIn || !status.built || status.stale) && graph === "framework") {
+  // The packaged framework index is a bootstrap fallback for an absent shared
+  // cache. Once a shared cache exists, its stale state proves that the local
+  // source index is newer; silently replacing it with an older packaged index
+  // would hide newly authored capabilities.
+  if ((!status.optedIn || !status.built) && !status.stale && graph === "framework") {
     const prebuilt = getFortemiCorePrebuiltStatus(graph);
     if (prebuilt.optedIn && prebuilt.built && !prebuilt.stale) {
       status = prebuilt;
@@ -187,7 +313,7 @@ export function loadFortemiCoreExport(
       reason: `${
         status.reason ??
         `Fortemi Core static index for graph '${graph}' is stale or incomplete`
-      }. Re-run 'aiwg index sync' or pass '--backend local' to use the legacy local index.`,
+      }. Re-run 'aiwg index sync${graph === "project" ? "" : ` --graph ${graph}`}' or pass '--backend local' to use the legacy local index.`,
     };
   }
 
@@ -215,9 +341,20 @@ function artifactTypeFromRecord(record: AiwgFortemiRecord): string {
 }
 
 function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
+  const indexedFrontmatter = record.search?.frontmatter ?? {};
+  const indexedSearchTerms = indexedFrontmatter.aiwg_search_terms;
+  const indexedScript = indexedFrontmatter.aiwg_script;
   return {
     path: record.source.path,
     type: artifactTypeFromRecord(record),
+    kind:
+      typeof indexedFrontmatter.aiwg_kind === "string"
+        ? indexedFrontmatter.aiwg_kind
+        : undefined,
+    sourceType:
+      typeof indexedFrontmatter.aiwg_source_type === "string"
+        ? indexedFrontmatter.aiwg_source_type
+        : undefined,
     phase: record.search?.phase ?? record.facets.phase?.[0] ?? "",
     title: record.title,
     name: record.name ?? record.search?.name,
@@ -244,18 +381,29 @@ function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
       ),
     triggers: record.search?.triggers,
     capability: record.search?.capability,
+    searchTerms: Array.isArray(indexedSearchTerms)
+      ? indexedSearchTerms.filter((term): term is string => typeof term === "string")
+      : undefined,
     kernel:
       typeof record.search?.frontmatter?.kernel === "boolean"
         ? record.search.frontmatter.kernel
         : undefined,
+    script:
+      indexedScript && typeof indexedScript === "object"
+        && typeof (indexedScript as Record<string, unknown>).entrypoint === "string"
+        && typeof (indexedScript as Record<string, unknown>).runtime === "string"
+        ? indexedScript as MetadataEntry["script"]
+        : undefined,
+    operationalState: record.operational_state,
   };
 }
 
 export function loadFortemiCoreMetadataEntries(
   cwd: string,
   graph: GraphType = "project",
+  sourcePaths?: FortemiCoreVerifiedSourcePaths,
 ): FortemiCoreLoadResult {
-  const loaded = loadFortemiCoreExport(cwd, graph);
+  const loaded = loadFortemiCoreExport(cwd, graph, sourcePaths);
   if (!loaded.exported) return { entries: [], reason: loaded.reason };
   return { entries: loaded.exported.items.map(entryFromRecord) };
 }
@@ -268,7 +416,11 @@ export async function queryFortemiCoreAiwgDiscovery(
     | { results: FortemiCoreAiwgDiscoveryResult[]; reason?: undefined }
     | { results: []; reason: string }
   > {
-  const loaded = loadFortemiCoreExport(cwd, options.graph ?? "framework");
+  const loaded = loadFortemiCoreExport(
+    cwd,
+    options.graph ?? "framework",
+    options.sourcePaths,
+  );
   if (!loaded.exported) {
     return {
       results: [],
@@ -279,10 +431,23 @@ export async function queryFortemiCoreAiwgDiscovery(
   const typeSet = options.types && options.types.length > 0
     ? new Set(options.types)
     : null;
-  const fortemiTypes = options.types?.map((type) => `aiwg.${type}`);
+  const dedicatedRecordTypes = new Set([
+    "skill", "agent", "command", "rule", "behavior", "flow", "workflow",
+  ]);
+  const fortemiTypes = options.types
+    ? [...new Set(options.types.map((type) =>
+        dedicatedRecordTypes.has(type) ? `aiwg.${type === "workflow" ? "flow" : type}` : "aiwg.artifact",
+      ))]
+    : undefined;
+  const requestedLimit = options.limit ?? 10;
+  const includesGenericRecordType = fortemiTypes?.includes("aiwg.artifact") ?? false;
   const { queryAiwgFortemiIndex } = await import("@fortemi/core/aiwg-index");
   const queried = queryAiwgFortemiIndex(loaded.exported as any, options.text, {
-    limit: options.limit ?? 10,
+    // `template`, `runbook`, and `hook` are intentionally represented by the
+    // server-owned generic aiwg.artifact record type. Overfetch before the
+    // exact artifact-type post-filter so unrelated generic artifacts cannot
+    // crowd the requested operational type out of the candidate window.
+    limit: includesGenericRecordType ? loaded.exported.items.length : requestedLimit,
     rank: true,
     includeMatches: false,
     searchProfile: "aiwg-discovery",
@@ -311,7 +476,8 @@ export async function queryFortemiCoreAiwgDiscovery(
           : (rankedItems.length - index) / rankedItems.length,
       };
     })
-    .filter((result) => !typeSet || typeSet.has(result.entry.type));
+    .filter((result) => !typeSet || typeSet.has(result.entry.type))
+    .slice(0, requestedLimit);
 
   return { results };
 }
@@ -449,6 +615,9 @@ export function queryFortemiCoreStaticFulltextIndex(
         summary: record.summary ?? record.search?.summary ?? record.text,
         score: Math.round(hit.score * 1000) / 1000,
         matched: hit.matchedTerms,
+        ...(record.operational_state
+          ? { operational_state: operationalStateQueryProjection(record.operational_state) }
+          : {}),
       };
     }),
   };

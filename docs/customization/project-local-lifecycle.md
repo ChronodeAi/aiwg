@@ -12,8 +12,35 @@ types over their full lifetime: discovery → deploy or provider selection
 ├── addons/<id>/        # Focused feature packs
 ├── frameworks/<id>/    # Complete workflow domains
 ├── plugins/<id>/       # Marketplace-packaged bundles
-└── providers/<id>/     # Custom provider definitions
+├── providers/<id>/     # Custom provider definitions
+├── quickref.config.json # Optional managed quickref overrides
+└── quickref.json        # Legacy complete v1 quickref definition (optional)
 ```
+
+The logical `.aiwg/` root is resolved through the same project artifact
+configuration as the rest of AIWG. If the project has `.aiwg-location` or
+`AIWG_ARTIFACTS_PATH`, discovery, scaffolding, quickref generation, registry
+bindings, and reindexing follow that configured directory instead of assuming
+`<project>/.aiwg`.
+
+Operators can add extra bundle roots for team/private extensions without
+moving the main project corpus:
+
+```json
+{
+  "version": "1",
+  "providers": ["claude"],
+  "installed": {},
+  "scripts": {},
+  "projectLocal": {
+    "searchPaths": ["../team-aiwg-bundles", "~/aiwg-private-bundles"]
+  }
+}
+```
+
+Each additional search root uses the same child layout (`addons/`,
+`extensions/`, `frameworks/`, `plugins/`, `providers/`). For one-off operator
+sessions, set `AIWG_PROJECT_LOCAL_PATHS` to a platform-delimited list of roots.
 
 Each `<id>/` contains a `manifest.json`. Artifact-bearing bundles also
 contain artifacts (skills/, rules/, agents/, commands/). Provider bundles
@@ -39,13 +66,16 @@ copy, not a migration.
 | `aiwg remove <name>` | Revert deployed files; preserves source under `.aiwg/` |
 | `aiwg promote <name>` | Graduate a bundle to upstream or a corpus path |
 | `aiwg activity-log show` | Audit the lifecycle event log |
+| `aiwg quickref generate --project` | Render the deterministic project quickref skill |
+| `aiwg quickref deploy --project` | Deploy the quickref to configured provider kernel surfaces |
 
 ## Discovery
 
 `aiwg use`, `aiwg doctor`, and `aiwg list --project-local` all run the
-same discovery scanner. It walks `.aiwg/{extensions,addons,frameworks}/`
-for content bundles, `.aiwg/plugins/` for marketplace delivery wrappers,
-and `.aiwg/providers/` for custom provider definitions. It validates each
+same discovery scanner. It walks the configured artifact root plus any
+`projectLocal.searchPaths` / `AIWG_PROJECT_LOCAL_PATHS` roots for
+`{extensions,addons,frameworks,plugins,providers}/<id>/manifest.json`.
+It validates each
 `manifest.json` against the canonical Zod schema and returns structured
 results.
 
@@ -111,6 +141,19 @@ Per-bundle deploy:
 5. Emit `deploy` (or `deploy-failed`) to the activity log
 
 `--dry-run` and `--no-project-local` are supported.
+
+Successful project-local reconciliation rebuilds the project capability index
+and synchronizes its Fortemi cache, including pre-existing bundles during
+`use`, `refresh`, and upgrades. Default `aiwg discover` and `aiwg show` also
+fall back to an existing local project index with a bounded warning if the
+cache is absent or stale. Normal capability lookup needs no graph or backend
+flags. Dry runs do not rebuild or synchronize caches.
+
+Each project-local deploy resolves a managed quickref from discovered bundles
+(or a legacy `.aiwg/quickref.json`) and refreshes that provider's project
+quickref. The generated skill stays short: it states local precedence and
+points to indexed assets rather than embedding their full bodies. See
+[Project Quickrefs](project-quickrefs.md).
 
 ## Conflict resolution (shadow policy)
 

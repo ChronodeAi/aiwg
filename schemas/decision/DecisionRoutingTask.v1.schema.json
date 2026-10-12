@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRoutingTask.v1.schema.json",
+  "title": "Decision Routing Task",
+  "description": "D28 closed task envelope. Every hard requirement is mandatory; unknown requirements fail closed. Only projected state is model-visible.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "description", "requirements", "state", "projection"],
+  "properties": {
+    "id": { "$ref": "#/$defs/name" },
+    "description": { "type": "string", "maxLength": 4096, "description": "Operator-facing only; never sent to Jev." },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilities", "privacy", "authorizationScopes", "region", "tools", "contextBytes", "allowlist", "maxCostMicros", "deadlineMs", "providers", "authorized"],
+      "properties": {
+        "capabilities": { "$ref": "#/$defs/names" },
+        "privacy": { "$ref": "#/$defs/name" },
+        "authorizationScopes": { "$ref": "#/$defs/names" },
+        "region": { "$ref": "#/$defs/name" },
+        "tools": { "$ref": "#/$defs/names" },
+        "contextBytes": { "type": "integer", "minimum": 0 },
+        "allowlist": { "$ref": "#/$defs/names" },
+        "maxCostMicros": { "type": "integer", "minimum": 0 },
+        "deadlineMs": { "type": "integer", "minimum": 1 },
+        "providers": { "$ref": "#/$defs/names" },
+        "authorized": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tools", "network", "filesystem", "secrets", "actions"],
+          "description": "Ordinary authorization ceiling. A route binding holding more than this is excluded.",
+          "properties": {
+            "tools": { "$ref": "#/$defs/names" },
+            "network": { "type": "boolean" },
+            "filesystem": { "enum": ["none", "read", "write"] },
+            "secrets": { "$ref": "#/$defs/names" },
+            "actions": { "$ref": "#/$defs/names" }
+          }
+        }
+      }
+    },
+    "state": { "description": "Ambient task state. Only fields declared by the projection reach Jev." },
+    "projection": { "type": "object", "description": "D10 DecisionProjectionPolicy, validated by validateProjectionPolicy." }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "names": { "type": "array", "uniqueItems": true, "maxItems": 64, "items": { "$ref": "#/$defs/name" } }
+  }
+}

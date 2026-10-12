@@ -1,5 +1,9 @@
 ---
 enforcement: high
+triggers:
+  - "should I use a stronger model"
+  - "is this worth escalating"
+  - "model tier"
 ---
 
 # Escalation Discipline

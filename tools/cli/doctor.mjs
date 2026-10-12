@@ -12,11 +12,21 @@ import { pathToFileURL } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
-import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
+import { scanStartupContext,
+  subagentDispatchHeadroom,
+  SUBAGENT_AGENT_DEF_TOKENS,
+  SUBAGENT_SYSTEM_PROMPT_TOKENS,
+  SUBAGENT_MIN_WORKING_TOKENS,
+} from '../lint/claude-context-inventory.mjs';
+import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
-const { getFrameworkRoot, getVersionInfo } = await importImpl(
+const { getFrameworkRoot, getPackageRoot, getVersionInfo } = await importImpl(
   import.meta.url,
   'channel/manager.mjs'
+);
+const { inspectInstallation } = await importImpl(
+  import.meta.url,
+  'installation/manager.mjs'
 );
 const { communityDataPath, loadCommunityLinks, validateCommunityLinks } = await importImpl(
   import.meta.url,
@@ -35,14 +45,57 @@ const { collectIndexStatus } = await importImpl(
   import.meta.url,
   'artifacts/index-status.js'
 );
-const { getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } = await importImpl(
+const { getFortemiCoreExecutableSkillStatus, getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } = await importImpl(
   import.meta.url,
   'artifacts/fortemi-core-sync.js'
+);
+const { checkGitignore } = await importImpl(
+  import.meta.url,
+  'config/gitignore.js'
+);
+const { auditLegacyPermissions } = await importImpl(
+  import.meta.url,
+  'policy/authorization.js'
+);
+const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfig } = await importImpl(
+  import.meta.url,
+  'config/aiwg-config.js'
+);
+const { validateThreatAssessmentConfig } = await importImpl(
+  import.meta.url,
+  'security/threat-assessment-config.js'
+);
+const { validateArtifactOutputs } = await importImpl(
+  import.meta.url,
+  'artifacts/output-policy.js'
+);
+const { collectPackagedAgentInventory, diagnoseOversizedAgent } = await importImpl(
+  import.meta.url,
+  'agents/packaged-agent-inventory.js'
+);
+const { auditProjectArtifactHealth } = await importImpl(
+  import.meta.url,
+  'config/project-artifacts-health.mjs'
 );
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
 const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot();
+
+// Installation identity drift, when present, is published by bin/aiwg.mjs for
+// read-only commands that keep running against a stale canonical install
+// (#270). The provider inventory below is read from AIWG_ROOT, so an
+// "unknown provider" under drift means the install predates the provider —
+// not that the provider is unregistered. Parse once so per-check messages
+// can name the drift instead of implying a registry defect.
+let installationDrift = null;
+try {
+  installationDrift = process.env.AIWG_INSTALLATION_DRIFT
+    ? JSON.parse(process.env.AIWG_INSTALLATION_DRIFT)
+    : null;
+} catch {
+  installationDrift = null;
+}
 
 const checks = [];
 
@@ -57,6 +110,7 @@ const checks = [];
 // Each entry exposes .paths via dynamic import so we don't pull all ten
 // provider modules eagerly when the user hasn't deployed to any of them.
 const PROVIDER_LABELS = {
+  antigravity: 'Google Antigravity CLI',
   claude:   'Claude Code',
   factory:  'Factory',
   codex:    'Codex',
@@ -67,13 +121,17 @@ const PROVIDER_LABELS = {
   windsurf: 'Windsurf',
   openclaw: 'OpenClaw',
   openhuman: 'OpenHuman',
+  omp: 'Oh My Pi',
   hermes:   'Hermes',
+  grokbot:  'Grok Bot',
+  muse:     'Muse Code',
 };
 
 // Quick-detect dirs (agents-only) — used when no --provider flag is given.
 // Mirrors the agents path each provider exports. Kept literal here so the
 // check is fast and string-greppable without loading every provider module.
 const PROVIDER_AGENT_DIRS = {
+  antigravity: '.agents/agents',
   claude:   '.claude/agents',
   factory:  '.factory/droids',
   codex:    '.codex/agents',
@@ -83,18 +141,35 @@ const PROVIDER_AGENT_DIRS = {
   warp:     '.warp/agents',
   windsurf: '.windsurf/agents',
   openhuman: '.agents/agents',
+  omp: '.omp/agents',
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
 
 // Parse doctor-specific flags from process.argv (no commander dependency).
 function parseDoctorArgs(argv) {
-  const out = { provider: null, allProviders: false, noBudgetCheck: false };
+  const out = {
+    provider: null,
+    allProviders: false,
+    noBudgetCheck: false,
+    strictContext: false,
+    contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
+    contextBudgetTokens: 200_000,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--provider' && argv[i + 1]) { out.provider = argv[i + 1]; i += 1; continue; }
     if (a.startsWith('--provider=')) { out.provider = a.slice('--provider='.length); continue; }
     if (a === '--all-providers') { out.allProviders = true; continue; }
     if (a === '--no-budget-check') { out.noBudgetCheck = true; continue; }
+    if (a === '--strict-context') { out.strictContext = true; continue; }
+    if (a === '--context-baseline' && argv[i + 1]) { out.contextBaseline = argv[i + 1]; i += 1; continue; }
+    if (a.startsWith('--context-baseline=')) { out.contextBaseline = a.slice('--context-baseline='.length); continue; }
+    if (a === '--context-budget-tokens' && argv[i + 1]) {
+      out.contextBudgetTokens = Number(argv[i + 1]); i += 1; continue;
+    }
+    if (a.startsWith('--context-budget-tokens=')) {
+      out.contextBudgetTokens = Number(a.slice('--context-budget-tokens='.length)); continue;
+    }
   }
   return out;
 }
@@ -256,7 +331,10 @@ function mergeSkillMeasurements(measurements) {
 async function checkTotalDeployedSkillBudgetForProvider(provName, label, provider) {
   const paths = new Set();
   if (provider?.kernelSkillsPath) paths.add(provider.kernelSkillsPath);
-  if (provider?.paths?.skills) paths.add(provider.paths.skills);
+  // Codex only scans the native kernel directory at startup. Standard-tier
+  // skills remain available through `aiwg discover`/`aiwg show`, but adding
+  // their hidden storage path here produces a false over-budget warning.
+  if (provName !== 'codex' && provider?.paths?.skills) paths.add(provider.paths.skills);
   if (paths.size === 0) return;
 
   const measurements = [];
@@ -289,7 +367,7 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
     check(
       `${label} Deployed Skill Count`,
       'warn',
-      `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+      `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Re-run \`aiwg use <bundle> --provider codex\` (no --force) to move bundle skills over the cap to the standard tier, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
     );
   }
 }
@@ -341,8 +419,12 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
     usageUnit = 'chars';
     budgetSource = `${CODEX_LISTING_CHAR_CAP.toLocaleString()}-char built-in cap`;
     if (usage > budget) {
-      recommendations.push('Codex caps the listing at 8 000 chars — trim skill descriptions or remove unused frameworks');
-      recommendations.push('see docs/skills-budget-guide.md');
+      // `--force` overwrites unmanaged files and is not a budget lever (#2561).
+      // The startup listing is the kernel dir; bundle skills that landed there
+      // are what push it over, and a plain redeploy re-places them under the cap.
+      recommendations.push('re-run `aiwg use <bundle> --provider codex` (no --force) so bundle skills over the cap move to the standard tier (`.codex/.aiwg/skills`, reachable via `aiwg discover`)');
+      recommendations.push('or run `aiwg use all --provider codex` to redeploy the kernel set without touching unmanaged files');
+      recommendations.push('use `aiwg list --deployed` to inspect include/exclude reasons');
     }
   } else {
     // Other platforms: emit an info-level usage line without a verdict so
@@ -367,6 +449,46 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
   } else {
     check(`${label} Skill Budget`, 'ok', `${ratio < 0.5 ? 'OK' : 'tight'} (${ratio.toFixed(2)}×) — ${summary}`);
   }
+}
+
+// Subagent dispatch headroom (#2562). A Task/subagent dispatch inherits the
+// same inlined startup context as the main session — the project's rules,
+// every ancestor directory's rules and CLAUDE.md — plus the agent definition
+// and the base system prompt, and it still needs room to work. When the
+// inlined surface leaves less than that, dispatch fails immediately with
+// "Prompt is too long" and the self-maintenance entry points (aiwg-steward,
+// aiwg-doctor, aiwg-refresh) become unreachable in exactly the projects that
+// need them. This is a real failure, so it is reported as an error; the
+// startup-context check above stays advisory.
+async function checkSubagentDispatchHeadroom(provName, label) {
+  if (provName !== 'claude') return;
+  let startup;
+  try {
+    startup = await scanStartupContext({ rootDir: process.cwd() });
+  } catch {
+    return;
+  }
+  if (!startup || startup.components.length === 0) return;
+  const k = (n) => `${Math.round(n / 1000)}K`;
+  const { headroom, status } = subagentDispatchHeadroom(startup);
+  const ancestors = startup.components.filter((c) => c.ancestor);
+  const ancestorNote = ancestors.length > 0
+    ? ` Ancestor directories contribute ~${k(startup.ancestorTokens)} of that (${[...new Set(ancestors.map((c) => c.ancestor))].join(', ')}); Claude Code inlines their CLAUDE.md and .claude/rules too.`
+    : '';
+  const detail = `~${k(startup.totalTokens)} tok inlined at startup leaves ~${k(Math.max(headroom, 0))} tok for a subagent ` +
+    `after a ${k(SUBAGENT_AGENT_DEF_TOKENS)} agent def and ~${k(SUBAGENT_SYSTEM_PROMPT_TOKENS)} system prompt (needs ≥${k(SUBAGENT_MIN_WORKING_TOKENS)}).`;
+  if (status === 'ok') {
+    check(`${label} Subagent Dispatch`, 'ok', detail);
+    return;
+  }
+  check(
+    `${label} Subagent Dispatch`,
+    status === 'fails' ? 'error' : 'warn',
+    `${status === 'fails' ? 'WILL FAIL' : 'AT RISK'} — ${detail}${ancestorNote} ` +
+      'Task dispatch to aiwg-steward/aiwg-doctor/aiwg-refresh fails with "Prompt is too long" until the inlined rule surface shrinks: ' +
+      'redeploy so HIGH rules beyond the inline budget move to RULES-ONDEMAND.md (`aiwg use all --provider claude`), ' +
+      'lower AIWG_RULES_INLINE_BUDGET_TOKENS, or prune ancestor rule deployments. Run `aiwg context-firewall scan --provider claude` for the attributed breakdown.',
+  );
 }
 
 // Startup-context budget (#1673). The skill-listing budget above covers skill
@@ -397,20 +519,28 @@ async function checkStartupContextBudget(provName, label) {
     `~${k(startup.totalTokens)} tok of ${k(startup.budgetTokens)} standard window ` +
     `(memory + .claude/rules); top: ${top}`;
 
+  // Long-lived projects carry artifacts from deploy models that no longer write
+  // them. The budget warning describes the symptom; name the likely cause and the
+  // command that reports it, so the operator is not left with a number (#2540).
+  const orphanHint =
+    ` Projects deployed under older versions accumulate agents/rules current AIWG no longer writes; ` +
+    `run \`aiwg refresh --dry-run\` to list orphaned artifacts before pruning.`;
+
   if (startup.status === 'over') {
     check(
       `${label} Startup Context`,
       'warn',
       `OVER budget — ${headline}. Exceeds the standard Sonnet window before any prompt; ` +
         `forces the credit-gated 1M tier or immediate exhaustion. Reduce always-on rules ` +
-        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.`,
+        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.` + orphanHint,
     );
   } else if (startup.status === 'warn') {
     check(
       `${label} Startup Context`,
       'warn',
       `tight — ${headline}. Limited headroom for real work on standard Sonnet. ` +
-        `Run \`npm run lint:claude-context -- --startup\` for the breakdown (#1673).`,
+        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).` +
+        orphanHint,
     );
   } else {
     check(`${label} Startup Context`, 'ok', headline);
@@ -581,6 +711,33 @@ async function runDoctor() {
     check('AIWG Installation', 'error', `AIWG not found at ${AIWG_ROOT}. Run: npm install -g aiwg`);
   }
 
+  const installation = inspectInstallation({ actualRoot: getPackageRoot() });
+  const installationDetail = [
+    `canonical=${installation.identity?.method ?? 'unrecorded'}:${installation.identity?.root ?? '(none)'}`,
+    `actual=${installation.actualMethod}:${installation.actualRoot}`,
+    // An edge/customize install launches from one root and reads the corpus
+    // from another; naming both keeps this line and `aiwg installation show`
+    // describing the same configuration (#2505).
+    ...(installation.launcher ? [`launcher=${installation.launcher.method}:${installation.launcher.root}`] : []),
+    `mode=${installation.identity?.runMode ?? 'unrecorded'}`,
+    `state=${installation.state}`,
+  ].join(' | ');
+  check(
+    'Installation Identity',
+    installation.state === 'aligned' ? 'ok' : 'error',
+    installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${installation.drift.join('; ')}`,
+  );
+
+  // 1a. Warn when test-only user-registry override is active (#246)
+  if (process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim()) {
+    check(
+      'User Registry Path',
+      'warn',
+      'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json'
+        + ` (active: ${process.env.AIWG_USER_REGISTRY_PATH})`,
+    );
+  }
+
   // 1b. Build state — surface a missing/incomplete dist/ as a clear error with
   // remediation instead of letting consumers hit cryptic MODULE_NOT_FOUND at
   // CLI runtime. The `.mjs`/JSON/YAML files (incl. dist/src/update/notifier.mjs)
@@ -674,7 +831,7 @@ async function runDoctor() {
     check('Community Links', 'warn', err instanceof Error ? err.message : String(err));
   }
 
-  // 3. Check .aiwg directory in current project
+  // 3. Check the repository-local control plane and external artifact corpus.
   const projectAiwg = path.join(process.cwd(), '.aiwg');
   const hasProjectAiwg = await fileExists(projectAiwg);
   if (hasProjectAiwg) {
@@ -682,13 +839,33 @@ async function runDoctor() {
   } else {
     check('Project .aiwg/', 'info', 'No .aiwg/ in current directory (not an AIWG project)');
   }
+  try {
+    const artifactHealth = auditProjectArtifactHealth(process.cwd());
+    if (artifactHealth.external_configured) {
+      const detail = `${artifactHealth.classification}; local=${artifactHealth.local_control_root}; external=${artifactHealth.artifact_root}`;
+      check(
+        'External Artifact Corpus',
+        artifactHealth.severity === 'ok' ? 'ok' : artifactHealth.severity === 'error' ? 'error' : 'warn',
+        artifactHealth.action ? `${detail} — ${artifactHealth.action}` : detail,
+      );
+    }
+  } catch (error) {
+    check('External Artifact Corpus', 'error', `health audit failed: ${error.message}`);
+  }
 
   // 4-5. Provider-aware agents + commands check (#1057).
   // Determine which providers to inspect:
   //   --provider <name>  → just that one
   //   --all-providers    → every supported provider
   //   (default)          → auto-detect deployed providers via PROVIDER_AGENT_DIRS
-  const { provider: providerArg, allProviders, noBudgetCheck } = parseDoctorArgs(process.argv.slice(2));
+  const {
+    provider: providerArg,
+    allProviders,
+    noBudgetCheck,
+    strictContext,
+    contextBaseline,
+    contextBudgetTokens,
+  } = parseDoctorArgs(process.argv.slice(2));
   let providersToCheck = [];
   if (providerArg) {
     providersToCheck = [providerArg];
@@ -701,15 +878,31 @@ async function runDoctor() {
     if (!providersToCheck.includes('claude')) providersToCheck.unshift('claude');
   }
 
+  // Compare deployed agent findings with the package that this Doctor process
+  // is actually running. Deployment size alone cannot establish an upstream
+  // package defect: a non-target provider may still contain older managed bytes.
+  const packagedAgentInventory = await collectPackagedAgentInventory(AIWG_ROOT);
+
   for (const provName of providersToCheck) {
     const provider = await loadProvider(provName);
     const label = PROVIDER_LABELS[provName] || provName;
     if (!provider || !provider.paths) {
-      check(`${label} Agents`, 'warn', `Unknown provider: ${provName}`);
+      // #270: under installation identity drift the provider inventory comes
+      // from the stale canonical install, so name the drift instead of
+      // reporting a bare "Unknown provider" that reads as a registry defect.
+      const driftNote = installationDrift
+        ? ' (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)'
+        : '';
+      check(`${label} Agents`, 'warn', `Unknown provider: ${provName}${driftNote}`);
       continue;
     }
 
     // Agents
+    // #2506: track the per-class artifact counts so a provider tree that was
+    // pruned to a half-deployed shape (commands/rules present, zero agents)
+    // is reported instead of rendering as healthy.
+    let deployedAgentCount = null;
+    let deployedCommandCount = null;
     const agentsPathRel = provider.paths.agents;
     const agentsPath = resolveProviderPath(agentsPathRel);
     if (agentsPath && await fileExists(agentsPath)) {
@@ -717,8 +910,15 @@ async function runDoctor() {
         const stat = await fs.stat(agentsPath);
         if (stat.isDirectory()) {
           const files = await fs.readdir(agentsPath);
-          const agentCount = files.filter(f => f.endsWith('.md') || f.endsWith('.agent.md')).length;
-          check(`${label} Agents`, 'ok', `${agentCount} agents deployed (${agentsPathRel})`);
+          const agentCount = files.filter(
+            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.toml'),
+          ).length;
+          deployedAgentCount = agentCount;
+          check(
+            `${label} Agents`,
+            agentCount > 0 ? 'ok' : 'info',
+            `${agentCount} agents deployed (${agentsPathRel})`,
+          );
 
           // Agent-def size ceiling (#1587). A deployed agent definition is loaded
           // verbatim as the subagent system prompt; stacked with a rule-heavy host
@@ -726,14 +926,25 @@ async function runDoctor() {
           // "Prompt is too long" at 0 tokens. Flag any def over the 16 KB ceiling.
           const AGENT_DEF_CEILING = 16 * 1024;
           const agentFiles = files.filter(
-            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.soul.md'),
+            f => f.endsWith('.md') || f.endsWith('.agent.md')
+              || f.endsWith('.soul.md') || f.endsWith('.toml'),
           );
           const oversized = [];
           for (const f of agentFiles) {
             try {
               const fstat = await fs.stat(path.join(agentsPath, f));
               if (fstat.isFile() && fstat.size > AGENT_DEF_CEILING) {
-                oversized.push({ name: f, size: fstat.size });
+                const content = await fs.readFile(path.join(agentsPath, f), 'utf8');
+                oversized.push({
+                  name: f,
+                  size: fstat.size,
+                  diagnosis: diagnoseOversizedAgent(
+                    f,
+                    content,
+                    packagedAgentInventory,
+                    AGENT_DEF_CEILING,
+                  ),
+                });
               }
             } catch {
               /* unreadable file — skip */
@@ -745,10 +956,30 @@ async function runDoctor() {
               .slice(0, 3)
               .map(o => `${o.name} (${(o.size / 1024).toFixed(1)} KB)`)
               .join(', ');
+            const currentPackage = oversized.filter(o => o.diagnosis === 'current-package').length;
+            const staleDeployment = oversized.filter(o => o.diagnosis === 'stale-deployment').length;
+            const unmanagedLocal = oversized.filter(o => o.diagnosis === 'unmanaged-local').length;
+            const diagnoses = [];
+            if (currentPackage > 0) {
+              diagnoses.push(
+                `${currentPackage} also exceed the ceiling in current packaged sources (current upstream packaging issue; externalize examples to the catalog)`,
+              );
+            }
+            if (staleDeployment > 0) {
+              diagnoses.push(
+                `${staleDeployment} are stale managed deployment bytes while current packaged sources are within the ceiling (run aiwg refresh --provider ${provName})`,
+              );
+            }
+            if (unmanagedLocal > 0) {
+              diagnoses.push(
+                `${unmanagedLocal} are unmanaged or project-local and cannot be attributed to the current package`,
+              );
+            }
             check(
               `${label} Agent def sizes`,
               'warn',
-              `${oversized.length} agent def(s) over the 16 KB subagent-dispatch ceiling: ${worst}${oversized.length > 3 ? ', …' : ''}. Oversized defs can fail Task dispatch with "Prompt is too long". Externalize examples to the catalog (see few-shot-examples rule) and re-deploy.`,
+              `${oversized.length} agent def(s) over the 16 KB subagent-dispatch ceiling: ${worst}${oversized.length > 3 ? ', …' : ''}. ` +
+              `${diagnoses.join('; ')}. Oversized defs can fail Task dispatch with "Prompt is too long".`,
             );
           } else if (agentFiles.length > 0) {
             check(`${label} Agent def sizes`, 'ok', `All ${agentFiles.length} agent defs ≤ 16 KB`);
@@ -760,6 +991,10 @@ async function runDoctor() {
       } catch {
         check(`${label} Agents`, 'info', `No agents deployed at ${agentsPathRel}`);
       }
+    } else if (provName === 'muse' && (providerArg || allProviders)) {
+      // Muse Code has no file-based agent surface by design: agents, commands,
+      // and rules stay indexed and are reached via `aiwg discover` / `aiwg show`.
+      check(`${label} Agents`, 'info', 'No native agent surface — agents are indexed; use `aiwg discover` / `aiwg show`');
     } else if (providerArg || allProviders) {
       // User explicitly asked about this provider — be explicit when missing.
       check(`${label} Agents`, 'info', `No agents deployed (run: aiwg use sdlc --provider ${provName})`);
@@ -776,6 +1011,7 @@ async function runDoctor() {
         try {
           const files = await fs.readdir(commandsPath);
           const cmdCount = files.filter(f => f.endsWith('.md') || f.endsWith('.prompt.md')).length;
+          deployedCommandCount = cmdCount;
           check(`${label} Commands`, 'ok', `${cmdCount} commands deployed (${commandsPathRel})`);
         } catch {
           // Skip silently — commands are optional for several providers
@@ -792,6 +1028,64 @@ async function runDoctor() {
       }
     }
 
+    // Deployment consistency (#2506). A provider tree holding commands or
+    // rules but no agents is half-deployed: commands and rules reference
+    // agents that are no longer on disk. This is the shape a cross-provider
+    // prune used to leave behind, and a bare "0 agents deployed" check mark
+    // is the line most likely to stop someone investigating.
+    {
+      const rulesPathRel = provider.paths.rules;
+      const rulesPath = rulesPathRel ? resolveProviderPath(rulesPathRel) : null;
+      let deployedRuleCount = null;
+      if (rulesPath && await fileExists(rulesPath)) {
+        try {
+          const stat = await fs.stat(rulesPath);
+          if (stat.isDirectory()) {
+            const files = await fs.readdir(rulesPath);
+            deployedRuleCount = files.filter(f => f.endsWith('.md') || f.endsWith('.mdc')).length;
+          }
+        } catch {
+          /* unreadable rules dir — treat as unknown */
+        }
+      }
+      const companions = [];
+      if (deployedCommandCount > 0) companions.push(`${deployedCommandCount} command(s)`);
+      if (deployedRuleCount > 0) companions.push(`${deployedRuleCount} rule(s)`);
+      if (deployedAgentCount === 0 && companions.length > 0) {
+        check(
+          `${label} Deployment consistency`,
+          'warn',
+          `Half-deployed tree: ${companions.join(' and ')} present with 0 agents at ${agentsPathRel}. `
+          + `Commands and rules can reference agents that are no longer on disk. `
+          + `Run 'aiwg use sdlc --provider ${provName}' to restore the agent surface, `
+          + `or remove the tree if this provider is no longer in use.`,
+        );
+      }
+
+      // #2506: recorded deployment state that claims agents against an empty
+      // directory is unambiguous drift. Only the zero-on-disk case is flagged;
+      // per-bundle counts legitimately differ from a raw directory listing.
+      if (deployedAgentCount === 0) {
+        try {
+          const cfg = await readAiwgConfig(process.cwd());
+          const claiming = Object.entries(cfg?.installed ?? {})
+            .filter(([, entry]) => (entry?.deployedTo?.[provName]?.agents ?? 0) > 0)
+            .map(([name, entry]) => `${name} (${entry.deployedTo[provName].agents})`);
+          if (claiming.length > 0) {
+            check(
+              `${label} Recorded deployment drift`,
+              'warn',
+              `.aiwg/aiwg.config records deployed agents for ${provName} that are not on disk: `
+              + `${claiming.join(', ')}. Re-run 'aiwg use <bundle> --provider ${provName}' to redeploy, `
+              + `or 'aiwg refresh --provider ${provName}' to reconcile.`,
+            );
+          }
+        } catch {
+          /* no readable config — nothing to reconcile against */
+        }
+      }
+    }
+
     // Skill listing budget (#1150) — pre-flight warn before the operator
     // sees post-hoc truncation in /doctor inside the running session.
     //
@@ -805,10 +1099,55 @@ async function runDoctor() {
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
       await checkStartupContextBudget(provName, label);
+      await checkSubagentDispatchHeadroom(provName, label);
     }
 
     if (provName === 'openhuman') {
       await checkOpenHumanHarnessTier2();
+    }
+  }
+
+  // Provider context and persistent-memory firewall (#2040). This complements
+  // per-provider listing/startup estimates with one cross-category inventory,
+  // deployment-manifest drift checks, reviewed digests, and poisoning labels.
+  // The default doctor is advisory; --strict-context promotes any violation or
+  // missing review baseline to an error and therefore a non-zero doctor exit.
+  if (!noBudgetCheck) {
+    try {
+      const supported = providersToCheck.filter((name) =>
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'muse'].includes(name),
+      );
+      const firewall = await scanContextMemoryFirewall({
+        rootDir: process.cwd(),
+        packageRoot: AIWG_ROOT,
+        providers: supported,
+        baselinePath: contextBaseline,
+        budgetTokens: contextBudgetTokens,
+      });
+      const stale = firewall.trust.stale;
+      const quarantined = firewall.trust.quarantined;
+      const external = firewall.trust.external;
+      const changed = firewall.records.filter((record) => record.reviewStatus === 'changed-review-required').length;
+      const categorySummary = Object.entries(firewall.categories)
+        .map(([category, value]) => `${category}=${value.bytes.toLocaleString()}B`)
+        .join(', ');
+      const summary =
+        `${firewall.totals.files} file(s), ~${firewall.totals.approxTokens.toLocaleString()} / `
+        + `${firewall.budget.tokens.toLocaleString()} tokens; ${categorySummary}; `
+        + `stale=${stale}, quarantined=${quarantined}, external=${external}, changed=${changed}`;
+      const baselineMissing = !firewall.baseline.exists;
+      const unsafe = firewall.violations.length > 0 || baselineMissing;
+      if (unsafe) {
+        const status = strictContext ? 'error' : 'warn';
+        const baselineMessage = baselineMissing
+          ? ` Review baseline missing at ${firewall.baseline.path}; run \`aiwg context-firewall baseline --plan\`, review every record, then use the confirmed write command it prints.`
+          : '';
+        check('Context/memory firewall', status, `${summary}.${baselineMessage}`);
+      } else {
+        check('Context/memory firewall', 'ok', `${summary}; reviewed baseline ${firewall.baseline.path}`);
+      }
+    } catch (error) {
+      check('Context/memory firewall', strictContext ? 'error' : 'warn', `scan failed: ${error.message}`);
     }
   }
 
@@ -980,7 +1319,13 @@ async function runDoctor() {
         const versions = s.packages.map(p => `${p.name} ${p.version ?? '?'}`).join(', ');
         check(label, 'ok', `installed (${versions})`);
       } else {
-        check(label, 'info', `not installed — \`aiwg features install ${s.feature.name}\` to enable`);
+        const broken = s.packages.filter(p => p.installed && !p.loadable);
+        if (broken.length > 0) {
+          const detail = broken.map(p => `${p.name}: ${p.error || 'native entry point failed to load'}`).join('; ');
+          check(label, 'warn', `native build unavailable (${detail}) — run \`aiwg features install ${s.feature.name}\` to rebuild with scoped lifecycle-script approval`);
+        } else {
+          check(label, 'info', `not installed — \`aiwg features install ${s.feature.name}\` to enable`);
+        }
       }
     }
   } catch (err) {
@@ -1085,11 +1430,15 @@ async function runDoctor() {
   // knows the install is degraded before they try to use it.
   const { spawnSync } = await import('node:child_process');
   const aiwgBin = process.env.AIWG_BIN || 'aiwg';
-  const probeCommand = (name, args, expectStdout = null) => {
+  const probeCommand = (name, args, expectStdout = null, validateStdout = null) => {
     try {
       const r = spawnSync(aiwgBin, args, {
         encoding: 'utf-8',
-        timeout: 10_000,
+        // Framework discovery can legitimately take longer than ten seconds
+        // while the release suite is concurrently packing and rebuilding
+        // provider indices. Keep the probe bounded, but align it with the
+        // integration runner budget so doctor does not report a false outage.
+        timeout: 30_000,
         shell: process.platform === 'win32',
       });
       if (r.error || r.status !== 0) {
@@ -1101,6 +1450,10 @@ async function runDoctor() {
       if (expectStdout && !(r.stdout || '').includes(expectStdout)) {
         return { ok: false, detail: `stdout missing expected marker '${expectStdout}'` };
       }
+      if (validateStdout) {
+        const validation = validateStdout(r.stdout || '');
+        if (validation !== true) return { ok: false, detail: validation };
+      }
       return { ok: true };
     } catch (e) {
       return { ok: false, detail: e.message };
@@ -1110,8 +1463,22 @@ async function runDoctor() {
   const discoveryProbes = [
     {
       label: 'Discovery: aiwg discover',
-      args: ['discover', 'doctor', '--json', '--limit', '1'],
+      args: ['discover', 'aiwg doctor', '--json', '--limit', '10'],
       hint: 'aiwg discover is unavailable — agents may bypass index-driven lookup',
+      validateStdout: (stdout) => {
+        try {
+          const payload = JSON.parse(stdout);
+          if (!Array.isArray(payload.results) || payload.results.length === 0) {
+            return 'discover exited successfully but returned zero results for the known aiwg-doctor capability';
+          }
+          if (!payload.results.some((result) => result?.name === 'aiwg-doctor')) {
+            return 'discover did not return the known aiwg-doctor capability';
+          }
+          return true;
+        } catch (error) {
+          return `discover returned invalid JSON: ${error.message}`;
+        }
+      },
     },
     {
       label: 'Discovery: aiwg show',
@@ -1136,8 +1503,9 @@ async function runDoctor() {
   ];
 
   let discoverOk = false;
+  let discoveryDegraded = false;
   for (const probe of discoveryProbes) {
-    const r = probeCommand(probe.label, probe.args);
+    const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
     if (r.ok) {
       check(probe.label, 'ok', `\`aiwg ${probe.args.join(' ')}\` succeeded`);
@@ -1149,8 +1517,56 @@ async function runDoctor() {
       check(probe.label, 'ok', 'no project-local index (global context) — discovery uses the framework index from the install root; run `aiwg index build` inside a project for project-scoped queries');
     } else {
       // Warn (not error) — discovery is degraded but doctor itself still works.
+      discoveryDegraded = true;
       check(probe.label, 'warn', `${probe.hint} — ${r.detail}`);
     }
+  }
+
+  // An install-root change (npm link) invalidates the framework graph for every
+  // consumer project, and the two-command repair runs in two different working
+  // directories — which is what made it hard to act on (#2530).
+  if (discoveryDegraded) {
+    const installRoot = AIWG_ROOT;
+    check('Discovery: repair', 'info',
+      `Rebuild the framework graph at the install root, then sync here: `
+      + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
+      + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
+      + `Immediate workaround: \`aiwg discover --backend local\`.`);
+  }
+
+  // 8d. Component-to-driver coverage (#1958).
+  //
+  // A healthy index is insufficient when a shipped component has no
+  // operational entry point. Join component manifests to source discovery
+  // metadata and surface the same invariant enforced by CI.
+  try {
+    const coverageModule = await import(pathToFileURL(
+      path.join(AIWG_ROOT, 'tools/manifest/check-discovery-coverage.mjs'),
+    ).href);
+    const coverage = coverageModule.buildCoverageReport(AIWG_ROOT);
+    if (coverage.ok) {
+      check(
+        'Discovery: component drivers',
+        'ok',
+        `${coverage.counts.covered} covered, ${coverage.counts.exempt} explicitly exempt`,
+      );
+    } else {
+      const missing = coverage.components
+        .filter(component => component.status === 'missing' || component.status === 'invalid')
+        .map(component => `${component.kind}:${component.component}`)
+        .slice(0, 8);
+      check(
+        'Discovery: component drivers',
+        'error',
+        `${coverage.counts.missing} missing, ${coverage.counts.invalid} invalid — ${missing.join(', ')}`,
+      );
+    }
+  } catch (error) {
+    check(
+      'Discovery: component drivers',
+      'warn',
+      `coverage report unavailable — ${error.message}`,
+    );
   }
 
   // 9. Check installed addons
@@ -1326,6 +1742,23 @@ async function runDoctor() {
     // Non-fatal — skip silently
   }
 
+  // Artifact output destination policy (#2122). Missing blocks are valid and
+  // resolve to the safe explicit-only compatibility default.
+  try {
+    const aiwgCfgPath = path.join(process.cwd(), '.aiwg', 'aiwg.config');
+    if (await fileExists(aiwgCfgPath)) {
+      const raw = JSON.parse(await fs.readFile(aiwgCfgPath, 'utf-8'));
+      const issues = validateArtifactOutputs(raw.artifact_outputs);
+      if (issues.length > 0) check('Artifact Output Policy', 'error', issues.join('; '));
+      else {
+        const policy = raw.artifact_outputs ?? { canonical: 'aiwg', provider_native: 'explicit-only' };
+        check('Artifact Output Policy', 'ok', `canonical=${policy.canonical ?? 'aiwg'}, provider-native=${policy.provider_native ?? 'explicit-only'}`);
+      }
+    }
+  } catch (err) {
+    check('Artifact Output Policy', 'warn', `Could not validate artifact_outputs: ${err.message}`);
+  }
+
   // 11c. Validate .aiwg/aiwg.config delivery block (#995)
   // Sanity-check the resolved delivery policy against actual repo state.
   try {
@@ -1354,9 +1787,19 @@ async function runDoctor() {
           issues.push(`merge_style=${d.merge_style} (must be one of ${validMergeStyles.join(', ')})`);
         }
 
-        // force_push_policy validation
+        // force_push_policy validation. `main-only-blocked` is the pre-rename spelling;
+        // accept it as a deprecated alias and name the semantic narrowing, rather than
+        // rejecting a config that was valid when it was written (#2532).
         const validForcePush = ['never', 'own-branch-only', 'allowed'];
-        if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
+        const forcePushAliases = { 'main-only-blocked': 'own-branch-only' };
+        if (d.force_push_policy && forcePushAliases[d.force_push_policy]) {
+          const current = forcePushAliases[d.force_push_policy];
+          issues.push(
+            `force_push_policy=${d.force_push_policy} is a deprecated alias for '${current}' and will be removed; `
+            + 'the permission also narrowed (old: any feature branch, new: the agent\'s own branch only). '
+            + `Run "aiwg config set --project delivery.force_push_policy ${current}"`,
+          );
+        } else if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
           issues.push(`force_push_policy=${d.force_push_policy} (must be one of ${validForcePush.join(', ')})`);
         }
 
@@ -1397,6 +1840,44 @@ async function runDoctor() {
           check('Delivery Policy', 'ok', `mode=${mode} merge=${merge} default_branch=${defaultBranch}`);
         } else {
           check('Delivery Policy', 'warn', issues.join('; '));
+        }
+      }
+
+      // 11c-bis. Project data classification (#2535). Surface what the repo
+      // declares it holds, and flag a declaration that contradicts the remotes:
+      // a repo declared private while a secondary remote pushes on release is
+      // publishing the thing it says must not be published.
+      if (raw) {
+        const project = typeof raw.project === 'string' ? { name: raw.project } : raw.project;
+        if (!project || typeof project !== 'object') {
+          check('Data Classification', 'info',
+            'project not declared — agents have no structured signal for how this repo may be handled');
+        } else if (!project.classification) {
+          check('Data Classification', 'info',
+            `project '${project.name ?? '(unnamed)'}' declares no classification (private|sanitized|public)`);
+        } else {
+          const closed = project.classification === 'private';
+          const handling = project.handling ?? {};
+          const excerptable = handling.excerptable ?? !closed;
+          const publishable = handling.publishable ?? !closed;
+          const mirror = handling.mirror ?? !closed;
+          const summary = `classification=${project.classification}`
+            + `${project.pii ? ' pii=true' : ''}`
+            + ` excerptable=${excerptable} publishable=${publishable} mirror=${mirror}`;
+
+          const conflicts = [];
+          const releaseMirrors = (raw.remotes?.secondary ?? [])
+            .filter((entry) => entry && entry.push_on_release);
+          if (!mirror && releaseMirrors.length > 0) {
+            conflicts.push(
+              `handling.mirror=false but remotes.secondary pushes on release: ${releaseMirrors.map((entry) => entry.name ?? '(unnamed)').join(', ')}`,
+            );
+          }
+          if (!publishable && releaseMirrors.length > 0) {
+            conflicts.push('handling.publishable=false but a secondary remote pushes on release');
+          }
+          if (conflicts.length > 0) check('Data Classification', 'warn', `${summary}; ${conflicts.join('; ')}`);
+          else check('Data Classification', 'ok', summary);
         }
       }
 
@@ -1447,21 +1928,9 @@ async function runDoctor() {
         checkRange('max_parallel_ralph_loops', 1, 20);
         checkRange('max_parallel_mc_missions', 1, 20);
 
-        // Detect operator override vs provider default
+        // Detect operator override vs provider default — use shared map (#249)
         const primary = Array.isArray(raw.providers) ? raw.providers[0] : undefined;
-        const PROVIDER_DEFAULTS = {
-          claude:   { max_parallel_subagents: 4 },
-          codex:    { max_parallel_subagents: 10 },
-          copilot:  { max_parallel_subagents: 10 },
-          cursor:   { max_parallel_subagents: 10 },
-          factory:  { max_parallel_subagents: 10 },
-          opencode: { max_parallel_subagents: 10 },
-          warp:     { max_parallel_subagents: 10 },
-          windsurf: { max_parallel_subagents: 10 },
-          openclaw: { max_parallel_subagents: 10 },
-          hermes:   { max_parallel_subagents: 10 },
-        };
-        const expectedDefault = PROVIDER_DEFAULTS[primary]?.max_parallel_subagents ?? 4;
+        const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
         const isOverride =
           p.max_parallel_subagents !== undefined &&
           p.max_parallel_subagents !== expectedDefault;
@@ -1489,61 +1958,235 @@ async function runDoctor() {
     // Non-fatal — skip silently
   }
 
-  // 10b. Check deployed agent/skill frontmatter for unpinned model aliases (#1442).
-  // Bare aliases (`sonnet`, `opus`, `haiku`) inherit the parent session's
-  // variant. Under a 1M-context parent (`claude-opus-4-7[1m]`), subagent
-  // dispatch hits the usage-credit gate and fails. Pin specific variants.
+  // #2913 / T-OG-12: offline health readiness, without installing adapters,
+  // reading credentials, probing models, or requiring Mission/admission state.
   try {
-    const PINNED_MAP = {
-      sonnet: 'claude-sonnet-4-6',
-      opus:   'claude-opus-4-7',
-      haiku:  'claude-haiku-4-5',
-    };
-    const scanDirs = [
-      '.claude/agents',
-      '.claude/skills',
-      '.claude/commands',
-    ];
-    const unpinned = [];
-    for (const rel of scanDirs) {
-      const dir = path.join(process.cwd(), rel);
-      let entries;
-      try {
-        entries = await fs.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const ent of entries) {
-        const target = ent.isDirectory()
-          ? path.join(dir, ent.name, 'SKILL.md')
-          : path.join(dir, ent.name);
-        if (!target.endsWith('.md')) continue;
-        let content;
-        try {
-          content = await fs.readFile(target, 'utf-8');
-        } catch {
-          continue;
+    const config = await readAiwgConfig(process.cwd());
+    if (!config?.parallelism?.worker_dispatch) {
+      check('Worker Health', 'info', 'group dispatch is disabled; legacy worker status remains unchanged');
+    } else {
+      const healthErrors = validateParallelismConfig(config.parallelism);
+      if (healthErrors.length) {
+        for (const message of healthErrors.slice(0, 16)) check('Worker Health Configuration', 'error',
+          `${message}; review parallelism.health and group references before launch`);
+      } else {
+        const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
+        const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+        const { resolveDynamicModelCatalog } = await importImpl(import.meta.url, 'models/model-discovery.js');
+        const { diagnoseWorkerHealthReadiness } = await importImpl(import.meta.url, 'models/worker-health-readiness.js');
+        const loader = new ConfigLoader(process.cwd());
+        const models = await loader.load(config.parallelism);
+        const catalog = await resolveDynamicModelCatalog({ aiwgRoot: AIWG_ROOT,
+          inventory: { generatedAt: new Date().toISOString(), projectDir: process.cwd(),
+            providers: [], activeProvider: null, activeSource: 'doctor-offline' }, allowNetwork: false });
+        // Catalog observations do not attest a current installation. This offline
+        // projection deliberately withholds bindings; models resolve rechecks them.
+        const report = diagnoseWorkerHealthReadiness({ config, models,
+          modelDigests: loader.getInputDigests(), catalog,
+          registry: loadProviderModelCapabilities(), installations: {} }, {
+          now: new Date().toISOString(),
+          context: { estimator: 'doctor-offline-context-v1', briefTokens: 0,
+            inputTokens: 0, toolOutputAllowance: 0, reservedOutput: 0 },
+        });
+        if (report.contextDigest) check('Worker Health Context', 'info',
+          `offline context digest=${report.contextDigest}; actual task context must be resolved before launch`);
+        for (const finding of report.findings.slice(0, 32)) {
+          check(`Worker Health${finding.role ? ` (${finding.role})` : ''}`, finding.status,
+            `${finding.code}: ${finding.message} [next: ${finding.nextAction}]`);
         }
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-        if (!fmMatch) continue;
-        const modelMatch = fmMatch[1].match(/^model:\s*(\S+)\s*$/m);
-        if (!modelMatch) continue;
-        const value = modelMatch[1].trim();
-        if (PINNED_MAP[value]) {
-          unpinned.push({ file: path.relative(process.cwd(), target), alias: value, pinned: PINNED_MAP[value] });
+        if (report.findings.length > 32) check('Worker Health', 'warn',
+          `${report.findings.length - 32} additional findings; narrow role/group scope with aiwg models resolve`);
+        check('Worker Health Qualification', 'info',
+          'offline doctor cannot authorize onboarding or launch; qualify the installation/profile, then use aiwg models resolve for the actual task');
+      }
+    }
+  } catch {
+    check('Worker Health', 'warn',
+      'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
+  }
+
+  // 11d-bis. Live host resources and worker isolation mode (#2954).
+  // Read-only: samples /proc signals and probes the systemd user manager.
+  // Never launches workers and never mutates configuration.
+  try {
+    const projectDir = process.cwd();
+    const aiwgCfgPath = path.join(projectDir, '.aiwg', 'aiwg.config');
+    let dispatchRaw = null;
+    if (await fileExists(aiwgCfgPath)) {
+      try {
+        dispatchRaw = JSON.parse(await fs.readFile(aiwgCfgPath, 'utf-8'));
+      } catch {
+        dispatchRaw = null;
+      }
+    }
+    const { checkWorkerDispatch, readLiveHostResources } = await import('../scripts/resource-preflight.mjs');
+    const { detectWorkerIsolation } = await import('../ralph-external/lib/worker-isolation.mjs');
+    const live = readLiveHostResources({ paths: [projectDir] });
+    const formatSignal = (value, digits = 1) => (value === undefined ? 'unknown' : Number(value).toFixed(digits));
+    if (live.supported) {
+      check(
+        'Host Resources',
+        'ok',
+        `avail=${formatSignal(live.availMemGb)}GB load=${live.load1 ?? 'unknown'}/${live.cores ?? '?'}cores `
+        + `psi10=${live.memPsiAvg10 ?? 'unknown'} psi60=${live.memPsiAvg60 ?? 'unknown'} workers=${live.workers ?? 'unknown'}`,
+      );
+    } else {
+      check('Host Resources', 'info', `live signals unavailable: ${live.reason}`);
+    }
+    const isolation = detectWorkerIsolation();
+    const dispatchCapable = Boolean(dispatchRaw?.parallelism?.worker_dispatch);
+    if (!dispatchCapable) {
+      check(
+        'Worker Isolation',
+        'info',
+        `worker_dispatch is off (legacy, no gating); isolation mode would be ${isolation.mode}`
+        + (isolation.mode === 'degraded' ? ` (${isolation.reason})` : ''),
+      );
+    } else if (isolation.mode !== 'systemd-unit') {
+      check(
+        'Worker Isolation',
+        'warn',
+        `dispatch-capable config with no isolation: ${isolation.reason}; `
+        + 'workers would launch unconfined unless the caller records an explicit degraded mode',
+      );
+    } else {
+      const gate = checkWorkerDispatch({ config: dispatchRaw, live });
+      const gateLabel = gate.ok
+        ? 'dispatch gate: OK'
+        : `dispatch gate: BLOCK (${gate.failures.map(failure => failure.signal).join(', ')})`;
+      check('Worker Isolation', gate.ok ? 'ok' : 'warn', `systemd user units enforce MemoryMax/MemorySwapMax=0; ${gateLabel}`);
+    }
+  } catch (error) {
+    check('Host Resources', 'info', `live host signals unavailable: ${error.message}`);
+  }
+
+  // 11e. Validate configurable forge-content threat policy (#1938).
+  try {
+    const threatConfigPath = path.join(process.cwd(), '.aiwg', 'aiwg.config');
+    if (await fileExists(threatConfigPath)) {
+      const raw = JSON.parse(await fs.readFile(threatConfigPath, 'utf-8'));
+      const errors = validateThreatAssessmentConfig(raw.security?.threatAssessment);
+      if (errors.length) {
+        check('Threat Assessment Policy', 'error', errors.join('; '));
+      } else {
+        const policy = raw.security?.threatAssessment;
+        const profile = policy?.defaultProfile || 'balanced';
+        const mode = policy?.mode || 'enforce';
+        const source = policy ? '.aiwg/aiwg.config' : 'backward-compatible default';
+        check('Threat Assessment Policy', 'ok', `mode=${mode} profile=${profile} (${source})`);
+      }
+    }
+  } catch (error) {
+    check('Threat Assessment Policy', 'error', error.message);
+  }
+
+  // Permission normalization health (#1800). Errors fail closed in the
+  // evaluator; doctor makes legacy sources and remediation visible.
+  try {
+    const permissionProjectDir = process.cwd();
+    const permissionConfig = await readAiwgConfig(permissionProjectDir);
+    if (permissionConfig) {
+      const diagnostics = await auditLegacyPermissions(permissionProjectDir, permissionConfig);
+      if (!diagnostics.length) {
+        check('Permissions', 'ok', 'normalized authorization model valid');
+      } else {
+        const errors = diagnostics.filter(item => item.severity === 'error');
+        const legacy = diagnostics.filter(item => item.code.startsWith('legacy-'));
+        const missingOnly = diagnostics.length === 1 && diagnostics[0].code === 'authorization-missing';
+        if (missingOnly) {
+          // A project that never had legacy permissions has nothing to audit;
+          // pointing it at `audit` just re-emits this warning. The one action
+          // that clears it is writing the initial block (#2563).
+          check(
+            'Permissions',
+            'info',
+            'no authorization block yet (default deny applies) — write one with "aiwg steward permissions migrate --apply"',
+          );
+        } else {
+          const status = errors.length ? 'error' : 'warn';
+          const fix = errors.length
+            ? 'run "aiwg steward permissions audit" for the failing references'
+            : 'run "aiwg steward permissions migrate --dry-run" then "--apply" to normalize them';
+          check(
+            'Permissions',
+            status,
+            `${errors.length} error(s), ${legacy.length} legacy source(s) — ${fix}`,
+          );
         }
       }
     }
-    if (unpinned.length === 0) {
-      check('Model Pinning', 'ok', 'all deployed agents/skills pin specific model variants');
-    } else {
-      const sample = unpinned.slice(0, 3).map(u => `${u.file} (${u.alias}→${u.pinned})`).join('; ');
-      const more = unpinned.length > 3 ? ` …and ${unpinned.length - 3} more` : '';
-      check(
-        'Model Pinning',
-        'warn',
-        `${unpinned.length} file(s) use bare model alias — subagent dispatch from 1M-context parents may fail. Run "aiwg refresh" to redeploy pinned variants. Examples: ${sample}${more}. See aiwg #1442.`,
-      );
+  } catch (err) {
+    check('Permissions', 'error', `authorization audit failed: ${err.message}`);
+  }
+
+  // 10b. Provider-aware model-policy diagnostics (#1802/#1805).
+  // Report canonical intent separately from the target's enforceable surface;
+  // never claim skill pins on providers whose skill schema ignores them.
+  try {
+    const registryPath = path.join(
+      AIWG_ROOT,
+      'agentic',
+      'code',
+      'providers',
+      'model-capabilities.v1.json',
+    );
+    const registry = JSON.parse(await fs.readFile(registryPath, 'utf-8'));
+    const PINNED_MAP = {
+      sonnet: 'claude-sonnet-5',
+      opus:   'claude-opus-5',
+      haiku:  'claude-haiku-4-5',
+    };
+    for (const provName of providersToCheck) {
+      const capability = registry.providers?.[provName];
+      if (!capability) continue;
+      const provider = await loadProvider(provName);
+      const label = PROVIDER_LABELS[provName] || provName;
+      const dir = resolveProviderPath(provider?.paths?.agents);
+      const aliases = [];
+      let modeled = 0;
+      let total = 0;
+      let entries = [];
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { /* absent */ }
+      for (const ent of entries) {
+        if (!ent.isFile() || !/\.(?:md|toml)$/.test(ent.name)) continue;
+        total++;
+        const target = path.join(dir, ent.name);
+        let content = '';
+        try {
+          content = await fs.readFile(target, 'utf-8');
+        } catch { continue; }
+        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        const modelMatch = ent.name.endsWith('.toml')
+          ? content.match(/^model\s*=\s*"([^"]+)"\s*$/m)
+          : fmMatch?.[1].match(/^model:\s*(\S+)\s*$/m);
+        if (!modelMatch) continue;
+        modeled++;
+        const value = modelMatch[1].trim();
+        if (PINNED_MAP[value]) {
+          aliases.push({
+            file: path.relative(process.cwd(), target),
+            alias: value,
+            pinned: PINNED_MAP[value],
+          });
+        }
+      }
+      const skillSurface = capability.skill;
+      if (aliases.length > 0) {
+        const sample = aliases.slice(0, 3)
+          .map(item => `${item.file} (${item.alias}→${item.pinned})`).join('; ');
+        check(
+          `${label} Model Policy`,
+          'warn',
+          `${aliases.length} agent alias(es) need compilation; agent=${capability.agent}, skill=${skillSurface}. Examples: ${sample}`,
+        );
+      } else if (total > 0) {
+        const status = capability.agent === 'unsupported' ? 'warn' : 'ok';
+        check(
+          `${label} Model Policy`,
+          status,
+          `canonical=${total}, modeled=${modeled}, agent=${capability.agent}, skill=${skillSurface}; skill policy is not reported as pinned when ${skillSurface}`,
+        );
+      }
     }
   } catch {
     // Non-fatal — skip silently
@@ -1576,23 +2219,12 @@ async function runDoctor() {
     // Non-fatal — skip silently.
   }
 
-  // 11. Check .gitignore for AIWG runtime patterns (warning if missing)
-  const AIWG_RUNTIME_PATTERNS = ['.aiwg/working/', '.aiwg/.index/', '.aiwg/ralph/', '.aiwg/ralph-external/', '.aiwg/security-engineering/reviews/disclosures/'];
-  const gitignorePath = path.join(process.cwd(), '.gitignore');
+  // 11. Check .gitignore for AIWG runtime patterns (warning if missing).
+  // Use the shared config helper so doctor and `aiwg config gitignore --fix`
+  // cannot drift on which runtime paths are required.
   try {
-    const gitignoreContent = await fs.readFile(gitignorePath, 'utf-8');
-    const lines = gitignoreContent.split('\n').map(l => l.trim());
-    const isCovered = (pattern) => {
-      if (lines.includes(pattern)) return true;
-      if (lines.includes(pattern.replace(/\/$/, ''))) return true;
-      const parts = pattern.split('/').filter(Boolean);
-      for (let i = 1; i < parts.length; i++) {
-        const parent = parts.slice(0, i).join('/') + '/';
-        if (lines.includes(parent) || lines.includes(parent.replace(/\/$/, ''))) return true;
-      }
-      return false;
-    };
-    const missing = AIWG_RUNTIME_PATTERNS.filter(p => !isCovered(p));
+    const result = await checkGitignore(process.cwd());
+    const missing = result.missingRuntime;
     if (missing.length === 0) {
       check('.gitignore', 'ok', 'AIWG runtime paths covered');
     } else {
@@ -1698,7 +2330,7 @@ async function runDoctor() {
   try {
     const { index, source } = await readIndexConfig(process.cwd());
     if (source === 'config.yaml') {
-      check('index-config', 'warn', 'index config still in .aiwg/config.yaml — migrate the index block into .aiwg/aiwg.config (#1491; see docs/cli-reference.md)');
+      check('index-config', 'warn', 'index config still in .aiwg/config.yaml — migrate the index block into .aiwg/aiwg.config (#1491; see docs/cli/reference.md)');
     }
     if (index) {
       const errs = validateIndexConfig(index);
@@ -1759,8 +2391,13 @@ async function runDoctor() {
     const local = getFortemiCoreSyncStatus(process.cwd(), 'framework');
     const prebuilt = getFortemiCorePrebuiltStatus('framework');
     if (prebuilt.built && !prebuilt.stale) {
-      const localNote = local.built && !local.stale ? '; local cache also ready' : '';
-      check('fortemi-core-index', 'ok', `prebuilt framework index present (${prebuilt.itemCount ?? 0} items${localNote})`);
+      const executable = getFortemiCoreExecutableSkillStatus('framework');
+      if (executable.missing.length > 0) {
+        check('fortemi-core-index', 'warn', `prebuilt framework index is missing executable metadata for ${executable.missing.length} source skill(s): ${executable.missing.slice(0, 5).join(', ')} — run "npm run release:fortemi-index" before release packaging`);
+      } else {
+        const localNote = local.built && !local.stale ? '; local cache also ready' : '';
+        check('fortemi-core-index', 'ok', `prebuilt framework index present (${prebuilt.itemCount ?? 0} items; ${executable.packagedExecutableCount}/${executable.sourceExecutableCount} executable skills preserved${localNote})`);
+      }
     } else if (local.built && !local.stale) {
       check('fortemi-core-index', 'ok', `local framework cache ready (${local.itemCount ?? 0} items); prebuilt package index not present`);
     } else if (prebuilt.optedIn && prebuilt.stale) {

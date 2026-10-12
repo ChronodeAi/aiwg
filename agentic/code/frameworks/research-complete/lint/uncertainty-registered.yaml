@@ -1,0 +1,37 @@
+id: research/uncertainty-registered
+name: Stated uncertainty must name an obstacle
+description: >
+  An uncertainty written only into prose is invisible to the verification contract.
+  The contract governs declared checks and returns pass/incomplete/blocked for things
+  someone thought to declare, so "no OpenReview query was run" never surfaces as
+  incomplete and the "never report skipped verification as success" rule is never
+  violated — the skipped verification was never registered as verification at all.
+
+  Flags a clause that states an unperformed action against a verification target the
+  agent could have acted on (OpenReview, ACL Anthology, camera-ready, PDF, retraction
+  or citation census, code URL, venue) with no obstacle named nearby. Accepts the
+  statement once it names a specific obstacle — HTTP status, credential requirement,
+  rate limit, paywall, anti-bot wall, unknown endpoint — or records an outcome with a
+  date, which is what turns "I did not check" into "I could not check, because".
+
+  A struck span followed by a dated outcome on the same line is a completed retraction,
+  accepted whatever the length of the struck text:
+  `~~<original limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>`. Before
+  #2556 the accepting window ended at the clause, so the recommended convention passed
+  for one struck sentence and failed for two.
+
+  Matching is scoped to a clause, not a line: corpus prose keeps whole paragraphs and
+  changelog table rows on one line, and line-scoped matching related unrelated clauses.
+  A verification target is required precisely so the paper's own unverified claims are
+  left alone — this rule must not discourage honest limitation sections.
+
+  Severity is warn because this is a prose heuristic. Measured on a 2,544-reference
+  corpus: 34 flagged clauses, of which roughly 31 are genuine unperformed checks —
+  including every gap a hand post-induction audit had found independently. Raise to
+  error once a corpus is clean if you want it to gate.
+severity: warn
+applies-to:
+  glob: "documentation/references/**/*.md"
+checks:
+  - type: unregistered-uncertainty
+    obstacleWithinLines: 2

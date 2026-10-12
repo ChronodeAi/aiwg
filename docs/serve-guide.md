@@ -5,8 +5,11 @@
 ## Quick Start
 
 ```bash
-# Install optional dependencies (first time only)
-npm install hono @hono/node-server
+# Install the web server feature (first time only)
+aiwg features install webserver
+
+# Local interactive terminals additionally require the native PTY feature
+aiwg features install pty
 
 # Start the server
 aiwg serve
@@ -21,6 +24,11 @@ aiwg serve --no-open
 aiwg serve --read-only
 ```
 
+`aiwg features install pty` builds `node-pty` under the AIWG user data
+directory with approval limited to the `node-pty` lifecycle scripts. The base
+global install does not run native dependency scripts. Remote sandbox terminals
+and read-only mode do not require the local PTY feature.
+
 The dashboard opens at `http://127.0.0.1:7337` by default.
 
 ## CLI Options
@@ -34,14 +42,18 @@ The dashboard opens at `http://127.0.0.1:7337` by default.
 
 ## Web Dashboard
 
-The maintained operator dashboard is Cockpit, a React SPA served by the local Bridge:
+The maintained operator dashboard is **Cockpit**, a React SPA served by its own
+local Bridge (default `:8140`). Cockpit has a dedicated documentation section —
+**[docs/cockpit/](./cockpit/README.md)** — covering installation, architecture,
+all eleven surfaces, the session model, the Bridge API, trust posture,
+stale-agent recovery, and the dev/test/mock/release patterns. The quick map:
 
 | Tab | Purpose |
 |-----|---------|
 | **Home** | Live stack overview, first-run flow, and session-first entry point |
 | **Inventory** | Host, container, Docker, and VM runtime targets with lifecycle controls |
 | **Running** | Active work across stacks and task stop controls |
-| **Missions** | Dispatch, monitor, pause, resume, and abort Mission Control tasks |
+| **Missions** | Read-only Mission Control projection (sessions, missions, audit tail) |
 | **Sessions** | Observe-first terminal attach, explicit drive/control, and replay posture |
 | **Approvals** | Unified human-in-the-loop decision inbox |
 | **Explore** | Live artifact-index status/query/rebuild and capability catalog search |
@@ -209,8 +221,61 @@ Returns `{ "ok": true }` on success. Returns `401` if the token does not match.
 | `POST` | `/api/sandboxes/:id/provision` | Proxy: provision a new agent |
 | `POST` | `/api/sandboxes/:id/agents/:aid/{action}` | Proxy: agent lifecycle (`start`, `stop`, `destroy`, `reprovision`) |
 | `DELETE` | `/api/sandboxes/:id/agents/:aid` | Proxy: delete an agent |
+| `GET` | `/api/sandboxes/:id/agents/:aid/sessions` | Proxy: list an agent's terminal sessions |
+| `POST` | `/api/sandboxes/:id/agents/:aid/sessions` | Proxy: create an agent session |
+| `DELETE` | `/api/sandboxes/:id/agents/:aid/sessions/:session` | Proxy: terminate a named session |
+| `GET` | `/api/sandboxes/:id/sessions/:sessionId/screen` | Proxy: read a session's current screen buffer |
 
 Proxied endpoints forward requests to the sandbox's own HTTP API.
+
+> **Session listing is live (v2026.7.4+).** The agent-session proxies above are
+> backed by agentic-sandbox's sessions API (`#140`) and host-runtime session
+> listing (`#611`). Before those endpoints shipped, `aiwg serve` returned `502`
+> as a placeholder; that path is now only a genuine-unreachability fallback. A
+> `200` with an empty list means "no sessions yet" — not a wiring gap.
+
+### Instance transport posture
+
+Each instance the sandbox reports carries **transport-trust posture** and
+**host-daemon status**, which `aiwg serve` passes through verbatim from the
+sandbox's v2 admin inventory (they are sandbox-sourced fields — `aiwg serve` does
+not compute them):
+
+| Field | Meaning | Example values |
+|-------|---------|----------------|
+| `transport` / `transport_posture` | How the client reaches the instance | `Secure transport · mtls` (Host/Container), `Local transport · vsock` (enrolled VM) |
+| `security_posture` | Trust classification of that transport | `mtls`, `vsock`, `bootstrap-pending` |
+| `host_daemon` | Host-daemon availability for host-tier instances | `available`, n/a (non-host tiers) |
+
+A VM still enrolling reports `bootstrap-pending` (the transitional
+`AgentTransportPosture::bootstrap_pending()` state) rather than a dead
+`unknown`. This posture drives the Cockpit Inventory tab's per-instance
+Transport / Host-daemon columns and the `host ✓ · docker ✓ · vm ✓` runtime
+coverage banner. Verified end-to-end against agentic-sandbox v2026.7.4
+(`.aiwg/testing/outputs/cockpit-7.4-transport-verify-2026-07-09.md`) as the
+minimum transport-posture feature evidence. The latest immutable
+fleet/activity qualification is v2026.8.3; see
+[the qualification record](./cockpit/qualifications/agentic-sandbox-v2026.8.3.md).
+
+### Stale agent recovery
+
+Cockpit distinguishes a stopped runtime from a running runtime whose agent has
+fallen out of the registry. Running Docker/container **and VM** rows with no
+resolvable agent stay visible as `agent unreachable`; Inventory and Sessions
+expose **Reconnect** instead of asking the operator to destroy or recreate the
+instance.
+
+The Cockpit Bridge recovery endpoint is:
+
+```
+POST /api/instances/:id/reconnect
+```
+
+The Bridge tries executor-owned reconnect routes first, then falls back to
+`docker exec <container> agent-reconnect` for container rows, or delivering the
+same reconnect signal through the libvirt qemu-guest-agent channel for VM rows
+(#1778). Full semantics, session-survival caveats, and host-runtime guidance:
+[docs/cockpit/recovery.md](./cockpit/recovery.md).
 
 ## WebSocket: Sandbox Event Push
 
@@ -336,18 +401,22 @@ The executor contract gives `aiwg serve` a way to **dispatch missions** to the s
 ```
 GET  /api/v2/admin/instances
 GET  /agents/{instance_id}/.well-known/agent-card.json
-GET  /agents/{instance_id}/v1/extendedAgentCard
-POST /agents/{instance_id}/v1/messages:send
-GET  /agents/{instance_id}/v1/tasks/{task_id}
-GET  /agents/{instance_id}/v1/tasks/{task_id}/subscribe
+SELECT an advertised A2A 0.3 or 1.0 interface
+CALL the version-specific message, task, and subscription operations
 ```
+
+Configure selection with `--a2a-protocol 0.3|1.0|auto`. Protocol fallback
+(`--a2a-protocol-fallback`) and fallback to the local executor `/dispatch` API
+are independent controls. Strict 1.0 mode permits neither downgrade. See
+[A2A protocol compatibility](./a2a-protocol-compatibility.md) for headers,
+routes, configuration, and qualification lanes.
 
 `executor_id` identifies the management executor registration. `instance_id`
 identifies the routable A2A sandbox instance. They may be different; dispatch
 payloads may pass `a2a_instance_id` when a concrete sandbox instance is known.
 `aiwg serve` reports the selected `a2a_instance_id` in dispatch responses.
-For v2 A2A dispatch, the returned sandbox task is not fire-and-forget:
-`aiwg serve` follows the task through `GET /agents/{instance_id}/v1/tasks/{task_id}`
+For A2A dispatch, the returned sandbox task is not fire-and-forget:
+`aiwg serve` follows the task through the selected version's task operation
 until it reaches a terminal A2A state, then projects that state into the AIWG
 mission record. Completed A2A tasks become `mission.completed`; failed or
 rejected tasks become `mission.failed`; canceled tasks become `mission.aborted`.

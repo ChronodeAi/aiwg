@@ -2,7 +2,7 @@
  * Capability discovery — `aiwg index discover` subcommand tests.
  *
  * Covers #1214:
- *   - Type inference for skill/agent/command/rule from source paths
+ *   - Type inference for operational asset types from source paths
  *   - Trigger extraction from `## Triggers` section
  *   - Capability extraction from frontmatter description / body fallback
  *   - Scorer trigger boost + multi-token matching
@@ -20,7 +20,7 @@ import {
 } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
-import { GRAPH_CONFIGS } from '../../../src/artifacts/types.js';
+import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
 
 let tmpRoot: string;
 let cwd: string;
@@ -33,10 +33,19 @@ function writeSkill(slug: string, framework: string, body: string): string {
   return file;
 }
 
+let previousXdgDataHome: string | undefined;
+
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-discover-'));
   cwd = path.join(tmpRoot, 'project');
   fs.mkdirSync(cwd, { recursive: true });
+  // The framework graph is USER-GLOBAL. This file builds it 18 times from
+  // two-artifact fixtures; unsandboxed, each one overwrites the developer's real
+  // ~/.local/share/aiwg/index/framework and silently breaks `aiwg discover`
+  // host-wide until the next full rebuild. Pin it here rather than per call so
+  // new tests inherit the sandbox instead of having to remember it (#2544).
+  previousXdgDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(tmpRoot, 'xdg');
   // Clear any user-defined graphs leaked from earlier tests
   for (const k of Object.keys(GRAPH_CONFIGS)) {
     if (!['framework', 'project', 'codebase', 'source', 'user'].includes(k)) {
@@ -46,6 +55,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = previousXdgDataHome;
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -73,6 +84,19 @@ Should be ignored.
     ]);
   });
 
+  it('is applied to rules, not only skills (#2544)', () => {
+    // `rule` is in OPERATIONAL_DISCOVERY_TYPES, so the indexer runs trigger
+    // extraction over rule bodies. A rule's name describes the policy, not the
+    // question an agent asks, so without triggers it ranks only on lexical
+    // title overlap and loses to any skill whose triggers cover a token.
+    expect(OPERATIONAL_DISCOVERY_TYPES).toContain('rule');
+    expect(extractTriggers('# Human Authorization Rules\n\nBody.', {
+      enforcement: 'high',
+      triggers: ['am I allowed to do this', 'do I need permission for this'],
+      // Extraction lowercases, so frontmatter casing does not matter.
+    })).toEqual(['am i allowed to do this', 'do i need permission for this']);
+  });
+
   it('returns empty array when no Triggers section exists', () => {
     expect(extractTriggers('# Just a heading\n\nNo triggers here.')).toEqual([]);
   });
@@ -92,6 +116,14 @@ Should be ignored.
     expect(extractTriggers(body, {
       triggers: ['Intake Wizard', 'Help me start a project.'],
     })).toEqual(['intake wizard', 'help me start a project.', 'start an intake']);
+  });
+
+  it('includes compatibility aliases and deprecated names', () => {
+    expect(extractTriggers('# Skill', {
+      triggers: ['Ralph loop'],
+      aliases: ['al', 'agent-loop'],
+      deprecated_names: ['al'],
+    })).toEqual(['ralph loop', 'al', 'agent-loop']);
   });
 
   it('handles arrow-style explanation separators', () => {
@@ -221,9 +253,7 @@ describe('buildIndex → type inference', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
 
-    const indexDir = process.env.XDG_DATA_HOME
-      ? path.join(process.env.XDG_DATA_HOME, 'aiwg', 'index', 'framework')
-      : path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework');
+    const indexDir = path.join(process.env.XDG_DATA_HOME as string, 'aiwg', 'index', 'framework');
     const metadataPath = path.join(indexDir, 'metadata.json');
     if (!fs.existsSync(metadataPath)) {
       // Test environment may have a different writer; skip the rest
@@ -264,6 +294,122 @@ describe('buildIndex → type inference', () => {
 });
 
 describe('discoverCapability — JSON output', () => {
+  it('keeps canonical skill aliases discoverable after a rename', async () => {
+    writeSkill(
+      'ralph',
+      'agent-loop',
+      `---
+name: ralph
+description: Execute an iterative task loop until completion
+aliases: [al, agent-loop]
+deprecated_names: [al]
+---
+
+# Agent Loop
+`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    for (const phrase of ['agent-loop', 'al']) {
+      const captured: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+        captured.push(args.join(' ')),
+      );
+      await discoverCapability(cwd, {
+        phrase,
+        graph: 'framework',
+        json: true,
+        backend: 'local',
+        limit: 3,
+      });
+      logSpy.mockRestore();
+
+      const parsed = JSON.parse(captured.join('\n'));
+      expect(parsed.results[0]?.path, phrase).toContain('/ralph/SKILL.md');
+      expect(parsed.results[0]?.ranking.matches, phrase).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'trigger',
+            match: 'exact',
+            value: phrase,
+          }),
+        ]),
+      );
+    }
+  });
+
+  it('does not match short one-word aliases inside longer words', async () => {
+    writeSkill(
+      'ralph',
+      'agent-loop',
+      `---
+name: ralph
+description: Execute an iterative task loop until completion
+aliases: [al, agent-loop]
+deprecated_names: [al]
+---
+
+# Agent Loop
+`,
+    );
+    writeSkill(
+      'steward',
+      'aiwg-utils',
+      `---
+name: steward
+description: Diagnose and repair stale AIWG setup and provider files
+triggers:
+  - "AIWG setup is stale or broken"
+  - "steward repair AIWG setup"
+---
+
+# Steward
+`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'AIWG setup is stale or broken',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 3,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    expect(parsed.results[0]?.path).toContain('/steward/SKILL.md');
+    expect(parsed.results[0]?.ranking.matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'trigger',
+          match: 'exact',
+          value: 'aiwg setup is stale or broken',
+        }),
+      ]),
+    );
+    expect(
+      parsed.results.some((result: { path: string; ranking: { matches: { value?: string }[] } }) =>
+        result.path.includes('/ralph/SKILL.md') &&
+        result.ranking.matches.some((match) => match.value === 'al'),
+      ),
+    ).toBe(false);
+  });
+
   it('emits a stable schema with path/type/score/triggers/capability', async () => {
     writeSkill(
       'skill-create-intake',
@@ -304,6 +450,29 @@ describe('discoverCapability — JSON output', () => {
       expect(top).toHaveProperty('type');
       expect(top).toHaveProperty('triggers');
       expect(top).toHaveProperty('capability');
+      expect(top).toHaveProperty('ranking');
+      expect(top.ranking).toMatchObject({
+        lexical_score: expect.any(Number),
+        final_score: expect.any(Number),
+        matches: expect.any(Array),
+        tie_breakers: {
+          scope: expect.any(String),
+          scope_rank: expect.any(Number),
+        },
+      });
+      expect(top.ranking.matches).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          field: 'trigger',
+          match: 'exact',
+          value: 'create intake',
+          query_token_coverage: 1,
+        }),
+      ]));
+      expect(parsed.diagnostics).toMatchObject({
+        content_tokens: ['create', 'intake'],
+        facet_activations: expect.any(Array),
+        score_tie_break_order: ['score', 'scope', 'type', 'name', 'path'],
+      });
     }
   });
 
@@ -415,6 +584,81 @@ describe('discoverCapability — JSON output', () => {
       expect(parsed.results.length, `"${phrase}" should not dead-end`).toBeGreaterThan(0);
       expect(parsed.results[0].path).toContain('intake-wizard');
     }
+  });
+
+  it('does not dilute a relevant capability match with unmatched query terms (#154)', async () => {
+    writeSkill(
+      'product-designer',
+      'design',
+      `---\nname: product-designer\ndescription: Crafts user experience flows, interface designs, and interaction specs that align with product objectives\n---\n`,
+    );
+    writeSkill(
+      'generic-reviewer',
+      'design',
+      `---\nname: generic-reviewer\ndescription: Reviews existing project screens\n---\n`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'design a user interface, information architecture, UX review of an existing screen',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 3,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    const productDesigner = parsed.results.find((result: { path: string }) =>
+      result.path.includes('/product-designer/SKILL.md'));
+    expect(productDesigner).toBeDefined();
+    expect(productDesigner.ranking.lexical_score).toBeGreaterThanOrEqual(0.2);
+  });
+
+  it('matches short acronyms on token boundaries rather than inside words (#154)', async () => {
+    writeSkill(
+      'linux-forensics',
+      'forensics',
+      `---\nname: linux-forensics\ndescription: Investigate Linux hosts and filesystems\n---\n`,
+    );
+    writeSkill(
+      'native-ux-tools',
+      'design',
+      `---\nname: native-ux-tools\ndescription: Use native UX tools for interface design\n---\n`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'UX',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 5,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    expect(parsed.results[0]?.path).toContain('/native-ux-tools/SKILL.md');
+    expect(parsed.results.some((result: { path: string }) =>
+      result.path.includes('/linux-forensics/SKILL.md'))).toBe(false);
   });
 
   // #1230 — kernel-marked skills used to short-circuit path anchoring,
@@ -679,6 +923,109 @@ describe('discoverCapability — Flow documents surface in default discover (#15
   });
 });
 
+describe('discoverCapability — operational assets beyond skills/rules (#1792)', () => {
+  it('surfaces behaviors and templates in broad default discovery and focused filters', async () => {
+    const prevXdg = process.env.XDG_DATA_HOME;
+    const prevRoot = process.env.AIWG_ROOT;
+    process.env.XDG_DATA_HOME = path.join(tmpRoot, 'xdg-operational-assets');
+    process.env.AIWG_ROOT = cwd;
+    try {
+      const behaviorDir = path.join(
+        cwd,
+        'agentic',
+        'code',
+        'addons',
+        'fleet',
+        'behaviors',
+        'quiet-bot',
+      );
+      fs.mkdirSync(behaviorDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(behaviorDir, 'BEHAVIOR.md'),
+        [
+          '---',
+          'name: quiet-bot',
+          'title: Quiet Bot',
+          'description: Mention-only group chat behavior for budget-sensitive bot fleets.',
+          '---',
+          '# Quiet Bot',
+          '',
+          'Respond only when mentioned in shared bot channels.',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const templateDir = path.join(
+        cwd,
+        'agentic',
+        'code',
+        'frameworks',
+        'sdlc-complete',
+        'templates',
+        'codex',
+      );
+      fs.mkdirSync(templateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(templateDir, 'config.toml.aiwg-template'),
+        [
+          '# Codex Config Template',
+          '',
+          'codex config toml provider template for agent runtime setup.',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const buildSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const buildErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+      buildSpy.mockRestore();
+      buildErrSpy.mockRestore();
+
+      async function runDiscover(phrase: string, typeFilter?: string[]) {
+        const captured: string[] = [];
+        const logSpy = vi.spyOn(console, 'log').mockImplementation((...a) => captured.push(a.join(' ')));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        await discoverCapability(cwd, {
+          phrase,
+          typeFilter,
+          graph: 'framework',
+          json: true,
+          backend: 'local',
+          limit: 10,
+        });
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+        return JSON.parse(captured.join('\n'));
+      }
+
+      const broadBehavior = await runDiscover('quiet bot mention only');
+      const behaviorHit = broadBehavior.results.find((r: { type: string; name?: string; path: string }) =>
+        r.type === 'behavior' && r.name === 'quiet-bot' && r.path.endsWith('quiet-bot/BEHAVIOR.md'),
+      );
+      expect(behaviorHit, 'behavior should be in default broad discover').toBeTruthy();
+
+      const broadTemplate = await runDiscover('codex config toml provider');
+      const templateHit = broadTemplate.results.find((r: { type: string; name?: string; path: string }) =>
+        r.type === 'template' && r.name === 'config.toml' && r.path.endsWith('config.toml.aiwg-template'),
+      );
+      expect(templateHit, 'template should be in default broad discover').toBeTruthy();
+
+      const focusedBehavior = await runDiscover('quiet bot', ['behavior']);
+      expect(focusedBehavior.results[0].type).toBe('behavior');
+
+      const focusedTemplate = await runDiscover('config toml', ['template']);
+      expect(focusedTemplate.results[0].type).toBe('template');
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+      if (prevRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = prevRoot;
+    }
+  });
+});
+
 describe('discoverCapability — deployed commands are discoverable (#1541)', () => {
   // #1541: `aiwg discover "address-issues"` returned nothing in a user opencode
   // project even though the command source exists in the framework graph. Two
@@ -775,7 +1122,7 @@ describe('discover — native-release vs plugin packaging routing (#1598)', () =
     writeSkill(
       'flow-release',
       'sdlc-complete',
-      `---\nname: flow-release\ndescription: Config-driven release orchestration — reads .aiwg/release.config and walks the project's declared gates (local build, CI green, doc-sync, changelog, README, release entry, post-release housekeeping)\n---\n\n## Triggers\n\n- "run the release"\n- "release prep"\n- "cut a release"\n`,
+      `---\nname: flow-release\ndescription: Config-driven release orchestration — reads .aiwg/release.config plus optional .aiwg/releases/<plan-id> sidecars and walks the selected release plan's gates\n---\n\n## Triggers\n\n- "run the release"\n- "release prep"\n- "cut a release"\n`,
     );
     const s = vi.spyOn(console, 'log').mockImplementation(() => {});
     const e = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -874,5 +1221,29 @@ describe('discover — native-release vs plugin packaging routing (#1598)', () =
     const parsed = JSON.parse(captured.join('\n'));
     expect(parsed.results.length).toBeGreaterThan(0);
     expect(parsed.results[0].path).toContain('release-publication-verify');
+  });
+});
+
+describe('experimental discovery shadow integration', () => {
+  it('passes only retrieved candidates to the observer and preserves emitted ranking on failure', async () => {
+    writeSkill('intake-first', 'fx', '---\nname: intake-first\ndescription: intake forms\n---\n');
+    writeSkill('intake-second', 'fx', '---\nname: intake-second\ndescription: intake forms\n---\n');
+    const logs: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+      const options = { phrase: 'intake forms', graph: 'framework' as const, json: true, backend: 'local' as const, limit: 3 };
+      logs.length = 0;
+      await discoverCapability(cwd, options);
+      const baseline = JSON.parse(logs.join('\n'));
+      const observer = { observe: vi.fn(async () => { throw new Error('offline observer failure'); }), disable: vi.fn() };
+      logs.length = 0;
+      await discoverCapability(cwd, { ...options, shadowRoute: observer as unknown as import('../../../src/artifacts/discovery-shadow.js').DiscoveryShadowRoute });
+      const shadow = JSON.parse(logs.join('\n'));
+      expect(shadow.results).toEqual(baseline.results);
+      expect(observer.observe).toHaveBeenCalledWith('intake forms', baseline.results.map((r: { id: string; name: string; type: string; capability: string }) => expect.objectContaining({ id: r.id, name: r.name, type: r.type, capability: r.capability })));
+      expect(observer.disable).toHaveBeenCalledTimes(1);
+    } finally { log.mockRestore(); err.mockRestore(); }
   });
 });

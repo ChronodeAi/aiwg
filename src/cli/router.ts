@@ -10,6 +10,7 @@
  * @tests @test/unit/cli/router.test.ts
  * @issue #33
  * @issue #58
+ * @issue #174
  */
 
 import { loadRegistry, type LoadedRegistry } from '../extensions/loader.js';
@@ -22,6 +23,7 @@ import { tryExecuteCliExtension } from './cli-extension-loader.js';
 import * as ui from './ui.js';
 import { maybeCelebrateMilestone } from '../community/milestones.js';
 import { maybeAppendCommandLog } from './command-log.js';
+import { maybeAppendSkillUsage } from './skill-usage.js';
 
 // Cached loaded registry
 let cachedRegistry: LoadedRegistry | null = null;
@@ -86,7 +88,11 @@ export async function run(
 ): Promise<void> {
   const started = process.hrtime.bigint();
   const registry = await initRouter();
-  const [rawCommand, ...commandArgs] = args;
+  // Normalize `help <command>` into the same non-executing help path.
+  const routedArgs = args[0] === 'help' && args[1] && !args[1].startsWith('-')
+    ? [args[1], ...args.slice(2), '--help']
+    : args;
+  const [rawCommand, ...commandArgs] = routedArgs;
 
   // No command - show help
   if (!rawCommand) {
@@ -146,6 +152,29 @@ export async function run(
   if (!handler) {
     ui.error(`No handler found for command: ${commandId}`);
     process.exit(1);
+  }
+
+  // Help must be intercepted before hooks and the normal handler path. Some
+  // commands mutate project or installation state, so passing an unrecognised
+  // help flag through to execute() is unsafe (#174).
+  if (commandArgs.includes('--help') || commandArgs.includes('-h')) {
+    const ctx = await buildContext(commandArgs, args, options);
+    if (handler.help) {
+      const result = await handler.help(ctx);
+      if (result.message) {
+        if (result.rawOutput) {
+          process.stdout.write(result.message.endsWith('\n') ? result.message : `${result.message}\n`);
+        } else if (result.exitCode !== 0) {
+          ui.error(result.message);
+        } else {
+          ui.info(result.message);
+        }
+      }
+      if (result.exitCode !== 0) process.exit(result.exitCode);
+    } else {
+      ui.info(`No detailed help for \`aiwg ${commandId}\`. Run \`aiwg help\` for the command overview.`);
+    }
+    return;
   }
 
   // Build context for handler and hooks
@@ -226,7 +255,9 @@ export async function run(
 
     // Output message if present
     if (result.message) {
-      if (result.exitCode !== 0) {
+      if (result.rawOutput) {
+        process.stdout.write(result.message.endsWith('\n') ? result.message : `${result.message}\n`);
+      } else if (result.exitCode !== 0) {
         ui.error(result.message);
       } else {
         ui.info(result.message);
@@ -279,8 +310,8 @@ async function logCommandInvocation(input: {
   started: bigint;
   exitStatus: number;
 }): Promise<void> {
+  const durationMs = Number(process.hrtime.bigint() - input.started) / 1_000_000;
   try {
-    const durationMs = Number(process.hrtime.bigint() - input.started) / 1_000_000;
     await maybeAppendCommandLog({
       command: input.command,
       args: input.args,
@@ -292,6 +323,20 @@ async function logCommandInvocation(input: {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     ui.warn(`command-log append failed: ${msg}`);
+  }
+
+  try {
+    await maybeAppendSkillUsage({
+      command: input.command,
+      args: input.args,
+      cwd: input.cwd,
+      frameworkRoot: input.frameworkRoot,
+      durationMs,
+      exitStatus: input.exitStatus,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    ui.warn(`skill-usage append failed: ${msg}`);
   }
 }
 
@@ -311,7 +356,7 @@ async function buildContext(
   rawArgs: string[],
   options: { cwd?: string; signal?: AbortSignal }
 ): Promise<HandlerContext> {
-  const frameworkRoot = await getFrameworkRoot();
+  const frameworkRoot = await getFrameworkRoot({ createIfMissing: !args.includes('--dry-run') });
   const ctx: HandlerContext = {
     args,
     rawArgs,

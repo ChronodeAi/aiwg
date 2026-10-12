@@ -22,6 +22,7 @@ import {
   ensureDir,
   deployFiles,
   deploySkillsWithKernelRouting,
+  createAgentsMdFromTemplate,
   getAddonAgentFiles,
   getAddonCommandFiles,
   getAddonSkillDirs,
@@ -30,6 +31,7 @@ import {
   normalizeDeploymentMode,
   cleanupOldRuleFiles,
   filterCommandsAgainstSkills,
+  resolveAiwgRoot,
 } from './base.mjs';
 
 // ============================================================================
@@ -48,8 +50,8 @@ export const paths = {
   // files; command-skills are reachable only through the kernel skill copy or
   // AIWG index/discovery.
   commands: '',
-  // Standard (non-kernel) skills are not copied for OpenHuman. This legacy
-  // path is passed to the shared router only so old hidden copies can be pruned.
+  // Standard (non-kernel) skills are not copied by default. `--copy-all`
+  // explicitly opts into this user-scoped mirror for offline/discovery use.
   skills: path.join(os.homedir(), '.openhuman', '.aiwg', 'skills'),
   // Full rule bodies for `aiwg show rule`.
   rules: path.join(os.homedir(), '.openhuman', '.aiwg', 'rules'),
@@ -59,8 +61,8 @@ export const paths = {
 export const kernelSkillsPath = path.join(os.homedir(), '.openhuman', 'skills');
 
 export const support = {
-  agents: 'none',           // Native TOML harness agents are emitted by the CLI
-  commands: 'none',
+  agents: 'indexed',        // Personas via aiwg discover/show; native TOML harness agents are opt-in
+  commands: 'indexed',      // Full command bodies via aiwg discover/show
   skills: 'native',         // .openhuman/skills/ natively scanned
   rules: 'indexed',         // `aiwg show rule`
 };
@@ -135,7 +137,8 @@ export function deployCommands(commandFiles, targetDir, opts) {
 /**
  * Kernel-vs-standard skill routing (#1212/#1216):
  *   - kernel   → ~/.openhuman/skills/        (native UI scan root)
- *   - standard → not copied                  (AIWG index/discovery)
+ *   - standard → not copied by default       (AIWG index/discovery)
+ *              → ~/.openhuman/.aiwg/skills/  with explicit --copy-all
  */
 export function deploySkills(skillDirs, targetDir, opts) {
   const standardDestDir = path.isAbsolute(paths.skills)
@@ -146,7 +149,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
     : path.join(targetDir, kernelSkillsPath);
   return deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, {
     ...opts,
-    copyStandardSkills: false,
+    copyStandardSkills: opts.copyStandardSkills === true,
     transformSkillMd: transformSkillFrontmatter,
   });
 }
@@ -160,8 +163,18 @@ export function deployRules(ruleFiles, targetDir, opts) {
   return deployFiles(ruleFiles, destDir, opts, transformAgent);
 }
 
+export function createAgentsMd(target, srcRoot, dryRun) {
+  const aiwgRoot = resolveAiwgRoot(srcRoot) || srcRoot;
+  createAgentsMdFromTemplate(target, aiwgRoot, 'openhuman/AGENTS.md.aiwg-template', dryRun);
+}
+
 export async function postDeploy(targetDir, opts) {
-  return;
+  if (
+    opts.createAgentsMd ||
+    (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)
+  ) {
+    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+  }
 }
 
 export function getFileExtension() {
@@ -235,7 +248,11 @@ export async function deploy(opts) {
   }
 
   if (shouldDeploySkills || skillsOnly) {
-    console.log(`\nDeploying ${skillDirs.length} skills (kernel → ~/.openhuman/skills, standard → index/discovery)...`);
+    console.log(
+      `\nDeploying ${skillDirs.length} skills (kernel → ~/.openhuman/skills, standard → ${
+        opts.copyStandardSkills ? '~/.openhuman/.aiwg/skills via --copy-all' : 'index/discovery'
+      })...`,
+    );
     deploySkills(skillDirs, target, opts);
   }
 
@@ -267,6 +284,7 @@ export default {
   deployCommands,
   deploySkills,
   deployRules,
+  createAgentsMd,
   transformSkillFrontmatter,
   postDeploy,
   getFileExtension,

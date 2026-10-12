@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationReport.v1.schema.json",
+  "title": "DecisionIssueTriageEvaluationReport.v1",
+  "description": "Offline evaluation report for the issue triage shadow pilot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "manifest",
+    "pilotPack",
+    "classCounts",
+    "classification",
+    "urgency",
+    "completeness",
+    "clarification",
+    "duplicates",
+    "slices",
+    "calibration",
+    "operations",
+    "baselineComparison",
+    "integrity",
+    "decision"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "decision-issue-triage-evaluation-report/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "manifest": { "$ref": "#/$defs/pin" },
+    "pilotPack": { "$ref": "#/$defs/pin" },
+    "classCounts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issueType", "area"],
+      "properties": {
+        "issueType": { "$ref": "#/$defs/multiclass" },
+        "area": { "$ref": "#/$defs/multiclass" }
+      }
+    },
+    "urgency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleN", "meanAbsoluteError", "normalizedAbsoluteError", "exactRate"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "meanAbsoluteError": { "type": "number", "minimum": 0 },
+        "normalizedAbsoluteError": { "$ref": "#/$defs/unit" },
+        "exactRate": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "completeness": { "$ref": "#/$defs/binary" },
+    "clarification": { "$ref": "#/$defs/binary" },
+    "duplicates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleN", "duplicateN", "noneN", "recall", "concordance", "comparablePairs", "ndcg", "topK", "falseDuplicateRate", "noneRecall"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "duplicateN": { "type": "integer", "minimum": 0 },
+        "noneN": { "type": "integer", "minimum": 0 },
+        "recall": { "$ref": "#/$defs/unit" },
+        "concordance": { "oneOf": [{ "$ref": "#/$defs/unit" }, { "type": "null" }] },
+        "comparablePairs": { "type": "integer", "minimum": 0 },
+        "ndcg": { "$ref": "#/$defs/unit" },
+        "topK": { "type": "object", "additionalProperties": { "$ref": "#/$defs/unit" } },
+        "falseDuplicateRate": { "$ref": "#/$defs/unit" },
+        "noneRecall": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "dimension", "aggregation", "sampleN", "minimumSupport", "status", "suppressed", "metrics"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "dimension": {
+            "enum": ["issue-type", "area", "state-completeness", "adversarial-authority", "new-or-unseen-category"]
+          },
+          "aggregation": { "enum": ["report-supported", "suppress-small-n"] },
+          "sampleN": { "type": ["integer", "null"], "minimum": 0 },
+          "minimumSupport": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["supported", "insufficient"] },
+          "suppressed": { "type": "boolean" },
+          "metrics": { "oneOf": [{ "$ref": "#/$defs/sliceMetrics" }, { "type": "null" }] }
+        }
+      }
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["riskCoverage", "driftEvents", "compatibilityRequired"],
+      "properties": {
+        "riskCoverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sampleN", "acceptedN", "coverage", "coverageLower", "selectiveRisk", "selectiveRiskUpper"],
+          "properties": {
+            "sampleN": { "type": "integer", "minimum": 1 },
+            "acceptedN": { "type": "integer", "minimum": 0 },
+            "coverage": { "$ref": "#/$defs/unit" },
+            "coverageLower": { "$ref": "#/$defs/nullableUnit" },
+            "selectiveRisk": { "$ref": "#/$defs/nullableUnit" },
+            "selectiveRiskUpper": { "$ref": "#/$defs/nullableUnit" }
+          }
+        },
+        "driftEvents": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "compatibilityRequired": { "type": "boolean" }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewLoad", "overrideRate", "latencyMs", "tokens", "costUsd", "calls", "retryRate", "fallbackRate", "cache", "usageReconciled"],
+      "properties": {
+        "reviewLoad": { "$ref": "#/$defs/unit" },
+        "overrideRate": { "$ref": "#/$defs/unit" },
+        "latencyMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p50", "p95", "p99"],
+          "properties": {
+            "p50": { "type": "number", "minimum": 0 },
+            "p95": { "type": "number", "minimum": 0 },
+            "p99": { "type": "number", "minimum": 0 }
+          }
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "output"],
+          "properties": {
+            "input": { "type": ["integer", "null"], "minimum": 0 },
+            "output": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "costUsd": { "type": ["number", "null"], "minimum": 0 },
+        "calls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["jev", "fallbackModel"],
+          "properties": {
+            "jev": { "type": "integer", "minimum": 0 },
+            "fallbackModel": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "retryRate": { "$ref": "#/$defs/unit" },
+        "fallbackRate": { "$ref": "#/$defs/unit" },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hits", "misses"],
+          "properties": {
+            "hits": { "type": "integer", "minimum": 0 },
+            "misses": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "usageReconciled": { "type": "boolean" }
+      }
+    },
+    "baselineComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "cascade", "delta", "qualityNonInferiority"],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/comparisonArm" },
+        "cascade": { "$ref": "#/$defs/comparisonArm" },
+        "delta": { "$ref": "#/$defs/comparisonArm" },
+        "qualityNonInferiority": { "oneOf": [{ "$ref": "#/$defs/nonInferiority" }, { "type": "null" }] }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstreamDecision", "findings"],
+      "properties": {
+        "upstreamDecision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+        "findings": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "nullableUnit": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "bps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+    "sliceMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cascadeQuality", "baselineQuality", "acceptedCoverage", "falseAutoRate", "falseDuplicateRate", "duplicateRecall"],
+      "properties": {
+        "cascadeQuality": { "$ref": "#/$defs/unit" },
+        "baselineQuality": { "$ref": "#/$defs/unit" },
+        "acceptedCoverage": { "$ref": "#/$defs/unit" },
+        "falseAutoRate": { "$ref": "#/$defs/nullableUnit" },
+        "falseDuplicateRate": { "$ref": "#/$defs/nullableUnit" },
+        "duplicateRecall": { "$ref": "#/$defs/nullableUnit" }
+      }
+    },
+    "nonInferiority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "levelBps", "marginBps", "lowerBps", "upperBps", "estimateBps", "n", "decision"],
+      "properties": {
+        "method": { "const": "newcombe-hybrid-score" },
+        "levelBps": { "type": "integer", "exclusiveMinimum": 5000, "exclusiveMaximum": 9999 },
+        "marginBps": { "type": "integer", "minimum": -10000, "maximum": 0 },
+        "lowerBps": { "$ref": "#/$defs/bps" },
+        "upperBps": { "$ref": "#/$defs/bps" },
+        "estimateBps": { "$ref": "#/$defs/bps" },
+        "n": { "type": "integer", "minimum": 1 },
+        "decision": { "enum": ["non-inferior", "not-non-inferior", "insufficient"] }
+      }
+    },
+    "binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleN", "precision", "recall", "f1"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "precision": { "$ref": "#/$defs/unit" },
+        "recall": { "$ref": "#/$defs/unit" },
+        "f1": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "multiclass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleN", "macro", "perClass"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "macro": { "$ref": "#/$defs/prf" },
+        "perClass": { "type": "object", "additionalProperties": { "$ref": "#/$defs/prf" } }
+      }
+    },
+    "prf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["precision", "recall", "f1"],
+      "properties": {
+        "precision": { "$ref": "#/$defs/unit" },
+        "recall": { "$ref": "#/$defs/unit" },
+        "f1": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "comparisonArm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quality", "tokens", "costUsd", "reviewerTimeMinutes"],
+      "properties": {
+        "quality": { "type": "number" },
+        "tokens": { "type": ["integer", "null"] },
+        "costUsd": { "type": ["number", "null"] },
+        "reviewerTimeMinutes": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

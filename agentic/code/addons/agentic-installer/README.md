@@ -1,6 +1,7 @@
 # Agentic Installer
 
-An AIWG addon that defines the `setup.aiwg.io/v1` SetupManifest language for cross-platform, script-first software installation workflows.
+An AIWG addon that defines the `setup.aiwg.io/v1` SetupManifest language for
+cross-platform deterministic and provider-orchestrated installation workflows.
 
 ## Overview
 
@@ -14,9 +15,15 @@ The agentic-installer addon provides:
 
 ## Design Philosophy
 
-**Scripts are the primary artifact. Agentic steps are exception handling only.**
+**Deterministic manifests are script-first. Provider-orchestrated manifests are
+explicitly labeled.**
 
-A well-written SetupManifest produces shell scripts that run standalone, without AI tooling. The `type: agentic` step exists only for recovery from unexpected environment states. If you can script it, script it.
+A deterministic SetupManifest produces shell scripts that run standalone,
+without AI tooling. Its `type: agentic` step exists only for recovery from
+unexpected environment states. A manifest with
+`metadata.execution_mode: provider-orchestrated` is instead interpreted by a
+capable AI provider and may use reasoning steps as the workflow. The CLI
+validates that mode but does not execute it through `setup-run`.
 
 ## Quick Start
 
@@ -69,23 +76,30 @@ recovery_procedures:
 ```
 
 ```bash
-# Validate
+# Generate starter runtime assets
+aiwg setup-generate --output setup.manifest.yaml
+
+# Validate for agentic runtime consumption
 aiwg setup-validate setup.manifest.yaml
 
-# Dry run
-aiwg setup-run --dry-run
+# Dry run without executing steps
+aiwg setup-run --manifest setup.manifest.yaml --dry-run
 
-# Execute
-aiwg setup-run
+# Execute only after the automation has reviewed the plan and has authorization
+aiwg setup-run --manifest setup.manifest.yaml --confirm
 ```
 
-## Skills
+## Agentic Runtime Commands
 
-| Skill | Description |
-|-------|-------------|
-| `setup-generate` | Generate a manifest from project context (README, package files) |
-| `setup-run` | Execute a manifest step by step with platform detection |
-| `setup-validate` | Validate a manifest against schema and run consistency checks |
+These CLI entrypoints are for agents and automation. They are intentionally
+machine-oriented surfaces that make setup assets discoverable, validateable, and
+executable under explicit safety gates.
+
+| Command | Backing skill | Description |
+|---------|---------------|-------------|
+| `setup-generate` | `setup-generate` | Generate starter manifest and script assets |
+| `setup-validate` | `setup-validate` | Validate a manifest against schema and consistency checks |
+| `setup-run` | `setup-run` | Validate, plan, and execute manifest steps with confirmation gates |
 
 ## Script Template Library
 

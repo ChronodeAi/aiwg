@@ -17,7 +17,7 @@ import { main } from '../../../src/config/cli.js';
 function makeTmpRepo(): string {
   const dir = join(tmpdir(), `aiwg-show-project-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
-  execSync('git init --quiet', { cwd: dir });
+  execSync('git init --quiet', { timeout: 60_000, cwd: dir });
   return dir;
 }
 
@@ -41,8 +41,10 @@ describe('aiwg config show --project (#999)', () => {
   let tmp: string;
   let logs: string[];
   let consoleSpy: ReturnType<typeof vi.spyOn>;
+  let originalArtifactsPath: string | undefined;
 
   beforeEach(() => {
+    originalArtifactsPath = process.env.AIWG_ARTIFACTS_PATH;
     tmp = makeTmpRepo();
     logs = [];
     consoleSpy = vi.spyOn(console, 'log').mockImplementation((msg: unknown) => {
@@ -51,6 +53,8 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   afterEach(() => {
+    if (originalArtifactsPath === undefined) delete process.env.AIWG_ARTIFACTS_PATH;
+    else process.env.AIWG_ARTIFACTS_PATH = originalArtifactsPath;
     consoleSpy?.mockRestore();
     rmSync(tmp, { recursive: true, force: true });
   });
@@ -79,8 +83,21 @@ describe('aiwg config show --project (#999)', () => {
     expect(out).toContain('origin');
   });
 
+  it('reports the configured artifact-root override', async () => {
+    const artifactRoot = join(tmp, 'private-corpus');
+    process.env.AIWG_ARTIFACTS_PATH = artifactRoot;
+    mkdirSync(artifactRoot, { recursive: true });
+    writeConfig(tmp, {});
+
+    await main(['show', '--project', '--target', tmp]);
+
+    const out = logs.join('\n');
+    expect(out).toContain(`Project config: ${join(tmp, '.aiwg', 'aiwg.config')}`);
+    expect(out).toContain(`Artifact root:  ${artifactRoot}`);
+  });
+
   it('shows resolved remote URLs when remotes are present', async () => {
-    execSync('git remote add origin https://example.com/owner/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://example.com/owner/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: { primary: 'origin' },
     });
@@ -91,8 +108,8 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   it('shows secondary remotes with purpose and push_on_release flags', async () => {
-    execSync('git remote add origin https://primary/r.git', { cwd: tmp });
-    execSync('git remote add github https://github.com/o/r.git', { cwd: tmp });
+    execSync('git remote add origin https://primary/r.git', { timeout: 60_000, cwd: tmp });
+    execSync('git remote add github https://github.com/o/r.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: {
         primary: 'origin',
@@ -107,8 +124,23 @@ describe('aiwg config show --project (#999)', () => {
     expect(out).toContain('push tags on release');
   });
 
+  it('shows a distinct customer issue tracker', async () => {
+    execSync('git remote add origin https://primary/r.git', { timeout: 60_000, cwd: tmp });
+    execSync('git remote add github https://github.com/o/r.git', { timeout: 60_000, cwd: tmp });
+    writeConfig(tmp, {
+      remotes: {
+        primary: 'origin',
+        issue_tracker: 'origin',
+        customer_issue_tracker: 'github',
+        customer_issue_provider: 'github',
+      },
+    });
+    await main(['show', '--project', '--target', tmp]);
+    expect(logs.join('\n')).toContain('Customer issues: github (https://github.com/o/r.git)');
+  });
+
   it('emits stable JSON with --json', async () => {
-    execSync('git remote add origin https://example.com/owner/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://example.com/owner/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: { primary: 'origin', secondary: [{ name: 'mirror' }] },
     });
@@ -123,6 +155,34 @@ describe('aiwg config show --project (#999)', () => {
       },
     });
     expect(parsed.remotes.secondary[0]).toMatchObject({ name: 'mirror', url: null });
+  });
+
+  it('surfaces multiple configured external links in JSON and human output', async () => {
+    writeConfig(tmp, {
+      externalLinks: {
+        project_docs: {
+          label: 'Project documentation',
+          url: 'https://example.com/docs',
+          category: 'docs',
+        },
+        status_page: {
+          label: 'Service status',
+          url: 'https://status.example.com',
+        },
+      },
+    });
+
+    await main(['show', '--project', '--json', '--target', tmp]);
+    const parsed = JSON.parse(logs.join('\n'));
+    expect(parsed.externalLinks).toHaveProperty('project_docs.url', 'https://example.com/docs');
+    expect(parsed.externalLinks).toHaveProperty('status_page.label', 'Service status');
+
+    logs.length = 0;
+    await main(['show', '--project', '--target', tmp]);
+    const human = logs.join('\n');
+    expect(human).toContain('External links:');
+    expect(human).toContain('project_docs: Project documentation');
+    expect(human).toContain('https://status.example.com');
   });
 
   it('reports url:null in JSON when remote name does not exist in git', async () => {

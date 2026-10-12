@@ -1,0 +1,23 @@
+[
+  {
+    "uuid": "web-conversation-unicode",
+    "name": "国际化テスト 🌍",
+    "created_at": "2026-08-03T09:00:00.000Z",
+    "chat_messages": [
+      {
+        "uuid": "web-msg-unicode-1",
+        "sender": "human",
+        "text": "こんにちは！絵文字テスト 🚀🔥✅ مرحبا بالعالم",
+        "created_at": "2026-08-03T09:00:00.000Z"
+      },
+      {
+        "uuid": "web-msg-unicode-2",
+        "sender": "assistant",
+        "created_at": "2026-08-03T09:00:30.000Z",
+        "content": [
+          { "type": "text", "text": "Здравствуйте! Support confirmed for RTL (مرحبا), CJK (你好), and emoji 🎉." }
+        ]
+      }
+    ]
+  }
+]

@@ -2,7 +2,7 @@
   "name": "@aiwg/cockpit-web",
   "version": "0.0.0",
   "private": true,
-  "description": "AIWG Cockpit web UI — React + Vite. Built output is served by the Bridge (token-injected). Not shipped in base aiwg.",
+  "description": "AIWG Cockpit web UI — React + Vite. Built output uses the Bridge one-time session bootstrap. Not shipped in base aiwg.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -26,6 +26,6 @@
     "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
     "vite": "^6.0.7",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.10"
   }
 }

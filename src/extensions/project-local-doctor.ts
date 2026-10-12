@@ -13,8 +13,7 @@
  * @implements #1037
  */
 
-import { resolve } from 'path';
-import { homedir } from 'os';
+import { join } from 'path';
 import { discoverProjectLocalBundles } from './project-local-discovery.js';
 import { buildUpstreamRegistry } from './upstream-registry.js';
 import { resolveShadows } from './shadow-resolver.js';
@@ -22,6 +21,10 @@ import { checkBundleManifestIgnored } from './project-local-gitignore.js';
 import { sha256OfFileRawAndNormalized } from './managed-marker.js';
 import type { ProjectLocalType } from './manifest.js';
 import type { AiwgConfig } from '../config/aiwg-config.js';
+import { projectAiwgPath } from '../config/project-artifacts.js';
+import { projectRelativePathIfInside } from './project-local-paths.js';
+import { auditProjectQuickref } from './project-quickref.js';
+import { artifactHashesForProvider, candidateDeployedPaths } from './project-local-remove.js';
 
 export interface DoctorSectionResult {
   /** Pre-formatted multi-line section (empty string when no project-local content). */
@@ -32,6 +35,8 @@ export interface DoctorSectionResult {
   denylistViolations: number;
   /** Count of artifacts whose deployed file hash differs from the registered hash. */
   driftCount: number;
+  /** Discovered bundles with no recorded deployment — usually an aborted deploy (#2503). */
+  undeployedCount: number;
   /** True when the section had failing content (validation, denylist, drift). */
   hasFailures: boolean;
 }
@@ -73,34 +78,30 @@ const TYPE_DIR: Record<ProjectLocalType, string> = {
   provider: 'providers',
 };
 
-// Per PUW-026 (#1127): home-deploying providers get absolute prefixes so
-// `resolve(projectDir, prefix)` correctly produces the home-rooted path
-// (resolve treats absolute paths as authoritative). Previously these were
-// `null`, which silently skipped lifecycle operations against home-deployed
-// project-local bundles.
-const PROVIDER_PREFIX: Record<string, string | null> = {
-  claude: '.claude',
-  cursor: '.cursor',
-  factory: '.factory',
-  opencode: '.opencode',
-  windsurf: '.windsurf',
-  warp: '.warp',
-  codex: '.codex',
-  copilot: '.github',
-  openclaw: resolve(homedir(), '.openclaw'),
-  hermes: resolve(homedir(), '.hermes'),
-};
-
 export async function buildProjectLocalDoctorSection(
   opts: BuildOptions,
 ): Promise<DoctorSectionResult> {
   const { projectDir, frameworkRoot, config, quiet = false } = opts;
 
   const discovery = await discoverProjectLocalBundles(projectDir);
+  const quickrefAudit = await auditProjectQuickref(projectDir, config?.providers ?? []);
+  const quickrefErrors = [...quickrefAudit.errors];
+  if (quickrefAudit.exists) {
+    for (const name of ['quickref.json', 'quickref.config.json']) {
+      const sourcePath = projectAiwgPath(projectDir, name);
+      const quickrefRelPath = projectRelativePathIfInside(projectDir, sourcePath);
+      const ignored = quickrefRelPath
+        ? await checkBundleManifestIgnored(projectDir, quickrefRelPath)
+        : null;
+      if (ignored === true && quickrefRelPath) {
+        quickrefErrors.push(`${quickrefRelPath} is ignored by git; operator project quickref input must be committed`);
+      }
+    }
+  }
 
   // No project-local content → no section at all
-  if (discovery.isEmpty && discovery.errors.length === 0) {
-    return { output: '', validationErrors: 0, denylistViolations: 0, driftCount: 0, hasFailures: false };
+  if (discovery.isEmpty && discovery.errors.length === 0 && !quickrefAudit.exists && quickrefErrors.length === 0) {
+    return { output: '', validationErrors: 0, denylistViolations: 0, driftCount: 0, undeployedCount: 0, hasFailures: false };
   }
 
   const lines: string[] = ['', '── Project-local artifacts ────────────────────────────────────'];
@@ -116,16 +117,23 @@ export async function buildProjectLocalDoctorSection(
       lines.push(`    ${dirName.padEnd(11)} ${ofType.length}${idList}`);
     }
     lines.push('');
+    if (quickrefAudit.exists) {
+      lines.push(`  Project quickref: ${quickrefAudit.skillName ?? 'invalid source'}`);
+      lines.push('');
+    }
   }
 
   // Validation
-  const validationErrors = discovery.errors.length;
+  const validationErrors = discovery.errors.length + quickrefErrors.length;
   if (validationErrors === 0) {
-    if (!quiet) lines.push('  Validation: ✓ all manifests valid');
+    if (!quiet) lines.push(`  Validation: ✓ all manifests${quickrefAudit.exists ? ' and project quickref source' : ''} valid`);
   } else {
     lines.push(`  Validation: ✗ ${validationErrors} error${validationErrors === 1 ? '' : 's'}`);
     for (const e of discovery.errors.slice(0, 10)) {
       lines.push(`    ✗ ${e.path}: ${e.field} — ${e.actual}`);
+    }
+    for (const error of quickrefErrors.slice(0, Math.max(0, 10 - discovery.errors.length))) {
+      lines.push(`    ✗ ${error}`);
     }
     if (validationErrors > 10) {
       lines.push(`    + ${validationErrors - 10} more (run 'aiwg list --project-local' for full list)`);
@@ -135,6 +143,9 @@ export async function buildProjectLocalDoctorSection(
 
   // Shadows + denylist
   let denylistViolations = 0;
+  // Bundles the resolver deliberately refused are already reported below as
+  // denylist violations; the undeployed check must not double-count them.
+  const refusedBundleIds = new Set<string>();
   if (discovery.bundles.length > 0) {
     try {
       const upstream = await buildUpstreamRegistry({ frameworkRoot });
@@ -143,6 +154,7 @@ export async function buildProjectLocalDoctorSection(
         r => r.verdict === 'refuse-unsafe' || r.verdict === 'refuse-phantom' || r.verdict === 'refuse-duplicate',
       );
       denylistViolations = refusals.length;
+      for (const refusal of refusals) refusedBundleIds.add(refusal.bundleId);
 
       if (!quiet) {
         const informational = shadowResult.shadows.filter(
@@ -175,34 +187,42 @@ export async function buildProjectLocalDoctorSection(
   }
 
   // Drift detection (requires config and artifactHashes)
-  let driftCount = 0;
-  const driftLines: string[] = [];
+  let driftCount = quickrefAudit.drift.length;
+  const driftLines: string[] = quickrefAudit.drift.map(message => `    ✗ project quickref :: ${message}`);
   let unhashedSeen = false;
   if (config) {
     for (const bundle of discovery.bundles) {
       const entry = config.installed[bundle.id];
       if (!entry || entry.source !== 'project-local') continue;
-      const hashes = entry.artifactHashes;
-      if (!hashes) {
+      if (!entry.artifactHashes && !entry.deployedArtifactHashes) {
         unhashedSeen = true;
         continue;
       }
       for (const provider of Object.keys(entry.deployedTo)) {
-        const prefix = PROVIDER_PREFIX[provider];
-        if (!prefix) continue;
-        const providerHashes = hashes[provider];
-        if (!providerHashes) {
-          unhashedSeen = true;
-          continue;
-        }
-        for (const [sourceRel, expectedHash] of Object.entries(providerHashes)) {
-          const deployedAbs = resolve(projectDir, `${prefix}/${sourceRel}`);
-          const actualHash = await hashDeployed(deployedAbs);
+        const hashes = artifactHashesForProvider(entry, provider);
+        for (const [sourceRel, expectedHash] of Object.entries(hashes)) {
+          let actualHash: { raw: string; normalized: string } | null = null;
+          for (const deployedAbs of candidateDeployedPaths(projectDir, provider, sourceRel)) {
+            actualHash = await hashDeployed(deployedAbs);
+            if (actualHash) break;
+          }
           if (actualHash === null) {
             // Missing — not drift, deploy is just absent
             continue;
           }
-          if (actualHash.normalized !== expectedHash && actualHash.raw !== expectedHash) {
+          // "Differs from source" must be judged against the source, not only
+          // against whichever rendering the registry recorded. A bundle can be
+          // (re)deployed through a path that writes the source verbatim plus
+          // the managed marker after the registry captured a transformed copy;
+          // the deployed file then matches its source line-for-line while the
+          // recorded hash never will (#2560). Accept the recorded deployed
+          // hash, the recorded source hash, or the current source file.
+          const accepted = new Set<string>([expectedHash]);
+          const recordedSourceHash = entry.artifactHashes?.[sourceRel];
+          if (recordedSourceHash) accepted.add(recordedSourceHash);
+          const currentSourceHash = await hashDeployed(join(bundle.artifactPath, sourceRel));
+          if (currentSourceHash) accepted.add(currentSourceHash.normalized);
+          if (!accepted.has(actualHash.normalized) && !accepted.has(actualHash.raw)) {
             driftCount++;
             driftLines.push(`    ✗ ${bundle.id} :: ${sourceRel} @ ${provider}  (deployed file differs from source)`);
           }
@@ -220,6 +240,35 @@ export async function buildProjectLocalDoctorSection(
     if (unhashedSeen) {
       lines.push('    (some entries lack artifactHashes — re-run `aiwg use <bundle>` to record)');
     }
+    lines.push('');
+  }
+
+  // Undeployed bundles (#2503).
+  //
+  // A bundle whose deploy aborted (a bad support-asset reference, a failed CLI
+  // contribution) leaves no `installed` entry, so every check above — manifest
+  // validation, drift — silently skips it and reports a clean bill of health
+  // for a bundle that is not actually available. The only prior signal was a
+  // WARN line in `aiwg use` output, long scrolled away by the time anyone
+  // wonders where the skill went.
+  const undeployed = config
+    ? discovery.bundles.filter((bundle) => {
+      if (refusedBundleIds.has(bundle.id)) return false;
+      const entry = config.installed[bundle.id];
+      return !entry || entry.source !== 'project-local';
+    })
+    : [];
+  if (undeployed.length > 0) {
+    lines.push(`  Deployment: ✗ ${undeployed.length} discovered bundle${undeployed.length === 1 ? '' : 's'} not deployed`);
+    for (const bundle of undeployed.slice(0, 5)) {
+      lines.push(`    ✗ ${bundle.type}/${bundle.id} (${bundle.localPath}) — no deployment recorded`);
+    }
+    if (undeployed.length > 5) lines.push(`    + ${undeployed.length - 5} more`);
+    lines.push(`    Run \`aiwg use ${undeployed[0].id}\` and read the output — a deploy that`);
+    lines.push('    fails reports the reason there.');
+    lines.push('');
+  } else if (!quiet && config && discovery.bundles.length > 0) {
+    lines.push('  Deployment: ✓ all discovered bundles deployed');
     lines.push('');
   }
 
@@ -258,8 +307,11 @@ export async function buildProjectLocalDoctorSection(
   if (discovery.bundles.length > 0) {
     const ignored: string[] = [];
     for (const b of discovery.bundles) {
-      const isIgnored = await checkBundleManifestIgnored(projectDir, b.manifestPath);
-      if (isIgnored === true) ignored.push(`${b.type}/${b.id} (${b.manifestPath})`);
+      const manifestRelPath = projectRelativePathIfInside(projectDir, join(b.bundlePath, 'manifest.json'));
+      const isIgnored = manifestRelPath
+        ? await checkBundleManifestIgnored(projectDir, manifestRelPath)
+        : null;
+      if (isIgnored === true) ignored.push(`${b.type}/${b.id} (${manifestRelPath})`);
     }
     gitignoredCount = ignored.length;
     if (ignored.length > 0) {
@@ -271,6 +323,8 @@ export async function buildProjectLocalDoctorSection(
         lines.push(`    + ${ignored.length - 5} more`);
       }
       lines.push('    Project-local bundle source should be tracked. Add to .gitignore:');
+      lines.push('      !.aiwg/quickref.json');
+      lines.push('      !.aiwg/quickref.config.json');
       lines.push('      !.aiwg/addons/');
       lines.push('      !.aiwg/extensions/');
       lines.push('      !.aiwg/frameworks/');
@@ -283,12 +337,14 @@ export async function buildProjectLocalDoctorSection(
     }
   }
 
-  const hasFailures = validationErrors > 0 || denylistViolations > 0 || driftCount > 0 || gitignoredCount > 0;
+  const hasFailures = validationErrors > 0 || denylistViolations > 0 || driftCount > 0
+    || gitignoredCount > 0 || undeployed.length > 0;
   return {
     output: lines.join('\n'),
     validationErrors,
     denylistViolations,
     driftCount,
+    undeployedCount: undeployed.length,
     hasFailures,
   };
 }

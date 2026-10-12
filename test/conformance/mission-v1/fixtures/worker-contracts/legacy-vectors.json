@@ -1,0 +1,77 @@
+[
+  {
+    "id": "legacy-caps-only",
+    "owner": "config",
+    "value": {
+      "parallelism": {
+        "max_parallel_subagents": 4,
+        "max_parallel_ralph_loops": 2,
+        "max_parallel_mc_missions": 4,
+        "rationale": "synthetic legacy"
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "legacy-empty-models",
+    "owner": "models",
+    "value": {},
+    "valid": true
+  },
+  {
+    "id": "legacy-native-models",
+    "owner": "models",
+    "value": {
+      "defaults": {
+        "provider": "codex",
+        "tier": "max-quality"
+      },
+      "agentOverrides": {
+        "aiwg-model-coding-worker": {
+          "model-override": "fixture/exact",
+          "rationale": "synthetic pin"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "id": "legacy-model-invalid-tier",
+    "owner": "models",
+    "value": {
+      "defaults": {
+        "tier": "unknown"
+      }
+    },
+    "valid": false
+  },
+  {
+    "id": "legacy-mission-no-worker",
+    "owner": "mission",
+    "value": {
+      "apiVersion": "mission.aiwg.io/v1",
+      "kind": "Mission",
+      "metadata": {
+        "id": "legacy-fixture"
+      },
+      "spec": {
+        "objective": "Synthetic legacy objective"
+      },
+      "status": {
+        "state": "pending",
+        "terminal": false,
+        "artifacts": []
+      },
+      "provenance": {
+        "sourceContract": "fixture",
+        "sourceVersion": "v1"
+      },
+      "extensions": {
+        "fixture.vendor": {
+          "retained": true
+        }
+      }
+    },
+    "valid": true
+  }
+]

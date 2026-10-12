@@ -6,8 +6,110 @@
  */
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+
+/** Existing MCP owners have not qualified worker contracts; fail before handoff. */
+const MISSION_WORKER_SCHEMA_ID = 'https://aiwg.io/schemas/mission.aiwg.io/v1';
+const MISSION_WORKER_DEFINITIONS = new Set([
+  'workerArtifact',
+  'workerEffort',
+  'workerTuple',
+  'workerLimits',
+  'workerSelectionIntent',
+  'workerBrief',
+  'workerClaims',
+  'workerUsage',
+  'workerExecution',
+  'workerVerification',
+  'workerResult',
+  'workerDispatch',
+  'workerDirectIntent',
+  'workerDirectBrief',
+  'workerResolvedInvocation',
+  'workerDirectVerification',
+  'workerDirectResult',
+  'workerHealthSummary',
+  'workerEffectiveHealth',
+]);
+
+// Resolve against the owning schema, never infer ownership from a $defs name.
+function workerContractReference(reference, base = 'https://aiwg.invalid/local-schema') {
+  if (typeof reference !== 'string') return false;
+  try {
+    const resolved = new URL(reference, base);
+    const fragment = decodeURIComponent(resolved.hash).split('/');
+    resolved.hash = '';
+    return resolved.href === MISSION_WORKER_SCHEMA_ID
+      && fragment[0] === '#' && fragment[1] === '$defs'
+      && MISSION_WORKER_DEFINITIONS.has(fragment[2]);
+  } catch {
+    return false;
+  }
+}
+
+export function assertNoWorkerBinding(value, consumer) {
+  const seenExtensions = new Set();
+  const seenRecords = new Set();
+  const seenSchemas = new Map();
+  function unsupported() {
+    const error = new Error(`OG_CONTRACT_UNSUPPORTED: ${consumer} does not advertise worker contract support.`);
+    error.code = 'OG_CONTRACT_UNSUPPORTED';
+    throw error;
+  }
+  function extensions(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenExtensions.has(item)) return;
+    seenExtensions.add(item);
+    if (Object.hasOwn(item, 'aiwg.worker-dispatch')) unsupported();
+    for (const [key, child] of Object.entries(item)) if (key.startsWith('aiwg.source.')) {
+      extensions(child);
+      record(child);
+    }
+  }
+  function schema(item, inheritedBase = 'https://aiwg.invalid/local-schema') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    let base = inheritedBase;
+    if (typeof item.$id === 'string') {
+      try { base = new URL(item.$id, inheritedBase).href; } catch { /* invalid schemas belong to validation */ }
+    }
+    const bases = seenSchemas.get(item) ?? new Set();
+    if (bases.has(base)) return;
+    bases.add(base);
+    seenSchemas.set(item, bases);
+    if (workerContractReference(item.$ref, base) || workerContractReference(item.schemaRef, base)) unsupported();
+    // Only JSON Schema subschemas inherit an owner. const/default/examples
+    // and properties' names are data, not active references or extensions.
+    for (const key of ['$defs', 'definitions', 'properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
+      for (const child of Object.values(item[key] ?? {})) schema(child, base);
+    }
+    for (const key of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+    }
+    for (const key of ['items', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties', 'contains', 'propertyNames', 'not', 'if', 'then', 'else']) {
+      if (Array.isArray(item[key])) for (const child of item[key]) schema(child, base);
+      else schema(item[key], base);
+    }
+  }
+  function record(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seenRecords.has(item)) return;
+    seenRecords.add(item);
+    // All mission-v1 carriers: /extensions and /status/artifacts/*/extensions.
+    extensions(item.extensions);
+    if (Array.isArray(item.status?.artifacts)) item.status.artifacts.forEach(record);
+    // Native protocols also use metadata and top-level artifacts.
+    extensions(item.metadata);
+    if (Array.isArray(item.artifacts)) item.artifacts.forEach(record);
+    if (typeof item.$ref === 'string' || typeof item.schemaRef === 'string'
+      || typeof item.$id === 'string' || typeof item.$schema === 'string') schema(item);
+    schema(item.schema);
+    if (workerContractReference(item.output?.schemaRef)) unsupported();
+    // Existing sandbox response envelopes own these records explicitly.
+    record(item.workload);
+    if (item.document_type === 'inventory' && Array.isArray(item.records)) item.records.forEach(record);
+  }
+  record(value);
+}
 
 /**
  * Resolve AIWG_ROOT, with safe fallback to known install locations.
@@ -15,26 +117,84 @@ import path from 'node:path';
 export const AIWG_ROOT = process.env.AIWG_ROOT ||
   path.join(process.env.HOME || '', '.local/share/ai-writing-guide');
 
+const PROJECT_AIWG_LOCATION_FILE = '.aiwg-location';
+const ARTIFACT_PATH_ENV_ALIASES = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+];
+
+function expandProjectArtifactPath(pathValue, projectDir) {
+  const trimmed = pathValue.trim();
+  if (trimmed === '~') return process.env.HOME || trimmed;
+  if (trimmed.startsWith('~/')) return path.resolve(process.env.HOME || '', trimmed.slice(2));
+  if (path.isAbsolute(trimmed)) return trimmed;
+  return path.resolve(projectDir, trimmed);
+}
+
+function parseProjectArtifactLocation(contents) {
+  for (const rawLine of contents.split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice('export '.length).trim();
+    const assignment = line.match(/^AIWG_ARTIFACTS_PATH\s*=\s*(.+)$/);
+    if (assignment) line = assignment[1].trim();
+    if (
+      (line.startsWith('"') && line.endsWith('"')) ||
+      (line.startsWith("'") && line.endsWith("'"))
+    ) {
+      line = line.slice(1, -1);
+    }
+    return line || null;
+  }
+  return null;
+}
+
+export async function resolveProjectAiwgDir(projectDir) {
+  for (const key of ARTIFACT_PATH_ENV_ALIASES) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.trim()) return expandProjectArtifactPath(value, projectDir);
+  }
+  try {
+    const pointer = await fs.readFile(path.join(projectDir, PROJECT_AIWG_LOCATION_FILE), 'utf-8');
+    const configured = parseProjectArtifactLocation(pointer);
+    if (configured) return expandProjectArtifactPath(configured, projectDir);
+  } catch {
+    // no pointer
+  }
+  return path.resolve(projectDir, '.aiwg');
+}
+
 /**
- * Walk up the directory tree looking for `.aiwg/`.
+ * Walk up the directory tree looking for `.aiwg/` or `.aiwg-location`.
  *
  * @param {string} startDir
  * @returns {Promise<string>}
- * @throws {Error} when no .aiwg directory found
+ * @throws {Error} when no .aiwg directory or .aiwg-location pointer is found
  */
 export async function findProjectRoot(startDir = process.cwd()) {
   let currentDir = startDir;
-  while (currentDir !== path.dirname(currentDir)) {
+  while (true) {
     const aiwgPath = path.join(currentDir, '.aiwg');
+    const pointerPath = path.join(currentDir, PROJECT_AIWG_LOCATION_FILE);
     try {
       const stat = await fs.stat(aiwgPath);
       if (stat.isDirectory()) return currentDir;
     } catch {
+      // continue to pointer check
+    }
+    try {
+      const stat = await fs.stat(pointerPath);
+      if (stat.isFile()) return currentDir;
+    } catch {
       // continue up
     }
-    currentDir = path.dirname(currentDir);
+    // Inspect the root candidate too, then stop instead of revisiting it.
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) break;
+    currentDir = parentDir;
   }
-  throw new Error('No .aiwg directory found. Run from an AIWG project or `aiwg new` first.');
+  throw new Error('No .aiwg directory or .aiwg-location pointer found. Run from an AIWG project or `aiwg new` first.');
 }
 
 /**
@@ -112,33 +272,56 @@ export function runAiwgCli(args, { cwd, env, timeoutMs = 120_000, input } = {}) 
     });
     let stdout = '';
     let stderr = '';
-    let timedOut = false;
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+    let settled = false;
+    let killTimer;
+    const rejectAndTerminate = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Settlement must not depend on a cooperative close event. Give the
+      // owned child one second to exit gracefully, then escalate cleanup.
+      reject(err);
+      killTimer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch { /* child may already have exited */ }
+      }, 1000);
+      killTimer.unref?.();
+      // Install cleanup first: kill() can synchronously trigger close in an adapter.
+      try { proc.kill('SIGTERM'); } catch { /* retain the original failure */ }
+    };
     const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill('SIGTERM');
+      rejectAndTerminate(new Error(`aiwg ${args[0] || ''} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    proc.stdout.on('data', (chunk) => { stdout += chunk; });
-    proc.stderr.on('data', (chunk) => { stderr += chunk; });
+    proc.stdout.on('data', (chunk) => { stdout += stdoutDecoder.write(chunk); });
+    proc.stderr.on('data', (chunk) => { stderr += stderrDecoder.write(chunk); });
 
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (timedOut) {
-        reject(new Error(`aiwg ${args[0] || ''} timed out after ${timeoutMs}ms`));
-        return;
-      }
+      clearTimeout(killTimer);
+      if (settled) return;
+      settled = true;
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       resolve({ stdout, stderr, code: code ?? -1 });
     });
     proc.on('error', (err) => {
       clearTimeout(timer);
+      // A late error must not cancel cleanup of a failed, still-live child.
+      if (settled) return;
+      settled = true;
       reject(err);
     });
 
-    if (input !== undefined) {
-      proc.stdin.write(input);
-      proc.stdin.end();
-    } else {
-      proc.stdin.end();
+    // Pipe errors are emitted on stdin, not on the ChildProcess. Register
+    // before writing so synchronous adapter events and late EPIPE are handled.
+    proc.stdin.on('error', rejectAndTerminate);
+    try {
+      if (input !== undefined) proc.stdin.write(input);
+      if (!settled) proc.stdin.end();
+    } catch (err) {
+      rejectAndTerminate(err);
     }
   });
 }
@@ -189,13 +372,20 @@ export async function loadCommandAllowList() {
     }
   }
   if (!text) {
-    // Last-resort fallback: spawn `aiwg help` and parse — slower but always works
+    // Installed packages need not contain TypeScript sources. Ask the CLI for
+    // its versioned canonical registry; human help is incomplete and contains examples.
     try {
-      const { stdout } = await runAiwgCli(['help'], { timeoutMs: 30_000 });
-      _commandIds = new Set(
-        Array.from(stdout.matchAll(/^\s{4}([a-z][a-z0-9-]+)\s/gm))
-          .map(m => m[1])
-      );
+      const { stdout, code } = await runAiwgCli(['help', '--json'], { timeoutMs: 30_000 });
+      if (code !== 0) throw new Error('Command registry subprocess failed');
+      const registry = JSON.parse(stdout);
+      const ids = registry?.commandIds;
+      if (registry?.schema !== 'aiwg.command-registry.v1'
+        || !Array.isArray(ids) || ids.length === 0
+        || ids.some(id => typeof id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(id))
+        || new Set(ids).size !== ids.length) {
+        throw new Error('Invalid command registry response');
+      }
+      _commandIds = new Set(ids);
       return _commandIds;
     } catch (e) {
       _commandIds = new Set();

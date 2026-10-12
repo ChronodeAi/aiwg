@@ -1,0 +1,123 @@
+{
+  "cases": [
+    {
+      "id": "undeclared-path",
+      "base": "triage-threshold-replay",
+      "layer": "semantic",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/variants/0/changes/0/path",
+          "value": "/ruleset/spec/rules/1/outcome"
+        }
+      ],
+      "expect": "undeclared path"
+    },
+    {
+      "id": "executable-value",
+      "base": "triage-input-field",
+      "layer": "semantic",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/pathDomains/0/values/-",
+          "value": "${process.env.SECRET}"
+        },
+        {
+          "op": "replace",
+          "path": "/variants/0/changes/0/value",
+          "value": "${process.env.SECRET}"
+        }
+      ],
+      "expect": "executable"
+    },
+    {
+      "id": "unauthorized-action",
+      "base": "triage-threshold-replay",
+      "layer": "semantic",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/pathDomains/2/values/-",
+          "value": { "route": "approve", "label": "low-risk", "action": "delete" }
+        },
+        {
+          "op": "replace",
+          "path": "/variants/1/changes/0/value",
+          "value": { "route": "approve", "label": "low-risk", "action": "delete" }
+        }
+      ],
+      "expect": "unauthorized action"
+    },
+    {
+      "id": "cross-project-subject",
+      "base": "triage-input-field",
+      "layer": "semantic",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/sourceSubject/projectId",
+          "value": "project-b"
+        }
+      ],
+      "expect": "source subject"
+    },
+    {
+      "id": "binary-search-probe",
+      "base": "triage-threshold-replay",
+      "layer": "semantic",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/privacy/differencing",
+          "value": "deny"
+        },
+        {
+          "op": "add",
+          "path": "/pathDomains/0/values/-",
+          "value": 8000
+        },
+        {
+          "op": "add",
+          "path": "/variants/-",
+          "value": {
+            "id": "threshold-mid",
+            "changes": [
+              {
+                "path": "/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps",
+                "value": 8000
+              }
+            ]
+          }
+        },
+        {
+          "op": "add",
+          "path": "/variants/-",
+          "value": {
+            "id": "threshold-low",
+            "changes": [
+              {
+                "path": "/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps",
+                "value": 7000
+              }
+            ]
+          }
+        }
+      ],
+      "expect": "probing"
+    },
+    {
+      "id": "schema-extra-field",
+      "base": "triage-input-field",
+      "layer": "schema",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/freeFormNarration",
+          "value": "explain why the model chose this"
+        }
+      ],
+      "expect": "additional"
+    }
+  ]
+}

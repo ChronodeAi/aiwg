@@ -173,6 +173,7 @@ describe('discoverDeployedArtifacts', () => {
 
 describe('provider policy', () => {
   it('emits AIWG.md/AGENTS.md for providers that need generated context bridges', () => {
+    expect(shouldEmitContextFiles('antigravity')).toBe(true);
     expect(shouldEmitContextFiles('codex')).toBe(true);
     expect(shouldEmitContextFiles('copilot')).toBe(true);
     expect(shouldEmitContextFiles('cursor')).toBe(true);
@@ -181,8 +182,12 @@ describe('provider policy', () => {
     expect(shouldEmitContextFiles('warp')).toBe(true);
     expect(shouldEmitContextFiles('factory')).toBe(true);
     expect(shouldEmitContextFiles('opencode')).toBe(true);
+    expect(shouldEmitContextFiles('pi')).toBe(true);
+    expect(shouldEmitContextFiles('grokbot')).toBe(true);
+    expect(shouldEmitContextFiles('grok-build')).toBe(true);
+    expect(shouldEmitContextFiles('muse')).toBe(true);
     expect(shouldEmitContextFiles('openhuman')).toBe(false);
-    expect(AGENTS_MD_PROVIDERS.size).toBe(8);
+    expect(AGENTS_MD_PROVIDERS.size).toBe(14);
   });
 
   // #1437: claude is no longer skipped — it gets AIWG.md emission + CLAUDE.md hook
@@ -232,6 +237,21 @@ describe('ensureClaudeMdHook (#1437)', () => {
     expect(content).toContain(CLAUDE_HOOK_START);
     expect(content).toContain(CLAUDE_HOOK_END);
     expect(content).toContain('@AIWG.md');
+    expect(content).toContain('@.aiwg/aiwg.config');
+    expect(content).toContain('Provider-native presentation/export: explicit-only');
+    expect(content).toContain('Never substitute, relocate, or omit the canonical AIWG plan/review artifact');
+  });
+
+  it('compiles the resolved Claude Design destination policy into the managed block', async () => {
+    await fs.mkdir(path.join(tmpDir, '.aiwg'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['claude'], installed: {}, scripts: {},
+      artifact_outputs: { canonical: 'aiwg', provider_native: 'disabled', destinations: { 'claude-code.design': { enabled: false, use_when: 'disabled' } } },
+    }));
+    const result = await ensureClaudeMdHook(tmpDir);
+    const content = await fs.readFile(result.claudeMdPath, 'utf8');
+    expect(content).toContain('Provider-native presentation/export: disabled');
+    expect(content).toContain('Claude Design: disabled by project policy');
   });
 
   it('appends the hook block when CLAUDE.md exists without the markers', async () => {
@@ -245,10 +265,69 @@ describe('ensureClaudeMdHook (#1437)', () => {
     expect(content).toContain(CLAUDE_HOOK_START);
     expect(content).toContain(CLAUDE_HOOK_END);
     expect(content).toContain('@AIWG.md');
+    expect(content).toContain('@.aiwg/aiwg.config');
     // Operator content appears before the block
     const operatorIdx = content.indexOf('Some operator content.');
     const blockIdx = content.indexOf(CLAUDE_HOOK_START);
     expect(operatorIdx).toBeLessThan(blockIdx);
+  });
+
+  it('migrates a generated provider bootstrap in place without duplicate includes (#1867)', async () => {
+    const initialized = [
+      '# Provider workspace bootstrap',
+      '<!-- aiwg-managed -->',
+      '<!-- AIWG:provider-bootstrap:start -->',
+      '',
+      '@WORKSPACE.md',
+      '@AIWG.md',
+      '',
+      '<!-- AIWG:provider-bootstrap:end -->',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), initialized, 'utf8');
+
+    const result = await ensureClaudeMdHook(tmpDir);
+    const content = await fs.readFile(result.claudeMdPath, 'utf8');
+
+    expect(result.action).toBe('updated');
+    expect((content.match(/AIWG:claude-md-hook:start/g) ?? [])).toHaveLength(1);
+    expect((content.match(/^@WORKSPACE\.md$/gm) ?? [])).toHaveLength(1);
+    expect((content.match(/^@AIWG\.md$/gm) ?? [])).toHaveLength(1);
+    expect((content.match(/^@\.aiwg\/aiwg\.config$/gm) ?? [])).toHaveLength(1);
+
+    const once = content;
+    expect((await ensureClaudeMdHook(tmpDir)).action).toBe('unchanged');
+    expect(await fs.readFile(result.claudeMdPath, 'utf8')).toBe(once);
+  });
+
+  it('byte-preserves operator content surrounding a migrated bootstrap (#1867)', async () => {
+    const before = '# Operator header\r\ncustom: true\r\n';
+    const managed = [
+      '<!-- AIWG:provider-bootstrap:start -->',
+      '@WORKSPACE.md',
+      '@AIWG.md',
+      '<!-- AIWG:provider-bootstrap:end -->',
+    ].join('\n');
+    const after = '\r\n# Operator footer\r\nKeep this exactly.\r\n';
+    await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), before + managed + after, 'utf8');
+
+    const result = await ensureClaudeMdHook(tmpDir);
+    const content = await fs.readFile(result.claudeMdPath, 'utf8');
+
+    expect(result.action).toBe('updated');
+    expect(content.startsWith(before)).toBe(true);
+    expect(content.endsWith(after)).toBe(true);
+  });
+
+  it('refuses to append when legacy provider-bootstrap markers are malformed', async () => {
+    const malformed = '# Operator content\n<!-- AIWG:provider-bootstrap:start -->\n@WORKSPACE.md\n';
+    await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), malformed, 'utf8');
+
+    const result = await ensureClaudeMdHook(tmpDir);
+
+    expect(result.action).toBe('skipped');
+    expect(result.warnings.join('\n')).toContain('malformed');
+    expect(await fs.readFile(result.claudeMdPath, 'utf8')).toBe(malformed);
   });
 
   it('returns unchanged when the hook block is already canonical', async () => {

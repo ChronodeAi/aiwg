@@ -9,6 +9,8 @@ commandHint:
   model: haiku
   category: automation
   platforms: [claude-code, hermes, openclaw]
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Al Attach
@@ -150,5 +152,5 @@ Press `Ctrl+C` while attached.
 
 - @$AIWG_ROOT/src/cli/handlers/ralph.ts — Al handler (attachToLoopOutput)
 - @$AIWG_ROOT/src/cli/handlers/ralph-launcher.ts — Loop launcher and state management
-- @$AIWG_ROOT/agentic/code/addons/ralph/README.md — Al documentation
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/README.md — Al documentation
 - @$AIWG_ROOT/tools/ralph-external/README.md — External loop architecture

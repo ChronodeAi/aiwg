@@ -1,0 +1,288 @@
+[
+  {
+    "id": "qualified-no-effort",
+    "pack": "T-OG-01",
+    "patch": {},
+    "code": null
+  },
+  {
+    "id": "unknown-effort",
+    "pack": "T-OG-01",
+    "patch": {
+      "observation": {
+        "effortSupport": "unknown"
+      }
+    },
+    "code": "OG_EFFORT_DENIED"
+  },
+  {
+    "id": "no-effort-coding-unqualified",
+    "pack": "T-OG-01",
+    "patch": {
+      "role": "coding"
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "backend-evidence-cannot-downgrade",
+    "pack": "T-OG-01",
+    "patch": {
+      "identityEvidence": "runtime-configured",
+      "policy": {
+        "guards": {
+          "minimumIdentityEvidence": "backend-attested"
+        }
+      }
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "backend-evidence-satisfies-runtime",
+    "pack": "T-OG-01",
+    "patch": {
+      "identityEvidence": "backend-attested"
+    },
+    "code": null
+  },
+  {
+    "id": "unknown-identity",
+    "pack": "T-OG-01",
+    "patch": {
+      "identityEvidence": "unknown"
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "mismatched-identity",
+    "pack": "T-OG-01",
+    "patch": {
+      "identityEvidence": "mismatched"
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "exact-pin-preserved",
+    "pack": "T-OG-01",
+    "patch": {
+      "wrapperPin": "other"
+    },
+    "code": "OG_PIN_MISMATCH"
+  },
+  {
+    "id": "alias-pin-rejected",
+    "pack": "T-OG-01",
+    "patch": {
+      "selectedModel": "alias"
+    },
+    "code": "OG_PIN_MISMATCH"
+  },
+  {
+    "id": "contributor-data-blocked",
+    "pack": "T-OG-01",
+    "patch": {
+      "observation": {
+        "dataUse": {
+          "productImprovement": true
+        }
+      }
+    },
+    "code": "OG_DATA_POLICY"
+  },
+  {
+    "id": "unknown-data-blocked",
+    "pack": "T-OG-01",
+    "patch": {
+      "observation": {
+        "dataUse": {
+          "processing": "unknown"
+        }
+      }
+    },
+    "code": "OG_DATA_POLICY"
+  },
+  {
+    "id": "empty-policy-denies-route",
+    "pack": "T-OG-01",
+    "patch": {
+      "policy": {
+        "guards": {
+          "allowedVisibility": []
+        }
+      }
+    },
+    "code": "OG_MODEL_UNAPPROVED"
+  },
+  {
+    "id": "stale-evidence",
+    "pack": "T-OG-01",
+    "patch": {
+      "observation": {
+        "observedAt": "2020-01-01T00:00:00Z"
+      }
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "self-delegating-alias-blocked",
+    "pack": "T-OG-01",
+    "patch": {
+      "effort": "alias",
+      "observation": {
+        "effortSupport": "explicit",
+        "efforts": [
+          {
+            "id": "alias",
+            "selfDelegates": true
+          }
+        ]
+      },
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "alias",
+            "effortLadder": [
+              "alias"
+            ]
+          }
+        }
+      }
+    },
+    "code": "OG_EFFORT_DENIED"
+  },
+  {
+    "id": "unknown-child-fanout-blocked",
+    "pack": "T-OG-01",
+    "patch": {
+      "effort": "high",
+      "observation": {
+        "effortSupport": "explicit",
+        "efforts": [
+          {
+            "id": "high",
+            "selfDelegates": null
+          }
+        ]
+      },
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "high",
+            "effortLadder": [
+              "high"
+            ]
+          }
+        }
+      }
+    },
+    "code": "OG_EFFORT_DENIED"
+  },
+  {
+    "id": "qualified-model-effort-accepted",
+    "pack": "T-OG-01",
+    "patch": {
+      "effort": "high",
+      "observation": {
+        "effortSupport": "explicit",
+        "efforts": [
+          {
+            "id": "high",
+            "selfDelegates": false
+          }
+        ]
+      },
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "high",
+            "effortLadder": [
+              "high"
+            ]
+          }
+        }
+      }
+    },
+    "code": null
+  },
+  {
+    "id": "default-ultra-denied",
+    "pack": "T-OG-01",
+    "patch": {
+      "effort": "ultra",
+      "observation": {
+        "effortSupport": "explicit",
+        "efforts": [
+          {
+            "id": "ultra",
+            "selfDelegates": false
+          }
+        ]
+      },
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "ultra",
+            "effortLadder": [
+              "ultra"
+            ]
+          }
+        }
+      }
+    },
+    "code": "OG_EFFORT_DENIED"
+  },
+  {
+    "id": "unqualified-evidence",
+    "pack": "T-OG-01",
+    "patch": {
+      "observation": {
+        "qualification": {
+          "status": "unqualified"
+        }
+      }
+    },
+    "code": "OG_ADAPTER_UNQUALIFIED"
+  },
+  {
+    "id": "mixed-group-no-control-returns-null",
+    "pack": "T-OG-01",
+    "patch": {
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "high",
+            "effortLadder": [
+              "high"
+            ],
+            "allowNotApplicableEffort": true
+          }
+        }
+      }
+    },
+    "code": null
+  },
+  {
+    "id": "real-none-qualified-with-empty-ladder",
+    "pack": "T-OG-01",
+    "patch": {
+      "effort": "none",
+      "observation": {
+        "effortSupport": "explicit",
+        "efforts": [
+          {
+            "id": "none",
+            "selfDelegates": false
+          }
+        ]
+      },
+      "policy": {
+        "roleGuidance": {
+          "efficiency": {
+            "initialEffort": "none",
+            "effortLadder": []
+          }
+        }
+      }
+    },
+    "code": null
+  }
+]

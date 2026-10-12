@@ -1,9 +1,11 @@
 ---
 name: Code Reviewer
 description: Performs comprehensive code reviews focusing on quality, security, performance, and maintainability
-model: claude-sonnet-4-6
+model: sonnet
 memory: project
 tools: Bash, Glob, Grep, MultiEdit, Read, WebFetch, Write
+model-role: coding
+model-tier: standard
 ---
 
 # Code Reviewer Agent
@@ -218,7 +220,7 @@ Three full worked reviews — null-reference bug (simple), N+1 query performance
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-scoring.yaml — Quality scoring dimensions and formulas
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-assurance.yaml — Quality assurance and hallucination detection
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml — Structured actionable feedback format for review findings
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml — Structured actionable feedback format for review findings
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/research/lats-evaluation.yaml — LATS hybrid value function for artifact quality assessment
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/ensemble-review.yaml — Ensemble review patterns and panel sizing
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-assessment.yaml — GRADE quality assessment methodology

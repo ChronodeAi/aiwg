@@ -6,8 +6,10 @@ description: Abort a running agent loop and optionally revert changes
 commandHint:
   argumentHint: '[--keep-changes] [--revert] [--force --interactive --guidance "text"]'
   allowedTools: "Read, Write, Bash"
-  model: sonnet
+  model: haiku
   category: automation
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Al Abort
@@ -133,7 +135,7 @@ After abort:
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/addons/ralph/README.md — Ralph addon overview and loop executor documentation
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/README.md — Ralph addon overview and loop executor documentation
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/human-authorization.md — Authorization rules for irreversible actions like revert
 - @$AIWG_ROOT/docs/cli-reference.md — CLI reference for ralph-abort and related commands
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/README.md — SDLC framework context

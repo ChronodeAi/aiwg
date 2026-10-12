@@ -6,9 +6,11 @@ description: Orchestrate handoff validation between SDLC phases and tracks (Disc
 commandHint:
   argumentHint: <from-phase> <to-phase> [project-directory] [--guidance "text"] [--interactive]
   allowedTools: Task, Read, Write, Glob, TodoWrite
-  model: opus
+  model: sonnet
   category: sdlc-orchestration
   orchestration: true
+  modelRole: coding
+  modelTier: standard
 ---
 
 > **Declarative Flow (#1539):** This flow's orchestration is now also expressed as a
@@ -20,6 +22,15 @@ commandHint:
 
 **You are the Core Orchestrator** for validating and executing handoffs between SDLC phases and tracks.
 
+## Threat-assessment gate
+
+Before signoff or packaging, resolve the active workspace member's
+`security.threatAssessment` policy and assess the synthesized handoff as
+`handoff` with `tools/security/threat-assessment.mjs`. Store the report with
+the handoff evidence. Audit mode records `wouldAction` without interrupting;
+enforce-mode `flag`/`require-authorization` pauses and `reject` blocks the
+handoff. Off mode disables only this AIWG classifier.
+
 ## Your Role
 
 **You orchestrate multi-agent workflows. You do NOT execute bash scripts.**
@@ -29,7 +40,7 @@ When the user requests this flow (via natural language or explicit command):
 1. **Interpret the request** and confirm understanding
 2. **Read this template** as your orchestration guide
 3. **Extract agent assignments** and workflow steps
-4. **Launch agents via Task tool** in correct sequence
+4. **Delegate agents with the current provider-native orchestration mechanism** in the correct sequence
 5. **Synthesize results** and finalize artifacts
 6. **Report completion** with summary
 

@@ -1,0 +1,819 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyCalibration.v1.schema.json",
+  "title": "D17StudyCalibration",
+  "description": "D17 staged D09 calibration protocol, fitted mapping, calibration set binding and operator calibration review.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/protocol"
+    },
+    {
+      "$ref": "#/$defs/mapping"
+    },
+    {
+      "$ref": "#/$defs/set"
+    },
+    {
+      "$ref": "#/$defs/review"
+    },
+    {
+      "$ref": "#/$defs/reviewTemplate"
+    },
+    {
+      "$ref": "#/$defs/tradeoff"
+    }
+  ],
+  "$defs": {
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "phaseSplits",
+        "fitSplit",
+        "method",
+        "smoothing",
+        "minimumBlockN",
+        "calibrators",
+        "application",
+        "metricsArm",
+        "qualificationMetrics",
+        "profile",
+        "developmentReview",
+        "promotion",
+        "calibrationSetBinding"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-calibration-protocol/v1"
+        },
+        "phaseSplits": {
+          "type": "array",
+          "const": [
+            "tuning",
+            "calibration"
+          ]
+        },
+        "fitSplit": {
+          "const": "calibration"
+        },
+        "method": {
+          "const": "isotonic-pav-laplace-v1"
+        },
+        "smoothing": {
+          "const": "laplace-1"
+        },
+        "minimumBlockN": {
+          "const": 10
+        },
+        "calibrators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "member",
+            "aggregate"
+          ],
+          "properties": {
+            "member": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version",
+                "input",
+                "requests"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d17-single-call-isotonic"
+                },
+                "version": {
+                  "const": "1"
+                },
+                "input": {
+                  "const": "single-call-yes-probability"
+                },
+                "requests": {
+                  "type": "array",
+                  "const": [
+                    "champion",
+                    "member_1",
+                    "member_2",
+                    "member_3"
+                  ]
+                }
+              }
+            },
+            "aggregate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version",
+                "input",
+                "requests"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d17-three-sample-mean-isotonic"
+                },
+                "version": {
+                  "const": "1"
+                },
+                "input": {
+                  "const": "three-sample-mean-yes-probability"
+                },
+                "requests": {
+                  "type": "array",
+                  "const": [
+                    "member_1",
+                    "member_2",
+                    "member_3"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "champion",
+            "challenger",
+            "tie",
+            "acceptance"
+          ],
+          "properties": {
+            "champion": {
+              "const": "member"
+            },
+            "challenger": {
+              "const": "aggregate"
+            },
+            "tie": {
+              "const": "defer"
+            },
+            "acceptance": {
+              "const": "calibrated-yes-probability-not-0.5-and-native-aggregate-accept"
+            }
+          }
+        },
+        "metricsArm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "member",
+            "aggregate"
+          ],
+          "properties": {
+            "member": {
+              "const": "champion"
+            },
+            "aggregate": {
+              "const": "challenger"
+            }
+          }
+        },
+        "qualificationMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "folds",
+            "assignment",
+            "finalMapping"
+          ],
+          "properties": {
+            "method": {
+              "const": "slice-stratified-k-fold-out-of-fold"
+            },
+            "folds": {
+              "const": 5
+            },
+            "assignment": {
+              "const": "row-id-order-within-slice-modulo-folds"
+            },
+            "finalMapping": {
+              "const": "full-calibration-split"
+            }
+          }
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimumTotalSamples",
+            "minimumPerSliceSamples",
+            "powerRule",
+            "confidenceInterval",
+            "maximumCalibrationError",
+            "maximumSelectiveRisk",
+            "expiresAfterDays"
+          ],
+          "properties": {
+            "minimumTotalSamples": {
+              "const": 380
+            },
+            "minimumPerSliceSamples": {
+              "const": 95
+            },
+            "powerRule": {
+              "const": null
+            },
+            "confidenceInterval": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "level"
+              ],
+              "properties": {
+                "method": {
+                  "const": "wilson"
+                },
+                "level": {
+                  "const": 0.95
+                }
+              }
+            },
+            "maximumCalibrationError": {
+              "const": 0.1
+            },
+            "maximumSelectiveRisk": {
+              "const": 0.1
+            },
+            "expiresAfterDays": {
+              "const": 30
+            }
+          }
+        },
+        "developmentReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stage",
+            "assessments",
+            "requiredFor",
+            "approvalBinding"
+          ],
+          "properties": {
+            "stage": {
+              "const": "development"
+            },
+            "assessments": {
+              "const": 40
+            },
+            "requiredFor": {
+              "type": "array",
+              "const": [
+                "phase-bundle",
+                "calibration-fit",
+                "calibration-registration",
+                "test-scoring"
+              ]
+            },
+            "approvalBinding": {
+              "const": "calibration-phase approvalReference cites the development review digest"
+            }
+          }
+        },
+        "calibrationSetBinding": {
+          "const": "approval.calibration.calibrationArtifactDigest = heldoutDigest(decision-d17-calibration-set/v1)"
+        },
+        "promotion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "studyDecision",
+            "route",
+            "requires"
+          ],
+          "properties": {
+            "studyDecision": {
+              "const": "HOLD-or-ROLLBACK"
+            },
+            "route": {
+              "const": "D09 PromotionEligibility + promoteChampionChallenger"
+            },
+            "requires": {
+              "type": "array",
+              "const": [
+                "locked-snapshot integrity gate PROMOTE",
+                "statistical gate pass",
+                "positive quality lower bound",
+                "anchored extra-cost tradeoff approval",
+                "D09 promotion eligibility"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "role",
+        "calibrator",
+        "method",
+        "model",
+        "splitDigest",
+        "definitionDigest",
+        "evidenceDigest",
+        "n",
+        "rows",
+        "blocks",
+        "qualification"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-calibration-mapping/v1"
+        },
+        "role": {
+          "enum": [
+            "member",
+            "aggregate"
+          ]
+        },
+        "calibrator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version"
+          ],
+          "properties": {
+            "id": {
+              "enum": [
+                "d17-single-call-isotonic",
+                "d17-three-sample-mean-isotonic"
+              ]
+            },
+            "version": {
+              "const": "1"
+            }
+          }
+        },
+        "method": {
+          "const": "isotonic-pav-laplace-v1"
+        },
+        "model": {
+          "const": "jev-1.13.0"
+        },
+        "splitDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "definitionDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "evidenceDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "lower",
+              "upper",
+              "n",
+              "yes",
+              "probability"
+            ],
+            "properties": {
+              "lower": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "upper": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "n": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "yes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "probability": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "exclusiveMaximum": 1
+              }
+            }
+          }
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "folds",
+            "outOfFold",
+            "inSample"
+          ],
+          "properties": {
+            "method": {
+              "const": "slice-stratified-k-fold-out-of-fold"
+            },
+            "folds": {
+              "const": 5
+            },
+            "outOfFold": {
+              "$ref": "#/$defs/metrics"
+            },
+            "inSample": {
+              "$ref": "#/$defs/metrics"
+            }
+          }
+        }
+      }
+    },
+    "set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "corpusDigest",
+        "preregistrationDigest",
+        "calibrationPhaseRecordDigest",
+        "priorApprovalDigest",
+        "member",
+        "aggregate"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-calibration-set/v1"
+        },
+        "corpusDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "preregistrationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "calibrationPhaseRecordDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "priorApprovalDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "member": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifactId",
+            "artifactDigest",
+            "mappingDigest"
+          ],
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "artifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "aggregate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifactId",
+            "artifactDigest",
+            "mappingDigest"
+          ],
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "artifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "approved",
+        "reviewer",
+        "calibrationSetDigest",
+        "memberArtifactDigest",
+        "aggregateArtifactDigest",
+        "approvalReference",
+        "reviewedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-calibration-review/v1"
+        },
+        "approved": {
+          "const": true
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "calibrationSetDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "memberArtifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "aggregateArtifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "approvalReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "reviewedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+        }
+      }
+    },
+    "reviewTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "approved",
+        "reviewer",
+        "calibrationSetDigest",
+        "memberArtifactDigest",
+        "aggregateArtifactDigest",
+        "approvalReference",
+        "reviewedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-calibration-review/v1"
+        },
+        "approved": {
+          "const": null
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          ]
+        },
+        "calibrationSetDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "memberArtifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "aggregateArtifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "approvalReference": {
+          "const": null
+        },
+        "reviewedAt": {
+          "const": null
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimumTotalSamples",
+        "minimumPerSliceSamples",
+        "powerRule",
+        "confidenceInterval",
+        "maximumCalibrationError",
+        "maximumSelectiveRisk",
+        "expiresAfterDays"
+      ],
+      "properties": {
+        "minimumTotalSamples": {
+          "const": 380
+        },
+        "minimumPerSliceSamples": {
+          "const": 95
+        },
+        "powerRule": {
+          "const": null
+        },
+        "confidenceInterval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "level"
+          ],
+          "properties": {
+            "method": {
+              "const": "wilson"
+            },
+            "level": {
+              "const": 0.95
+            }
+          }
+        },
+        "maximumCalibrationError": {
+          "const": 0.1
+        },
+        "maximumSelectiveRisk": {
+          "const": 0.1
+        },
+        "expiresAfterDays": {
+          "const": 30
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalSamples",
+        "perSliceSamples",
+        "calibrationError",
+        "selectiveRisk",
+        "confidenceIntervals"
+      ],
+      "properties": {
+        "totalSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "perSliceSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "calibrationError": {
+          "type": "number",
+          "minimum": 0
+        },
+        "selectiveRisk": {
+          "type": "number",
+          "minimum": 0
+        },
+        "confidenceIntervals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selectiveRisk",
+            "coverage"
+          ],
+          "properties": {
+            "selectiveRisk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lower",
+                "upper"
+              ],
+              "properties": {
+                "lower": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "upper": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "coverage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lower",
+                "upper"
+              ],
+              "properties": {
+                "lower": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "upper": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tradeoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "approved",
+        "reviewer",
+        "reportDigest",
+        "statisticsDigest",
+        "netSavingsMicros",
+        "acceptedAdditionalCostMicros",
+        "qualityLowerBps",
+        "approvalReference",
+        "approvedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17-tradeoff-approval/v1"
+        },
+        "approved": {
+          "const": true
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "reportDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "statisticsDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "netSavingsMicros": {
+          "type": "number"
+        },
+        "acceptedAdditionalCostMicros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "qualityLowerBps": {
+          "type": "integer"
+        },
+        "approvalReference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "approvedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+        }
+      }
+    }
+  }
+}

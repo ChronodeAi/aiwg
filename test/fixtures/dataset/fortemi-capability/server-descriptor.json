@@ -1,0 +1,208 @@
+{
+  "contract": "fortemi.dataset-execution-capabilities/v1",
+  "schemaVersion": "1.0.0",
+  "runtime": {
+    "id": "fortemi-server-mcp",
+    "version": "2026.9.10",
+    "plane": "live-remote-persistence",
+    "dataClass": "remote-persistence",
+    "maturity": "alpha"
+  },
+  "guarantees": {
+    "transaction": "atomic-batch",
+    "isolation": "serializable",
+    "durability": "wal",
+    "availability": "single-host",
+    "ordering": "backend-cursor"
+  },
+  "capabilities": [
+    {
+      "id": "ingest.full",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxInputBytes": 16777216,
+        "maxRecordBytes": 4194304,
+        "maxBatchRecords": 500,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "ingest.snapshot",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxInputBytes": 16777216,
+        "maxRecordBytes": 4194304,
+        "maxBatchRecords": 500,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "ingest.incremental",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxInputBytes": 16777216,
+        "maxRecordBytes": 4194304,
+        "maxBatchRecords": 500,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "schema.inspect",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "identity.stable-revision",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "identity.record",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "mutation.upsert",
+      "version": "1.0.0",
+      "status": "supported",
+      "limits": {
+        "maxInputBytes": 16777216,
+        "maxRecordBytes": 4194304,
+        "maxBatchRecords": 500,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "checkpoint.read",
+      "version": "1.0.0",
+      "status": "experimental",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "checkpoint.write",
+      "version": "1.0.0",
+      "status": "experimental",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "execution.cancel",
+      "version": "1.0.0",
+      "status": "experimental",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "rejection.record",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "index.lexical",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxPageSize": 1000,
+        "maxTraversalDepth": 8,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "lineage.dataset",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxPageSize": 1000,
+        "maxTraversalDepth": 8,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "lineage.record",
+      "version": "1.0.0",
+      "status": "experimental",
+      "limits": {
+        "maxPageSize": 1000,
+        "maxTraversalDepth": 8,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "transaction.atomic-batch",
+      "version": "1.0.0",
+      "status": "supported",
+      "limits": {
+        "maxInputBytes": 16777216,
+        "maxRecordBytes": 4194304,
+        "maxBatchRecords": 500,
+        "maxConcurrency": 1
+      },
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "pagination.cursor",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    },
+    {
+      "id": "ordering.deterministic",
+      "version": "1.0.0",
+      "status": "supported",
+      "evidence": [
+        "fortemi-server-dataset-execution-v1"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "fortemi-server-dataset-execution-v1",
+      "kind": "fixture",
+      "uri": "fortemi://contracts/dataset-execution/1.0.0/conformance"
+    }
+  ]
+}

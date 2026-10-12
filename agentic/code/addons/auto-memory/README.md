@@ -304,7 +304,7 @@ Memory has evolved with:
 
 - **Claude Code Automatic Memory**: [Documentation](https://docs.anthropic.com/claude/docs/automatic-memory) (Claude Code v2.1.32+)
 - **AIWG CLAUDE.md**: `@CLAUDE.md` - Static project instructions
-- **Agent Loop Debug Memory**: `@$AIWG_ROOT/agentic/code/addons/ralph/schemas/debug-memory.yaml` - Loop-specific debugging state
+- **Agent Loop Debug Memory**: `@$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/debug-memory.yaml` - Loop-specific debugging state
 - **AIWG Scaffolding**: `@$AIWG_ROOT/tools/scaffold/` - Project scaffolding implementation
 
 ## Version History

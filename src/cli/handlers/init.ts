@@ -26,9 +26,12 @@ import {
 } from '../../config/aiwg-config.js';
 import * as ui from '../ui.js';
 import { askString as sharedAskString, askYesNo as sharedAskYesNo } from '../prompt-utils.js';
+import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 import { writeNormalizedAiwgMd } from '../../smiths/context-pipeline/finalization.js';
+import { ensureWorkspaceContext } from '../../smiths/context-pipeline/workspace-context.js';
 
 const PROVIDER_LABELS: Record<string, string> = {
+  antigravity: 'Google Antigravity .agents/',
   claude:    'Claude Code       .claude/',
   copilot:   'GitHub Copilot    .github/',
   cursor:    'Cursor            .cursor/',
@@ -39,6 +42,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   codex:     'OpenAI Codex      ~/.codex/',
   openclaw:  'OpenClaw          ~/.openclaw/',
   hermes:    'Hermes (MCP)      aiwg mcp',
+  omp:       'Oh My Pi         .omp/ + .agents/skills/',
+  pi:        'Pi Coding Agent   .pi/ + .agents/skills/',
 };
 
 // Local aliases for the shared prompt utilities. These preserve existing
@@ -78,8 +83,13 @@ async function askProviders(rl: readline.Interface, signal?: AbortSignal): Promi
     const num = parseInt(part, 10);
     if (!isNaN(num) && num >= 1 && num <= VALID_PROVIDERS.length) {
       selected.push(VALID_PROVIDERS[num - 1]);
-    } else if (VALID_PROVIDERS.includes(part as typeof VALID_PROVIDERS[number])) {
-      selected.push(part);
+      continue;
+    }
+    // Accept canonical ids and registered aliases (e.g. `dsh` for
+    // `deepseek-harness`) so the picker honours the same names as `--provider`.
+    const canonical = normalizeProviderDefinitionId(part);
+    if (canonical && VALID_PROVIDERS.includes(canonical as typeof VALID_PROVIDERS[number])) {
+      selected.push(canonical);
     } else {
       ui.warn(`  Unknown provider '${part}' — skipped`);
     }
@@ -186,11 +196,13 @@ export const initHandler: CommandHandler = {
 
     // Write
     await writeAiwgConfig(projectDir, config);
-    await writeNormalizedAiwgMd(projectDir);
+    const normalizedAiwgMdPath = await writeNormalizedAiwgMd(projectDir);
+    const workspace = await ensureWorkspaceContext(projectDir);
 
     ui.blank();
     ui.success(`Created ${getConfigPath(projectDir)}`);
-    ui.success('Created .aiwg/AIWG.md');
+    ui.success(`Created ${normalizedAiwgMdPath}`);
+    ui.success(`${workspace.action === 'created' ? 'Created' : 'Preserved'} WORKSPACE.md`);
     ui.success(`Providers: ${providers.join(', ')}`);
     if (Object.keys(scripts).length > 0) {
       ui.success(`Scripts: ${Object.keys(scripts).join(', ')}`);

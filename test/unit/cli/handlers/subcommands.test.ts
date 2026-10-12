@@ -11,6 +11,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { HandlerContext } from "../../../../src/cli/handlers/types.js";
 import { researchQueryCommand } from "../../../../src/extensions/commands/definitions.js";
+import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from "../../../../src/extensions/project-local-paths.js";
+
+const ARTIFACT_ENV_KEYS = [
+  "AIWG_ARTIFACTS_PATH",
+  "AIWG_PROJECT_ARTIFACTS_PATH",
+  "AIWG_PROJECT_AIWG_DIR",
+  PROJECT_LOCAL_SEARCH_PATHS_ENV,
+] as const;
+
+let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>> = {};
 
 // Mock script runner
 const mockRun = vi.fn().mockResolvedValue({ exitCode: 0 });
@@ -22,8 +32,11 @@ vi.mock("../../../../src/cli/handlers/script-runner.js", () => ({
 }));
 
 // Mock channel manager
+const { mockGetFrameworkRoot } = vi.hoisted(() => ({
+  mockGetFrameworkRoot: vi.fn(),
+}));
 vi.mock("../../../../src/channel/manager.mjs", () => ({
-  getFrameworkRoot: vi.fn().mockResolvedValue("/mock/framework/root"),
+  getFrameworkRoot: mockGetFrameworkRoot,
 }));
 
 // Mock MCP CLI module
@@ -81,7 +94,13 @@ describe("Subcommand Handlers", () => {
   let mockContext: HandlerContext;
 
   beforeEach(() => {
+    originalEnv = {};
+    for (const key of ARTIFACT_ENV_KEYS) {
+      originalEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     mockRun.mockResolvedValue({ exitCode: 0 });
+    mockGetFrameworkRoot.mockResolvedValue("/mock/framework/root");
     mockContext = {
       args: [],
       rawArgs: [],
@@ -89,6 +108,14 @@ describe("Subcommand Handlers", () => {
       frameworkRoot: "/mock/framework/root",
     };
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    for (const key of ARTIFACT_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("mcpHandler", () => {
@@ -335,6 +362,11 @@ describe("Subcommand Handlers", () => {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
         expect(manifest.type).toBe("provider");
         expect(manifest.providerConfig).toEqual({ extends: "claude", displayName: "custom-provider" });
+        const fortemiManifestPath = path.join(tmpDir, ".aiwg", ".index", "fortemi-core", "project", "manifest.json");
+        const fortemiManifest = JSON.parse(fs.readFileSync(fortemiManifestPath, "utf-8"));
+        expect(fortemiManifest.backend).toBe("fortemi-core");
+        expect(fortemiManifest.graph).toBe("project");
+        expect(fortemiManifest.item_count).toBeGreaterThan(0);
       } finally {
         logSpy.mockRestore();
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -357,7 +389,7 @@ describe("Subcommand Handlers", () => {
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/plugin-installer-cli.mjs",
         mockContext.args,
-        { cwd: mockContext.cwd },
+        { cwd: mockContext.cwd, env: { AIWG_ROOT: "/mock/framework/root" } },
       );
     });
   });
@@ -420,19 +452,38 @@ describe("Subcommand Handlers", () => {
       await packagePluginHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["my-plugin"],
+        ["--plugin", "my-plugin"],
         { cwd: mockContext.cwd },
       );
 
-      // Multiple plugins with flags
+      // Positional public name with supported flags
       vi.clearAllMocks();
-      mockContext.args = ["plugin1", "plugin2", "--output", "dist"];
+      mockContext.args = ["plugin1", "--provider", "codex", "--dry-run"];
       await packagePluginHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["plugin1", "plugin2", "--output", "dist"],
+        ["--plugin", "plugin1", "--provider", "codex", "--dry-run"],
         { cwd: mockContext.cwd },
       );
+    });
+
+    it("preserves the legacy explicit --plugin compatibility form", async () => {
+      mockContext.args = ["--plugin", "sdlc", "--dry-run"];
+      await packagePluginHandler.execute(mockContext);
+      expect(mockRun).toHaveBeenCalledWith(
+        "tools/plugin/package-plugins.mjs",
+        ["--plugin", "sdlc", "--dry-run"],
+        { cwd: mockContext.cwd },
+      );
+    });
+
+    it("returns public AIWG help without exposing the internal node script", async () => {
+      mockContext.args = ["--help"];
+      const result = await packagePluginHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("aiwg package-plugin <name>");
+      expect(result.message).not.toContain("node tools/plugin");
+      expect(mockRun).not.toHaveBeenCalled();
     });
   });
 
@@ -461,13 +512,22 @@ describe("Subcommand Handlers", () => {
 
       // With additional args
       vi.clearAllMocks();
-      mockContext.args = ["--output", "dist"];
+      mockContext.args = ["--provider", "codex", "--dry-run"];
       await packageAllPluginsHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["--all", "--output", "dist"],
+        ["--all", "--provider", "codex", "--dry-run"],
         { cwd: mockContext.cwd },
       );
+    });
+
+    it("returns public AIWG help", async () => {
+      mockContext.args = ["--help"];
+      const result = await packageAllPluginsHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("aiwg package-all-plugins");
+      expect(result.message).not.toContain("node tools/plugin");
+      expect(mockRun).not.toHaveBeenCalled();
     });
   });
 
@@ -634,6 +694,51 @@ describe("Subcommand Handlers", () => {
       expect(errorResult.exitCode).toBe(1);
       expect(errorResult.error).toBe(testError);
       expect(errorResult.message).toMatch(/ops command failed/i);
+    });
+  });
+
+  describe("newBundleHandler", () => {
+    it("syncs the Fortemi Core project cache before claiming immediate discovery", async () => {
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const os = require("node:os");
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "aiwg-new-bundle-"));
+      const originalXdgDataHome = process.env.XDG_DATA_HOME;
+      process.env.XDG_DATA_HOME = path.join(tmpDir, "xdg-data");
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        mockContext = {
+          ...mockContext,
+          cwd: tmpDir,
+          args: ["fortemi-rulepack", "--starter", "rule"],
+          rawArgs: ["new-bundle", "fortemi-rulepack", "--starter", "rule"],
+        };
+
+        const result = await newBundleHandler.execute(mockContext);
+
+        expect(result.exitCode).toBe(0);
+        expect(
+          fs.existsSync(
+            path.join(
+              tmpDir,
+              ".aiwg",
+              ".index",
+              "fortemi-core",
+              "project",
+              "manifest.json",
+            ),
+          ),
+        ).toBe(true);
+        expect(logSpy.mock.calls.flat().join("\n")).toContain(
+          'Discoverable now via:  aiwg discover "fortemi-rulepack"',
+        );
+      } finally {
+        logSpy.mockRestore();
+        if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+        else process.env.XDG_DATA_HOME = originalXdgDataHome;
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 

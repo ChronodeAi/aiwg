@@ -10,9 +10,9 @@
  * new regressions rather than baselining today's number. They can be
  * overridden via env for specific CI needs:
  *
- *   AIWG_PACK_PACKED_BUDGET_KB    — default 22000 (22 MB)
+ *   AIWG_PACK_PACKED_BUDGET_KB    — default 23000 (23 MB)
  *   AIWG_PACK_UNPACKED_BUDGET_KB  — default 70000 (70 MB)
- *   AIWG_PACK_FILES_BUDGET        — default 5000 (file count)
+ *   AIWG_PACK_FILES_BUDGET        — default 5500 (file count)
  *
  * The package intentionally ships a prebuilt Fortemi Core framework discovery
  * index so users do not have to build that index after install. The dedicated
@@ -24,9 +24,13 @@
 
 import { execSync } from 'child_process';
 
-const PACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_PACKED_BUDGET_KB', 22_000);
+const PACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_PACKED_BUDGET_KB', 23_000);
 const UNPACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_UNPACKED_BUDGET_KB', 70_000);
-const FILES_BUDGET = parseIntEnv('AIWG_PACK_FILES_BUDGET', 5_000);
+// The full package intentionally preserves the inspectable, offline corpus:
+// 3,900 agentic artifacts, 700+ local docs, compiled modules, and runtime
+// tools. The 5,500 ceiling leaves less than 2% headroom over the measured
+// post-cleanup package while still catching accidental file proliferation.
+const FILES_BUDGET = parseIntEnv('AIWG_PACK_FILES_BUDGET', 5_500);
 
 const verbose = process.argv.includes('--verbose');
 

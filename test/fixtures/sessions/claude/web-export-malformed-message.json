@@ -1,0 +1,11 @@
+[
+  {
+    "uuid": "web-conversation-bad-message",
+    "name": "One malformed message",
+    "created_at": "2026-08-07T09:00:00.000Z",
+    "chat_messages": [
+      { "uuid": "web-msg-bad-1", "sender": "human", "text": "Fine", "created_at": "2026-08-07T09:00:00.000Z" },
+      { "uuid": "web-msg-bad-2", "sender": "narrator", "text": "Invalid sender value", "created_at": "2026-08-07T09:00:01.000Z" }
+    ]
+  }
+]
