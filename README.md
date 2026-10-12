@@ -172,15 +172,15 @@ artifact memory (`.aiwg/`), background orchestration, autonomous loops, artifact
 diagnostics, and more. These are tools the agent calls when the task calls for them — you stay in chat. Most are
 opt-in. The deployment layer works standalone as plain text files the platform reads natively.
 
-### Project scope (recommended) vs user scope (global)
+### Project scope, user scope, and multi-project workspaces
 
 `aiwg use` supports project deployments, additive user mirrors, and a
 user-global bootstrap:
 
 - **Project scope** — default. Run `aiwg use all --provider <provider>` from a project root and the artifacts land in
   that provider's project paths. This keeps project-specific instructions associated with the intended repository.
-  Some providers also use user-level surfaces; check the reported deployment scope. **This is the recommended default
-  for new users.**
+  Some providers also use user-level surfaces; check the reported deployment scope. **This is the simplest start
+  for a single project.**
 - **User scope (additive mirror)** — `aiwg use all --provider <provider> --scope user` keeps the
   project deployment and mirrors it to `~/.claude/agents/`,
   `~/.claude/skills/`, etc.
@@ -189,6 +189,9 @@ user-global bootstrap:
   lightweight context and provider bootstrap files in the current project.
   Ask the assistant to connect additional projects without
   deploying their own skill copies.
+
+Several repositories under one assistant or orchestrating session are supported. See
+[Working Across Multiple Projects](docs/guides/multi-project-workspaces.md) for setup, access, and sharing boundaries.
 
 Shared user-level instructions can be useful for personal conventions, while project-local instructions keep a team's
 requirements and decisions with its repository. Review both scopes when a provider uses them together. The installer
