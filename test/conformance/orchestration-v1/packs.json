@@ -70,7 +70,8 @@
         "test/unit/mcp/worker-qualification.test.ts",
         "test/unit/ralph-external/worker-finals.test.ts",
         "test/unit/mission-protocol/worker-results.test.ts",
-        "test/conformance/orchestration-v1/worker-health-adapters.test.ts"
+        "test/conformance/orchestration-v1/worker-health-adapters.test.ts",
+        "test/unit/ralph-external/worker-health.test.ts"
       ],
       "remaining": "S1 synthetic health observation and mapping only; no live version/account qualification. Managed supervision, shared ownership and remediation remain S2+."
     },
@@ -378,7 +379,8 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/conformance/orchestration-v1/worker-health-stall.test.ts"
+        "test/conformance/orchestration-v1/worker-health-stall.test.ts",
+        "test/unit/ralph-external/worker-health.test.ts"
       ],
       "remaining": "S1 exact stall math, synthetic clocks, bounded content fingerprints and uncertain stop only; automated retry/fallback and managed runtime remain S2+ with their existing owners."
     },

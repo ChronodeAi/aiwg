@@ -48,6 +48,24 @@ describe('T-OG-21 exact frozen effective health', () => {
 });
 
 describe('T-OG-21 no-progress and deadline observations', () => {
+  it.each([1, 2, 3])('513 rotating keys reach stalled within the scale-%s stall window', scale => {
+    const f = fixture({ stallSeconds: 300 * scale, quietSeconds: 90 * scale });
+    const hard = f.observer.snapshot().hardDeadlineAt;
+    for (let i = 0; i < 513; i++) {
+      f.set(i); f.observer.observe({ kind: 'progress', key: `rotating-${i}` });
+    }
+    const progress = f.observer.snapshot().lastProgressAt;
+    const deadline = 512 + 300000 * scale;
+    for (let i = 0, time = 1512; time <= deadline; i++, time += 1000) {
+      f.set(time); f.observer.observe({ kind: 'progress', key: `rotating-${i % 513}` });
+      const sample = f.observer.check();
+      expect(sample.lastProgressAt).toBe(progress);
+      expect(sample.hardDeadlineAt).toBe(hard);
+      if (time < deadline) expect(sample.state).toBe('active');
+    }
+    expect(f.observer.snapshot()).toMatchObject({ state: 'stalled', reasonCode: 'NO_PROGRESS', confidence: 'suspected', coverage: 'degraded' });
+    expect(f.observer.snapshot().unavailableSignals).toContain('progress-key-churn');
+  });
   it('520 distinct keys and 60 later completions never falsely stall or become hung', () => {
     const f = fixture();
     const hard = f.observer.snapshot().hardDeadlineAt;
