@@ -11,8 +11,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+import {
+  existsSync,
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  promises as fsp,
+} from 'fs';
+import { resolve, join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -262,24 +271,94 @@ describe('doctor: Node.js version check', () => {
 });
 
 // ── MCP server check logic ────────────────────────────────────
+//
+// #276: published npm installs ship only dist/src/mcp/server.mjs (no
+// src/mcp/server.mjs), so the check must accept either layout.
 
 describe('doctor: MCP server check', () => {
   async function checkMcp(root: string, exists: (p: string) => Promise<boolean>) {
-    const mcpServer = `${root}/src/mcp/server.mjs`;
-    const present = await exists(mcpServer);
+    const candidates = [`${root}/dist/src/mcp/server.mjs`, `${root}/src/mcp/server.mjs`];
+    const present = (await Promise.all(candidates.map(exists))).some(Boolean);
     return present
       ? { status: 'ok' as const, message: 'Available (run: aiwg mcp serve)' }
       : { status: 'warn' as const, message: 'Not found' };
   }
 
-  it('ok when mcp server exists', async () => {
-    const result = await checkMcp('/root', async () => true);
+  it('ok when source-layout mcp server exists', async () => {
+    const result = await checkMcp('/root', async (p) => p === '/root/src/mcp/server.mjs');
     expect(result.status).toBe('ok');
   });
 
-  it('warn (not error) when mcp server absent', async () => {
+  it('ok when dist-layout mcp server exists (published npm install)', async () => {
+    const result = await checkMcp('/root', async (p) => p === '/root/dist/src/mcp/server.mjs');
+    expect(result.status).toBe('ok');
+  });
+
+  it('warn (not error) when mcp server absent in both layouts', async () => {
     const result = await checkMcp('/root', async () => false);
     expect(result.status).toBe('warn');
+  });
+
+  it('source script checks both dist/src and src MCP server paths', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("path.join(AIWG_ROOT, 'dist/src/mcp/server.mjs')");
+    expect(content).toContain("path.join(AIWG_ROOT, 'src/mcp/server.mjs')");
+  });
+});
+
+describe('doctor: MCP server check — fixture trees (#276)', () => {
+  async function fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fsp.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function checkMcp(root: string) {
+    const candidates = [
+      join(root, 'dist/src/mcp/server.mjs'),
+      join(root, 'src/mcp/server.mjs'),
+    ];
+    const present = (await Promise.all(candidates.map(fileExists))).some(Boolean);
+    return present ? 'ok' : 'warn';
+  }
+
+  function makeTempRoot(): string {
+    return mkdtempSync(join(tmpdir(), 'aiwg-doctor-mcp-'));
+  }
+
+  it('reports ok for a dev/source checkout layout (src/mcp/server.mjs, no dist/)', async () => {
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'src/mcp/server.mjs'), '// source server\n');
+      expect(await checkMcp(root)).toBe('ok');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports ok for a published npm install layout (dist/src/mcp/server.mjs, no src/)', async () => {
+    const root = makeTempRoot();
+    try {
+      mkdirSync(join(root, 'dist/src/mcp'), { recursive: true });
+      writeFileSync(join(root, 'dist/src/mcp/server.mjs'), '// compiled server\n');
+      expect(await checkMcp(root)).toBe('ok');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports warn when neither layout has the server file', async () => {
+    const root = makeTempRoot();
+    try {
+      mkdirSync(root, { recursive: true });
+      expect(await checkMcp(root)).toBe('warn');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

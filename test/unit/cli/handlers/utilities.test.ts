@@ -258,6 +258,41 @@ describe('Utility Command Handlers', () => {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
     });
+
+    // #278 — Claude Code's own `.claude/skills/synced/` sync bucket (UUID
+    // bucket dirs + manifest.json, no SKILL.md at the top level) must never
+    // be reported as a colliding AIWG skill. A real skill nested one level
+    // inside a container directory must still be found.
+    it('does not report a non-skill container directory (synced/) as a colliding skill (#278)', async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-doctor-skill-collision-'));
+      const skillsDir = path.join(tmp, '.claude', 'skills');
+      fs.mkdirSync(path.join(skillsDir, 'real-skill'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'real-skill', 'SKILL.md'), '---\nname: real-skill\n---\nBody.\n');
+      // Claude Code bucket storage: UUID dirs with manifest.json, no SKILL.md
+      // anywhere directly under `synced/` itself.
+      fs.mkdirSync(path.join(skillsDir, 'synced', '.bucket-11111111-1111-1111-1111-111111111111'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'synced', '.last-complete-round'), '1\n');
+      // A real nested skill one level inside a container directory must
+      // still be found and reported — only the container itself is exempt.
+      fs.mkdirSync(path.join(skillsDir, 'synced', 'other'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'synced', 'other', 'SKILL.md'), '---\nname: other\n---\nBody.\n');
+
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        mockContext.cwd = tmp;
+        await doctorHandler.execute(mockContext);
+        const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+        expect(output).toContain('── Skill collision scan ──');
+        // 'synced' itself is never reported as a colliding skill name.
+        expect(output).not.toContain('✗ synced:');
+        // The real top-level skill and the real nested skill are still found.
+        expect(output).toContain('✗ real-skill:');
+        expect(output).toContain('synced/other');
+      } finally {
+        log.mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('contextFirewallHandler', () => {

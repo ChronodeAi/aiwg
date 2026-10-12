@@ -1384,9 +1384,14 @@ async function runDoctor() {
     check('Node.js', 'error', `${nodeVersion} (requires >= 18.0.0)`);
   }
 
-  // 8. Check MCP server
-  const mcpServer = path.join(AIWG_ROOT, 'src/mcp/server.mjs');
-  const hasMcp = await fileExists(mcpServer);
+  // 8. Check MCP server — published npm installs only ship dist/src/ (no
+  // src/), so check both the compiled and source layouts (#276).
+  const mcpServerCandidates = [
+    path.join(AIWG_ROOT, 'dist/src/mcp/server.mjs'),
+    path.join(AIWG_ROOT, 'src/mcp/server.mjs'),
+  ];
+  const mcpServerChecks = await Promise.all(mcpServerCandidates.map(fileExists));
+  const hasMcp = mcpServerChecks.some(Boolean);
   if (hasMcp) {
     check('MCP Server', 'ok', 'Available (run: aiwg mcp serve)');
   } else {

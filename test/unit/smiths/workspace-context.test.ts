@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { promises as fsPromises } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -618,5 +619,44 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     const index = JSON.parse(await readFile(join(root, '.aiwg', '.index', 'metadata.json'), 'utf8')) as { entries: Record<string, unknown> };
     expect(index.entries).toHaveProperty('WORKSPACE.md');
     expect(index.entries).toHaveProperty('AIWG.md');
+  });
+
+  // #277 — the context-graph walk must never descend into cache/registry/venv
+  // trees, even when they are reachable from the project root (not just $HOME).
+  it('never descends into cache/registry/venv directories during the nested-instruction-file walk', async () => {
+    const root = await project();
+    await writeFile(join(root, 'AGENTS.md'), 'Root instructions.\n');
+
+    // Sentinel AGENTS.md files buried inside directories that must be ignored
+    // by name. If the walk ever descends into them, these would be found.
+    const heavyDirs = [
+      ['.cache', 'act', 'deep'],
+      ['.cargo', 'registry', 'src'],
+      ['node_modules', 'some-pkg', 'nested'],
+      ['Trash', 'deleted-project'],
+      ['repo', '.venv', 'lib', 'site-packages'],
+    ];
+    for (const segments of heavyDirs) {
+      await mkdir(join(root, ...segments), { recursive: true });
+      await writeFile(join(root, ...segments, 'AGENTS.md'), 'Should never be found.\n');
+    }
+
+    const readdirSpy = vi.spyOn(fsPromises, 'readdir');
+    const audit = await auditWorkspaceContext(root);
+
+    // None of the sentinel files were discovered.
+    expect(audit.sources.some((source) => source.path !== 'AGENTS.md' && source.operatorContent.includes('Should never be found.'))).toBe(false);
+    expect(audit.plan.nestedSources).toHaveLength(0);
+
+    // The walk never even attempted to read inside the ignored directories.
+    const readDirectories = readdirSpy.mock.calls.map((call) => String(call[0]));
+    for (const directory of readDirectories) {
+      expect(directory).not.toMatch(/[\\/]\.cache([\\/]|$)/);
+      expect(directory).not.toMatch(/[\\/]\.cargo([\\/]|$)/);
+      expect(directory).not.toMatch(/[\\/]node_modules([\\/]|$)/);
+      expect(directory).not.toMatch(/[\\/]Trash([\\/]|$)/);
+      expect(directory).not.toMatch(/[\\/]\.venv([\\/]|$)/);
+    }
+    readdirSpy.mockRestore();
   });
 });

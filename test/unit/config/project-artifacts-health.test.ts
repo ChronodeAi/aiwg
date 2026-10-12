@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { auditProjectArtifactHealth } from '../../../src/config/project-artifacts.js';
@@ -96,5 +97,53 @@ describe('auditProjectArtifactHealth', () => {
     expect(report.classification).toBe('duplicated-divergent');
     expect(report.repairable).toBe(false);
     expect(report.divergent_local_corpus_files).toEqual(['requirements/UC-1.md']);
+  });
+
+  // #274 — local mode (no external root configured) must never byte-compare
+  // the local payload with itself. Previously `externalReachable` was true
+  // in local mode (artifactRoot === localRoot, which exists), so every
+  // payload file was read twice and compared with itself for nothing.
+  describe('local mode (no external root configured)', () => {
+    it('reports external_reachable=false and skips the payload scan entirely', () => {
+      const project = mkdtempSync(join(tmpdir(), 'aiwg-artifact-health-local-'));
+      roots.push(project);
+      controls(join(project, '.aiwg'));
+      mkdirSync(join(project, '.aiwg', 'requirements'), { recursive: true });
+      writeFileSync(join(project, '.aiwg', 'requirements', 'UC-1.md'), '# Local only\n');
+
+      const readSpy = vi.spyOn(fs, 'readFileSync');
+      const readdirSpy = vi.spyOn(fs, 'readdirSync');
+      try {
+        const report = auditProjectArtifactHealth(project, {});
+        expect(report.external_configured).toBe(false);
+        expect(report.external_reachable).toBe(false);
+        expect(report.classification).toBe('local');
+        expect(report.duplicated_local_corpus_files).toEqual([]);
+        expect(report.divergent_local_corpus_files).toEqual([]);
+        // No payload file content was read, and the payload directory was
+        // never listed — local mode has nothing to compare against.
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(readdirSpy).not.toHaveBeenCalled();
+      } finally {
+        readSpy.mockRestore();
+        readdirSpy.mockRestore();
+      }
+    });
+
+    it('still succeeds when a local payload file is unreadable', () => {
+      const project = mkdtempSync(join(tmpdir(), 'aiwg-artifact-health-local-unreadable-'));
+      roots.push(project);
+      controls(join(project, '.aiwg'));
+      mkdirSync(join(project, '.aiwg', 'requirements'), { recursive: true });
+      const unreadable = join(project, '.aiwg', 'requirements', 'UC-1.md');
+      writeFileSync(unreadable, '# Local only\n');
+      chmodSync(unreadable, 0o000);
+      try {
+        expect(() => auditProjectArtifactHealth(project, {})).not.toThrow();
+        expect(auditProjectArtifactHealth(project, {}).classification).toBe('local');
+      } finally {
+        chmodSync(unreadable, 0o644);
+      }
+    });
   });
 });

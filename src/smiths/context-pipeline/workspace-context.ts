@@ -8,7 +8,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { Platform } from '../../agents/types.js';
 import { buildAiwgMdContent } from './aiwg-md.js';
@@ -105,6 +106,9 @@ export interface WorkspaceContextAudit {
   overlaps: WorkspaceDirectiveOverlap[];
   conflicts: WorkspaceDirectiveConflict[];
   sensitiveFindings: Array<{ path: string; evidence: string }>;
+  /** True when the nested-instruction-file walk hit its depth or directory-count
+   * bound before finishing (#277) — the context graph may be incomplete. */
+  contextWalkTruncated: boolean;
   plan: {
     neutralSources: string[];
     providerSources: string[];
@@ -729,21 +733,63 @@ function sensitiveEvidence(content: string): string[] {
   return findings;
 }
 
-async function nestedInstructionFiles(projectPath: string): Promise<string[]> {
+// Directory names the context-graph walk never descends into: VCS/build
+// output plus the package/cache/vendor trees that can dwarf a project when
+// the walk runs from a directory that also holds them (most commonly
+// $HOME) (#277). Project-relevant dot-directories (`.aiwg`, `.claude`,
+// `.codex`) are intentionally NOT in this set — only their own heavy,
+// non-instructional subtrees are (`.tmp` covers `.codex/.tmp/...`).
+const CONTEXT_WALK_IGNORED_DIR_NAMES = new Set([
+  '.git', 'node_modules', 'dist', 'build', 'coverage', '.aiwg',
+  '.cache', '.cargo', '.rustup', '.npm', '.nvm', '.pnpm-store',
+  '.gradle', '.m2', '.venv', 'venv', 'target', '__pycache__',
+  '.local', '.tmp', 'Caches', 'Trash', '.Trash',
+]);
+
+/** Walk depth/entry bounds for the context-graph walk (#277). A hit sets
+ * `truncated: true` on the result instead of silently stopping. */
+const CONTEXT_WALK_MAX_DEPTH = 10;
+const CONTEXT_WALK_MAX_DIRECTORIES = 20_000;
+
+function hasProjectMarkers(projectPath: string): boolean {
+  const markers: string[] = ['.git', '.aiwg', 'package.json', 'WORKSPACE.md', ...LEGACY_ROOT_FILES];
+  return markers.some((marker) => existsSync(path.join(projectPath, marker)));
+}
+
+interface NestedInstructionFilesResult {
+  files: string[];
+  truncated: boolean;
+}
+
+async function nestedInstructionFiles(projectPath: string): Promise<NestedInstructionFilesResult> {
   const found: string[] = [];
-  const ignored = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.aiwg']);
   const artifactRoot = path.resolve(resolveProjectAiwgDir(projectPath));
-  async function walk(directory: string): Promise<void> {
+  // Running from $HOME (or from a directory with no recognizable project
+  // marker) is the exact shape of #277: bound the walk to the top level
+  // instead of recursing into every cache/registry/venv underneath it.
+  const isHomeDirectory = path.resolve(projectPath) === path.resolve(homedir());
+  const maxDepth = isHomeDirectory || !hasProjectMarkers(projectPath) ? 1 : CONTEXT_WALK_MAX_DEPTH;
+  let visitedDirectories = 0;
+  let truncated = false;
+  async function walk(directory: string, depth: number): Promise<void> {
+    if (depth > maxDepth || visitedDirectories >= CONTEXT_WALK_MAX_DIRECTORIES) {
+      truncated = true;
+      return;
+    }
+    visitedDirectories += 1;
     let entries;
     try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
+      // Dirent.isDirectory() is false for symlinks (it reflects the entry
+      // itself, not its target), so symlinked directories are never
+      // followed out of the root by this walk.
       if (entry.isDirectory()) {
         const child = path.join(directory, entry.name);
         if (
-          !ignored.has(entry.name)
+          !CONTEXT_WALK_IGNORED_DIR_NAMES.has(entry.name)
           && !entry.name.startsWith('.context-migration-')
           && path.resolve(child) !== artifactRoot
-        ) await walk(child);
+        ) await walk(child, depth + 1);
       } else if (['AGENTS.md', 'CLAUDE.md', 'WARP.md'].includes(entry.name)) {
         const relative = path.relative(projectPath, path.join(directory, entry.name)).replace(/\\/g, '/');
         const segments = relative.split('/');
@@ -752,8 +798,8 @@ async function nestedInstructionFiles(projectPath: string): Promise<string[]> {
       }
     }
   }
-  await walk(projectPath);
-  return found.sort((a, b) => a.localeCompare(b));
+  await walk(projectPath, 1);
+  return { files: found.sort((a, b) => a.localeCompare(b)), truncated };
 }
 
 async function migratedProviderFiles(projectPath: string): Promise<string[]> {
@@ -770,10 +816,11 @@ async function migratedProviderFiles(projectPath: string): Promise<string[]> {
 
 export async function auditWorkspaceContext(projectPath: string): Promise<WorkspaceContextAudit> {
   const extractedProject = await extractExistingProjectContext(projectPath);
+  const nested = await nestedInstructionFiles(projectPath);
   const candidates = new Set<string>([
     'WORKSPACE.md',
     ...LEGACY_ROOT_FILES,
-    ...await nestedInstructionFiles(projectPath),
+    ...nested.files,
     ...await migratedProviderFiles(projectPath),
   ]);
   const sources: WorkspaceContextSource[] = [];
@@ -874,6 +921,7 @@ export async function auditWorkspaceContext(projectPath: string): Promise<Worksp
     overlaps,
     conflicts,
     sensitiveFindings,
+    contextWalkTruncated: nested.truncated,
     plan: {
       routing,
       scopeReview,
@@ -1182,6 +1230,13 @@ export async function workspaceLinkedFiles(projectPath: string): Promise<string[
 export async function diagnoseWorkspaceContext(projectPath: string): Promise<WorkspaceContextDiagnostic[]> {
   const diagnostics: WorkspaceContextDiagnostic[] = [];
   const audit = await auditWorkspaceContext(projectPath);
+  if (audit.contextWalkTruncated) {
+    diagnostics.push({
+      severity: 'info',
+      code: 'context-walk-truncated',
+      message: 'Nested-instruction-file walk stopped early (depth/entry bound reached, or the root looks like $HOME or has no project markers); the context graph may be incomplete.',
+    });
+  }
   const workspacePath = path.join(projectPath, 'WORKSPACE.md');
   const workspace = await readOptional(workspacePath);
   if (!workspace) {

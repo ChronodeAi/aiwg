@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { repairProjectArtifacts } from '../../../src/artifacts/repair.js';
@@ -69,5 +69,31 @@ describe('repairProjectArtifacts', () => {
     expect(readFileSync(join(artifactRoot, 'research', 'new.md'), 'utf8')).toBe('# Local only\n');
     expect(readFileSync(join(artifactRoot, 'research', 'divergent.md'), 'utf8')).toBe('# External variant\n');
     expect(readFileSync(join(artifactRoot, applied.archivedConflicts[0]), 'utf8')).toBe('# Local variant\n');
+  });
+
+  // #274 — repair must refuse local mode (no external root configured)
+  // before auditing, not after scanning the full local payload. Proven by
+  // making a local payload subdirectory unreadable: the pre-fix code calls
+  // `auditProjectArtifactHealth()` (which lists the whole local payload)
+  // before checking `external_configured`, so it throws an unrelated
+  // EACCES error instead of the intended "no external corpus" refusal.
+  it('refuses local mode before auditing, even when the local payload is unreadable', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'aiwg-artifact-repair-local-'));
+    roots.push(projectDir);
+    mkdirSync(join(projectDir, '.aiwg', 'frameworks'), { recursive: true });
+    writeFileSync(join(projectDir, '.aiwg', 'AIWG.md'), '# AIWG\n');
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), '{}\n');
+    writeFileSync(join(projectDir, '.aiwg', 'frameworks', 'registry.json'), '{}\n');
+    const unreadableDir = join(projectDir, '.aiwg', 'requirements');
+    mkdirSync(unreadableDir, { recursive: true });
+    writeFileSync(join(unreadableDir, 'UC-1.md'), '# Requirement\n');
+    chmodSync(unreadableDir, 0o000);
+    try {
+      await expect(repairProjectArtifacts({ projectDir })).rejects.toThrow(
+        'No external AIWG artifact corpus is configured for this project.',
+      );
+    } finally {
+      chmodSync(unreadableDir, 0o755);
+    }
   });
 });
