@@ -5,6 +5,15 @@ import { writeFile } from 'node:fs/promises';
 const writer = 'cat > "$1" && chmod 755 "$1"';
 const timeout = 10_000;
 
+// A child that fails before reading its input closes the pipe, so the parent
+// also sees EPIPE. The exit status is the cause; report it instead.
+/** @param {unknown} error @param {number | null} code @param {NodeJS.Signals | null} signal */
+const describeFailure = (error, code, signal) => {
+  const brokenPipe = /** @type {NodeJS.ErrnoException | undefined} */ (error)?.code === 'EPIPE';
+  if (error && !(brokenPipe && code)) return /** @type {Error} */ (error).message;
+  return `exit ${code}, signal ${signal}`;
+};
+
 // In Vitest's thread pool, a concurrent fork can inherit any writable file
 // descriptor in this process. Keep executable writes entirely in a child so
 // those inherited descriptors cannot make a later exec fail with ETXTBSY.
@@ -27,7 +36,7 @@ export async function writeExecutable(path, content) {
     child.stdin.on('error', error => { failure ??= error; });
     child.on('close', (code, signal) => {
       if (failure || code !== 0) {
-        reject(new Error(`Cannot write executable ${JSON.stringify(path)}: ${failure?.message ?? `exit ${code}, signal ${signal}`} ${stderr.trim()}`));
+        reject(new Error(`Cannot write executable ${JSON.stringify(path)}: ${describeFailure(failure, code, signal)} ${stderr.trim()}`));
       } else {
         resolve();
       }
@@ -46,6 +55,6 @@ export function writeExecutableSync(path, content) {
     input: content, encoding: 'utf8', timeout, killSignal: 'SIGKILL',
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`Cannot write executable ${JSON.stringify(path)}: ${result.error?.message ?? `exit ${result.status}, signal ${result.signal}`} ${result.stderr?.trim() ?? ''}`);
+    throw new Error(`Cannot write executable ${JSON.stringify(path)}: ${describeFailure(result.error, result.status, result.signal)} ${result.stderr?.trim() ?? ''}`);
   }
 }

@@ -48,8 +48,12 @@ describe.each([
     expect(targets.filter(target => target === executable || target === `${executable} (deleted)`)).toEqual([]);
   });
 
-  it.skipIf(process.platform === 'win32')('reports the path and child failure', async () => {
+  // The large content cannot fit in the pipe, so the child always exits before
+  // the write completes and the parent sees a broken pipe as well.
+  it.skipIf(process.platform === 'win32').each([
+    ['small', 'content'], ['larger than the pipe', 'x'.repeat(1 << 20)],
+  ])('reports the path and child exit status for %s content', async (_size, content) => {
     const missing = join(directory, 'missing', 'script');
-    await expect(Promise.resolve().then(() => write(missing, 'content'))).rejects.toThrow(`Cannot write executable ${JSON.stringify(missing)}: exit`);
+    await expect(Promise.resolve().then(() => write(missing, content))).rejects.toThrow(`Cannot write executable ${JSON.stringify(missing)}: exit 2`);
   });
 });
