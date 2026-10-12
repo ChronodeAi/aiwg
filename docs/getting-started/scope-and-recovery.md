@@ -13,7 +13,7 @@ Validation baseline: test this page against AIWG version 2026.5. While the recov
 
 ## The Default: Project Scope
 
-For beginners, the right default is project-scoped setup. Run AIWG from the folder that contains the project you want the AI assistant to understand:
+For a single project, project-scoped setup is the simplest start. Run AIWG from the folder that contains the project you want the AI assistant to understand:
 
 ```bash
 cd /path/to/your/project
@@ -22,13 +22,16 @@ ls -a
 aiwg wizard --dry-run --goal "help me start a project"
 ```
 
+For multi-repository work, see [Working Across Multiple Projects](../guides/multi-project-workspaces.md).
+
+
 Good signs include `.git/`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, or another project file. After deploy, you should also see `.aiwg/` and provider files such as `.claude/`, `.codex/`, `.cursor/`, `.opencode/`, or `AGENTS.md`.
 
 ## Global Or User Scope
 
 Global or user-scoped setup is for capabilities you intentionally want across many projects, such as personal defaults or provider-level reusable skills. It is not the beginner default because it does not by itself teach AIWG about a specific project.
 
-Use project scope unless you can finish this sentence:
+Choose shared capabilities deliberately; you should be able to finish this sentence:
 
 ```text
 I want this AIWG capability available across projects because ...

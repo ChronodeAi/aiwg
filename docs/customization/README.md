@@ -9,12 +9,14 @@ shared.
 | **B — Fork** | Cross-project customization, contributing back | Fork + dev mode | Yes (PR upstream) |
 | **C — Corpus** | Cross-project sharing without going public | One-time setup per corpus | Within your team / org |
 
-If unsure, **start with Path A.** It's the lowest commitment and the
+For a single project, **start with Path A.** It's the lowest commitment and the
 easiest to graduate later.
+
+For multi-repository work, see [Working Across Multiple Projects](../guides/multi-project-workspaces.md).
 
 ---
 
-## Path A — Project-Local (recommended for most users)
+## Path A — Project-Local (simplest start for a single project)
 
 Author bundles directly inside your project under `.aiwg/{type}/{name}/`.
 No fork, no clone, no rebuild: just files in your repo. Discovered

@@ -566,6 +566,16 @@
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
     },
     {
+      "path": "docs/guides/multi-project-workspaces.md",
+      "owner": "docs/guides",
+      "role": "documentation-example",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "markdown",
+      "migrationAction": "adapt",
+      "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
+    },
+    {
       "path": "docs/integrations/mcp-capability-audit.md",
       "owner": "docs/integrations",
       "role": "documentation-example",
