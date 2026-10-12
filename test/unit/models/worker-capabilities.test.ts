@@ -130,3 +130,20 @@ describe('S1 production capability contracts (T-OG-03/14/15/17/19)', () => {
       expect(() => qualifyWorkerInvocationProfile(value, selection)).toThrow(/sandbox.*installation qualification/i);
     });
 });
+
+describe('coordinated shared vocabulary amendments (#2991/#2998)', () => {
+  it('reports the version-pattern compile error at registry load', () => {
+    const value = registry();
+    value.workerAdapters.fixture.invocation.versionPattern = '^(a*)$';
+    expect(() => parseProviderModelCapabilities(value)).toThrow('Unsafe worker version pattern');
+  });
+  it('freezes all four stdin kinds, including installed adapter frames', () => {
+    expect(schemas.capability.$defs.process.properties.stdin.enum).toEqual(['closed', 'brief-json', 'brief-text', 'adapter-frame']);
+  });
+  it.each(['(a+)+', '^((a))$', '^(a|aa){1,100}$', '^(a*)$', '^(a)\\1$', '^([a-z]{1,999})$', '^([a-z]{1,10})(?=x)$', '^([0-9]{1,10})['])
+    ('rejects unsafe or invalid version pattern %s at registry load', versionPattern => {
+      const value = registry();
+      value.workerAdapters.fixture.invocation.versionPattern = versionPattern;
+      expect(() => parseProviderModelCapabilities(value)).toThrow();
+    });
+});

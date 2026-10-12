@@ -60,6 +60,7 @@
       ],
       "status": "partial",
       "testFiles": [
+        "test/unit/models/worker-capabilities.test.ts",
         "test/conformance/orchestration-v1/worker-fixtures.test.ts",
         "test/unit/providers/grok-build-headless.test.ts",
         "test/unit/ralph-external/worker-invocation.test.ts",
@@ -232,7 +233,7 @@
         "test/unit/ralph-external/installed-worker-adapter.test.ts",
         "test/unit/ralph-external/worker-single-invocation.test.ts"
       ],
-      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2991 adds six-banner normalization, pin-change and defensive pattern coverage."
     },
     "T-OG-15": {
       "name": "Direct command contract",
@@ -258,7 +259,7 @@
         "test/unit/ralph-external/worker-installation.test.ts",
         "test/conformance/orchestration-v1/worker-status.test.ts"
       ],
-      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+      "remaining": "S1 synthetic installation, registration and control mapping only; no live provider qualification. Remaining provider/package qualification and managed S2+ runtime assertions stay open. #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+. #3002/#2998 add bounded private artifact delivery/cleanup and adapter stdin frames; 14 other bundled process profiles retain frozen argv/stdin rendering. Workspace-relative artifacts and authenticated smoke runs remain open."
     },
     "T-OG-16": {
       "name": "Conductor direct lifecycle",

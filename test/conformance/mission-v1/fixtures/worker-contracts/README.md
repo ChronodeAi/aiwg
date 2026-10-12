@@ -752,3 +752,54 @@ Final frozen-contract rerun:
 `npx vitest run --config config/vitest.conformance.config.js test/conformance/mission-v1/worker-contracts.test.ts`
 passed **142/142**, including strict fragment/manifest equality and original
 unresolved-intent, admitted-brief and assembled-evidence round trips.
+
+## #2991 / #3002 / #2998 coordinated contract amendment (2026-10-11)
+
+The adapter fragment adds optional bounded `versionPattern` and the
+`adapter-frame` stdin kind. The Mission definition fragment adds the same
+stdin kind and optional generated `artifacts` declarations (name, content,
+optional `location: run-directory`). Manifest SHA-256 bindings are amended;
+exact equality and strict compilation checks remain intact. These are
+intentional shared-contract extensions; no schema ID or subsystem is added.
+Cursor decimal date cores normalize 2026.10.01-e373342 to
+2026.10.1-e373342 once in the version probe; suffixes remain unchanged.
+Subsequent installation qualification also compares the captured raw version
+text with the recorded banner: added leading zeros cannot reuse a normalized
+version pin, including `2026.010.1` versus `2026.10.1`.
+Artifacts are bounded private launcher files with argv placeholders, never
+preview writes. Workspace-relative artifacts remain deferred to S2+ (#2905).
+Antigravity frames are computed by the installed driver and delivered only
+on stdin, must be nonempty, and shell framing binds the trusted host store bytes
+and conductor policy explicitly under `env -i`, without cwd config resolution.
+Launcher records bind substituted argv and artifact names, byte lengths and
+content digests without exposing contents; the placeholder argv digest is retained.
+Output paths cannot collide with reserved `artifact-` paths.
+Provider controls remain unqualified until authenticated smoke
+runs; synthetic fixtures do not grant live authority.
+
+Version patterns are anchored whole-banner expressions with exactly one
+capture, at most 256 characters and two bounded atom repetitions (each at
+most 128). Branching, assertions, backreferences, wildcard/unbounded
+repetition and repeated groups are rejected by the registry loader. Probes
+retain at most 4096 bytes of raw UTF-8 banner evidence. The artifact limits
+are 16 names, 1 MiB per artifact and 4 MiB total UTF-8 bytes (the existing
+invocation-file ceiling can be stricter); names use alphanumerics, underscore
+and hyphen, with an alphanumeric first character.
+
+Review-required fixes validation (2026-10-11): all 12 added regression cases
+fail against the pre-fix uncommitted source and pass with the fixes. The full
+touched unit files report 341 passed, 20 failed and 1 skipped; the touched
+Antigravity/DeepSeek conformance files report 29 passed and 11 failed. All
+31 remaining failure names also reproduce against the pre-fix source (empty
+subprocess stdio/version evidence and MCP fixture disconnects); no new failures
+were introduced. Frozen worker-contract conformance passes 142/142, and every
+fragment's SHA-256 matches the manifest. These fixes change no frozen schema
+fragment, so their existing amended digests remain valid.
+
+`npm run -s typecheck`, `npm run -s lint:schemas` (236 schemas, 0 errors,
+2 existing warnings), `npm run -s lint:orchestration-packs` (21 packs) and
+`git diff --check` pass. Vitest's default config bundling hits EROFS;
+`--configLoader runner --no-cache` starts successfully and produces the results
+above. `node tools/mission-protocol/inventory.mjs --write` remains blocked by
+`spawnSync rg EPERM`; no generated inventory was hand-edited. No vendor/model
+calls or commits were made. Runtime qualification remains deferred.

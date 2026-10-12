@@ -65,6 +65,12 @@ merged policy role guidance with `allowNotApplicableEffort: true`. Preparation
 does not support skipping observation checks.
 
 The method checks Linux/version/transport/control qualification and expiration.
+When an installation has recorded raw version evidence, subsequent qualification
+checks both the normalized version pin and the exact captured version text from
+that banner. Decimal core normalization can accommodate Cursor's date spelling
+on initial qualification, but a later change from `2026.10.1` to `2026.010.1`
+cannot reuse the recorded pin. Prefix/suffix text outside the capture is not
+part of this version comparison.
 The frozen `stdin: 'closed'` field renders empty stdin (`< /dev/null`, immediate
 EOF); it does not promise an absent operating-system file descriptor.
 It quotes each shell token, structurally renders CWD/input/output redirections,
@@ -72,6 +78,12 @@ forwards only profile-allowlisted environment names, and derives shell syntax
 rather than trusting a supplied `shellCommand`. MCP arguments are size-bounded
 by the bundled worker codec and validated against the pinned input schema.
 It never falls back to legacy bypass arguments.
+An `adapter-frame` shell stage runs under `env -i` with the recorded environment
+names only. Its conductor-bound installation-store path and SHA-256 bytes digest,
+policy (checked against the installation's effective config digest), adapter,
+scope and brief digest are explicit inputs. It never reads project or model
+configuration from the worker-writable cwd; an absent or changed binding fails
+closed. Adapter frames must contain at least one byte.
 
 This is preparation, including preparatory plans; it does not prove launch
 readiness. The resolver/qualified driver still owns exact provider argument
@@ -213,7 +225,13 @@ permission cleanup acts on opened inodes rather than worker-replaced paths.
 
 `invocation.json` records a digest-bound, sanitized command, environment variable
 **names**, the prompt reference/digest, workspace and output bindings, and
-thresholds. It contains no environment values or prompt text. `process.json`
+thresholds. It contains no environment values or prompt text.
+The sanitized `argv` and `commandDisplay` describe the substituted launch argv;
+`executedArgvDigest` binds it, while `placeholderArgvDigest` binds the plan argv
+before substitution (`argvDigest` remains its compatibility alias). Each generated
+artifact records its name, UTF-8 `byteLength` and SHA-256 content digest, never
+its contents. Output paths cannot use the run directory's `artifact-` namespace.
+`process.json`
 distinguishes the supervisor from the actual worker and records available PID,
 PGID, UID, host/boot, executable, parent and process-start identity. Unknown facts
 are null. Restricted stdout and stderr remain separate captures; JSONL naming

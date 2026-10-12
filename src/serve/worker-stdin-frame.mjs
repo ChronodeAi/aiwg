@@ -14,9 +14,11 @@
  * one-shot launcher (written to the child's stdin pipe).
  */
 import { open } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 export const WORKER_STDIN_FRAME_MAX_BRIEF_BYTES = 262144;
+export const WORKER_STDIN_FRAME_MAX_BYTES = 1048576;
 
 /** @returns {string} the exact JSON document delivered on stdin. */
 export function workerStdinDocument({ brief, model, cwd }) {
@@ -28,11 +30,20 @@ export function workerStdinDocument({ brief, model, cwd }) {
 }
 
 /** Stdin bytes for a resolved invocation: null (closed), the raw brief, or the framed document. */
-export function workerStdinBytes(invocation, brief) {
+export function workerStdinBytes(invocation, brief, adapter) {
   if (invocation.stdin === 'closed') return null;
   if (invocation.stdin === 'brief-text') return Buffer.isBuffer(brief) ? brief : Buffer.from(brief);
   if (invocation.stdin === 'brief-json') {
     return Buffer.from(workerStdinDocument({ brief, model: invocation.selected?.model, cwd: invocation.cwd }));
+  }
+  if (invocation.stdin === 'adapter-frame') {
+    if (typeof adapter?.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
+    if (Buffer.byteLength(brief) > WORKER_STDIN_FRAME_MAX_BRIEF_BYTES) throw new Error('Brief exceeds the framing bound');
+    const frame = adapter.buildWorkerStdinFrame(brief);
+    if (typeof frame !== 'string' && !(frame instanceof Uint8Array)) throw new Error('Adapter stdin frame must be bytes or text');
+    if (Buffer.byteLength(frame) === 0) throw new Error('Adapter stdin frame must not be empty');
+    if (Buffer.byteLength(frame) > WORKER_STDIN_FRAME_MAX_BYTES) throw new Error('Adapter stdin frame exceeds byte bound');
+    return Buffer.from(frame);
   }
   throw new Error(`Unsupported worker stdin mode: ${invocation.stdin}`);
 }
@@ -54,13 +65,41 @@ async function readBounded(filename) {
   } finally { await handle.close(); }
 }
 
+/** Bound host authority only; workspace is an execution scope, never a config source. */
+export async function recordedWorkerStdinBytes({ filename, workspace, cli, adapterId, scopeDigest, briefDigest,
+  storePath, storeDigest, policy }) {
+  if (!filename?.startsWith('/') || !storePath?.startsWith('/')
+    || !/^sha256:[a-f0-9]{64}$/.test(storeDigest ?? '')) throw new Error('Invalid adapter stdin framing request');
+  const { loadRecordedWorkerInstallations } = await import('../models/worker-installation.mjs');
+  const { loadProviderModelCapabilities } = await import('../models/provider-policy.js');
+  const { drivers } = await loadRecordedWorkerInstallations({ registry: loadProviderModelCapabilities(),
+    cwd: workspace, policy, storePath, storeDigest });
+  const driver = drivers[cli];
+  if (!driver || driver.qualification.adapterId !== adapterId
+    || driver.qualification.adapter.invocation.stdin !== 'adapter-frame'
+    || driver.qualification.installation?.evidence?.scopeDigest !== scopeDigest) throw new Error('Adapter stdin binding changed');
+  const brief = await readBounded(filename);
+  if (`sha256:${createHash('sha256').update(brief).digest('hex')}` !== briefDigest) throw new Error('Adapter stdin brief changed');
+  return workerStdinBytes({ stdin: 'adapter-frame' }, brief, driver);
+}
+
 // Pipeline stage: `worker-stdin-frame.mjs BRIEF_PATH MODEL CWD`. Only the
 // brief path, never its content, appears on this command line.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [briefPath, model, cwd] = process.argv.slice(2);
   try {
-    if (process.argv.length !== 5 || !briefPath?.startsWith('/')) throw new Error('usage: worker-stdin-frame.mjs BRIEF_PATH MODEL CWD');
-    process.stdout.write(workerStdinDocument({ brief: await readBounded(briefPath), model, cwd }));
+    if (briefPath === '--adapter-frame') {
+      const [filename, workspace, cli, adapterId, scopeDigest, briefDigest, storePath, storeDigest, policyJson] = process.argv.slice(3);
+      if (process.argv.length !== 12) throw new Error('Invalid adapter stdin framing request');
+      // Reuse the recorded-installation loader; no module path or code supplied
+      // by a brief is ever imported. The conductor binds store bytes and policy;
+      // never resolve configuration from the worker-writable workspace.
+      process.stdout.write(await recordedWorkerStdinBytes({ filename, workspace, cli, adapterId, scopeDigest, briefDigest,
+        storePath, storeDigest, policy: JSON.parse(policyJson) ?? undefined }));
+    } else {
+      if (process.argv.length !== 5 || !briefPath?.startsWith('/')) throw new Error('usage: worker-stdin-frame.mjs BRIEF_PATH MODEL CWD');
+      process.stdout.write(workerStdinDocument({ brief: await readBounded(briefPath), model, cwd }));
+    }
   } catch (error) {
     process.stderr.write(`worker-stdin-frame: ${error?.message ?? error}\n`);
     process.exitCode = 2;

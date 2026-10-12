@@ -29,7 +29,7 @@
       "source": "05-configuration-spec.md ### 4.3 Existing",
       "owner": "schemas/models/provider-model-capabilities.v1.schema.json",
       "target": "$defs.workerAdapter",
-      "sha256": "e00af474820934fcbdc13a3c0b705e39f08e2b75b164e8c8dd71432216eca8f5"
+      "sha256": "5945f2bc75cf0faef8bbead3d706ab2ec4b20bf83b29fa836055bb7b03c5e6e2"
     },
     {
       "file": "capability-root.patch.json",
@@ -50,7 +50,7 @@
       "source": "05-configuration-spec.md ### 5.1 Executable",
       "owner": "schemas/mission-v1.schema.json",
       "target": "$defs",
-      "sha256": "000ee2dee5a75d229bfa7b64d4aae708b5b49cc430e509bf9483eab79ee024e4"
+      "sha256": "29316d7dc5d8e2b88291c8b97e18a78c3a00b65812c6457bfad3661445d237f0"
     }
   ]
 }
