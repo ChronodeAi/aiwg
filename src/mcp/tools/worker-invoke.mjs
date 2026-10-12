@@ -559,6 +559,25 @@ async function loadAiwgConfigModule() {
  * AIWG_ROOT-absolute path is the robust way in rather than a relative
  * specifier (whose depth from this file differs between `src/mcp/tools/`
  * and `dist/src/mcp/tools/`). */
+/**
+ * #2915A: resolve the scoped-recovery breaker for one `run()`. Returns null
+ * (recovery disabled) when the toolset passes `scopedBreaker: null`;
+ * otherwise the explicitly injected breaker or the process-shared
+ * direct-recovery breaker, with covering scope keys derived from the
+ * trusted resolved invocation (never worker text). The invocation key uses
+ * the registry entry id, unique per run.
+ */
+let cachedRecoveryModule = null;
+async function resolveRunRecovery(scopedBreakerOption, invocation, drivers, entryInvocationId) {
+  if (scopedBreakerOption !== undefined && !scopedBreakerOption) return null;
+  if (!cachedRecoveryModule) cachedRecoveryModule = loadRalphExternal('session-launcher.mjs');
+  const module = await cachedRecoveryModule;
+  const breaker = scopedBreakerOption ?? module.getDirectRecoveryBreaker();
+  const quotaAccount = drivers?.[invocation?.selected?.cli]?.qualification?.installation?.accountScope ?? null;
+  return { breaker, module,
+    scopeKeys: module.recoveryScopeKeysForInvocation(invocation, { invocationId: entryInvocationId, quotaAccount }) };
+}
+
 async function loadRalphExternal(relativeFromToolsRoot) {
   const absolute = path.join(findOwnPackageRoot(), 'tools/ralph-external', relativeFromToolsRoot);
   return import(pathToFileURL(absolute).href);
@@ -1209,6 +1228,31 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: plan.diagnostics ?? [] });
       }
       const invocation = plan.invocation;
+      // #2915A: scoped-recovery gate for this dispatch. Consults the
+      // process-shared direct-recovery breaker (or `options.scopedBreaker`;
+      // `null` disables) using only trusted resolved identities, BEFORE
+      // either transport launches. Refused launches never spawn; launched
+      // attempts note cohort membership and record their launcher-observed
+      // outcome below (process health only — claim-level failures are
+      // task-local by definition and record invocation-scoped).
+      const recovery = await resolveRunRecovery(options.scopedBreaker, invocation, drivers, entry.invocationId);
+      const recoveryScopeKeys = recovery?.scopeKeys ?? [];
+      if (recovery?.breaker) {
+        const gate = recovery.breaker.canLaunch({ scopeKeys: recoveryScopeKeys });
+        if (!gate.ok) {
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+            diagnostics: [`recovery scope open: ${gate.blockedBy.join(', ')}`] });
+        }
+        recovery.breaker.noteLaunched(recoveryScopeKeys, entry.invocationId);
+      }
+      const recordRecovery = (outcome) => {
+        if (!recovery?.breaker) return;
+        try {
+          const { recordDirectWorkerOutcome } = recovery.module;
+          recordDirectWorkerOutcome(recovery.breaker,
+            { scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId, outcome });
+        } catch { /* recovery accounting must never fail a run */ }
+      };
       // F4 (fix-2892-r2, formerly part of M5): per operator decision, the
       // MCP path REQUIRES the structured WorkerDirectBrief — a probe showed
       // a plaintext brief (or a JSON brief swapped to plaintext between
@@ -1250,10 +1294,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
-          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, ...gateInputs });
+          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, scopedBreaker: recovery?.breaker ?? null, ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched && !launch.launchAttempted) {
           mayHaveLaunched = false;
+          try { recovery?.breaker?.noteSettled({ scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId }); } catch { /* never fail a run */ }
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
         }
         // M2: a live stop handle for the duration of this call, so an
@@ -1282,6 +1327,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         if (registry.get(entry.invocationId)?.cancelRequested) await control.stop();
         const outcome = launch.launched ? await control.wait(deadlineMs) : await control.stopAndConfirm();
         observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode };
+        // #2915A: launcher-observed process health only (wait status, never
+        // worker claims) — failures record invocation-scoped.
+        recordRecovery({ termination: outcome.termination, exitCode: outcome.exitCode });
         if (outcome.termination !== 'confirmed') {
           // M2: stays LIVE — capacity is held until a stop is proven or the
           // conductor disposes of it explicitly, never freed on a mere
@@ -1326,6 +1374,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           ...gateInputs,
         });
         if (result.outcome === 'blocked') {
+          // Never launched (dispatch gate or queue refusal): settle the noted
+          // cohort membership with no failure evidence.
+          try { recovery?.breaker?.noteSettled({ scopeKeys: recoveryScopeKeys, invocationId: entry.invocationId }); } catch { /* never fail a run */ }
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
         }
         if (result.outcome !== 'responded') {
@@ -1341,10 +1392,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
               : registry.update(entry.invocationId, patch);
           }
           // M2: stays LIVE for the same reason as the shell timeout path above.
+          recordRecovery({ termination: 'uncertain', exitCode: null });
           return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [`worker ${result.outcome}; cancellation delivered, not confirmed stopped`] });
         }
         rawOutput = result.response;
         observation = { transport: 'mcp', status: result.response.isError ? 'failed' : 'completed', termination: 'confirmed', exitCode: result.response.isError ? 1 : null, isError: !!result.response.isError };
+        // #2915A: launcher-observed transport health only — an isError
+        // response records invocation-scoped, never a shared scope.
+        recordRecovery({ termination: 'confirmed', exitCode: observation.exitCode });
         if (result.response.isError) {
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }

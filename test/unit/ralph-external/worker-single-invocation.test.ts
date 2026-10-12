@@ -312,7 +312,12 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8'))).toMatchObject({ invocationId: result.invocationId, candidate: true, verified: false });
     expect(await readdir(f.root)).not.toContain('.aiwg');
     await expect(lstat(path.join(f.root, 'injected'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(f.launch()).rejects.toThrow(/fresh|empty/);
+    // #2915: the degraded first attempt ends 'uncertain', so a same-launcher
+    // retry is now refused by the mandatory stop-before-retry gate before any
+    // path check — and the reused-path rejection below is proven with a fresh
+    // launcher, isolating the path check from the retry gate.
+    await expect(f.launch()).rejects.toMatchObject({ code: 'UNCERTAIN_TERMINATION' });
+    await expect(new SessionLauncher().launchWorker(f.options)).rejects.toThrow(/fresh|empty/);
   });
 
   it('extracts stdout-only final separately while retaining the original event stream', async () => {

@@ -44,6 +44,7 @@ import { importImpl } from '../_resolve-impl.mjs';
 import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
+import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
 /**
@@ -274,6 +275,28 @@ async function launchOneWorker(owner, options) {
   if (isolation.mode === 'degraded' && !options.allowDegraded) {
     throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
   }
+  // Scoped recovery gate (#2915A): consult the process-scoped breaker before
+  // any spawn or runDir creation, using only trusted resolved identities. A
+  // launch covered by an open scope (or a pending/admitted canary) is
+  // refused here — by the next check — leaving no debris behind.
+  // `scopedBreaker: null` disables the gate for callers that own recovery
+  // themselves; pre-spawn refusals above never reach this point.
+  const recoveryBreaker = options?.scopedBreaker !== undefined ? options.scopedBreaker : getDirectRecoveryBreaker();
+  const recoveryQuotaAccount = inputs.drivers?.[invocation.selected.cli]?.qualification?.installation?.accountScope ?? null;
+  const recoveryScopeKeys = recoveryBreaker
+    ? recoveryScopeKeysForInvocation(invocation, { quotaAccount: recoveryQuotaAccount })
+    : [];
+  // Fresh invocation ids are never tracked, so the pre-spawn check omits
+  // the invocation key; it is added to the noted keys once minted below.
+  if (recoveryBreaker) {
+    const gate = recoveryBreaker.canLaunch({ scopeKeys: recoveryScopeKeys });
+    if (!gate.ok) {
+      const error = new Error(`Worker launch refused: recovery scope open (${gate.blockedBy.join(', ')})`);
+      error.code = RECOVERY_SCOPE_OPEN_CODE;
+      error.blockedBy = gate.blockedBy;
+      throw error;
+    }
+  }
   if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
   const runStat = await lstat(runDir);
   if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
@@ -282,6 +305,13 @@ async function launchOneWorker(owner, options) {
   const invocationId = randomUUID();
   const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
   try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
+  // The invocation key joins the noted keys once the id is minted, so the
+  // frozen cohort and outstanding set track this attempt under every
+  // covering scope.
+  const recoveryScopeKeysWithInvocation = recoveryBreaker
+    ? recoveryScopeKeysForInvocation(invocation, { invocationId, quotaAccount: recoveryQuotaAccount })
+    : recoveryScopeKeys;
+  if (recoveryBreaker) recoveryBreaker.noteLaunched(recoveryScopeKeysWithInvocation, invocationId);
   const supervisor = sampleWorkerIdentity(process.pid);
   const launchTime = new Date().toISOString();
   const monotonicStart = process.hrtime.bigint().toString();
@@ -345,11 +375,18 @@ async function launchOneWorker(owner, options) {
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
-    return await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir });
+    return await recordRecoveryAfterAttempt(recoveryBreaker, recoveryScopeKeysWithInvocation,
+      invocation, invocationId, recoveryQuotaAccount,
+      captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
+        launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir }));
   } catch (error) {
-    if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
-      endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    if (!outcome?.child) {
+      // Pre-spawn failure (or a recovery-scope refusal): this attempt never
+      // ran, so it settles outstanding membership with NO failure evidence.
+      try { recoveryBreaker?.noteSettled?.({ scopeKeys: recoveryScopeKeysWithInvocation, invocationId }); } catch { /* never fail teardown */ }
+      await publish('exit.json', { invocationId, exitCode: null, signal: null,
+        endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    }
     throw error;
   } finally {
     try { await artifacts?.cleanup(); } finally {
@@ -816,9 +853,280 @@ async function captureOneWorker(owner, ctx) {
  * @property {Object} data - Event data
  */
 
+/**
+ * Stop-before-retry gate (#2915, 03 §11.5 steps 1–3). A retry or fresh-tree
+ * replacement for a worker is only issued after the previous attempt's
+ * termination is CONFIRMED using the launcher's own termination evidence
+ * (`exit.json` `termination`, produced in finish() above). An uncertain
+ * termination blocks the retry and is surfaced with a code the conductor
+ * can act on — it must never silently spawn a duplicate writer.
+ */
+export const STOP_BEFORE_RETRY_CODE = 'UNCERTAIN_TERMINATION';
+export const UNBOUND_RETRY_EVIDENCE_CODE = 'UNBOUND_RETRY_EVIDENCE';
+
+/**
+ * Mandatory stop-before-retry gate (#2915, 03 §11.5 steps 1–3). A retry or
+ * fresh-tree replacement is only issued after the previous attempt's
+ * termination is CONFIRMED using the launcher's own termination evidence
+ * (`exit.json` `termination`, produced in finish() above). The evidence must
+ * also be BOUND to the previous owned invocation: any object containing
+ * `termination: 'confirmed'` is not enough — its `invocationId` must match
+ * the launcher's stored previous attempt, or (for a fresh launcher with no
+ * stored attempt, e.g. a cross-restart retry) the caller must supply the
+ * evidence explicitly and it is adopted as the chain. An uncertain
+ * termination, or confirmed evidence for some other invocation, blocks the
+ * retry and is surfaced with a code the conductor can act on — it must never
+ * silently spawn a duplicate writer.
+ */
+export function stopBeforeRetryGate(previousResult, { expectedInvocationId = null } = {}) {
+  if (previousResult?.termination !== 'confirmed') {
+    return {
+      ok: false,
+      code: STOP_BEFORE_RETRY_CODE,
+      reason: `Previous attempt termination is '${previousResult?.termination ?? 'unknown'}', not confirmed: `
+        + 'retry is blocked until owned stop is proven (no duplicate writer while the old tree may continue).',
+      previousResult: previousResult === undefined ? undefined : (previousResult ?? null),
+    };
+  }
+  const evidenceId = previousResult?.invocationId ?? null;
+  if (expectedInvocationId !== null && evidenceId !== expectedInvocationId) {
+    return {
+      ok: false,
+      code: UNBOUND_RETRY_EVIDENCE_CODE,
+      reason: `Confirmed termination evidence is for invocation '${evidenceId ?? 'unknown'}', not the previous owned attempt `
+        + `'${expectedInvocationId}': retry is blocked until the previous attempt's own stop is proven.`,
+      previousResult: previousResult ?? null,
+    };
+  }
+  return { ok: true };
+}
+
+export function assertStopBeforeRetry(previousResult, options) {
+  const gate = stopBeforeRetryGate(previousResult, options);
+  if (!gate.ok) {
+    const error = new Error(gate.reason);
+    error.code = gate.code;
+    error.previousResult = gate.previousResult;
+    throw error;
+  }
+  return gate;
+}
+
+/**
+ * One corrected startup retry (#2915, 03 §11.5 step 1). A failed start may
+ * correct a demonstrated qualified mechanical cause at most once — and only
+ * within the task's existing attempts/budget, which the caller enforces.
+ * Auth, trust, resource and unknown causes are never qualified: they need
+ * authorized restoration or diagnosis, not a blind relaunch.
+ */
+export const MAX_STARTUP_CORRECTIONS = 1;
+export const QUALIFIED_STARTUP_CORRECTION_CODES = Object.freeze(['STDIN_WAIT', 'NOT_FOUND', 'MODEL']);
+
+export function startupCorrectionGate({ correctionsUsed = 0, reasonCode = null } = {}) {
+  if (!QUALIFIED_STARTUP_CORRECTION_CODES.includes(reasonCode)) {
+    return { ok: false, reason: `Reason '${reasonCode ?? 'unknown'}' is not a qualified mechanical startup cause` };
+  }
+  if (correctionsUsed >= MAX_STARTUP_CORRECTIONS) {
+    return { ok: false, reason: `Startup already corrected once (${correctionsUsed}); no further blind relaunch` };
+  }
+  return { ok: true, correctionsRemaining: MAX_STARTUP_CORRECTIONS - correctionsUsed };
+}
+
+/**
+ * Build the narrowest-scope failure attribution for a failed invocation.
+ * Identities come from trusted resolved configuration only: the inference
+ * backend is the raw `selected.inferenceProvider` string (never normalized
+ * through the CLI/provider-definition registry, which maps backends onto
+ * CLI ids and merges the two identities), the installation is
+ * `selected.cli`, and the quota account is the installation qualification's
+ * `accountScope` (or an explicitly passed trusted account). Reason codes
+ * carry an evidence source: only launcher/resolver-classified reasons may
+ * widen a scope — worker-derived codes (stderr signatures, worker output,
+ * worker-writable files) stay invocation-scoped no matter their text.
+ */
+export async function buildFailureAttribution(invocation, { reasonCode = null, evidenceSource = null,
+  quotaAccount = null, hostId = null, corroboratedBackends = null } = {}) {
+  const { attributeFailureScope } = await import('./lib/consecutive-failure-circuit-breaker.mjs');
+  const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const selected = invocation?.selected ?? {};
+  let modelKey = null;
+  try {
+    const inferenceProvider = selected.inferenceProvider ?? null;
+    const apiModelId = selected.apiModelId ?? selected.model ?? null;
+    if (inferenceProvider && apiModelId) modelKey = workerModelKey(inferenceProvider, apiModelId);
+  } catch { modelKey = null; }
+  const account = quotaAccount
+    ?? invocation?.qualification?.installation?.accountScope
+    ?? selected.accountScope
+    ?? null;
+  return attributeFailureScope({
+    reasonCode,
+    evidenceSource,
+    invocationId: invocation?.invocationId ?? null,
+    modelKey,
+    cli: selected.cli ?? null,
+    inferenceProvider: selected.inferenceProvider ?? null,
+    quotaAccount: account,
+    hostId,
+    corroboratedBackends,
+  });
+}
+
+/**
+ * Classify a launcher-observed attempt outcome into trusted recovery
+ * evidence. Uses ONLY launcher-owned facts (spawn errors on the resolved
+ * argv, waitpid exit/signal, timeout and termination flags) — never worker
+ * stderr/stdout text, structured worker output, or worker-writable records.
+ * Post-spawn outcomes therefore attest only that THIS attempt failed, in
+ * its own invocation scope; only a failure to execute the resolved CLI
+ * binary itself (pre-spawn ENOENT/EACCES on argv[0]) implicates the
+ * installation. 429/transport/auth signatures visible only in worker output
+ * are worker-sourced by definition and must not be passed here as
+ * launcher evidence.
+ */
+export function classifyLaunchOutcomeForRecovery(result) {
+  if (result?.termination !== 'confirmed') return { reasonCode: null, evidenceSource: null };
+  const code = result?.errorCode ?? null;
+  if ((code === 'ENOENT' || code === 'EACCES' || code === 'SPAWN_ERROR') && !result?.sawExit && result?.exitCode == null) {
+    return { reasonCode: 'NOT_FOUND', evidenceSource: 'launcher' };
+  }
+  return { reasonCode: null, evidenceSource: 'launcher' };
+}
+
+/**
+ * Process-scoped recovery breaker owner for the S1 direct dispatch path
+ * (#2915A). Both direct launch functions (`launchWorker` below and
+ * `planDirectWorkerLaunch`) construct-and-consult this one breaker, so
+ * repeated conductor attempts in this process share scope state: `canLaunch`
+ * before a launch, failure attribution after an attempt, probe/canary
+ * gating before a paused scope resumes.
+ *
+ * State lives in-memory in this process (see ScopedFailureBreaker restart
+ * notes): a process restart comes up with every scope CLOSED, coupled with
+ * the stop-before-retry gate below. Tests inject a synthetic-clock breaker
+ * via `setDirectRecoveryBreaker`; production uses the lazy default.
+ */
+let _directRecoveryBreaker = null;
+
+export function getDirectRecoveryBreaker() {
+  if (!_directRecoveryBreaker) _directRecoveryBreaker = new ScopedFailureBreaker();
+  return _directRecoveryBreaker;
+}
+
+export function setDirectRecoveryBreaker(breaker) {
+  _directRecoveryBreaker = breaker;
+}
+
+export function resetDirectRecoveryBreaker() {
+  try { _directRecoveryBreaker?.destroy(); } catch { /* never fail teardown */ }
+  _directRecoveryBreaker = null;
+}
+
+/**
+ * Derive the recovery scope keys covering a resolved invocation, from
+ * trusted resolved configuration only (selected cli/backend, installation
+ * accountScope). The invocation key uses the launcher-minted invocationId.
+ * Unresolvable identities are omitted — never defaulted to a shared scope.
+ */
+export function recoveryScopeKeysForInvocation(invocation, { invocationId = null, quotaAccount = null } = {}) {
+  const selected = invocation?.selected ?? {};
+  const keys = [];
+  if (invocationId != null) keys.push(`invocation:${invocationId}`);
+  if (selected.cli) keys.push(`installation:${selected.cli}`);
+  if (selected.inferenceProvider) keys.push(`provider:${selected.inferenceProvider}`);
+  const account = quotaAccount
+    ?? invocation?.qualification?.installation?.accountScope
+    ?? selected.accountScope
+    ?? null;
+  if (account) keys.push(`quota:${account}`);
+  return keys;
+}
+
+export const RECOVERY_SCOPE_OPEN_CODE = 'RECOVERY_SCOPE_OPEN';
+
+/**
+ * Attribute a finished direct attempt to the scoped breaker (#2915A/C).
+ * Successes and uncertain terminations never open scopes; confirmed
+ * failures attribute through launcher-only evidence
+ * (classifyLaunchOutcomeForRecovery), so post-spawn task failures land in
+ * the invocation scope however loudly the worker blamed the provider.
+ * Recording never fails the attempt: the result passes through unchanged.
+ */
+export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, invocationId, quotaAccount, outcomePromise) {
+  const result = await outcomePromise;
+  if (breaker) {
+    try {
+      if (result?.termination !== 'confirmed') {
+        breaker.noteUncertainTermination({ scopeKeys, invocationId });
+      } else if (result?.exitCode === 0 && !result?.errorCode && !result?.timedOut) {
+        for (const scopeKey of scopeKeys ?? []) breaker.recordSuccess({ scopeKey, invocationId });
+      } else {
+        const selected = invocation?.selected ?? {};
+        const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
+        const attributed = attributeFailureScope({
+          reasonCode,
+          evidenceSource,
+          invocationId,
+          cli: selected.cli ?? null,
+          inferenceProvider: selected.inferenceProvider ?? null,
+          quotaAccount,
+        });
+        breaker.recordFailure({
+          scope: attributed.scope,
+          scopeKey: attributed.scopeKey,
+          invocationId,
+          reasonCode,
+          evidenceSource,
+          cli: selected.cli ?? null,
+          inferenceProvider: selected.inferenceProvider ?? null,
+          quotaAccount,
+        });
+      }
+      // Settle outstanding membership on every covering scope (idempotent):
+      // the outcome above records against one scope, and sibling scopes must
+      // not retain a stale member that would veto future cohort unanimity.
+      breaker.noteSettled({ scopeKeys, invocationId });
+    } catch { /* recovery accounting must never fail a launch */ }
+  }
+  return result;
+}
+
+/**
+ * Record a direct-dispatch outcome observed OUTSIDE launchOneWorker (the
+ * MCP worker-invoke bridge, which launches through planDirectWorkerLaunch
+ * and observes termination itself). Same trust contract as
+ * recordRecoveryAfterAttempt: `outcome` carries launcher-observed
+ * `{ termination, exitCode, errorCode, timedOut }`, never worker text.
+ * `invocationId` is the registry entry id (unique per run); scope keys come
+ * from the trusted resolved invocation via recoveryScopeKeysForInvocation.
+ */
+export function recordDirectWorkerOutcome(breaker, { scopeKeys = [], invocationId = null, outcome = null } = {}) {
+  if (!breaker) return;
+  try {
+    if (outcome?.termination !== 'confirmed') {
+      breaker.noteUncertainTermination({ scopeKeys, invocationId });
+    } else if (outcome?.exitCode === 0 && !outcome?.errorCode && !outcome?.timedOut) {
+      for (const scopeKey of scopeKeys ?? []) breaker.recordSuccess({ scopeKey, invocationId });
+    } else {
+      // Wait-status alone never implicates a shared scope: the failure is
+      // recorded in this run's own invocation scope only.
+      breaker.recordFailure({
+        scope: 'invocation',
+        scopeKey: `invocation:${invocationId ?? 'unknown'}`,
+        invocationId,
+        reasonCode: null,
+        evidenceSource: 'launcher',
+      });
+    }
+    breaker.noteSettled({ scopeKeys, invocationId });
+  } catch { /* recovery accounting must never fail a launch */ }
+}
+
 export class SessionLauncher extends EventEmitter {
   constructor() {
     super();
+    this.lastAttemptResult = null;
+    this.lastAttemptInvocationId = null;
     this.currentProcess = null;
     this.startTime = null;
     /** @type {import('./lib/provider-adapter.mjs').ProviderAdapter|null} */
@@ -833,12 +1141,62 @@ export class SessionLauncher extends EventEmitter {
     this.providerAdapter = adapter;
   }
 
-  /** Attached direct attempt; no Ralph state, monitor constructor, retry or legacy args. */
+  /**
+   * Attached direct attempt; no Ralph state, monitor constructor, retry or legacy args.
+   *
+   * Stop-before-retry is MANDATORY, not opt-in (#2915B): when this launcher
+   * already ran an attempt, relaunching is a retry of it and requires the
+   * launcher's own confirmed-termination evidence for that previous attempt,
+   * bound to its invocation id. `options.afterAttempt` supplies the evidence
+   * explicitly (cross-restart retries, where no stored attempt exists);
+   * otherwise the stored `lastAttemptResult` is used automatically, so an
+   * omitted `afterAttempt` after an uncertain attempt still blocks. A first
+   * launch (no previous attempt) and launches after pre-spawn refusals
+   * (which never record an attempt) pass the gate vacuously.
+   *
+   * `options.freshAttempt: true` declares a sequential UNRELATED attempt
+   * rather than a retry. It does not bypass the physics: an outstanding
+   * uncertain previous attempt still blocks. It only severs the invocation
+   * chain (the new attempt records previousAttemptId null). No production
+   * caller needs it today (`--launch-worker` uses a fresh launcher per CLI
+   * call; sequential test launches are pre-spawn refusals with no stored
+   * attempt); it exists so a future same-launcher sequential caller must
+   * declare intent instead of silently chaining.
+   *
+   * `options.correctStartup: { reasonCode, correctionsUsed }` enforces the
+   * one-qualified-startup-correction budget on a conductor-declared
+   * correction retry (startupCorrectionGate): unqualified causes and second
+   * corrections are refused here, within the task's existing allowance
+   * (which the caller enforces). There is no automatic correction loop.
+   */
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
+    const previousResult = options?.afterAttempt !== undefined ? options.afterAttempt : this.lastAttemptResult;
+    if (previousResult !== null && previousResult !== undefined) {
+      assertStopBeforeRetry(previousResult, { expectedInvocationId: this.lastAttemptInvocationId });
+      // An explicitly supplied cross-restart retry adopts its evidence's
+      // chain so the next retry binds against it.
+      if (this.lastAttemptInvocationId === null && previousResult?.invocationId != null) {
+        this.lastAttemptInvocationId = previousResult.invocationId;
+      }
+    }
+    if (options?.correctStartup !== undefined) {
+      const gate = startupCorrectionGate(options.correctStartup ?? {});
+      if (!gate.ok) {
+        const error = new Error(`Startup correction refused: ${gate.reason}`);
+        error.code = 'STARTUP_CORRECTION_REFUSED';
+        throw error;
+      }
+    }
     this.workerLaunchPending = true;
-    try { return await launchOneWorker(this, options); }
-    finally { this.workerLaunchPending = false; }
+    try {
+      const result = await launchOneWorker(this, options);
+      // Only post-spawn attempts record: pre-spawn refusals throw before
+      // any result exists, so they never create linkage or gate later calls.
+      this.lastAttemptResult = result ?? null;
+      this.lastAttemptInvocationId = result?.invocationId ?? this.lastAttemptInvocationId;
+      return result;
+    } finally { this.workerLaunchPending = false; }
   }
 
   /** Explicit manual observation grants no signal authority, with or without scratch. */
@@ -1650,7 +2008,10 @@ export async function getClaudeVersion() {
  *   client) that needs to read/write the worker's stdin/stdout directly.
  * @returns {{ launched: boolean, blocked?: boolean, failures?: unknown[], mode?: string }}
  *   Same result shape as `launchIsolatedWorker`; a blocked result carries the
- *   dispatch gate's typed failures and never reaches a spawn call.
+ *   dispatch gate's typed failures and never reaches a spawn call. A
+ *   recovery-scope refusal (`#2915`) returns `blocked: true` with
+ *   `recoveryBlocked` (covering scope keys) and a `diagnostic`, and likewise
+ *   never spawns.
  */
 export function planDirectWorkerLaunch({
   name = 'worker',
@@ -1686,9 +2047,26 @@ export function planDirectWorkerLaunch({
   // -> stdio[0] 'ignore') unchanged. An MCP stdio worker passes `'open'` to
   // get a live, writable stdin pipe for JSON-RPC requests.
   stdin,
+  // #2915A: scoped-breaker consultation for this dispatch. Defaults to the
+  // process-shared direct-recovery breaker; `null` disables the gate for
+  // callers that own recovery themselves. Flat-option callers without a
+  // resolved invocation have no trusted identities, so the gate is skipped
+  // for them (never defaulted to a shared scope).
+  scopedBreaker,
+  recoveryScopeKeys,
 } = {}) {
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
+  }
+  const recoveryBreaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
+  const coveringKeys = recoveryScopeKeys
+    ?? (invocation?.selected ? recoveryScopeKeysForInvocation(invocation, {}) : []);
+  if (recoveryBreaker && coveringKeys.length > 0) {
+    const gate = recoveryBreaker.canLaunch({ scopeKeys: coveringKeys });
+    if (!gate.ok) {
+      return { launched: false, blocked: true, recoveryBlocked: gate.blockedBy,
+        diagnostic: `recovery scope open: ${gate.blockedBy.join(', ')}` };
+    }
   }
   // Free disk is sampled on the worktree filesystem the worker will actually
   // write to — never the conductor's process cwd. Without live signals or
