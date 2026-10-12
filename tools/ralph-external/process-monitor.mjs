@@ -627,7 +627,15 @@ export function classifyWorkerStatus(records, facts = {}) {
   const transport = invocation?.transport ?? (identity?.request ? 'mcp' : 'shell');
   if (!['shell', 'mcp', 'http'].includes(transport)) throw statusError('INVALID_TRANSPORT');
   const expected = identity?.worker;
-  const actual = facts.actual ?? null;
+  // A 'transport-reported-unverified' worker is a diagnostic guess, never
+  // kernel-verified ownership (see session-launcher.mjs finish()). Treating
+  // it as `expected` for live-identity comparison would let a forged or
+  // merely unlucky worker record manufacture a mismatch against
+  // `facts.actual` and downgrade an otherwise kernel-confirmed exit to
+  // uncertain/IDENTITY_CHANGED. There is nothing reliable to compare
+  // against, so suppress the signal entirely rather than risk a false
+  // mismatch.
+  const actual = identity?.identityObservation === 'transport-reported-unverified' ? null : facts.actual ?? null;
   const matched = transport !== 'mcp' && expected?.uid === process.getuid() && sameWorkerIdentity(expected, actual)
     && (facts.bootId == null || actual.bootId === facts.bootId);
   const running = matched ? !['Z', 'X', 'x'].includes(actual.state) : null;
@@ -802,7 +810,11 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
           exit: await statusRecord(directory, 'exit.json'), scratch: await statusRecord(directory, 'last-observed.json') };
         const ownerRecord = await statusRecord(directory, '.status-observer');
         const expected = records.process.worker;
-        const actual = records.invocation?.transport !== 'mcp' && !records.process.request && expected?.uid === process.getuid()
+        // classifyWorkerStatus() also ignores an unverified worker for this
+        // comparison; skip the resample too so this never samples an
+        // unrelated process merely because a diagnostic record named its PID.
+        const actual = records.process.identityObservation !== 'transport-reported-unverified'
+          && records.invocation?.transport !== 'mcp' && !records.process.request && expected?.uid === process.getuid()
           ? (options.sampleIdentity ?? sampleWorkerIdentity)(expected.pid) : null;
         const key = records.process.invocationId;
         const counters = await captureSizes(directory);

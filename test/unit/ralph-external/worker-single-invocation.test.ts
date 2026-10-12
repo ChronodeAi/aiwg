@@ -527,7 +527,7 @@ describe('launcher load races with controlled interleavings', () => {
     const f = await fixture();
     const pid = 2147483646;
     const child = attachedStandIn(pid);
-    const leader = { ...sampleWorkerIdentity(process.pid), pid, pgid: pid, startTicks: '101' };
+    const leader = { ...sampleWorkerIdentity(process.pid), pid, pgid: pid, parentPid: process.pid, startTicks: '101' };
     const sample = vi.fn(() => null as any);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
     const launched = new Promise(resolve => f.launcher.once('launched', resolve));
@@ -548,7 +548,7 @@ describe('launcher load races with controlled interleavings', () => {
     const f = await fixture();
     const pid = 2147483646;
     const child = attachedStandIn(pid);
-    const leader = { ...sampleWorkerIdentity(process.pid), pid, pgid: pid, startTicks: '101' };
+    const leader = { ...sampleWorkerIdentity(process.pid), pid, pgid: pid, parentPid: process.pid, startTicks: '101' };
     const sample = vi.fn(() => ({ ...leader, pgid: process.pid }));
     const observations: any[] = [];
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
@@ -657,7 +657,7 @@ describe('launcher load races with controlled interleavings', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('requires consecutive owned-group observations with an unchanged start time', async () => {
+  it('requires two matching leader observations of the same birth, not just one', async () => {
     const f = await fixture();
     const pid = 2147483646;
     const child = attachedStandIn(pid);
@@ -730,6 +730,31 @@ describe('launcher load races with controlled interleavings', () => {
     expect(sample).toHaveBeenCalledTimes(settledCount);
   });
 
+  it('rejects two matching samples of an unrelated same-uid leader for the direct-child fallback', async () => {
+    // The stability window alone (two matching samples) only proves the
+    // *same* process answered twice -- it says nothing about whose child it
+    // is. A direct-child candidate must also be launcher-parented before it
+    // is even eligible for that window: otherwise an unrelated same-uid
+    // group leader (e.g. the OS reusing `child.pid` for something else
+    // entirely after our own child exited before the immediate sample) is
+    // accepted merely for repeating on two polls.
+    const f = await fixture();
+    const pid = 2147483646;
+    const child = attachedStandIn(pid);
+    const unrelated = { ...sampleWorkerIdentity(process.pid), pid, pgid: pid, parentPid: 1, startTicks: '999' };
+    const sample = vi.fn(() => unrelated);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ sampleIdentity: sample, launchIsolated: () => ({ mode: 'degraded', child }) });
+    await launched;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sample.mock.calls.length).toBeGreaterThanOrEqual(50);
+    child.emit('exit', 0, null); child.emit('close');
+    await done;
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'process.json'), 'utf8')))
+      .toMatchObject({ worker: null, ownership: 'unknown', identityObservation: 'no-stable-owned-group' });
+  });
+
   it('finalization cannot recover ownership from an unverified worker-writable start record', async () => {
     const f = await fixture();
     const pid = 2147483646;
@@ -742,6 +767,107 @@ describe('launcher load races with controlled interleavings', () => {
       queueMicrotask(() => { child.emit('exit', 0, null); child.emit('close'); });
       return { mode: 'degraded', transportSupervisor: true, child };
     } });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'process.json'), 'utf8')))
+      .toMatchObject({ worker: null, ownership: 'unknown', identityObservation: 'no-stable-owned-group' });
+  });
+
+  it('pins the transport birth synchronously, before the transport can exit and be reaped', async () => {
+    // Root cause (#3003 residual): nativeSupervisor was previously sampled
+    // only from inside observeIdentity's polling loop, after its first
+    // `await transportRecord(...)` -- a real, unavoidable async disk read.
+    // A worker fast enough to let the transport exit and be reaped during
+    // that single await left nativeSupervisor permanently null (a dead pid
+    // can never resample back to non-null), so finish()'s unverified-
+    // diagnostic fallback could never fire and `worker` stayed null even
+    // for a worker that ran completely normally. `sampleNativeSupervisor`
+    // here returns a valid sample only until the first microtask turn --
+    // i.e. only to a caller that samples synchronously, before any await --
+    // deterministically reproducing that ordering without relying on real
+    // process timing or host load.
+    const f = await fixture();
+    const pid = 2147483646;
+    const child = attachedStandIn(pid);
+    const transportBirth = { ...sampleWorkerIdentity(process.pid), pid: 987654, pgid: 987654, startTicks: '555' };
+    let afterMicrotask = false;
+    const sampleNativeSupervisor = vi.fn(() => (afterMicrotask ? null : transportBirth));
+    const reported = { ...sampleWorkerIdentity(process.pid), pid: 555555, pgid: 555555,
+      parentPid: transportBirth.pid, startTicks: '777' };
+    await f.launch({ sampleNativeSupervisor, launchIsolated: (opts: any) => {
+      writeFileSync(path.join(f.runDir, 'worker-identity.json'), JSON.stringify({
+        invocationId: opts.name, supervisor: transportBirth, worker: reported,
+      }), { mode: 0o600 });
+      // `launchOneWorker` has its own real awaits (dynamic import, policy
+      // revalidation, ...) before `captureOneWorker` even starts, so a
+      // microtask queued before `f.launch(...)` is called fires too early
+      // to distinguish anything -- it would have already run before the
+      // early pin even has a chance to. Queuing it here, from inside
+      // `launchIsolated`'s own synchronous callback, instead places it
+      // immediately after that callback's synchronous return: still before
+      // the capture loop's first real disk read (`await
+      // transportRecord(...)`), which is the actual boundary this test
+      // needs to straddle.
+      queueMicrotask(() => { afterMicrotask = true; child.emit('exit', 0, null); child.emit('close'); });
+      return { mode: 'degraded', transportSupervisor: true, child };
+    } });
+    // The pin happened before any await: the very first sample, taken
+    // synchronously at capture start, is non-null.
+    expect(sampleNativeSupervisor.mock.results[0]).toMatchObject({ value: transportBirth });
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'process.json'), 'utf8')))
+      .toMatchObject({ worker: reported, ownership: 'unknown', identityObservation: 'transport-reported-unverified',
+        nativeSupervisor: transportBirth });
+  });
+
+  it('never re-acquires a worker identity once the transport has observably exited', async () => {
+    // A transport pid can be reused by an unrelated process once the real
+    // transport has exited; a children-scan or live resample keyed on that
+    // pid number after that point could silently pivot onto it. Once
+    // `sawExit` is true, the launcher must stop attempting any such live
+    // resolution -- a dead transport can never produce a new, valid sample
+    // anyway, so this is a pure safety stop. `close` (which settles
+    // immediately) is withheld until after the mid-grace assertion so this
+    // observes the launcher mid-poll, sawExit true but not yet settled --
+    // not just its already-finished end state. `exit` is queued as a
+    // microtask from inside `launchIsolated`'s own synchronous callback, so
+    // it is enqueued -- and therefore runs -- strictly before the capture
+    // loop's first `await transportRecord(...)` (a real disk read, never
+    // faked) can even begin resolving. That ordering is deterministic;
+    // *how long* the real read then takes is not, which is why the wait
+    // below polls the real clock rather than assuming a fixed virtual-time
+    // advance is enough real time for it to land -- the same reasoning as
+    // `untilObserved` above, applied to a negative assertion: there is no
+    // observable "it happened" event to wait for, so this waits a generous
+    // real deadline while continuing to advance the capture loop's own
+    // (fake) polling clock, and asserts the call never landed in that time.
+    // This is exactly the in-flight case the entry-only check `!sawExit`
+    // cannot catch by itself -- the condition is evaluated before that same
+    // await, so a call already past it must re-check after resuming.
+    const f = await fixture();
+    const pid = 2147483646;
+    const child = attachedStandIn(pid);
+    const transportBirth = { ...sampleWorkerIdentity(process.pid), pid: 987654, pgid: 987654, startTicks: '555' };
+    const sampleNativeSupervisor = vi.fn(() => transportBirth);
+    const unrelatedChild = { ...sampleWorkerIdentity(process.pid), pid: 42, pgid: 42,
+      parentPid: transportBirth.pid, startTicks: '999' };
+    const sampleChildren = vi.fn(() => [unrelatedChild]);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+    const launched = new Promise(resolve => f.launcher.once('launched', resolve));
+    const done = f.launch({ sampleNativeSupervisor, sampleChildren,
+      launchIsolated: () => { queueMicrotask(() => child.emit('exit', 0, null));
+        return { mode: 'degraded', transportSupervisor: true, child }; } });
+    await launched;
+    const deadline = Date.now() + 2000;
+    while (!sampleChildren.mock.calls.length && Date.now() < deadline) {
+      await vi.advanceTimersByTimeAsync(50);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    // The children-scan fallback must never even be queried once the
+    // transport's exit has been observed -- `unrelatedChild` passes every
+    // shape check the fallback applies, so asserting the call never
+    // happened is the only way to show it was never consulted at all.
+    expect(sampleChildren).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(600);
+    child.emit('close');
+    await done;
     expect(JSON.parse(await readFile(path.join(f.runDir, 'process.json'), 'utf8')))
       .toMatchObject({ worker: null, ownership: 'unknown', identityObservation: 'no-stable-owned-group' });
   });

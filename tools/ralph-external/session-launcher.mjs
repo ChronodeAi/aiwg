@@ -366,10 +366,29 @@ async function captureOneWorker(owner, ctx) {
   const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
   const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
   const sampleIdentity = options.sampleIdentity ?? sampleWorkerIdentity;
+  // Separate hook from `sampleIdentity` (the worker-side sampler): this one
+  // samples the launcher's own trusted transport child, never a worker PID,
+  // and tests need to control the two independently (e.g. the transport
+  // dies as soon as it is sampled once, while the worker side is never
+  // reached at all).
+  const sampleNativeSupervisor = options.sampleNativeSupervisor ?? sampleWorkerIdentity;
   // For our own detached child, spawn waits through setsid/exec; one owned leader sample suffices.
   const immediate = !hasTransport ? sampleIdentity(child.pid) : null;
   let identity = immediate?.pid === child.pid && immediate?.pid === immediate?.pgid
     && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
+  // Pin the transport's own birth identity at the earliest possible moment --
+  // synchronously, before any await can let it exit and be reaped. For
+  // degraded/attached mode `child` IS the transport process (its PID is
+  // `native.mainPid` below), so this sample is as trustworthy as the direct
+  // child's `immediate` sample above. Sampling this only inside the polling
+  // loop (as before) raced a worker that ran and exited fast enough that the
+  // transport itself had already exited by the loop's first `await`,
+  // leaving `nativeSupervisor` permanently null -- a dead process can never
+  // be resampled back to non-null, so no later retry could recover it,
+  // which is exactly the ordering that produced the null `worker` field.
+  // For systemd-unit mode the unit's MainPID is not known synchronously; it
+  // is still resolved once inside observeIdentity.
+  let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
   const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
   let identityObservation = 'pending';
   let reportedWorker = null;
@@ -385,7 +404,6 @@ async function captureOneWorker(owner, ctx) {
   let deliveredSignal = null;
   let sawExit = false;
   let sawClose = false;
-  let nativeSupervisor = null;
   const driver = ctx.inputs.drivers[invocation.selected.cli];
   const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
     effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
@@ -630,16 +648,34 @@ async function captureOneWorker(owner, ctx) {
   const observeIdentity = async (firstSample) => {
     if (settled) return;
     let candidate = !hasTransport ? firstSample === undefined ? sampleIdentity(child.pid) : firstSample : null;
-    if (hasTransport) {
+    // Once the transport is observed to have exited, stop trying to acquire
+    // the worker's identity through it: `nativeSupervisor.pid` is a fixed
+    // pid *number*, and after the real transport process is gone the OS can
+    // reuse that number for an unrelated process, so a live resample of "its"
+    // children or a live-resample match against a stale disk record could
+    // silently pivot onto that unrelated process. Nothing further can be
+    // learned this way regardless -- a dead transport can never produce a
+    // new, valid live sample -- so this is a pure safety stop, not a loss.
+    if (hasTransport && !sawExit) {
       const native = outcome.mode === 'systemd-unit' ? readNative() : { mainPid: child.pid };
       const recorded = await transportRecord('worker-identity.json');
-      if (settled) return;
-      // The transport's own identity cannot change while it is alive, and a
-      // dead-process resample (e.g. the attached child already exited while
-      // this poll was in flight) must never clobber the one good sample with
-      // null — finalization's unverified-diagnostic fallback (below) depends
-      // on this surviving until finish() runs.
-      nativeSupervisor = sampleWorkerIdentity(native?.mainPid) ?? nativeSupervisor;
+      // Re-check, not just `settled`: the transport's exit can be observed
+      // while this very call is awaiting the disk read above, and resuming
+      // into the containment/children-scan work below on a transport pid
+      // the OS may have already reused is exactly what this guard exists to
+      // prevent -- checking only at entry is not enough once an await
+      // separates the check from the work it is meant to gate.
+      if (settled || sawExit) return;
+      // The transport's own identity cannot change while it is alive. Once
+      // pinned, a later non-null resample is never accepted as a
+      // replacement: if the transport's pid were reused after it exited,
+      // that unrelated process would otherwise become the trusted ancestor
+      // for every containment check below. The first successful sample is
+      // either the launcher's own spawn-time pin (captured above, before any
+      // await could let the transport exit and be reaped) or, for
+      // systemd-unit mode where the unit's MainPID isn't known
+      // synchronously, the first live resample here.
+      nativeSupervisor ??= sampleNativeSupervisor(native?.mainPid);
       const contained = candidatePid => verifyWorkerContainment(candidatePid, { mode: outcome.mode, unit: outcome.unit, nativeSupervisor });
       // A disk record that merely matches a REAL process on resample is not
       // enough: that real process can be any same-UID process on the host.
@@ -656,7 +692,7 @@ async function captureOneWorker(owner, ctx) {
         // children scan below can see a pre-setsid fork.
         if (current.pid === current.pgid && current.uid === process.getuid()) identity ??= current;
       } else {
-        const children = sampleWorkerChildren(nativeSupervisor?.pid);
+        const children = (options.sampleChildren ?? sampleWorkerChildren)(nativeSupervisor?.pid);
         if (children?.length === 1 && children[0].uid === process.getuid() && children[0].parentPid === nativeSupervisor.pid
           && contained(children[0].pid)) {
           const current = sampleIdentity(children[0].pid);
@@ -666,7 +702,19 @@ async function captureOneWorker(owner, ctx) {
     }
     // A third-party children scan requires two matching samples: setsid may be pending.
     // A direct child uses stable capture only when its immediate sample was unusable.
-    identity ??= identityCapture.observe(candidate);
+    const observed = identityCapture.observe(candidate);
+    // The capture's two-matching-samples stability only proves the *same*
+    // process answered twice; it says nothing about whose child it is. A
+    // transport-path candidate reaching here is already launcher/transport
+    // -parented (verified above, before being assigned to `candidate`), but
+    // a direct child's candidate is not -- require it here, or an unrelated
+    // same-uid group leader (e.g. the OS reusing `child.pid` for something
+    // else entirely after our own child exited before the immediate sample)
+    // would be accepted merely for repeating within the window. This is
+    // deliberately checked *after* `identityCapture.observe()`, not before:
+    // rejecting the candidate earlier would starve the capture's own
+    // window/deadline bookkeeping of ever seeing a non-null sample.
+    if (observed && (hasTransport || observed.parentPid === process.pid)) identity ??= observed;
     if (identity) observer.processStarted(identity);
     if (!identity && !identityCapture.expired()) {
       later(observeIdentity, identityCapture.started() ? 5 : 50); return;
