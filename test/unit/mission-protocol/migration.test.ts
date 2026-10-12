@@ -1,11 +1,18 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { applyMigration, discoverMigration, resumeMigration, rollbackMigration, verifyMigration } from '../../../tools/mission-protocol/migrate.mjs';
+
+// None of this file's workspace roots were ever removed (#3018); track and clean up after each test.
+const tmpRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(tmpRoots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
 
 async function workspace(states = ['running', 'paused', 'completed', 'failed', 'aborted', 'incomplete']) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-mission-migration-'));
+  tmpRoots.push(root);
   const sessions = path.join(root, '.aiwg/ralph-external/mc/sessions');
   await mkdir(sessions, { recursive: true });
   const originals = new Map<string, Buffer>();
