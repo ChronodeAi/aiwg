@@ -208,7 +208,8 @@
           "enum": [
             "closed",
             "brief-json",
-            "brief-text"
+            "brief-text",
+            "adapter-frame"
           ]
         },
         "cwd": {
@@ -230,6 +231,11 @@
             "minLength": 1
           },
           "minItems": 1
+        },
+        "versionPattern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
         },
         "maxOutputBytes": {
           "type": "integer",

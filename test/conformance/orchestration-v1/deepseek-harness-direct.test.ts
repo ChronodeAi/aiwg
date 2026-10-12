@@ -2,7 +2,7 @@
  * #2909 (B-OG-44) DeepSeek Harness (`dsh`) promotion: offline S1 profile
  * work. T-OG-15 renders the version-bound `deepseek-harness-direct`
  * profile through the real resolver and #2887 renderer, then executes the
- * rendered shell command against a synthetic `dsh` that records argv, cwd,
+ * resolved invocation through the launcher against a synthetic `dsh` that records argv, cwd,
  * the patch file contents, stdin brief and environment names. T-OG-20/21
  * drive the same fake through the #2896 health observer and the real
  * `parseWorkerFinal` hook. Spawns are plain child processes (no systemd);
@@ -10,6 +10,7 @@
  * qualification here is synthetic and never live qualification: the
  * bundled profile stays unqualified (DH08).
  */
+import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -182,13 +183,15 @@ async function dshPlan(options: { qualify?: boolean; cliVersion?: string } = {})
   f.snapshot.catalog.discovery!.instances = { 'deepseek-harness': discovery };
   const drivers: Record<string, WorkerInvocationDriver> = { 'deepseek-harness': {
     qualification: { adapter, adapterId: 'deepseek-harness-direct', cliVersion: binding.cliVersion },
+    extractFinal: (output: string) => installed.owner.parseOutput(output),
     buildInvocation: async input => ({ argv: [process.execPath, FAKE, ...owner.buildWorkerArgs(input, profile, input.permissions)],
+      artifacts: owner.buildWorkerArtifacts(input),
       stdin: DEEPSEEK_HARNESS_DIRECT_STDIN, envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
   } };
   const request = { role: 'coding' as const, group: 'workers', task: 'implementation', brief, workdir,
     final_output: path.join(root, "final '雪\n.json"), transport: 'shell' as const };
   const plan = await resolveWorkerInvocation(f.snapshot, request as any, drivers, f.request.now);
-  return { plan, root, workdir, payload, brief, adapter, profile };
+  return { plan, root, workdir, payload, brief, adapter, profile, snapshot: f.snapshot, drivers };
 }
 
 describe('DeepSeek Harness version-bound direct profile (B-OG-44)', () => {
@@ -241,49 +244,38 @@ describe('DeepSeek Harness version-bound direct profile (B-OG-44)', () => {
 });
 
 describe('T-OG-15 DeepSeek Harness direct command contract', () => {
-  it('DH02 renders exact PURE argv (buildWorkerArgs writes nothing); writing the patch and executing is the caller\'s job until a shared hook exists', async () => {
-    const { plan, root, workdir, payload } = await dshPlan();
-    expect(plan.invocation, JSON.stringify({ diagnostics: plan.diagnostics, exclusions: (plan as any).exclusions })).toBeDefined();
-    const invocation = plan.invocation!;
-    expect(invocation.argv.slice(2, 4)).toEqual(['--profile', 'headless']);
-    expect(invocation.argv[4]).toBe('--patch');
-    const patchPath = invocation.argv[5];
-    expect(invocation.argv.slice(6)).toEqual(['--json', '-']);
-    expect(JSON.stringify(invocation.argv)).not.toContain(MARKER);
-    // buildWorkerArgs is pure: nothing wrote the patch file as a side effect.
-    expect(existsSync(patchPath)).toBe(false);
-    expect(patchPath).toBe(deepSeekHarnessPatchPath({ finalPath: invocation.finalPath }));
-    // The caller (here: the test, standing in for a future shared
-    // execution-time hook) writes it with the adapter's own pure helper,
-    // exclusive create, mode 0600 -- never through buildWorkerArgs.
-    const patchContent = buildDeepSeekHarnessPatch({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never' });
-    await writeFile(patchPath, patchContent, { flag: 'wx', mode: 0o600 });
-    const { file, recordPath } = await fakeConfig(root, 'success');
-    const result = await run('/bin/sh', ['-c', invocation.shellCommand!], { cwd: root,
-      env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: file, DSH_UNRELATED_SECRET: 'sk-synthetic-should-not-pass' } });
-    expect(result.code, result.stderr).toBe(0);
-    const record = JSON.parse(await readFile(recordPath, 'utf8'));
-    expect(record).toMatchObject({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never', cwd: workdir, patchPath });
-    expect(record.brief).toBe(payload);
-    expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG']);
-    expect(existsSync(path.join(root, 'injected'))).toBe(false);
-    expect(patchContent).not.toContain(MARKER);
-    expect(patchContent).toContain(`model: "${MODEL}"`);
-    const stdout = await readFile(invocation.stdoutPath, 'utf8');
-    const final = installed.owner.parseOutput(stdout);
-    expect(JSON.parse(final!.text).summary).toBe(`synthetic reply (${payload.length} chars)`);
+  it('DH02 resolve writes nothing; the launcher writes only the selected patch controls and cleans up', async () => {
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
-    try {
-      const claims = await installed.owner.parseWorkerFinal(stdout,
-        { observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 } });
-      expect(claims).toMatchObject({ status: 'completed' });
-    } finally { vi.unstubAllEnvs(); }
+    const { plan, root, workdir, payload, snapshot, drivers } = await dshPlan();
+    expect(plan.invocation).toBeDefined();
+    expect(plan.invocation!.argv[5]).toBe('${artifact:dsh-patch}');
+    expect(existsSync(path.join(root, 'artifact-dsh-patch'))).toBe(false);
+    const patch = plan.invocation!.artifacts![0];
+    expect(patch.content).toBe(buildDeepSeekHarnessPatch({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never' }));
+    expect(patch.content).not.toContain(MARKER);
+    const { file, recordPath } = await fakeConfig(root, 'success');
+    vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', file);
+    const invocationPath = path.join(root, 'plan.json');
+    await writeFile(invocationPath, JSON.stringify(plan));
+    const runDir = path.join(root, 'run');
+    const result = await new SessionLauncher().launchWorker({ invocationPath, runDir,
+      inputs: { snapshot, drivers }, now: '2026-10-07T00:00:00Z',
+      checkDispatch: () => ({ ok: true, enabled: true, failures: [] }),
+      isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true });
+    const record = JSON.parse(await readFile(recordPath, 'utf8'));
+    expect(record).toMatchObject({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never', cwd: workdir,
+      patchPath: path.join(runDir, 'artifact-dsh-patch'), brief: payload });
+    expect(existsSync(record.patchPath)).toBe(false);
+    expect(record.argv).not.toContain(payload);
+    expect(result.exitCode).toBe(0);
+    vi.unstubAllEnvs();
   });
 
   it('DH03 the driver argv is PURE (no I/O) and refuses guessed or unsafe controls', () => {
     const input = { brief: 'b', cwd: '/w', finalPath: '/w/final.json', selected: { model: MODEL, effort: { value: EFFORT } } };
     const argv = owner.buildWorkerArgs(input, null, {});
     expect(argv.slice(0, 2)).toEqual(['--profile', 'headless']);
+    expect(owner.buildWorkerArgs({ ...input, brief: undefined, briefPath: '/w/brief' }, null, {})).toEqual(argv);
     expect(argv.slice(4)).toEqual(['--json', '-']);
     // No I/O: calling buildWorkerArgs twice never creates a file.
     expect(existsSync(argv[3])).toBe(false);
@@ -308,14 +300,7 @@ describe('T-OG-15 DeepSeek Harness direct command contract', () => {
     expect(patch).toContain('policy: "never"');
     expect(() => buildDeepSeekHarnessPatch({ model: 'bad"quote', effort: EFFORT, sandbox: 'read-only', approval: 'never' }))
       .toThrow(/conservative identifier charset/);
-    expect(deepSeekHarnessPatchPath({ finalPath: '/w/final.json' })).toBe('/w/final.json.dsh-patch.yml');
-    // Per-invocation: two finals in one run directory never share a patch path.
-    expect(deepSeekHarnessPatchPath({ finalPath: '/run/a.json' })).not.toBe(deepSeekHarnessPatchPath({ finalPath: '/run/b.json' }));
-    // Containment: a crafted final path cannot steer the patch outside its run directory.
-    for (const crafted of ['/run/../outside/final.json', '/run/./final.json', '/run//final.json', '/run/final.json/']) {
-      expect(() => deepSeekHarnessPatchPath({ finalPath: crafted })).toThrow(/normalized/);
-    }
-    expect(() => deepSeekHarnessPatchPath({ finalPath: 'relative.json' })).toThrow(/absolute/);
+    expect(deepSeekHarnessPatchPath({ finalPath: '/w/final.json' })).toBe('${artifact:dsh-patch}');
   });
 
   it('DH08 the bundled registry stays undispatchable: live qualification is a recorded S1 blocker', () => {

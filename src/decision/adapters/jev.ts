@@ -15,7 +15,6 @@ import { DecisionValidationError, validateDecisionValue, validateDistribution } 
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { partitionProjectedState } from '../projection.js';
 import { isTraceparent } from '../telemetry/context.js';
-import { runInNewContext } from 'node:vm';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { request as httpsRequest } from 'node:https';
@@ -50,7 +49,7 @@ interface PinnedAddress { address: string; family: 4 }
 const MAX_HEADER_BYTES = 32 * 1024;
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_REQUEST_ID_LENGTH = 128;
-const MAX_PARSE_MS = 50;
+const MAX_PARSE_DEPTH = 64;
 
 /** Safe resolver taxonomy; messages are intentionally discarded at this boundary. */
 export class JevCredentialError extends Error {
@@ -85,6 +84,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     this.observeResponseBody = options.observeResponseBody;
   }
 
+  /** Used only for non-2xx error bodies, where there is no separate successful parse to stay consistent with. */
   private observeResponse(body: string): void {
     if (!this.observeResponseBody) return;
     let parsed: Record<string, unknown> = {};
@@ -93,6 +93,26 @@ export class JevDecisionAdapter implements DecisionAdapter {
     try { usage = normalizeUsage(parsed.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
     this.observeResponseBody(body, { actualModel: typeof parsed.model === 'string' && parsed.model ? parsed.model : null,
       usage });
+  }
+
+  /**
+   * Derives the observer's model/usage from a value `parseBoundedJson` has already produced (or `undefined`
+   * on a failed parse) -- never from a second, independent parse of the same bytes. `parseBoundedJson` runs
+   * inside a bounded-time VM context (`MAX_PARSE_MS`); calling it twice on identical bytes let one call
+   * succeed while the other spuriously hit that wall-clock bound under host contention, so the reported
+   * metadata could disagree with the actual parsed answer even though both described one response.
+   */
+  private observationMetadataOf(parsed: unknown): { actualModel: string | null; usage: DecisionUsage } {
+    let record: Record<string, unknown> = {};
+    try { record = asRecord(parsed); } catch { /* A non-object (or absent) top-level value has no model; usage stays unknown. */ }
+    let usage = emptyUsage();
+    try { usage = normalizeUsage(record.usage); } catch { /* Missing usage is unknown, including on auth errors. */ }
+    return { actualModel: typeof record.model === 'string' && record.model ? record.model : null, usage };
+  }
+
+  /** Observes exactly once, from the single parse attempt `parsed` already represents (successful or not). */
+  private observeParsed(body: string, parsed: unknown): void {
+    this.observeResponseBody?.(body, this.observationMetadataOf(parsed));
   }
 
   async capabilities(): Promise<AdapterCapabilities> {
@@ -197,10 +217,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
         if (!metadata.requestId && response.headers.get('content-type')?.includes('json')) {
           let parsedError: unknown;
           try { parsedError = parseBoundedJson(errorBody); }
-          catch (error) {
-            if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') throw error;
-            parsedError = null;
-          }
+          catch { parsedError = null; }
           if (parsedError && typeof parsedError === 'object' && !Array.isArray(parsedError)) {
             const field = (parsedError as Record<string, unknown>).request_id ?? (parsedError as Record<string, unknown>).requestId;
             const safe = safeRequestId(field);
@@ -219,8 +236,10 @@ export class JevDecisionAdapter implements DecisionAdapter {
     let parsed: unknown;
     try {
       const encoded = await readBoundedBody(response, signal);
-      this.observeResponse(encoded);
-      parsed = parseBoundedJson(encoded);
+      // One parse attempt; the observer reads its outcome (success or failure) before answer validation,
+      // so an invalid answer still gets model/usage checked, and a parse failure is reported as unknown
+      // to both the observer and the main path -- never divergently.
+      try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
       if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
       if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
       const normalized = normalizeResponse(request, parsed);
@@ -307,8 +326,9 @@ export class JevDecisionAdapter implements DecisionAdapter {
     }
     try {
       const encoded = await readBoundedBody(response, signal);
-      this.observeResponse(encoded);
-      const parsed = parseBoundedJson(encoded);
+      // One parse attempt; see the single-request `evaluate()` for why observation never re-parses.
+      let parsed: unknown;
+      try { parsed = parseBoundedJson(encoded); } finally { this.observeParsed(encoded, parsed); }
       const normalized = normalizeBatchResponse(requests, parsed).map(answer => ({
         questionId: answer.questionId,
         observation: { ...answer.observation, ...metadata },
@@ -550,19 +570,21 @@ function safeRequestId(value: unknown): string | null {
     && /^[\x21-\x7e]+$/.test(value) && !value.includes(',') ? value : null;
 }
 
-function parseBoundedJson(text: string): unknown {
-  rejectDuplicateAnswerKeys(text);
-  return structuredClone(runInNewContext('JSON.parse(input)', { input: text }, { timeout: MAX_PARSE_MS }));
-}
-
-/** Detect duplicate keys in the response's answer map before JSON.parse erases them. */
-function rejectDuplicateAnswerKeys(text: string): void {
-  const marker = /"answers"\s*:\s*\{/g.exec(text);
-  if (!marker) return;
-  let index = marker.index + marker[0].length;
-  let depth = 1;
-  const keys = new Set<string>();
-  while (index < text.length && depth > 0) {
+/** @internal Exported from this module for direct admission and CPU-cost evidence, not the public barrel. */
+export function parseBoundedJson(text: string): unknown {
+  // Bound work, not elapsed time: a VM timeout includes host scheduling delay.
+  // The stream reader also enforces this bound, before UTF-8 decoding.
+  if (text.length > MAX_BODY_BYTES || Buffer.byteLength(text, 'utf8') > MAX_BODY_BYTES) {
+    throw new DecisionValidationError('Jev response too large');
+  }
+  // Scan iteratively before allocation by JSON.parse. Total key text/count is
+  // bounded by body bytes; no recursive walk or suffix copying is needed.
+  // String/key spans are disjoint; skip the whitespace consumed by lookahead.
+  // Each code unit is visited once. Key slicing/decoding/hashing sum to
+  // O(body bytes), as does native parsing.
+  const containers: Array<Set<string> | null> = [];
+  let index = 0;
+  while (index < text.length) {
     const char = text[index]!;
     if (char === '"') {
       const start = index++;
@@ -573,17 +595,26 @@ function rejectDuplicateAnswerKeys(text: string): void {
         else if (next === '\\') escaped = true;
         else if (next === '"') break;
       }
-      if (depth === 1 && /^\s*:/.test(text.slice(index))) {
+      let next = index;
+      while (next < text.length && /[\x20\t\r\n]/.test(text[next]!)) next += 1;
+      const keys = containers.at(-1);
+      if (keys && text[next] === ':') {
         const key = JSON.parse(text.slice(start, index)) as string;
-        if (keys.has(key)) throw new DecisionValidationError('duplicate Jev answer key');
+        if (keys.has(key)) throw new DecisionValidationError('duplicate Jev response key');
         keys.add(key);
       }
+      index = next;
       continue;
     }
-    if (char === '{' || char === '[') depth += 1;
-    else if (char === '}' || char === ']') depth -= 1;
+    if (char === '{' || char === '[') {
+      if (containers.length >= MAX_PARSE_DEPTH) throw new DecisionValidationError('Jev response nesting too deep');
+      containers.push(char === '{' ? new Set<string>() : null);
+    } else if (char === '}' || char === ']') containers.pop();
     index += 1;
   }
+  // Native parsing checks the complete JSON grammar, with no reviver or code
+  // execution. Input bytes and nesting bound its work and allocated graph.
+  return JSON.parse(text) as unknown;
 }
 
 function headersWithinLimit(headers: Headers): boolean {

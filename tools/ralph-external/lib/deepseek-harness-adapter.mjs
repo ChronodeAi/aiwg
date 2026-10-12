@@ -93,26 +93,10 @@ registerProvider('dsh', () => new DeepSeekHarnessAdapter());
  * in the registry below, matching grok-build/cursor/opencode's convention
  * for controls evidenced only by help, source or no-model probes.
  *
- * KNOWN GAP (BLOCKER, reported, not invented around): there is no shared,
- * execution-time artifact hook with an owned private directory, exclusive/
- * no-follow creation and cleanup. `resolveWorkerInvocation` calls
- * `driver.buildInvocation` (which calls this adapter's `buildWorkerArgs`)
- * during RESOLUTION/PREVIEW as well as actual dispatch
- * (`src/serve/worker-invocation.ts` ~476), and installed preparation/
- * revalidation calls it again. `buildWorkerArgs` is therefore PURE below:
- * it never performs I/O, only returns argv with a deterministic patch path
- * (beside the per-invocation `finalPath`). Nothing in production today
- * actually writes that patch file, so the model/effort/sandbox/approval
- * controls this profile would configure through it are NOT dispatchable —
- * this profile cannot run until a shared execution-time hook exists. The
- * pure {@link buildDeepSeekHarnessPatch} (YAML text) and
- * {@link deepSeekHarnessPatchPath} (path) are exported so tests and the
- * docs' manual smoke command can write the file themselves (exclusive
- * create, mode 0600, inside their own `mktemp` directory) until that hook
- * lands. A no-model probe confirms `dsh` fails closed before any model call
- * when `--patch` points at a missing file (quoted in
- * docs/providers/deepseek-harness-direct.md) — so a caller that forgets to
- * write the patch gets a hard, visible failure, never a silent default.
+ * Execution-time patch delivery uses buildWorkerArtifacts, a pure declaration.
+ * Resolution emits an artifact placeholder; only the launcher writes the patch
+ * into its owned private run directory with exclusive no-follow creation and
+ * cleanup. No preview edits account defaults or writes a patch file.
  *
  * `DEEPSEEK_API_KEY` is the credential env var the no-model probe's
  * `MISSING_CREDENTIAL` error names (`llm-deepseek: no API key for
@@ -158,12 +142,6 @@ export const DEEPSEEK_HARNESS_DIRECT_SANDBOX_MODES = Object.freeze(['read-only',
 export const DEEPSEEK_HARNESS_DIRECT_APPROVAL_POLICIES = Object.freeze(['never']);
 /** Brief transport for the direct profile: piped stdin (`-`), never argv. */
 export const DEEPSEEK_HARNESS_DIRECT_STDIN = 'brief-text';
-/** Suffix appended to the per-invocation `finalPath` to name the generated
- * `--patch` overlay. The final path is unique per invocation, so two
- * invocations sharing a run directory never share a patch path. The file is
- * written by whatever execution-time hook eventually exists (#3002), never
- * by `buildWorkerArgs`, which is pure. */
-export const DEEPSEEK_HARNESS_DIRECT_PATCH_SUFFIX = '.dsh-patch.yml';
 const AUTO_SELECTION_VALUES = Object.freeze(['auto', 'default']);
 /** Conservative identifier charset for YAML-embedded values: letters,
  * digits, `.`, `_`, `-`, `/`, `:`, first character alphanumeric. Rejects
@@ -214,7 +192,7 @@ function normalizeDeepSeekHarnessApproval(approval) {
 
 /** Pure: the `--patch` overlay YAML text for one invocation's model,
  * effort, sandbox and approval. Performs no I/O — see the module-level
- * KNOWN GAP (BLOCKER) doc. Exported so tests and the docs' manual smoke
+ * execution-time artifact contract. Exported so tests and the docs' manual smoke
  * command can write this text themselves. Every value is validated against
  * a conservative charset/enum AND `JSON.stringify`-quoted in the emitted
  * YAML (defense in depth): neither alone is trusted. The patch never
@@ -244,23 +222,9 @@ export function buildDeepSeekHarnessPatch({ model, effort, sandbox, approval }) 
   ].join('\n');
 }
 
-/** Pure: the deterministic absolute path for the `--patch` overlay beside
- * the per-invocation `finalPath`. Performs no I/O.
- * @param {{ finalPath?: unknown }} invocation
- * @returns {string}
- */
-export function deepSeekHarnessPatchPath(invocation) {
-  const finalPath = invocation?.finalPath;
-  if (typeof finalPath !== 'string' || !finalPath.startsWith('/') || finalPath.includes('\0')) {
-    throw new Error('DeepSeek Harness worker requires an absolute final-output path');
-  }
-  // Containment: the path must already be normalized (no `.`/`..` segments, no
-  // trailing slash, no doubled separators), so the patch can never be steered
-  // outside the invocation's own run directory by a crafted final path.
-  if (resolve(finalPath) !== finalPath || finalPath.endsWith('/')) {
-    throw new Error('DeepSeek Harness worker requires a normalized final-output path');
-  }
-  return `${finalPath}${DEEPSEEK_HARNESS_DIRECT_PATCH_SUFFIX}`;
+/** Pure placeholder: the launcher substitutes its private, per-run path. */
+export function deepSeekHarnessPatchPath(_invocation) {
+  return '${artifact:dsh-patch}';
 }
 
 /** Strict scan of one `--json` stdout capture against the grammar documented
@@ -367,9 +331,8 @@ export class DeepSeekHarnessDirectAdapter extends DeepSeekHarnessAdapter {
    * argv (stdin only, via `-`); no invented `--model`/`--effort`/`--sandbox`
    * flags (none exist). Model/effort/sandbox/approval are validated here
    * (via {@link buildDeepSeekHarnessPatch}, result discarded) so argv is
-   * never rendered for a control this profile cannot actually enforce, but
-   * nothing writes the patch file in production today — see the module
-   * KNOWN GAP (BLOCKER) doc. */
+   * never rendered for a control this profile cannot actually enforce, and
+   * the launcher writes the declared patch at execution time. */
   buildWorkerArgs(invocation, _profile, permissions = {}) {
     const model = invocation?.selected?.model;
     const effort = invocation?.selected?.effort?.value;
@@ -379,9 +342,24 @@ export class DeepSeekHarnessDirectAdapter extends DeepSeekHarnessAdapter {
     const cwd = invocation?.cwd;
     if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0')) throw new Error('DeepSeek Harness worker requires an absolute workspace');
     const brief = invocation?.brief;
-    if (typeof brief !== 'string' || !brief || brief.includes('\0')) throw new Error('DeepSeek Harness worker requires a non-empty brief');
+    // Resolution supplies brief text; installed rechecks carry only its path.
+    // Neither form contributes prompt bytes to argv.
+    if (brief !== undefined ? typeof brief !== 'string' || !brief || brief.includes('\0')
+      : typeof invocation?.briefPath !== 'string' || !invocation.briefPath.startsWith('/') || invocation.briefPath.includes('\0')) {
+      throw new Error('DeepSeek Harness worker requires a non-empty brief or an absolute brief path');
+    }
     const patchPath = deepSeekHarnessPatchPath(invocation);
     return ['--profile', 'headless', '--patch', patchPath, '--json', '-'];
+  }
+
+  /** Pure execution-time artifact declaration; workspace-relative locations
+   * are intentionally unsupported by the shared launcher. */
+  buildWorkerArtifacts(invocation) {
+    const permissions = invocation.permissions ?? {};
+    return [{ name: 'dsh-patch', location: 'run-directory', content: buildDeepSeekHarnessPatch({
+      model: invocation.selected.model, effort: invocation.selected.effort.value,
+      sandbox: permissions.sandbox ?? 'workspace-write', approval: permissions.approval ?? 'never',
+    }) }];
   }
 
   /** No evidenced stdin abort channel; stdin carries the brief to EOF. */

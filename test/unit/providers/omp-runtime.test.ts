@@ -6,7 +6,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { OmpFrameDecoder, MAX_FRAME, OmpRpcClient, inspectOmpProcess, waitForOmpProcessCleanup } from '../../../tools/providers/omp-transport.mjs';
+import { OmpFrameDecoder, MAX_FRAME, OmpRpcClient, inspectOmpProcess, waitForOmpProcessCleanup, warmAndConnectOmpRpcClient } from '../../../tools/providers/omp-transport.mjs';
 import { OmpAdapter } from '../../../tools/ralph-external/lib/omp-adapter.mjs';
 import { OmpTaskGate, runOmpTeam, acquireOmpWorkspaceSlot } from '../../../tools/providers/omp-teams.mjs';
 import { discoverOmpModels, resolveOmpRoleModel } from '../../../src/models/model-discovery.js';
@@ -109,6 +109,61 @@ describe('OMP RPC lifecycle', () => {
     const client = new OmpRpcClient({ ...rpcFixture(executable), timeoutMs: 50 });
     await expect(client.connect()).rejects.toThrow('timeout'); await client.close(); expect(client.isClosed).toBe(true);
     await rm(dir, { recursive: true, force: true });
+  });
+  // #2999: a cold-starting pinned binary that is slow but healthy (slower than a fixed 30s wait
+  // under contention) must still be able to connect once warmed with a larger, explicit
+  // first-start readiness budget -- separate from, and never widening, this client's ordinary
+  // command/prompt timeout -- and that warm-up and startup must be measured and ordered, not just
+  // pass/fail.
+  it('separates the first-start readiness budget from the normal command timeout, and records an ordered, measured warm-up', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-')); const executable = join(dir, 'omp');
+    const fixture = join(dir, 'fixture.cjs'); const trace = join(dir, 'trace.log');
+    // Forwards argv: `--version` logs 'warmup' and answers immediately; the RPC start logs
+    // 'rpc-start', is slow to become ready (like a cold start competing for the host), and then
+    // never answers any command -- so only a command's own (short) timeout can end it.
+    await writeFile(fixture, `const fs=require('fs');const log=l=>fs.appendFileSync(${JSON.stringify(trace)},l+' '+Date.now()+'\\n');` +
+      `if(process.argv[2]==='--version'){log('warmup');process.stdout.write('18.1.10\\n');process.exit(0);}log('rpc-start');` +
+      `process.stdin.resume();setTimeout(()=>{process.stdout.write(JSON.stringify({type:'ready'})+'\\n');},150);`);
+    await writeFile(executable, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`);
+    try {
+      // A fixed wait shorter than the cold start fails exactly as the filed #2999 incident did
+      // (see "kills a hanging child on timeout and abort" above for that case in isolation).
+      // The larger, explicit `readyTimeoutMs` this fix adds lets the same slow-but-healthy binary
+      // connect, while the ordinary (short) `timeoutMs` keeps bounding what happens after.
+      const { client, warmup, warmedMs, readyMs } = await warmAndConnectOmpRpcClient({ ...rpcFixture(executable), readyTimeoutMs: 2000, timeoutMs: 80, closeGraceMs: 50 });
+      try {
+        expect(client.failure).toBeUndefined();
+        expect(warmup).toMatchObject({ status: 0, signal: null, error: null });
+        expect(Number.isFinite(warmedMs)).toBe(true); expect(warmedMs).toBeGreaterThanOrEqual(0);
+        expect(Number.isFinite(readyMs)).toBe(true); expect(readyMs).toBeGreaterThanOrEqual(140);
+        // The warm-up ran, and ran strictly before the RPC process started.
+        const lines = (await readFile(trace, 'utf8')).trim().split('\n').map(line => { const [label, ts] = line.split(' '); return { label, ts: Number(ts) }; });
+        expect(lines.map(line => line.label)).toEqual(['warmup', 'rpc-start']);
+        expect(lines[0]!.ts).toBeLessThanOrEqual(lines[1]!.ts);
+        // The fixture never answers any command: only `timeoutMs` (80ms), not `readyTimeoutMs`
+        // (2000ms), can end this call -- proving the two budgets are independent.
+        const startedCommand = Date.now();
+        await expect(client.command('get_state')).rejects.toThrow('get_state timeout');
+        expect(Date.now() - startedCommand).toBeLessThan(2000);
+      } finally { await client.close(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it('closes the client when connect() rejects (e.g. a protocol negotiation rejection), so the helper never loses ownership', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-reject-')); const executable = join(dir, 'omp');
+    const fixture = join(dir, 'fixture.cjs'); const pidFile = join(dir, 'pid');
+    // Advertises protocol v2 (so `connect()` negotiates) but rejects every command, including
+    // `negotiate_protocol` -- `connect()` must reject, and the helper must still close the process.
+    await writeFile(fixture, `const fs=require('fs');fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));` +
+      `process.stdout.write(JSON.stringify({type:'ready',supportedProtocolVersions:[1,2]})+'\\n');` +
+      `require('readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);` +
+      `process.stdout.write(JSON.stringify({type:'response',id:m.id,command:m.type,success:false})+'\\n');});`);
+    await writeFile(executable, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`);
+    try {
+      await expect(warmAndConnectOmpRpcClient({ ...rpcFixture(executable), readyTimeoutMs: 2000, closeGraceMs: 50 }))
+        .rejects.toThrow('negotiate_protocol failed');
+      const pid = Number(await readFile(pidFile, 'utf8'));
+      await vi.waitFor(async () => { expect((await inspectOmpProcess({ pid })).present).toBe(false); }, { timeout: 2000, interval: 20 });
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
 describe('OMP team native dispatch', () => {

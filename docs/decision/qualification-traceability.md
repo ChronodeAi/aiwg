@@ -23,7 +23,7 @@ Status values:
 
 | ID | Amendment | Gate | Owning issues | Status | Evidence |
 |---|---|---|---|---|---|
-| M01 | Endpoint normalization, redirect/DNS/private-address policy, authorization-header non-forwarding, bounded response parsing | G2 | #2593, #2597 | offline-covered | `SEC-DNS`, `SEC-DNS-PRIVATE`, `SEC-ORIGIN-REDIRECT`, `SEC-REDIRECT-LOOP`, `SEC-HOST-MISMATCH`, `SEC-RESPONSE-BOUNDS`, `SEC-RESPONSE-PARSE-TIME`, `SEC-DNS-PIN`, `SEC-COMPRESSED-BOUND`, telemetry collector DNS rebinding, projection origin checks |
+| M01 | Endpoint normalization, redirect/DNS/private-address policy, authorization-header non-forwarding, structurally bounded response parsing | G2 | #2593, #2597, #3016 | offline-covered | `SEC-DNS`, `SEC-DNS-PRIVATE`, `SEC-ORIGIN-REDIRECT`, `SEC-REDIRECT-LOOP`, `SEC-HOST-MISMATCH`, `SEC-RESPONSE-BOUNDS`, `SEC-RESPONSE-PARSE-TIME`, `SEC-DNS-PIN`, `SEC-COMPRESSED-BOUND`, telemetry collector DNS rebinding, projection origin checks |
 | M02 | Opaque request-ID validation, export redaction, metric-cardinality exclusion | G2 | #2593, #2602, #2605 | offline-covered | `ADP-REQID-INJECTION`, `ADP-REQID-BODY`, batch malformed request IDs, telemetry redaction and cardinality bounds |
 | M03 | Per-principal/project quotas, bounded queues and pre-admission work, noisy-neighbor isolation, load shedding | G4 | #2594, #2601, #2610 | offline-covered | scheduler-admission noisy-neighbor, shedding and queue bounds; job quota and poll-limiter conformance |
 | M04 | Receipt/cache tamper detection, alias-safe cache lookup, cross-project read denial | G2 | #2595, #2609 | offline-covered | receipt tamper and substitution, result-cache tamper/alias/cross-workspace, result-cache scope substitution, `CCP-006` |
@@ -34,6 +34,16 @@ Status values:
 | M09 | Lifecycle deletion, tombstone, legal-hold, and backup behavior | G2 | #2597, #2605, #2609, #2610, #2613, #2614, #2615, #2616, #2617 | offline-covered | lifecycle cascade and holds, file lifecycle journal, result-cache backup restore, telemetry tombstones, `HITL-RETENTION`, job D10 erase and backup restore |
 | M10 | Machine-validated threat-preflight and runbook evidence | G4 | #2605, #2607 | offline-covered | `M10-PREFLIGHT-01..03`, `M10-RUNBOOK-01..03`, `PAT-OPS-001` |
 | M11 | Traceability to every new scored risk R-23 through R-30 | G4 | #2604 | offline-covered | `M11-TRACE-01..05` |
+
+M01 note: `SEC-RESPONSE-PARSE-TIME` preserves the control that hostile provider
+JSON cannot consume unbounded parse time. Under #3016 the mechanism is a 1 MiB
+UTF-8 byte cap, 64-container depth cap, single-pass linear scan, and duplicate-key
+rejection in every object before the full native parse. Its evidence measures
+the worst admissible shapes, including 132,441 unique keys, against a generous
+500 ms `process.cpuUsage()` CPU regression budget per parse. The former 50 ms
+wall-clock VM watchdog is removed; the CPU budget is a test assertion, not a
+runtime timer. See the [decision record](jev-json-parse.md) for the cost argument,
+fixed-seed grammar/structure tests, and the response-fixture compatibility audit.
 
 M07 note: no DMN, OPA, or XML importer exists yet. The M07 suite bounds the
 existing JSON/YAML decision admission path (`parseDecisionJson`,

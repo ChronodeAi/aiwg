@@ -47,11 +47,13 @@ function scrubEvent(event: Record<string, unknown>, env: NodeJS.ProcessEnv): Rec
 }
 
 function isTerminal(event: Record<string, unknown>): boolean {
-  return ['result', 'error', 'complete', 'completed'].includes(String(event.type ?? event.event ?? ''));
+  return event.type === 'end' || event.type === 'error';
 }
 
 function isError(event: Record<string, unknown>): boolean {
-  return event.is_error === true || event.error !== undefined || ['error', 'failed'].includes(String(event.type ?? event.event ?? ''));
+  return event.type === 'error' || event.is_error === true || event.error != null
+    || (event.type === 'end' && event.stopReason !== 'end_turn')
+    || (['tool_call', 'tool_call_update'].includes(String(event.type)) && event.status === 'failed');
 }
 
 function stopProcess(child: ReturnType<typeof spawn>): void {
@@ -68,7 +70,7 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
   const timeoutMs = Math.min(Math.max(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1), MAX_TIMEOUT_MS);
   const maxBytes = Math.min(Math.max(options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT, 1024), DEFAULT_MAX_OUTPUT);
   const env = options.env ?? process.env;
-  const args = [...(options.prefixArgs ?? []), '--no-auto-update', ...(options.disableSubagents ? ['--no-subagents'] : []), '-p', options.prompt, '--output-format', format];
+  const args = [...(options.prefixArgs ?? []), ...(options.disableSubagents ? ['--no-subagents'] : []), '-p', options.prompt, '--output-format', format];
   return new Promise((resolve, reject) => {
     const child = spawn(options.command ?? 'grok', args, {
       cwd: options.cwd,
@@ -106,7 +108,7 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
       if (format === 'json') {
         try {
           const parsed = JSON.parse(cleanStdout) as Record<string, unknown>;
-          if (isError(parsed)) throw new Error('Grok Build returned a JSON error result');
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || isError(parsed) || parsed.stopReason !== 'end_turn') throw new Error('Grok Build returned a JSON error result');
           events.push(parsed);
         } catch (cause) {
           reject(cause instanceof Error ? cause : new Error('Invalid Grok Build JSON result'));
@@ -120,7 +122,29 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
     child.on('error', error => finish(new Error(`Grok Build headless launch failed: ${error.message}`)));
+    const acceptEvent = (event: Record<string, unknown>): void => {
+      if (settled) return;
+      if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        finish(new Error('Invalid Grok Build streaming-json event')); return;
+      }
+      // ACP end is always last. Failure is latched across the whole stream.
+      if (terminalSeen) { finish(new Error('Grok Build event after terminal event')); return; }
+      const safe = scrubEvent(event, env);
+      events.push(safe);
+      options.onEvent?.(safe);
+      if (isError(safe)) terminalError = true;
+      if (isTerminal(safe)) {
+        terminalSeen = true;
+        // Some builds leave background work attached after end. Allow a
+        // short drain, then terminate the process group.
+        drainTimer ??= setTimeout(() => {
+          if (pending.trim()) { finish(new Error('Invalid trailing Grok Build streaming-json event')); return; }
+          stopProcess(child); finish(undefined, terminalError ? 1 : 0);
+        }, 300);
+      }
+    };
     child.stdout.on('data', (chunk: Buffer) => {
+      if (settled) return;
       bytes += chunk.length;
       if (bytes > maxBytes) { finish(new Error(`Grok Build headless output exceeded ${maxBytes} bytes`)); return; }
       const part = chunk.toString('utf8');
@@ -135,16 +159,8 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
         let event: Record<string, unknown>;
         try { event = JSON.parse(line) as Record<string, unknown>; }
         catch { finish(new Error('Invalid Grok Build streaming-json event')); return; }
-        const safe = scrubEvent(event, env);
-        events.push(safe);
-        options.onEvent?.(safe);
-        if (isError(safe)) terminalError = true;
-        if (isTerminal(safe)) {
-          terminalSeen = true;
-          // Some provider builds leave background work attached after the
-          // result. Allow a short drain, then terminate the process group.
-          drainTimer ??= setTimeout(() => { stopProcess(child); finish(undefined, terminalError ? 1 : 0); }, 300);
-        }
+        acceptEvent(event);
+        if (settled) return;
       }
     });
     child.stderr.on('data', (chunk: Buffer) => {
@@ -154,10 +170,7 @@ export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<Gro
     child.on('close', code => {
       if (format === 'streaming-json' && pending.trim()) {
         try {
-          const event = scrubEvent(JSON.parse(pending) as Record<string, unknown>, env);
-          events.push(event);
-          if (isError(event)) terminalError = true;
-          if (isTerminal(event)) terminalSeen = true;
+          acceptEvent(JSON.parse(pending) as Record<string, unknown>);
         } catch { finish(new Error('Invalid trailing Grok Build streaming-json event')); return; }
       }
       finish(undefined, code ?? 1);

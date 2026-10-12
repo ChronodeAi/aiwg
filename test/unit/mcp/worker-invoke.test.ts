@@ -769,6 +769,22 @@ function fakeNeverClosingChild() {
  * parallel contract. */
 function buildFixture(root: string, transport: 'shell' | 'mcp') {
   const f = workerResolutionFixture();
+  // The shared fixture's synthetic model observation has a tiny 4096-token context window
+  // (test/conformance/mission-v1/fixtures/worker-contracts/shared-vectors.json
+  // "observation-no-effort"). Admission (resolveWorkerInvocation, src/serve/worker-invocation.ts)
+  // estimates `briefTokens` as the raw byte length of the structured WorkerDirectBrief, which
+  // embeds this test's absolute workdir/final_output paths (built under TMPDIR via
+  // `tempRoot()`/os.tmpdir()). With the default short /tmp this fits; with a longer TMPDIR (for
+  // example a `/var/tmp/<name>` override) the extra path bytes alone were enough to push the
+  // estimate over the 4096-token budget — every launch was then refused as 'blocked' with
+  // `plan.selected === null`, whose per-candidate `OG_MODEL_UNAPPROVED /worker/contextTokens`
+  // reason lives only in `plan.exclusions`, never in the diagnostics this test observes. Widen
+  // the window so admission in this file is independent of the host's TMPDIR path length; no
+  // assertion here depends on the specific 4096/1024 figures.
+  for (const model of f.snapshot.catalog.discovery!.instances!.codex.models) {
+    model.worker!.contextTokens = 200000;
+    model.worker!.maxOutputTokens = 32000;
+  }
   const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
   adapter.id = 'codex';
   const binding = f.snapshot.installations.codex;

@@ -30,6 +30,17 @@ export interface ConfigLocations {
   projectConfig: string;
 }
 
+/** Options overriding `ConfigLoader`'s default location resolution. */
+export interface ConfigLoaderOptions {
+  /**
+   * Resolved AIWG home to load bundled model defaults from. Takes
+   * precedence over `AIWG_HOME` when provided — callers resolve their own
+   * explicit-env-vs-fallback precedence and pass the result here rather
+   * than ever writing `process.env.AIWG_HOME` themselves.
+   */
+  aiwgHome?: string;
+}
+
 /**
  * Loads and merges model configurations
  */
@@ -39,8 +50,8 @@ export class ConfigLoader {
   private inputDigests: Pick<WorkerActivation, 'projectModelsDigest' | 'userModelsDigest' | 'builtinModelsDigest'> | null = null;
   private readonly locations: ConfigLocations;
 
-  constructor(projectPath?: string) {
-    const aiwgHome = process.env.AIWG_HOME || resolve(homedir(), '.local/share/ai-writing-guide');
+  constructor(projectPath?: string, options?: ConfigLoaderOptions) {
+    const aiwgHome = options?.aiwgHome || process.env.AIWG_HOME || resolve(homedir(), '.local/share/ai-writing-guide');
     const userConfigDir = process.env.AIWG_CONFIG || resolve(homedir(), '.config/aiwg');
 
     this.locations = {

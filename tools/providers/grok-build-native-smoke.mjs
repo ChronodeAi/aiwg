@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
+import { observeProviderHealthEvent } from '../ralph-external/lib/worker-health.mjs';
 
 const skipped = (reason) => {
   process.stdout.write(`${JSON.stringify({ provider: 'grok-build', status: 'skipped', reason })}\n`);
@@ -42,7 +43,7 @@ if (!process.env.XAI_API_KEY) {
   process.exit(0);
 }
 
-const child = spawn(binary, ['--no-auto-update', '-p', 'Reply with the word OK only.', '--output-format', 'streaming-json'], {
+const child = spawn(binary, ['-p', 'Reply with the word OK only.', '--output-format', 'streaming-json'], {
   cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'], shell: false,
   detached: process.platform !== 'win32',
 });
@@ -51,6 +52,16 @@ let events = 0;
 let terminal = false;
 let errorEvent = false;
 let stderrBytes = 0;
+const acceptEvent = event => {
+  const observation = observeProviderHealthEvent('grok-build', event, { kind: 'stdout' }, {});
+  events++;
+  if (terminal) errorEvent = true; // ACP end must be last.
+  if (observation?.kind === 'terminal') {
+    terminal = true;
+    if (!observation.success) errorEvent = true;
+  }
+  if (observation?.kind === 'error' && observation.fatal) { terminal = true; errorEvent = true; }
+};
 const stop = () => {
   if (child.pid && process.platform !== 'win32') {
     try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* already exited */ }
@@ -76,10 +87,7 @@ child.stdout.on('data', chunk => {
     pending = pending.slice(end + 1);
     if (!line) continue;
     try {
-      const event = JSON.parse(line);
-      events++;
-      if (['result', 'complete', 'completed', 'error'].includes(event.type || event.event)) terminal = true;
-      if (event.error || event.is_error === true || event.type === 'error') errorEvent = true;
+      acceptEvent(JSON.parse(line));
     } catch {
       stop();
       process.stderr.write('Grok Build live smoke received invalid JSON event\n');
@@ -95,6 +103,9 @@ child.stderr.on('data', chunk => {
 child.on('error', () => { clearTimeout(timeout); process.stderr.write('Grok Build live smoke launch failed\n'); process.exitCode = 1; });
 child.on('close', code => {
   clearTimeout(timeout);
+  if (pending.trim()) {
+    try { acceptEvent(JSON.parse(pending)); } catch { errorEvent = true; }
+  }
   const status = process.exitCode || code !== 0 || errorEvent || !terminal ? 'failed' : 'passed';
   process.stdout.write(`${JSON.stringify({ provider: 'grok-build', status, eventCount: events, terminal, stderrBytes })}\n`);
   if (status === 'failed') process.exitCode = 1;

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   computeEgressLiveMetrics, EGRESS_ATTACK_CLASSES, EGRESS_LIVE_ENV_GATE, EgressLiveBudget, egressLiveDigest, egressLiveDryRun, egressLivePreregistration,
   EGRESS_LIVE_MAX_MEASUREMENT_FAILURES_PER_CLASS, egressLiveReservationMicros, egressPriorRunSpendUsd, egressRetryDecision, egressWorstCaseDispatches, generateEgressAttackCorpus, guardEgressTransport, runEgressLiveQualification, scopedCredentialResolver, validateEgressLiveApproval,
@@ -81,11 +81,23 @@ async function sourceFixture() {
   return { root, commit: git(root, 'rev-parse', 'HEAD') };
 }
 
+// #2997 every withRun case below only reads the source fixture (hashing/committing it, never
+// writing into it) through runEgressLiveQualification, so one fixture built once per describe
+// is equivalent to one built fresh per case. Building it 10+ times per file, each through three
+// synchronous git child-process spawns, added fixture-build overhead that scales with runner
+// contention. EGRESS-FIXTURE-01 below asserts fixtureBuildCount === 1 as the regression check: the
+// fixture is built in that describe's own `beforeAll`, which vitest runs once whenever any test in
+// the describe is selected -- including `-t EGRESS-FIXTURE-01` alone -- so the count is independent
+// of which other cases in the describe are also selected or of their declaration order.
+let sharedSourceFixture: { root: string; commit: string } | null = null;
+let fixtureBuildCount = 0;
+
 async function withRun<T>(work: (context: { source: string; commit: string; output: string; corpus: EgressLiveCorpus }) => Promise<T>): Promise<T> {
-  const { root, commit } = await sourceFixture();
+  if (!sharedSourceFixture) throw new Error('egress source fixture must be built by this describe\'s beforeAll before any case runs');
+  const { root, commit } = sharedSourceFixture;
   const output = await mkdtemp(join(tmpdir(), 'egress-artifacts-')); route.root = output;
   try { return await work({ source: root, commit, output, corpus: generateEgressAttackCorpus(undefined, 2) }); }
-  finally { route.root = ''; await rm(root, { recursive: true, force: true }); await rm(output, { recursive: true, force: true }); }
+  finally { route.root = ''; await rm(output, { recursive: true, force: true }); }
 }
 
 async function filesUnder(dir: string): Promise<string[]> {
@@ -331,6 +343,11 @@ describe('#2680 preregistered movement metrics', () => {
 });
 
 describe('#2680 synthetic end-to-end collection through the real evaluator and D10 projection', () => {
+  // Suite-owned: vitest runs a describe's beforeAll whenever any of its tests are selected, including a
+  // single `it` picked by name (e.g. `-t EGRESS-FIXTURE-01`), so this always builds the fixture exactly
+  // once before any case in this describe can read it, regardless of selection or declaration order.
+  beforeAll(async () => { fixtureBuildCount++; sharedSourceFixture = await sourceFixture(); });
+
   it('EGRESS-E2E-01 records digest-bound D11 evidence, scoped reads, a denied decoy and clean surfaces', async () => {
     await withRun(async ({ source, commit, output, corpus }) => {
       const jev = fakeJev(); const host = fakeHost();
@@ -597,6 +614,17 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
       });
     } finally { vi.unstubAllEnvs(); }
   }, 60_000);
+
+  // #2997 regression check: this describe's `beforeAll` builds the fixture exactly once no matter
+  // which cases run. Passes standalone (`-t EGRESS-FIXTURE-01`), in any declaration order, and
+  // alongside every other case in this describe.
+  it('EGRESS-FIXTURE-01 this describe builds its source fixture exactly once', () => {
+    expect(fixtureBuildCount).toBe(1);
+  });
+
+  afterAll(async () => {
+    if (sharedSourceFixture) { await rm(sharedSourceFixture.root, { recursive: true, force: true }); sharedSourceFixture = null; }
+  });
 });
 
 describe('#2680 OpenBao KV resolver (offline seams)', () => {

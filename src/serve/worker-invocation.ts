@@ -87,6 +87,8 @@ export function mcpToolSchemaDigest(schema: unknown): string {
 
 export interface WorkerInvocationQualification extends ParametersContext {
   installation?: WorkerInstallationRequest;
+  /** Host store bytes bound by the recorded-installation loader, never a brief/cwd lookup. */
+  stdinFramerBinding?: { storePath: string; storeDigest: string };
   adapter: WorkerAdapterMetadata;
   adapterId: string;
   cliVersion: string;
@@ -198,9 +200,21 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
       const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
       const frame = [process.execPath, framer, result.briefPath, result.selected.model, result.cwd].map(quote).join(' ');
       result.shellCommand = `cd ${quote(result.cwd)} && env -i ${frame} | ${worker} ${outputs}`;
-    } else {
+    } else if (result.stdin === 'adapter-frame') {
+      const binding = qualification.stdinFramerBinding;
+      if (!binding || !absolute(binding.storePath) || !/^sha256:[a-f0-9]{64}$/.test(binding.storeDigest)) {
+        throw new Error('Adapter stdin framer requires a trusted installation binding');
+      }
+      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
+      const frame = [process.execPath, framer, '--adapter-frame', result.briefPath, result.cwd,
+        result.selected.cli, qualification.adapterId, result.selected.qualificationDigest, result.briefDigest!,
+        binding.storePath, binding.storeDigest, JSON.stringify(qualification.policy ?? null)].map(quote).join(' ');
+      result.shellCommand = `cd ${quote(result.cwd)} && env -i${environment ? ` ${environment}` : ''} ${frame} | ${worker} ${outputs}`;
+    } else if (result.stdin === 'closed' || result.stdin === 'brief-text') {
       const stdin = result.stdin === 'closed' ? '< /dev/null' : `< ${quote(result.briefPath)}`;
       result.shellCommand = `cd ${quote(result.cwd)} && ${worker} ${stdin} ${outputs}`;
+    } else {
+      throw new Error(`Unsupported worker stdin mode: ${result.stdin}`);
     }
   } else {
     const binding = result.mcp!;
@@ -238,6 +252,8 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
 
 /** Trusted #2885 installation owner supplies driver bindings, never task input. */
 export interface WorkerInvocationDriver {
+  /** Pure installed-adapter framing; called only to deliver stdin. */
+  buildWorkerStdinFrame?(brief: string | Buffer): string | Uint8Array;
   /** Existing adapter extraction; raw stream remains separate and untrusted. */
   extractFinal?(stdout: string): unknown;
   parseWorkerFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
@@ -254,7 +270,7 @@ export interface WorkerInvocationDriver {
     cwd: string; briefPath: string; brief: string; finalPath: string;
     limits: WorkerResolvedInvocation['limits'];
     health: WorkerEffectiveHealth;
-  }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp'>>;
+  }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp' | 'artifacts'>>;
 }
 
 export interface WorkerCommandRequest {
@@ -476,12 +492,14 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     const transport = await driver.buildInvocation({ selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
       health: structuredClone(effectiveHealth) });
+    if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
     const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
       expiresAt, cwd: request.workdir, briefPath: request.brief, stdoutPath, stderrPath, finalPath,
+      ...(transport.artifacts ? { artifacts: transport.artifacts } : {}),
       argv: transport.argv, stdin: transport.stdin, envNames: transport.envNames, mcp: transport.mcp,
       ...(tuple.transport === 'shell' ? { shellCommand: '' } : {}),
       readiness: bytes !== null && workspaceExists && outputParentsExist ? 'launchable' : 'preparatory', briefDigest,

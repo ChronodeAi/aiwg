@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
+import { valid } from 'semver';
 
 // Shipped negative-suite definition. Evidence producers hash this definition,
 // including case semantics and permission rows; arbitrary fixture labels cannot
@@ -114,17 +115,26 @@ export async function qualifyWorkerInstallation(instance, options) {
   try {
     const { scope, request } = await recheckWorkerInstallation(instance, options);
     const { evidence } = request;
-    const version = await boundedVersionProbe(scope.binary.realpath,
+    const { rawBanner, version } = await boundedVersionProbe(scope.binary.realpath,
       request.adapter.invocation.versionArgv, request.environment ?? {}, request.cwd,
-      request.timeoutMs ?? 10_000, request.maxBytes ?? 5 * 1024 * 1024);
+      request.timeoutMs ?? 10_000, Math.min(request.maxBytes ?? 4096, 4096), request.adapter.invocation.versionPattern);
     if (version !== request.cliVersion) throw new Error('Installed CLI version changed');
+    if (request.versionProbe) {
+      const pattern = request.adapter.invocation.versionPattern;
+      const captured = banner => pattern === undefined ? banner.trim()
+        : compileWorkerVersionPattern(pattern).exec(banner.trim())?.[1];
+      if (request.versionProbe.version !== version
+        || captured(request.versionProbe.rawBanner) !== captured(rawBanner)) {
+        throw new Error('Installed CLI captured version text changed');
+      }
+    }
     // Detect changes during the probe as well as on subsequent dispatch.
     if ((await inspectWorkerInstallation(instance, request)).scopeDigest !== scope.scopeDigest) {
       throw new Error('Installation changed during qualification');
     }
     return { status: 'ENABLED', scopeDigest: scope.scopeDigest, fixtureDigest: evidence.fixtureDigest,
       verifiedAt: evidence.verifiedAt, evidenceRef: evidence.evidenceRef,
-      cliVersion: request.cliVersion, platform: request.platform ?? process.platform,
+      cliVersion: version, rawVersionBanner: rawBanner, platform: request.platform ?? process.platform,
       ...(request.mcpServerDigest ? { serverDigest: request.mcpServerDigest } : {}) };
   } catch {
     // Probe output, env values, argv and filesystem errors may contain secrets.
@@ -165,6 +175,9 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
       if (!roots.some(root => inside(root, target))) throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker input/output path is outside the qualified scope');
     }
     if (result.transport === 'shell') {
+      const expectedArtifacts = typeof instance.buildWorkerArtifacts === 'function'
+        ? instance.buildWorkerArtifacts({ ...result, permissions: qualification.permissions }) : undefined;
+      if (JSON.stringify(expectedArtifacts) !== JSON.stringify(result.artifacts)) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker artifacts differ from authorized driver mapping');
       const workerArgs = instance.buildWorkerArgs(result, profile, qualification.permissions);
       assertWorkerControlArgv(profile, workerArgs);
       const expected = [scope.binary.realpath, ...workerArgs];
@@ -312,7 +325,59 @@ export async function inspectWorkerInstallation(instance, request) {
     mcpServerDigest: request.mcpServerDigest ?? null }) };
 }
 
-function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes) {
+/** Restricted whole-banner regex: one capture, no branching, assertions,
+ * backreferences, wildcards, unbounded repetition or repeated groups. Bounded
+ * at most two atom repetitions, each capped at 128; banners are capped at 4096 bytes. */
+export function compileWorkerVersionPattern(pattern) {
+  if (typeof pattern !== 'string' || pattern.length > 256 || !pattern.startsWith('^') || !pattern.endsWith('$')) throw new Error('Invalid worker version pattern');
+  let captures = 0, depth = 0, repetitions = 0, atom = false;
+  for (let i = 1; i < pattern.length - 1; i++) {
+    const c = pattern[i];
+    if (c === '\\') {
+      const next = pattern[++i];
+      if (!next || !'dws.-+()[]\\'.includes(next)) throw new Error('Unsafe worker version escape');
+      atom = true;
+    } else if (c === '[') {
+      const start = i;
+      while (++i < pattern.length && pattern[i] !== ']') {
+        if (pattern[i] === '\\') i++;
+      }
+      if (i >= pattern.length - 1 || i === start + 1) throw new Error('Invalid worker version class');
+      atom = true;
+    } else if (c === '(') {
+      if (depth || ++captures > 1) throw new Error('Worker version pattern requires one capture');
+      depth++; atom = false;
+    } else if (c === ')') {
+      if (!depth) throw new Error('Invalid worker version capture');
+      depth--; atom = false; // groups cannot be repeated
+    } else if (c === '{') {
+      const match = /^\{([0-9]+),([0-9]+)\}/.exec(pattern.slice(i));
+      if (++repetitions > 2 || !atom || !match || +match[1] < 1 || +match[2] < +match[1] || +match[2] > 128) throw new Error('Unsafe worker version repetition');
+      i += match[0].length - 1; atom = false;
+    } else {
+      if ('.*+?|^$}'.includes(c)) throw new Error('Unsafe worker version pattern');
+      atom = true;
+    }
+  }
+  if (depth || captures !== 1) throw new Error('Worker version pattern requires one capture');
+  return new RegExp(pattern, 'u');
+}
+
+export function normalizeWorkerVersionBanner(banner, pattern) {
+  if (typeof banner !== 'string' || Buffer.byteLength(banner) > 4096) throw new Error('Worker version banner exceeds bound');
+  if (pattern === undefined) return banner;
+  const match = compileWorkerVersionPattern(pattern).exec(banner);
+  // JS $ also matches before a final newline; require the entire banner.
+  if (!match || match[0] !== banner) throw new Error('Worker version banner does not match');
+  // Date-style decimal cores (Cursor 2026.10.01) become 2026.10.1;
+  // prerelease and build identifiers remain byte-for-byte unchanged.
+  const version = match[1].replace(/^([0-9]+)\.([0-9]+)\.([0-9]+)/,
+    (_, major, minor, patch) => [major, minor, patch].map(n => String(Number(n))).join('.'));
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-|\+|$)/.test(version) || !valid(version)) throw new Error('Worker version capture is not semver');
+  return version;
+}
+
+function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000
     || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 5 * 1024 * 1024
     || !Array.isArray(argv) || argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
@@ -320,7 +385,7 @@ function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxB
   }
   return new Promise((resolve, reject) => {
     const child = spawn(executable, argv, { cwd, env: environment, stdio: 'pipe', detached: true, shell: false });
-    let output = '';
+    let output = Buffer.alloc(0);
     let size = 0;
     let failed = false;
     const stop = () => {
@@ -336,7 +401,7 @@ function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxB
     const consume = (chunk, stdout) => {
       size += chunk.length;
       if (size > maxBytes) { clearTimeout(timer); abort(); }
-      else if (stdout) output += chunk.toString();
+      else if (stdout) output = Buffer.concat([output, chunk]);
     };
     child.stdout.on('data', chunk => consume(chunk, true));
     child.stderr.on('data', chunk => consume(chunk, false));
@@ -347,7 +412,13 @@ function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxB
     child.once('close', code => {
       clearTimeout(timer); stop();
       if (failed || code !== 0) reject(new Error('Bounded version probe failed'));
-      else resolve(output.trim());
+      else {
+        try {
+          const rawBanner = new TextDecoder('utf-8', { fatal: true }).decode(output);
+          resolve({ rawBanner, version: normalizeWorkerVersionBanner(rawBanner.trim(), versionPattern) });
+        }
+        catch (error) { reject(error); }
+      }
     });
   });
 }
@@ -623,15 +694,18 @@ async function assertTrustedStore(filename, writableRoots) {
   }
 }
 
-async function readInstallationStore(filename) {
+async function readInstallationStore(filename, expectedDigest) {
   try {
-    const stored = JSON.parse((await readInstalledFile(filename)).toString('utf8'));
+    const bytes = await readInstalledFile(filename);
+    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    if (expectedDigest !== undefined && digest !== expectedDigest) throw new Error('Installation store binding changed');
+    const stored = JSON.parse(bytes.toString('utf8'));
     if (stored.version !== 1 || !Array.isArray(stored.registrations) || stored.registrations.length > 128) {
       throw new Error('Unsupported installation record');
     }
-    return stored;
+    return { stored, digest };
   } catch (error) {
-    if (error.code === 'ENOENT') return { version: 1, registrations: [] };
+    if (error.code === 'ENOENT' && expectedDigest === undefined) return { stored: { version: 1, registrations: [] }, digest: null };
     throw error;
   }
 }
@@ -653,13 +727,13 @@ export async function recordWorkerInstallation(instance, options) {
     || binding.accountScope !== installation.accountScope) throw new Error('Installation binding differs from qualification');
   const filename = installationStorePath();
   await assertTrustedStore(filename, installation.workerWritableRoots);
-  const stored = await readInstallationStore(filename);
+  const { stored } = await readInstallationStore(filename);
   const environmentNames = Object.keys(installation.environment ?? {});
   delete installation.environment;
   delete installation.adapter;
   delete installation.now;
   const record = { cli, binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
-    installation: { ...installation, environmentNames },
+    installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
     ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
     ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
   stored.registrations = stored.registrations.filter(entry => entry.cli !== cli);
@@ -674,13 +748,17 @@ export async function recordWorkerInstallation(instance, options) {
 
 /** Read recorded host authority, validate installation bytes, then load the same
  * approved factory used by Ralph. Resolution never launches a version probe. */
-export async function loadRecordedWorkerInstallations({ registry, cwd, policy }) {
+export async function loadRecordedWorkerInstallations({ registry, cwd, policy, storePath, storeDigest }) {
   const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
   const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required');
-  const filename = installationStorePath();
-  let stored;
-  try { await assertTrustedStore(filename, [cwd]); stored = await readInstallationStore(filename); }
+  const filename = storePath ?? installationStorePath();
+  let stored, digest;
+  try {
+    if (!path.isAbsolute(filename) || (storePath !== undefined && !/^sha256:[a-f0-9]{64}$/.test(storeDigest ?? ''))) throw fail();
+    await assertTrustedStore(filename, [cwd]);
+    ({ stored, digest } = await readInstallationStore(filename, storeDigest));
+  }
   catch { throw fail(); }
   const installations = {};
   const drivers = {};
@@ -736,10 +814,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy })
         ...(typeof instance.createHealthObserver === 'function'
           ? { createHealthObserver: options => instance.createHealthObserver(options) } : {}),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,
-          platform: process.platform, installation, ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
+          platform: process.platform, installation, stdinFramerBinding: { storePath: filename, storeDigest: digest },
+          ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
+        ...(typeof instance.buildWorkerStdinFrame === 'function'
+          ? { buildWorkerStdinFrame: brief => instance.buildWorkerStdinFrame(brief) } : {}),
         buildInvocation: async input => profile.transport === 'shell' ? {
           argv: [scope.binary.realpath, ...instance.buildWorkerArgs(input, profile, input.permissions)],
           stdin: adapter.invocation.stdin, envNames: Object.keys(installation.environment),
+          ...(typeof instance.buildWorkerArtifacts === 'function'
+            ? { artifacts: instance.buildWorkerArtifacts(input) } : {}),
         } : instance.buildInvocation(input),
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),

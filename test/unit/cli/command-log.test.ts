@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, stat } from 'fs/promises';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm, stat } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import {
@@ -9,8 +9,16 @@ import {
 } from '../../../src/cli/command-log.js';
 import { emptyConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
 
+// None of this file's temp roots were ever removed (#3018); track and clean them up.
+const tmpRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(tmpRoots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
 async function tmpProject(): Promise<string> {
-  return mkdtemp(path.join(os.tmpdir(), 'aiwg-command-log-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-command-log-'));
+  tmpRoots.push(root);
+  return root;
 }
 
 async function append(projectDir: string, overrides: Partial<Parameters<typeof maybeAppendCommandLog>[0]> = {}) {

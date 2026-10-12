@@ -7,7 +7,7 @@
  * @nfr @.aiwg/requirements/nfr-modules/performance.md - NFR-PERF-001 (<60s validation)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WritingValidationEngine, ValidationResult } from '../../../src/writing/validation-engine.ts';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -18,10 +18,15 @@ describe('WritingValidationEngine', () => {
   let testDir: string;
 
   beforeEach(() => {
-    testDir = join(tmpdir(), `aiwg-engine-test-${Date.now()}`);
+    testDir = join(tmpdir(), `aiwg-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(testDir, { recursive: true });
 
     engine = new WritingValidationEngine();
+  });
+
+  // testDir was never removed (#3018), leaking one directory per test.
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   describe('Pattern Detection', () => {

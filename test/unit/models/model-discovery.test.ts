@@ -91,9 +91,12 @@ afterEach(async () => {
 
 describe('dynamic model catalog', () => {
   it('records an implemented-or-unsupported decision for every AIWG provider', () => {
+    // 'ollama' added by roctinam/aiwg#2899 (B-OG-09): GET /api/tags is a native,
+    // read-only model-list decision, declared here but not independently
+    // implemented by that task (see the local-http worker-adapter docs).
     expect(Object.keys(PROVIDER_DISCOVERY_DECISIONS).sort()).toEqual([
       'claude', 'codex', 'copilot', 'cursor', 'factory', 'grok-build', 'grokbot', 'hermes',
-      'muse', 'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
+      'muse', 'ollama', 'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
     ]);
     expect(Object.values(PROVIDER_DISCOVERY_DECISIONS).every(decision =>
       decision.reason.length > 0 && decision.documentation.startsWith('https://')
@@ -101,7 +104,7 @@ describe('dynamic model catalog', () => {
     expect(Object.values(PROVIDER_DISCOVERY_DECISIONS)
       .filter(decision => decision.status === 'native')
       .map(decision => decision.provider)
-      .sort()).toEqual(['codex', 'grok-build', 'muse', 'omp', 'openclaw', 'opencode', 'pi']);
+      .sort()).toEqual(['codex', 'grok-build', 'muse', 'ollama', 'omp', 'openclaw', 'opencode', 'pi']);
   });
 
   it('maps enumerated models to semantic roles without inventing identifiers', () => {
