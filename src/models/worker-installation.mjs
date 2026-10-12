@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
-import { valid } from 'semver';
+import { satisfies, valid, validRange } from 'semver';
 
 // Shipped negative-suite definition. Evidence producers hash this definition,
 // including case semantics and permission rows; arbitrary fixture labels cannot
@@ -377,7 +377,43 @@ export function normalizeWorkerVersionBanner(banner, pattern) {
   return version;
 }
 
-function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern) {
+// Credential-free environment for read-only `<executable> ...versionArgv`
+// probes. A version call needs process plumbing only (PATH for `env`-shebang
+// interpreters, Windows system roots for process startup) — never provider API
+// keys, account tokens, HOME, or caller session state. This allowlist is
+// intentionally narrower than any adapter `envAllowlist`, which governs worker
+// launches, not version probes.
+export const workerVersionProbeEnvAllowlist = Object.freeze([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR',
+]);
+
+// Build the cleared probe environment from a source mapping (defaults to
+// process.env). Only allowlisted string values survive; everything else,
+// including provider credentials, is dropped. Always returns a fresh object.
+export function workerVersionProbeEnvironment(source = process.env) {
+  const environment = {};
+  for (const name of workerVersionProbeEnvAllowlist) {
+    const value = source?.[name];
+    if (typeof value === 'string' && !value.includes('\0')) environment[name] = value;
+  }
+  return environment;
+}
+
+// Default bounds for read-only version probes: 10s deadline, 64 KiB output.
+export const workerVersionProbeDefaults = Object.freeze({ timeoutMs: 10_000, maxBytes: 64 * 1024 });
+
+// Shared semver range check for an installed CLI version. Returns the first
+// unsupported range (or the invalid range declaration), else null. Read-only
+// surfaces reuse this instead of re-deriving the inspector's range logic.
+export function workerVersionRangeMismatch(version, ranges) {
+  for (const range of ranges) {
+    if (typeof range !== 'string' || !validRange(range)) return `Unsupported version range '${range}'`;
+    if (!satisfies(version, range)) return range;
+  }
+  return null;
+}
+
+export function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000
     || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 5 * 1024 * 1024
     || !Array.isArray(argv) || argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
@@ -407,7 +443,14 @@ function boundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxB
     child.stderr.on('data', chunk => consume(chunk, false));
     child.stdin.on('error', () => {});
     child.stdin.end();
-    child.once('error', () => { clearTimeout(timer); stop(); reject(new Error('Version probe unavailable')); });
+    child.once('error', cause => {
+      clearTimeout(timer); stop();
+      const error = new Error('Version probe unavailable');
+      // Preserve the spawn cause (notably ENOENT for a missing CLI) so
+      // callers can report "not installed" without re-deriving it.
+      if (cause?.code !== undefined) error.code = cause.code;
+      reject(error);
+    });
     child.once('exit', stop);
     child.once('close', code => {
       clearTimeout(timer); stop();

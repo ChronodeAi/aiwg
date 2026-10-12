@@ -783,3 +783,34 @@ describe('doctor: unknown-provider check names installation drift (#270)', () =>
     );
   });
 });
+
+// ── Direct-worker readiness opt-in probes (#2894) ──
+//
+// Wiring contract for tools/cli/doctor.mjs: probes are opt-in behind
+// --probe-workers, the section is silent without configured workers, and the
+// live behavior (no-spawn default, silence, advisory statuses) is covered by
+// buildDirectWorkerDoctorSection tests in
+// test/unit/models/worker-direct-readiness.test.ts.
+
+describe('doctor: direct-worker probes are opt-in (#2894)', () => {
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+  it('parses --probe-workers in the existing boolean flag style', () => {
+    expect(content).toContain("if (a === '--probe-workers') { out.probeWorkers = true; continue; }");
+  });
+
+  it('renders the section through the shared builder with the flag', () => {
+    expect(content).toContain('buildDirectWorkerDoctorSection');
+    expect(content).toMatch(/probeWorkers,\s*\n/);
+    expect(content).not.toContain('diagnoseDirectWorkerReadiness');
+  });
+
+  it('emits no direct-worker section when no workers are configured', () => {
+    expect(content).toContain('Object.keys(directConfig?.parallelism?.clis ?? {}).length');
+  });
+
+  it('documents the default config-only behavior in doctor help', () => {
+    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/utilities.ts'), 'utf-8');
+    expect(utilities).toContain('--probe-workers');
+  });
+});

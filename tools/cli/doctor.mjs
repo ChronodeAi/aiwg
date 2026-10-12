@@ -150,6 +150,7 @@ function parseDoctorArgs(argv) {
   const out = {
     provider: null,
     allProviders: false,
+    probeWorkers: false,
     noBudgetCheck: false,
     strictContext: false,
     contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
@@ -160,6 +161,7 @@ function parseDoctorArgs(argv) {
     if (a === '--provider' && argv[i + 1]) { out.provider = argv[i + 1]; i += 1; continue; }
     if (a.startsWith('--provider=')) { out.provider = a.slice('--provider='.length); continue; }
     if (a === '--all-providers') { out.allProviders = true; continue; }
+    if (a === '--probe-workers') { out.probeWorkers = true; continue; }
     if (a === '--no-budget-check') { out.noBudgetCheck = true; continue; }
     if (a === '--strict-context') { out.strictContext = true; continue; }
     if (a === '--context-baseline' && argv[i + 1]) { out.contextBaseline = argv[i + 1]; i += 1; continue; }
@@ -861,6 +863,7 @@ async function runDoctor() {
   const {
     provider: providerArg,
     allProviders,
+    probeWorkers,
     noBudgetCheck,
     strictContext,
     contextBaseline,
@@ -2010,6 +2013,31 @@ async function runDoctor() {
   } catch {
     check('Worker Health', 'warn',
       'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
+  }
+
+  // #2894: direct-worker onboarding/readiness. Config-only by default: no
+  // subprocess is started unless --probe-workers opts into the bounded
+  // `<executable> ...versionArgv` probes (never a worker launch, model call
+  // or mutation). Decision 17 dropped qualification runners and evidence
+  // files, so this reports installation readiness and resolver dispatch
+  // eligibility only, and never claims a profile is "qualified" — profiles
+  // stay unqualified until an authenticated smoke run (#3005). No workers
+  // configured means no section at all.
+  try {
+    const directConfig = await readAiwgConfig(process.cwd());
+    if (Object.keys(directConfig?.parallelism?.clis ?? {}).length) {
+      const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+      const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
+      const directSection = await buildDirectWorkerDoctorSection({
+        parallelism: directConfig.parallelism,
+        registry: loadProviderModelCapabilities(),
+        probeWorkers,
+      });
+      for (const line of directSection.lines) check(line.name, line.status, line.message);
+    }
+  } catch {
+    check('Direct Worker', 'warn',
+      'direct readiness inputs are invalid or unavailable; review parallelism.clis and the provider registry');
   }
 
   // 11d-bis. Live host resources and worker isolation mode (#2954).

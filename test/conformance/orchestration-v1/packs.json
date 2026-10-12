@@ -213,9 +213,11 @@
       ],
       "status": "partial",
       "testFiles": [
-        "test/unit/models/worker-health-readiness.test.ts"
+        "test/unit/models/worker-health-readiness.test.ts",
+        "test/unit/models/worker-direct-readiness.test.ts",
+        "test/unit/models/worker-version-probe.test.ts"
       ],
-      "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; managed ownership, shared breakers and remediation remain S2+."
+      "remaining": " #2913 adds S1 synthetic worker status/health readiness coverage; #2894 adds S1 direct onboarding readiness (install/version via fake CLIs with opt-in probes, resolver-reported dispatch eligibility, unqualified until smoke run #3005); managed ownership, shared breakers and remediation remain S2+."
     },
     "T-OG-14": {
       "name": "Package/platform/extension",
