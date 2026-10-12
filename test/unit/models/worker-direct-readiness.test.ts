@@ -9,6 +9,7 @@ import {
 } from '../../../src/models/worker-direct-readiness.js';
 import { loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
 import type { ParallelismConfig } from '../../../src/config/aiwg-config.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 
 // T-OG-12 / #2894 S1: synthetic offline inputs plus fake local CLIs created
 // under os.tmpdir() with a temp HOME. No paid calls, no credentials, no real
@@ -95,18 +96,22 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
       installedVersion: '0.999.0', readiness: 'not-ready', nextAction: 'upgrade-or-pin-cli' }));
   });
 
-  it('T-OG-12-direct-03 reports a banner that misses the version pattern', async () => {
+  it('T-OG-12-direct-03 reports a banner that misses the version pattern, advisory while unreferenced', async () => {
     const report = await diagnoseDirectWorkerReadiness({
       parallelism: parallelismWith({ codex: codexCli(await fakeCli('hello world')) }),
       registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
     });
     expect(report.ready).toBe(false);
+    // 'codex' is not referenced by any group with a requiredRoles entry, so
+    // this installation failure stays advisory (never 'error') and never
+    // flips doctor's exit code — see T-OG-12-direct-14 for the required case.
     expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
-      code: 'WORKER_DIRECT_BANNER_UNMATCHED', status: 'error',
+      code: 'WORKER_DIRECT_BANNER_UNMATCHED', status: 'warn',
       installedVersion: null, readiness: 'not-ready', nextAction: 'reinstall-supported-cli' }));
+    for (const finding of report.findings) expect(finding.status).not.toBe('error');
   });
 
-  it('T-OG-12-direct-04 reports a missing CLI as not installed', async () => {
+  it('T-OG-12-direct-04 reports a missing CLI as not installed, advisory while unreferenced', async () => {
     const dir = await scratchDir('aiwg-direct-missing-');
     const report = await diagnoseDirectWorkerReadiness({
       parallelism: parallelismWith({ codex: codexCli(join(dir, 'missing-cli')) }),
@@ -114,7 +119,72 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     });
     expect(report.ready).toBe(false);
     expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_NOT_INSTALLED', status: 'warn', readiness: 'not-ready', nextAction: 'install-cli' }));
+    for (const finding of report.findings) expect(finding.status).not.toBe('error');
+  });
+
+  it('T-OG-12-direct-14 keeps a required (group requiredRoles) cli at error so exit code reflects it', async () => {
+    const dir = await scratchDir('aiwg-direct-missing-');
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith(
+        { codex: codexCli(join(dir, 'missing-cli')) },
+        { g1: { requiredRoles: ['coding'], members: [{ id: 'm1', cli: 'codex', model: 'codex-mini', roles: ['coding'] }] } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
+    });
+    expect(report.ready).toBe(false);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
       code: 'WORKER_DIRECT_NOT_INSTALLED', status: 'error', readiness: 'not-ready', nextAction: 'install-cli' }));
+  });
+
+  it('T-OG-12-direct-15 resolves a relative project-configured executable against the project root', async () => {
+    const projectRoot = await scratchDir('aiwg-direct-project-');
+    const cliDir = await scratchDir('aiwg-direct-cli-rel-');
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const absoluteCli = await fakeCli('codex-cli 0.161.0');
+    // "bin/fake-codex" relative to the fixture's own project root, not tmpdir().
+    const binDir = join(projectRoot, 'bin');
+    const { mkdir, copyFile, chmod: chmodFile } = await import('node:fs/promises');
+    await mkdir(binDir, { recursive: true });
+    const relativeTarget = join(binDir, 'fake-codex');
+    await copyFile(absoluteCli, relativeTarget);
+    await chmodFile(relativeTarget, 0o755);
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ codex: codexCli('bin/fake-codex') }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd, projectRoot,
+    });
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_READY', status: 'ok', readiness: 'ready', executable: relativeTarget }));
+  });
+
+  it('T-OG-12-direct-16 leaves an absolute project-configured executable untouched', async () => {
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const absoluteCli = await fakeCli('codex-cli 0.161.0');
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ codex: codexCli(absoluteCli) }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd, projectRoot: await scratchDir('aiwg-direct-project-'),
+    });
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_READY', status: 'ok', readiness: 'ready', executable: absoluteCli }));
+  });
+
+  it('T-OG-12-direct-17 announces the resolved executable before spawning, not after', async () => {
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const executable = await fakeCli('codex-cli 0.161.0');
+    const events: string[] = [];
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ codex: codexCli(executable) }),
+      registry: registry(), probeCwd,
+      announce: (cli, exe, argv) => { events.push(`announce:${cli}:${exe}:${argv.join(',')}`); },
+      probe: async (exe, argv, options) => {
+        // The announcement must already have happened by the time the probe runs.
+        expect(events).toContain(`announce:codex:${exe}:${argv.join(',')}`);
+        events.push(`probe:${exe}`);
+        return probeDirectWorkerVersion(exe, argv, options);
+      },
+    });
+    expect(events[0]).toMatch(/^announce:codex:/);
+    expect(events[1]).toBe(`probe:${executable}`);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'codex', code: 'WORKER_DIRECT_READY' }));
   });
 
   it('T-OG-12-direct-05 skips the probe when cli dispatch is disabled', async () => {
@@ -156,21 +226,43 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
       code: 'WORKER_DIRECT_READY', status: 'ok', installedVersion: '2.1.295', readiness: 'ready' }));
   });
 
-  it('T-OG-12-direct-08 resolves adapter aliases and non-canonical cli keys', async () => {
+  it('T-OG-12-direct-08 resolves an explicit canonical binding and a custom workerAdapters id exactly', async () => {
     const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const configured = registry();
+    configured.workerAdapters = { ...(configured.workerAdapters ?? {}), 'custom-worker': {
+      ...structuredClone(configured.providers.codex.workerHealthAdapter), id: 'custom-worker' } };
     const report = await diagnoseDirectWorkerReadiness({
       parallelism: parallelismWith({
         'codex-work': { ...codexCli(await fakeCli('codex-cli 0.161.0')), adapter: 'providers:codex' },
-        // 'openai' is a registered alias of the codex provider definition.
-        'legacy': { ...codexCli(await fakeCli('codex-cli 0.161.0')), adapter: 'providers:openai' },
+        // A custom `workerAdapters:<id>` reference must resolve exactly
+        // against the worker-adapter registry, not through the provider
+        // alias registry (#2894 fix: aliasing was collapsing both
+        // namespaces onto provider IDs and rejecting valid custom ids).
+        'custom': { ...codexCli(await fakeCli('codex-cli 0.161.0')), adapter: 'workerAdapters:custom-worker' },
       }),
-      registry: registry(), probe: probeDirectWorkerVersion, probeCwd,
+      registry: configured, probe: probeDirectWorkerVersion, probeCwd,
     });
-    for (const cli of ['codex-work', 'legacy']) {
+    for (const cli of ['codex-work', 'custom']) {
       expect(report.findings).toContainEqual(expect.objectContaining({ cli, kind: 'install',
         code: 'WORKER_DIRECT_READY', status: 'ok', readiness: 'ready' }));
     }
     expect(report.findings).not.toContainEqual(expect.objectContaining({ code: 'WORKER_DIRECT_NO_PROFILE' }));
+  });
+
+  it('T-OG-12-direct-08b rejects a provider alias that public config validation also rejects', async () => {
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    // 'openai' is only a registered *alias* of the codex provider definition
+    // (normalizeProviderDefinitionId('openai') === 'codex'); it is not a
+    // canonical provider ID, so validateParallelismConfig's public builtinIds
+    // check rejects `providers:openai` too. Readiness must agree, not accept
+    // a binding the real config loader would refuse.
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ legacy: { ...codexCli(await fakeCli('codex-cli 0.161.0')), adapter: 'providers:openai' } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd,
+    });
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli: 'legacy', kind: 'install',
+      code: 'WORKER_DIRECT_NO_PROFILE', status: 'warn', readiness: 'not-ready' }));
+    for (const finding of report.findings) expect(finding.status).not.toBe('error');
   });
 
   it('T-OG-12-direct-09 states resolver refusal plainly despite install readiness', async () => {
@@ -203,6 +295,47 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     expect(dispatch?.eligibility).toBe('eligible');
     expect(dispatch?.code).toBe('WORKER_DIRECT_DISPATCH_ELIGIBLE');
     expect(dispatch?.eligibilityDetail).toContain('#3005');
+  });
+
+  it('T-OG-12-direct-10b calls the actual offline dispatch resolver and reports member-specific missing evidence', async () => {
+    // Fixture snapshot: group 'workers' with members 'primary' and
+    // 'alternate', both cli 'codex', no explicit parallelism.clis entry
+    // (implicit canonical binding) and a qualified workerAdapter — this is
+    // exactly the install-ready-but-undispatchable shape the fix requires,
+    // except the verdict must now come from resolveWorkerPlan itself, not a
+    // re-derived binding-only approximation.
+    const f = workerResolutionFixture();
+    const parallelism = f.snapshot.config.parallelism!;
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism, registry: f.snapshot.registry,
+      resolverSnapshot: { config: f.snapshot.config, models: f.snapshot.models,
+        modelDigests: f.snapshot.modelDigests, catalog: f.snapshot.catalog, now: f.request.now },
+    });
+    expect(report.workersConfigured).toBe(true); // implicit group-referenced cli, no explicit clis entry
+    const dispatch = report.findings.find(finding => finding.cli === 'codex' && finding.kind === 'dispatch');
+    expect(dispatch?.eligibility).toBe('blocked');
+    // Doctor's offline resolver call never supplies installation evidence
+    // (diagnoseDirectWorkerReadiness forces installations: {} for this
+    // call); the resolver's own evidence diagnostic, not a generic
+    // binding-only caveat, must be what is reported, named per member.
+    expect(dispatch?.eligibilityDetail).toMatch(/OG_ADAPTER_UNQUALIFIED/);
+    expect(dispatch?.eligibilityDetail).toMatch(/installation evidence/i);
+    expect(dispatch?.eligibilityDetail).toContain("group 'workers' member 'primary'");
+    expect(dispatch?.eligibilityDetail).toContain("group 'workers' member 'alternate'");
+    expect(dispatch?.eligibilityDetail).toContain('#3005');
+  });
+
+  it('T-OG-12-direct-10c falls back to a binding-only caveat without a resolverSnapshot', async () => {
+    // Same fixture, no resolverSnapshot supplied: must fall back to the
+    // binding-only check and say plainly that group/member qualification was
+    // not evaluated (contrast with 10b, which does evaluate it).
+    const f = workerResolutionFixture();
+    const parallelism = f.snapshot.config.parallelism!;
+    const report = await diagnoseDirectWorkerReadiness({ parallelism, registry: f.snapshot.registry });
+    const dispatch = report.findings.find(finding => finding.cli === 'codex' && finding.kind === 'dispatch');
+    expect(dispatch?.eligibility).toBe('eligible');
+    expect(dispatch?.eligibilityDetail).toMatch(/binding level only/i);
+    expect(dispatch?.eligibilityDetail).toMatch(/group\/member qualification was not evaluated/i);
   });
 
   it('T-OG-12-direct-11 default path starts no process and stays config-only', async () => {

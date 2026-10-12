@@ -1968,10 +1968,32 @@ async function runDoctor() {
     // Non-fatal — skip silently
   }
 
+  // Shared config read for worker-health (#2913) and direct-worker (#2894)
+  // offline readiness sections: read once so an invalid `gates` section (or
+  // any other non-fatal read-time warning) is not printed a second time, and
+  // so a project with no workers configured sees byte-identical output
+  // whether the read succeeds, has unrelated warnings, or fails outright —
+  // this feature must never add a finding in that case. `workerSnapshot*`
+  // are populated only when worker_dispatch is on and parallelism validates
+  // cleanly, so the direct-worker dispatch check below can reuse the exact
+  // same offline models/catalog/registry instead of resolving a second one.
+  let workerSectionsConfig = null;
+  let workerSectionsConfigFailed = false;
+  let workerSnapshotModels = null;
+  let workerSnapshotCatalog = null;
+  let workerSnapshotDigests = null;
+  let workerSnapshotRegistry = null;
+  try {
+    workerSectionsConfig = await readAiwgConfig(process.cwd());
+  } catch {
+    workerSectionsConfigFailed = true;
+  }
+
   // #2913 / T-OG-12: offline health readiness, without installing adapters,
   // reading credentials, probing models, or requiring Mission/admission state.
   try {
-    const config = await readAiwgConfig(process.cwd());
+    if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
+    const config = workerSectionsConfig;
     if (!config?.parallelism?.worker_dispatch) {
       check('Worker Health', 'info', 'group dispatch is disabled; legacy worker status remains unchanged');
     } else {
@@ -1989,11 +2011,18 @@ async function runDoctor() {
         const catalog = await resolveDynamicModelCatalog({ aiwgRoot: AIWG_ROOT,
           inventory: { generatedAt: new Date().toISOString(), projectDir: process.cwd(),
             providers: [], activeProvider: null, activeSource: 'doctor-offline' }, allowNetwork: false });
+        const registry = loadProviderModelCapabilities();
+        // Shared with the direct-worker dispatch-eligibility check below
+        // (#2894): same offline snapshot, no second catalog resolution.
+        workerSnapshotModels = models;
+        workerSnapshotCatalog = catalog;
+        workerSnapshotDigests = loader.getInputDigests();
+        workerSnapshotRegistry = registry;
         // Catalog observations do not attest a current installation. This offline
         // projection deliberately withholds bindings; models resolve rechecks them.
         const report = diagnoseWorkerHealthReadiness({ config, models,
-          modelDigests: loader.getInputDigests(), catalog,
-          registry: loadProviderModelCapabilities(), installations: {} }, {
+          modelDigests: workerSnapshotDigests, catalog,
+          registry, installations: {} }, {
           now: new Date().toISOString(),
           context: { estimator: 'doctor-offline-context-v1', briefTokens: 0,
             inputTokens: 0, toolOutputAllowance: 0, reservedOutput: 0 },
@@ -2011,8 +2040,13 @@ async function runDoctor() {
       }
     }
   } catch {
-    check('Worker Health', 'warn',
-      'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
+    if (!workerSectionsConfigFailed) {
+      check('Worker Health', 'warn',
+        'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
+    }
+    // else: the shared config read itself failed. There is nothing
+    // worker-health-specific to diagnose beyond the project's other config
+    // checks, which already surface the read failure.
   }
 
   // #2894: direct-worker onboarding/readiness. Config-only by default: no
@@ -2022,22 +2056,52 @@ async function runDoctor() {
   // files, so this reports installation readiness and resolver dispatch
   // eligibility only, and never claims a profile is "qualified" — profiles
   // stay unqualified until an authenticated smoke run (#3005). No workers
-  // configured means no section at all.
+  // configured (explicitly or implicitly through a group member) means no
+  // section at all, and a failed/unavailable shared config read means this
+  // section stays silent too — it never adds its own warning on top of
+  // whatever the config read failure already surfaced above, so a project
+  // with no workers configured sees unchanged output even when the config
+  // has unrelated warnings or fails to load.
   try {
-    const directConfig = await readAiwgConfig(process.cwd());
-    if (Object.keys(directConfig?.parallelism?.clis ?? {}).length) {
+    if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
+    const directConfig = workerSectionsConfig;
+    const directParallelism = directConfig?.parallelism;
+    const directCliIds = new Set(Object.keys(directParallelism?.clis ?? {}));
+    for (const group of Object.values(directParallelism?.groups ?? {})) {
+      for (const member of group?.members ?? []) directCliIds.add(member.cli);
+    }
+    if (directCliIds.size) {
       const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
       const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
+      const registry = workerSnapshotRegistry ?? loadProviderModelCapabilities();
       const directSection = await buildDirectWorkerDoctorSection({
-        parallelism: directConfig.parallelism,
-        registry: loadProviderModelCapabilities(),
+        parallelism: directParallelism,
+        registry,
         probeWorkers,
+        projectRoot: process.cwd(),
+        // Announce each resolved executable immediately, before it is
+        // spawned — never buffered behind the rest of the report (#2894
+        // review: the announcement must not wait for probes to finish).
+        announce: probeWorkers ? (cli, executable, argv) => {
+          process.stdout.write(`  ○ Direct Worker Probes: about to run '${executable} ${argv.join(' ')}' (cli '${cli}')\n`);
+        } : undefined,
+        // Reuse the Worker Health offline snapshot above so dispatch
+        // eligibility comes from the actual dispatch resolver, not a
+        // re-derived binding-only approximation.
+        ...(directParallelism?.worker_dispatch && workerSnapshotModels ? {
+          resolverSnapshot: {
+            config: directConfig, models: workerSnapshotModels, modelDigests: workerSnapshotDigests,
+            catalog: workerSnapshotCatalog, now: new Date().toISOString(),
+          },
+        } : {}),
       });
       for (const line of directSection.lines) check(line.name, line.status, line.message);
     }
   } catch {
-    check('Direct Worker', 'warn',
-      'direct readiness inputs are invalid or unavailable; review parallelism.clis and the provider registry');
+    if (!workerSectionsConfigFailed) {
+      check('Direct Worker', 'warn',
+        'direct readiness inputs are invalid or unavailable; review parallelism.clis and the provider registry');
+    }
   }
 
   // 11d-bis. Live host resources and worker isolation mode (#2954).
