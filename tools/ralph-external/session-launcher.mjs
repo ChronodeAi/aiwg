@@ -277,23 +277,34 @@ async function launchOneWorker(owner, options) {
   }
   // Scoped recovery gate (#2915A): consult the process-scoped breaker before
   // any spawn or runDir creation, using only trusted resolved identities. A
-  // launch covered by an open scope (or a pending/admitted canary) is
-  // refused here — by the next check — leaving no debris behind.
+  // launch covered by an open scope (or an outstanding canary) is refused
+  // here — by the next check — leaving no debris behind.
   // `scopedBreaker: null` disables the gate for callers that own recovery
   // themselves; pre-spawn refusals above never reach this point.
-  const recoveryBreaker = options?.scopedBreaker !== undefined ? options.scopedBreaker : getDirectRecoveryBreaker();
+  //
+  // #2915 P0 (do no harm): this gate is additive to the EXISTING dispatch
+  // switch, never independent of it. `gate.enabled` above is resolved from
+  // `parallelism.worker_dispatch` (and the per-CLI enable the resolver
+  // already checked); when it is false, the recovery breaker is never
+  // constructed or consulted at all, so behaviour with dispatch disabled is
+  // byte-for-byte what it was before this feature existed (#2915 review:
+  // the gate previously ran independently of the switch, refusing/launching
+  // regardless of it).
+  const recoveryBreaker = !gate.enabled ? null
+    : options?.scopedBreaker !== undefined ? options.scopedBreaker : getDirectRecoveryBreaker();
+  const installationQualifier = inputs.drivers?.[invocation.selected.cli]?.qualification?.installation?.boundary?.digest ?? null;
   const recoveryQuotaAccount = inputs.drivers?.[invocation.selected.cli]?.qualification?.installation?.accountScope ?? null;
   const recoveryScopeKeys = recoveryBreaker
-    ? recoveryScopeKeysForInvocation(invocation, { quotaAccount: recoveryQuotaAccount })
+    ? await recoveryScopeKeysForInvocation(invocation, { quotaAccount: recoveryQuotaAccount, installationQualifier })
     : [];
   // Fresh invocation ids are never tracked, so the pre-spawn check omits
   // the invocation key; it is added to the noted keys once minted below.
   if (recoveryBreaker) {
-    const gate = recoveryBreaker.canLaunch({ scopeKeys: recoveryScopeKeys });
-    if (!gate.ok) {
-      const error = new Error(`Worker launch refused: recovery scope open (${gate.blockedBy.join(', ')})`);
+    const recoveryGate = recoveryBreaker.canLaunch({ scopeKeys: recoveryScopeKeys });
+    if (!recoveryGate.ok) {
+      const error = new Error(`Worker launch refused: recovery scope open (${recoveryGate.blockedBy.join(', ')})`);
       error.code = RECOVERY_SCOPE_OPEN_CODE;
-      error.blockedBy = gate.blockedBy;
+      error.blockedBy = recoveryGate.blockedBy;
       throw error;
     }
   }
@@ -309,7 +320,7 @@ async function launchOneWorker(owner, options) {
   // frozen cohort and outstanding set track this attempt under every
   // covering scope.
   const recoveryScopeKeysWithInvocation = recoveryBreaker
-    ? recoveryScopeKeysForInvocation(invocation, { invocationId, quotaAccount: recoveryQuotaAccount })
+    ? await recoveryScopeKeysForInvocation(invocation, { invocationId, quotaAccount: recoveryQuotaAccount, installationQualifier })
     : recoveryScopeKeys;
   if (recoveryBreaker) recoveryBreaker.noteLaunched(recoveryScopeKeysWithInvocation, invocationId);
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -378,7 +389,8 @@ async function launchOneWorker(owner, options) {
     return await recordRecoveryAfterAttempt(recoveryBreaker, recoveryScopeKeysWithInvocation,
       invocation, invocationId, recoveryQuotaAccount,
       captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-        launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir }));
+        launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir }),
+      installationQualifier);
   } catch (error) {
     if (!outcome?.child) {
       // Pre-spawn failure (or a recovery-scope refusal): this attempt never
@@ -945,7 +957,7 @@ export function startupCorrectionGate({ correctionsUsed = 0, reasonCode = null }
  * worker-writable files) stay invocation-scoped no matter their text.
  */
 export async function buildFailureAttribution(invocation, { reasonCode = null, evidenceSource = null,
-  quotaAccount = null, hostId = null, corroboratedBackends = null } = {}) {
+  quotaAccount = null, hostId = null, corroboratedBackends = null, installationQualifier = null } = {}) {
   const { attributeFailureScope } = await import('./lib/consecutive-failure-circuit-breaker.mjs');
   const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
   const selected = invocation?.selected ?? {};
@@ -969,6 +981,7 @@ export async function buildFailureAttribution(invocation, { reasonCode = null, e
     quotaAccount: account,
     hostId,
     corroboratedBackends,
+    installationQualifier,
   });
 }
 
@@ -1025,20 +1038,37 @@ export function resetDirectRecoveryBreaker() {
 /**
  * Derive the recovery scope keys covering a resolved invocation, from
  * trusted resolved configuration only (selected cli/backend, installation
- * accountScope). The invocation key uses the launcher-minted invocationId.
- * Unresolvable identities are omitted — never defaulted to a shared scope.
+ * accountScope, model). The invocation key uses the launcher-minted
+ * invocationId. Unresolvable identities are omitted — never defaulted to a
+ * shared scope, EXCEPT `host:local`, which always covers every direct
+ * dispatch today (single-host S1 scope; #2915 review: model/host scopes
+ * could open but nothing ever checked them, since this function omitted
+ * both). `installationQualifier`, when supplied, distinguishes
+ * separately-qualified installations that share a CLI name (e.g. the
+ * installed binary's boundary digest) so two different installations of
+ * the same CLI never share one `installation:<cli>` scope.
  */
-export function recoveryScopeKeysForInvocation(invocation, { invocationId = null, quotaAccount = null } = {}) {
+export async function recoveryScopeKeysForInvocation(invocation, { invocationId = null, quotaAccount = null,
+  installationQualifier = null } = {}) {
   const selected = invocation?.selected ?? {};
   const keys = [];
   if (invocationId != null) keys.push(`invocation:${invocationId}`);
-  if (selected.cli) keys.push(`installation:${selected.cli}`);
+  let modelKey = null;
+  try {
+    const { workerModelKey } = await importImpl(import.meta.url, 'models/provider-policy.js');
+    const inferenceProvider = selected.inferenceProvider ?? null;
+    const apiModelId = selected.apiModelId ?? selected.model ?? null;
+    if (inferenceProvider && apiModelId) modelKey = workerModelKey(inferenceProvider, apiModelId);
+  } catch { modelKey = null; }
+  if (modelKey) keys.push(`model:${modelKey}`);
+  if (selected.cli) keys.push(installationQualifier ? `installation:${selected.cli}:${installationQualifier}` : `installation:${selected.cli}`);
   if (selected.inferenceProvider) keys.push(`provider:${selected.inferenceProvider}`);
   const account = quotaAccount
     ?? invocation?.qualification?.installation?.accountScope
     ?? selected.accountScope
     ?? null;
   if (account) keys.push(`quota:${account}`);
+  keys.push('host:local');
   return keys;
 }
 
@@ -1052,7 +1082,7 @@ export const RECOVERY_SCOPE_OPEN_CODE = 'RECOVERY_SCOPE_OPEN';
  * the invocation scope however loudly the worker blamed the provider.
  * Recording never fails the attempt: the result passes through unchanged.
  */
-export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, invocationId, quotaAccount, outcomePromise) {
+export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, invocationId, quotaAccount, outcomePromise, installationQualifier = null) {
   const result = await outcomePromise;
   if (breaker) {
     try {
@@ -1063,6 +1093,12 @@ export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation,
       } else {
         const selected = invocation?.selected ?? {};
         const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
+        // `installationQualifier` MUST match the one used to derive the
+        // covering keys this attempt was noted/checked under (#2915
+        // review-adjacent bug: attributing a failure through the
+        // UNqualified `installation:<cli>` key while the pre-launch gate
+        // watches the QUALIFIED `installation:<cli>:<qualifier>` key would
+        // open a scope that `canLaunch` never checks, and vice versa).
         const attributed = attributeFailureScope({
           reasonCode,
           evidenceSource,
@@ -1070,6 +1106,7 @@ export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation,
           cli: selected.cli ?? null,
           inferenceProvider: selected.inferenceProvider ?? null,
           quotaAccount,
+          installationQualifier,
         });
         breaker.recordFailure({
           scope: attributed.scope,
@@ -1080,6 +1117,7 @@ export async function recordRecoveryAfterAttempt(breaker, scopeKeys, invocation,
           cli: selected.cli ?? null,
           inferenceProvider: selected.inferenceProvider ?? null,
           quotaAccount,
+          installationQualifier,
         });
       }
       // Settle outstanding membership on every covering scope (idempotent):
@@ -1127,6 +1165,12 @@ export class SessionLauncher extends EventEmitter {
     super();
     this.lastAttemptResult = null;
     this.lastAttemptInvocationId = null;
+    // Launcher-owned identity of the last POST-SPAWN attempt's target work
+    // item (#2915 P1: "retry" is precisely defined as relaunching the SAME
+    // `invocationPath`+`runDir` — the only identity available before the
+    // attempt's own fresh `invocationId` is minted inside `launchOneWorker`).
+    // Set only alongside `lastAttemptResult`; never touched by a caller.
+    this.lastAttemptIdentity = null;
     this.currentProcess = null;
     this.startTime = null;
     /** @type {import('./lib/provider-adapter.mjs').ProviderAdapter|null} */
@@ -1144,24 +1188,35 @@ export class SessionLauncher extends EventEmitter {
   /**
    * Attached direct attempt; no Ralph state, monitor constructor, retry or legacy args.
    *
-   * Stop-before-retry is MANDATORY, not opt-in (#2915B): when this launcher
-   * already ran an attempt, relaunching is a retry of it and requires the
-   * launcher's own confirmed-termination evidence for that previous attempt,
-   * bound to its invocation id. `options.afterAttempt` supplies the evidence
-   * explicitly (cross-restart retries, where no stored attempt exists);
-   * otherwise the stored `lastAttemptResult` is used automatically, so an
-   * omitted `afterAttempt` after an uncertain attempt still blocks. A first
-   * launch (no previous attempt) and launches after pre-spawn refusals
-   * (which never record an attempt) pass the gate vacuously.
+   * Stop-before-retry is MANDATORY, not opt-in (#2915B), but it applies
+   * ONLY to a RETRY, defined precisely (#2915 P1) as relaunching the SAME
+   * work item a previous attempt on THIS launcher targeted — same
+   * `options.invocationPath` AND `options.runDir` as the stored attempt's
+   * own, launcher-owned identity (`lastAttemptIdentity`, set only from a
+   * completed attempt, never from caller input). Unrelated work — a
+   * different `invocationPath`/`runDir` — is never treated as a retry and
+   * is never gated here, no matter what the previous attempt's termination
+   * was (#2915 review: an unrelated sequential launch on the same launcher
+   * was being refused as if it were a retry).
    *
-   * `options.freshAttempt: true` declares a sequential UNRELATED attempt
-   * rather than a retry. It does not bypass the physics: an outstanding
-   * uncertain previous attempt still blocks. It only severs the invocation
-   * chain (the new attempt records previousAttemptId null). No production
-   * caller needs it today (`--launch-worker` uses a fresh launcher per CLI
-   * call; sequential test launches are pre-spawn refusals with no stored
-   * attempt); it exists so a future same-launcher sequential caller must
-   * declare intent instead of silently chaining.
+   * `options.afterAttempt` supplies retry evidence explicitly for a FRESH
+   * launcher with no stored attempt of its own (a cross-restart retry).
+   * It can only ADD evidence where none exists — it can never override,
+   * fabricate past, or null out evidence this launcher itself observed:
+   * whenever `lastAttemptResult` is already set, THAT is what gets
+   * checked, regardless of what `afterAttempt` the caller passes (#2915
+   * review: `afterAttempt: null` bypassed the gate entirely, and a
+   * fabricated `{invocationId, termination:'confirmed'}` for a mismatched
+   * invocation overrode stored uncertainty). A first launch (no previous
+   * attempt) and launches after pre-spawn refusals (which never record an
+   * attempt) pass the gate vacuously.
+   *
+   * `options.freshAttempt: true` is an explicit caller override that forces
+   * UNRELATED classification even if `invocationPath`/`runDir` happen to
+   * coincide with the stored attempt — it never widens what passes evidence
+   * review (the "fresh, empty runDir" precondition in `launchOneWorker`
+   * independently refuses an actual same-directory relaunch), it only lets
+   * a caller declare intent instead of relying on path comparison alone.
    *
    * `options.correctStartup: { reasonCode, correctionsUsed }` enforces the
    * one-qualified-startup-correction budget on a conductor-declared
@@ -1171,8 +1226,16 @@ export class SessionLauncher extends EventEmitter {
    */
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
-    const previousResult = options?.afterAttempt !== undefined ? options.afterAttempt : this.lastAttemptResult;
-    if (previousResult !== null && previousResult !== undefined) {
+    const sameWork = this.lastAttemptIdentity !== null
+      && options?.invocationPath === this.lastAttemptIdentity.invocationPath
+      && options?.runDir === this.lastAttemptIdentity.runDir;
+    const explicitAfterAttempt = options?.afterAttempt !== undefined;
+    const isRetry = options?.freshAttempt === true ? false
+      : explicitAfterAttempt || (this.lastAttemptResult !== null && sameWork);
+    if (isRetry) {
+      // Launcher-owned evidence wins: `afterAttempt` is consulted ONLY when
+      // this launcher holds no stored attempt of its own to check.
+      const previousResult = this.lastAttemptResult !== null ? this.lastAttemptResult : (options.afterAttempt ?? null);
       assertStopBeforeRetry(previousResult, { expectedInvocationId: this.lastAttemptInvocationId });
       // An explicitly supplied cross-restart retry adopts its evidence's
       // chain so the next retry binds against it.
@@ -1195,6 +1258,7 @@ export class SessionLauncher extends EventEmitter {
       // any result exists, so they never create linkage or gate later calls.
       this.lastAttemptResult = result ?? null;
       this.lastAttemptInvocationId = result?.invocationId ?? this.lastAttemptInvocationId;
+      this.lastAttemptIdentity = result ? { invocationPath: options?.invocationPath, runDir: options?.runDir } : this.lastAttemptIdentity;
       return result;
     } finally { this.workerLaunchPending = false; }
   }
@@ -2013,7 +2077,7 @@ export async function getClaudeVersion() {
  *   `recoveryBlocked` (covering scope keys) and a `diagnostic`, and likewise
  *   never spawns.
  */
-export function planDirectWorkerLaunch({
+export async function planDirectWorkerLaunch({
   name = 'worker',
   memoryMaxGb,
   invocation,
@@ -2058,16 +2122,11 @@ export function planDirectWorkerLaunch({
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
   }
-  const recoveryBreaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
-  const coveringKeys = recoveryScopeKeys
-    ?? (invocation?.selected ? recoveryScopeKeysForInvocation(invocation, {}) : []);
-  if (recoveryBreaker && coveringKeys.length > 0) {
-    const gate = recoveryBreaker.canLaunch({ scopeKeys: coveringKeys });
-    if (!gate.ok) {
-      return { launched: false, blocked: true, recoveryBlocked: gate.blockedBy,
-        diagnostic: `recovery scope open: ${gate.blockedBy.join(', ')}` };
-    }
-  }
+  // #2915 P0 (do no harm): the dispatch switch is consulted FIRST. Legacy
+  // behaviour (`worker_dispatch` off) must be byte-for-byte unchanged, so
+  // the scoped-recovery breaker is never constructed or consulted at all
+  // when the gate is disabled (#2915 review: the recovery gate previously
+  // ran independently of this switch, refusing/launching regardless of it).
   // Free disk is sampled on the worktree filesystem the worker will actually
   // write to — never the conductor's process cwd. Without live signals or
   // caller-supplied paths, an unknown worktree fails closed in the gate.
@@ -2076,6 +2135,18 @@ export function planDirectWorkerLaunch({
     paths: paths ?? (typeof cwd === 'string' && cwd ? [cwd] : undefined),
   });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
+  if (gate.enabled) {
+    const recoveryBreaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
+    const coveringKeys = recoveryScopeKeys
+      ?? (invocation?.selected ? await recoveryScopeKeysForInvocation(invocation, {}) : []);
+    if (recoveryBreaker && coveringKeys.length > 0) {
+      const recoveryGate = recoveryBreaker.canLaunch({ scopeKeys: coveringKeys });
+      if (!recoveryGate.ok) {
+        return { launched: false, blocked: true, recoveryBlocked: recoveryGate.blockedBy,
+          diagnostic: `recovery scope open: ${recoveryGate.blockedBy.join(', ')}` };
+      }
+    }
+  }
   return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
     gate, config, allowDegraded, attached, ownedGroup, onSpawnAttempt,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),

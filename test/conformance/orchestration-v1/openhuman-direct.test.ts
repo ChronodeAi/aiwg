@@ -291,8 +291,8 @@ describe('T-OG-15 OpenHuman direct command contract', () => {
   it('OD03a a direct systemd launch plan refuses brief-json without a framed params file', async () => {
     const { planDirectWorkerLaunch } = await import('../../../tools/ralph-external/session-launcher.mjs');
     const { plan } = await openHumanPlan();
-    expect(() => planDirectWorkerLaunch({ invocation: plan.invocation, memoryMaxGb: 1 }))
-      .toThrow('brief-json stdin requires an explicit conductor-framed params file');
+    await expect(planDirectWorkerLaunch({ invocation: plan.invocation, memoryMaxGb: 1 }))
+      .rejects.toThrow('brief-json stdin requires an explicit conductor-framed params file');
   });
 
   it.each([

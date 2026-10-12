@@ -42,6 +42,7 @@ import {
   setDirectRecoveryBreaker,
   resetDirectRecoveryBreaker,
   recordDirectWorkerOutcome,
+  recordRecoveryAfterAttempt,
   planDirectWorkerLaunch,
 } from '../../../tools/ralph-external/session-launcher.mjs';
 
@@ -70,11 +71,10 @@ describe('RecoveryPolicy explicit bounds', () => {
     expect(RecoveryPolicy.minOutstanding).toBe(2);
     expect(RecoveryPolicy.cooldownMs).toBe(120_000);
     expect(RecoveryPolicy.maxCooldownMs).toBe(900_000);
-    expect(RecoveryPolicy.probeTimeoutMs).toBe(10_000);
-    expect(RecoveryPolicy.probeMaxBytes).toBe(65_536);
     expect(RecoveryPolicy.canaryTimeoutMs).toBe(300_000);
-    expect(RecoveryPolicy.maxProbesPerEpisode).toBe(4);
-    expect(RecoveryPolicy.maxCanariesPerEpisode).toBe(1);
+    expect(RecoveryPolicy.backoffMultiplier).toBe(2);
+    expect(RecoveryPolicy.maxTrackedScopes).toBe(500);
+    expect(RecoveryPolicy.maxChargedAttempts).toBe(5_000);
   });
 
   it('rejects unbounded or out-of-range policy overrides', () => {
@@ -83,9 +83,10 @@ describe('RecoveryPolicy explicit bounds', () => {
       { cooldownMs: Number.POSITIVE_INFINITY },
       { distinctThreshold: 0 },
       { maxCooldownMs: 1 },
-      { probeTimeoutMs: -5 },
-      { maxProbesPerEpisode: 1.5 },
+      { canaryTimeoutMs: -5 },
       { backoffMultiplier: 0.5 },
+      { maxTrackedScopes: 1 },
+      { maxChargedAttempts: 1.5 },
     ]) {
       expect(() => validateRecoveryPolicy({ ...RecoveryPolicy, ...policy })).toThrow(RangeError);
     }
@@ -270,9 +271,9 @@ describe('ScopedFailureBreaker correlation', () => {
     expect(state.resetAtMs).toBe(Date.now() + 300_000);
     // Earliest probe is max(120s cooldown, reset): still not due at +121s.
     vi.advanceTimersByTime(121_000);
-    expect(breaker.reserveProbe(QUOTA).reason).toBe('not-due');
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(false);
     vi.advanceTimersByTime(180_000);
-    expect(breaker.reserveProbe(QUOTA).ok).toBe(true);
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(true);
   });
 
   it('refuses to open the quota scope on worker-claimed 429 without trusted account identity', () => {
@@ -296,7 +297,7 @@ describe('ScopedFailureBreaker correlation', () => {
     expect(state.resetAtMs).toBeNull();
     expect(state.nextProbeAtMs).toBe(t0 + 120_000); // deterministic: zero jitter
     vi.advanceTimersByTime(120_000);
-    expect(breaker.reserveProbe(QUOTA).ok).toBe(true);
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(true);
   });
 
   it('pushes the next probe out when a later failure carries a further reset', () => {
@@ -312,9 +313,9 @@ describe('ScopedFailureBreaker correlation', () => {
     expect(state.resetAtMs).toBe(Date.now() + 420_000);
     expect(state.nextProbeAtMs).toBeGreaterThanOrEqual(state.resetAtMs);
     vi.advanceTimersByTime(120_000);
-    expect(breaker.reserveProbe(QUOTA).reason).toBe('not-due');
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(false);
     vi.advanceTimersByTime(300_000);
-    expect(breaker.reserveProbe(QUOTA).ok).toBe(true);
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(true);
   });
 
   it('stops cross-provider retries while the corroborated host scope is open', () => {
@@ -373,7 +374,7 @@ describe('ScopedFailureBreaker correlation', () => {
   });
 });
 
-describe('bounded probe and canary episodes', () => {
+describe('half-open canary admission (#2915D2: the next real launch IS the probe)', () => {
   let breaker;
   let summaries;
 
@@ -397,124 +398,75 @@ describe('bounded probe and canary episodes', () => {
     vi.useRealTimers();
   });
 
-  it('runs one verified relevant probe, one canary, then recovers', () => {
+  it('refuses every launch while open and not due, admits exactly one once due, then recovers on a launcher-reported success', () => {
     openInstall();
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('not-due');
-    vi.advanceTimersByTime(120_000);
-    const { reservation } = breaker.reserveProbe(INSTALL);
-    expect(reservation.deadlineMs - reservation.reservedAtMs).toBe(10_000);
-    expect(reservation.maxBytes).toBe(65_536);
-    // A relevant success WITHOUT launcher verification never advances.
-    expect(breaker.completeProbe(reservation.id, { ok: true, evidenceSource: 'worker' }).transition)
-      .toBe('echo-insufficient');
-    expect(breaker.getState(INSTALL).state).toBe('open');
-    vi.advanceTimersByTime(120_000);
-    const second = breaker.reserveProbe(INSTALL);
-    expect(second.ok).toBe(true);
-    expect(breaker.completeProbe(second.reservation.id, { ok: true, evidenceSource: 'launcher' }).transition)
-      .toBe('canary-admitted');
-
-    // The scope stays gated until the single canary succeeds.
     expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('canary-pending');
-    const canary = breaker.reserveCanary(INSTALL);
-    expect(canary.ok).toBe(true);
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('canary-pending');
-    expect(breaker.reserveCanary(INSTALL).reason).toBe('no-canary-pending');
-    // An unverified canary "success" never recovers...
-    expect(breaker.completeCanary(INSTALL, { ok: true, canaryId: canary.canary.id }).transition)
-      .toBe('canary-unverified');
-    expect(breaker.getState(INSTALL).state).toBe('open');
-    // ...but a launcher-verified canary on a fresh cycle does.
-    vi.advanceTimersByTime(120_000);
-    const probe = breaker.reserveProbe(INSTALL);
-    expect(breaker.completeProbe(probe.reservation.id, { ok: true, evidenceSource: 'launcher' }).transition)
-      .toBe('canary-admitted');
-    const canary2 = breaker.reserveCanary(INSTALL);
-    expect(breaker.completeCanary(INSTALL, { ok: true, evidenceSource: 'launcher', canaryId: canary2.canary.id }).transition)
-      .toBe('recovered');
+    vi.advanceTimersByTime(119_999);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
+    vi.advanceTimersByTime(1);
+    const admitted = breaker.canLaunch({ scopeKeys: [INSTALL] });
+    expect(admitted.ok).toBe(true);
+    expect(admitted.canaryScopeKeys).toEqual([INSTALL]);
+    // One real attempt at a time: while that canary is outstanding, no
+    // further launch for this scope is admitted, including a re-check in
+    // the very same tick.
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
+    breaker.recordSuccess({ scopeKey: INSTALL, invocationId: 'canary-1' });
+    expect(breaker.getState(INSTALL).state).toBe('closed');
     expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
-    expect(breaker.snapshot().canariesCharged).toBe(2);
+    expect(summaries.map((s) => s.transition)).toEqual(['opened', 'canary-admitted', 'recovered']);
+    expect(breaker.snapshot().canariesCharged).toBe(1);
   });
 
-  it('refuses canary completion with no reservation', () => {
-    // Unauthorized-canary regression: completeCanary without any admitted
-    // canary must not recover an open scope.
+  it('a failed canary reopens immediately with doubled backoff, never waiting on the distinct-failure threshold', () => {
     openInstall();
-    expect(breaker.completeCanary(INSTALL, { ok: true, evidenceSource: 'launcher' }))
-      .toEqual({ ok: false, reason: 'no-canary-reservation' });
+    vi.advanceTimersByTime(120_000);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
+    expect(breaker.recordFailure(installFailure('canary-1')).canaryFailed).toBe(true);
     expect(breaker.getState(INSTALL).state).toBe('open');
-    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
-  });
-
-  it('probes unrelated scopes independently but never concurrently within one scope', () => {
-    openInstall();
-    for (const id of ['x', 'y', 'z']) breaker.recordFailure(trustedQuotaFailure(id, 'codex'));
-    vi.advanceTimersByTime(120_000);
-    const first = breaker.reserveProbe(INSTALL);
-    expect(first.ok).toBe(true);
-    // Same scope, second reservation: refused while one is active...
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('probe-already-active');
-    // ...but an unrelated scope probes independently.
-    const other = breaker.reserveProbe(QUOTA);
-    expect(other.ok).toBe(true);
-    expect(breaker.completeProbe(first.reservation.id, { ok: false }).transition).toBe('probe-failed');
-    expect(breaker.completeProbe(other.reservation.id, { ok: false }).transition).toBe('probe-failed');
-
-    // Failed probes double the cooldown: next probe due at +240s, not +120s.
-    vi.advanceTimersByTime(120_000);
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('not-due');
-    vi.advanceTimersByTime(120_000);
-    expect(breaker.reserveProbe(INSTALL).ok).toBe(true);
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
-  });
-
-  it('accounts a hung probe as failed and frees the reservation on expiry', () => {
-    openInstall();
+    // Not due yet at +120s (doubled backoff), due at +240s.
     vi.advanceTimersByTime(120_000);
-    const hung = breaker.reserveProbe(INSTALL);
-    expect(hung.ok).toBe(true);
-    // The probe hangs: past its 10s deadline the next check accounts it as
-    // failed (backoff) and closes the reservation, so a fresh probe can be
-    // admitted once due. A never-completed probe monopolizes nothing.
-    vi.advanceTimersByTime(10_001);
     expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
-    expect(summaries.map((s) => s.transition)).toContain('probe-expired');
-    expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
-    expect(breaker.getState(INSTALL).activeProbe).toBeNull();
-    // The stale completion for the expired id is refused, not honored.
-    expect(breaker.completeProbe(hung.reservation.id, { ok: true, evidenceSource: 'launcher' }))
-      .toEqual({ ok: false, reason: 'unknown-probe' });
-    vi.advanceTimersByTime(240_000);
-    const fresh = breaker.reserveProbe(INSTALL);
-    expect(fresh.ok).toBe(true);
-    expect(fresh.reservation.id).not.toBe(hung.reservation.id);
+    vi.advanceTimersByTime(120_000);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
   });
 
-  it('caps backoff at 900s and bounds the episode probe count', () => {
+  it('caps backoff at 900s across repeated canary failures', () => {
     openInstall();
     let at = 120_000;
     vi.advanceTimersByTime(at);
-    // Three failed probes: cooldowns 240s, 480s, then capped 900s.
-    const cooldowns = [240_000, 480_000, 900_000];
+    const cooldowns = [240_000, 480_000, 900_000, 900_000];
     for (const expected of cooldowns) {
-      const r = breaker.reserveProbe(INSTALL);
-      expect(r.ok).toBe(true);
-      breaker.completeProbe(r.reservation.id, { ok: false });
+      expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
+      breaker.recordFailure(installFailure(`canary-${expected}`));
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(expected);
       at += expected;
       vi.advanceTimersByTime(expected);
     }
-    // Fourth probe is an echo success: never closes the outage, exhausts the episode.
-    const echo = breaker.reserveProbe(INSTALL, { kind: 'echo' });
-    expect(echo.ok).toBe(true);
-    expect(breaker.completeProbe(echo.reservation.id, { ok: true }).transition).toBe('probes-exhausted');
     expect(breaker.getState(INSTALL).state).toBe('open');
-    expect(breaker.reserveProbe(INSTALL).reason).toBe('probe-budget-exhausted');
-    expect(breaker.probesCharged).toBe(4);
   });
 
-  it('charges every launched attempt, probe and canary once and keeps unknown cost unknown', () => {
+  it('an uncertain canary termination releases the reservation and reopens with backoff, never recovering', () => {
+    openInstall();
+    vi.advanceTimersByTime(120_000);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
+    breaker.noteUncertainTermination({ scopeKeys: [INSTALL], invocationId: 'canary-1' });
+    expect(breaker.getState(INSTALL).state).toBe('open');
+    expect(breaker.getState(INSTALL).activeCanary).toBeNull();
+    expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
+    expect(summaries.map((s) => s.transition)).toContain('canary-uncertain');
+  });
+
+  it('unrelated scopes are admitted independently; neither blocks the other', () => {
+    openInstall();
+    for (const id of ['x', 'y', 'z']) breaker.recordFailure(trustedQuotaFailure(id, 'codex'));
+    vi.advanceTimersByTime(120_000);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
+    expect(breaker.canLaunch({ scopeKeys: [QUOTA] }).ok).toBe(true);
+  });
+
+  it('charges every launched attempt and the canary attempt once, keeping unknown cost unknown', () => {
     breaker.recordFailure(installFailure('same'));
     breaker.recordFailure(installFailure('same'));
     expect(breaker.snapshot().attemptsCharged).toBe(1);
@@ -531,18 +483,24 @@ describe('bounded probe and canary episodes', () => {
     expect(summaries.every((s) => s.costUsd === null)).toBe(true);
   });
 
-  it('expires a hung canary with backoff instead of gating forever', () => {
+  it('expires a hung canary with backoff instead of gating forever (no deadlock)', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const probe = breaker.reserveProbe(INSTALL);
-    breaker.completeProbe(probe.reservation.id, { ok: true, evidenceSource: 'launcher' });
-    const canary = breaker.reserveCanary(INSTALL);
-    expect(canary.ok).toBe(true);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
     expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
+    // The admitted attempt never reports back at all (crash/dropped
+    // callback) -- past its canaryTimeoutMs deadline, the very next gate
+    // check sweeps it as a failed canary, closes the reservation and
+    // reopens with doubled backoff: the scope is never gated forever.
     vi.advanceTimersByTime(300_001);
     expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(false);
     expect(summaries.map((s) => s.transition)).toContain('canary-expired');
     expect(breaker.getState(INSTALL).activeCanary).toBeNull();
+    expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
+    // And it eventually resumes at the doubled backoff, proving the path
+    // back to a real launch is reachable, not merely closed.
+    vi.advanceTimersByTime(240_000);
+    expect(breaker.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
   });
 });
 
@@ -575,7 +533,7 @@ describe('stop-before-retry gate (session-launcher)', () => {
     expect(anonymous.code).toBe(UNBOUND_RETRY_EVIDENCE_CODE);
   });
 
-  it('blocks launchWorker before any spawn on uncertain termination', async () => {
+  it('blocks launchWorker before any spawn on uncertain termination (cross-restart afterAttempt, fresh launcher)', async () => {
     const launcher = new SessionLauncher();
     await expect(launcher.launchWorker({ afterAttempt: { termination: 'uncertain' } })).rejects.toMatchObject({
       code: STOP_BEFORE_RETRY_CODE,
@@ -583,22 +541,72 @@ describe('stop-before-retry gate (session-launcher)', () => {
     expect(launcher.lastAttemptResult).toBeNull();
   });
 
-  it('blocks a same-launcher retry on the stored uncertain attempt even when afterAttempt is omitted', async () => {
+  it('blocks a same-launcher RETRY (same invocationPath+runDir) on the stored uncertain attempt even when afterAttempt is omitted', async () => {
     // Default-on regression: the gate reads lastAttemptResult, so omitting
-    // afterAttempt after an uncertain attempt still blocks.
+    // afterAttempt after an uncertain attempt still blocks -- but only for
+    // an actual retry of the SAME work item.
     const launcher = new SessionLauncher();
     launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
     launcher.lastAttemptInvocationId = 'prev-1';
-    await expect(launcher.launchWorker({})).rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
+    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run' }))
+      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
     expect(launcher.lastAttemptResult.invocationId).toBe('prev-1');
   });
 
-  it('blocks a same-launcher retry on unrelated confirmed evidence', async () => {
+  it('never refuses UNRELATED work on the same launcher, even after a stored uncertain attempt (#2915 P1 false-refusal fix)', async () => {
+    const launcher = new SessionLauncher();
+    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
+    launcher.lastAttemptInvocationId = 'prev-1';
+    launcher.lastAttemptIdentity = { invocationPath: '/plan-a.json', runDir: '/run-a' };
+    // A different invocationPath+runDir is, by the launcher's own stored
+    // identity, NOT a retry of the uncertain attempt -- the gate must not
+    // fire. (The call still fails downstream, on a missing plan file --
+    // proving the STOP_BEFORE_RETRY/UNBOUND_RETRY_EVIDENCE gate itself
+    // never ran, not that nothing ran at all.)
+    await expect(launcher.launchWorker({ invocationPath: '/plan-b.json', runDir: '/run-b' }))
+      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+  });
+
+  it('launcher-owned evidence cannot be overridden, fabricated, or nulled out by a caller', async () => {
+    // (a) `afterAttempt: null` must not bypass a stored uncertain attempt.
+    const nulled = new SessionLauncher();
+    nulled.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
+    nulled.lastAttemptInvocationId = 'prev-1';
+    nulled.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
+    await expect(nulled.launchWorker({ invocationPath: '/plan.json', runDir: '/run', afterAttempt: null }))
+      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+
+    // (b) A fabricated "confirmed" object for the retried invocation cannot
+    // override the launcher's own stored uncertainty.
+    const fabricated = new SessionLauncher();
+    fabricated.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
+    fabricated.lastAttemptInvocationId = 'prev-1';
+    fabricated.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
+    await expect(fabricated.launchWorker({ invocationPath: '/plan.json', runDir: '/run',
+      afterAttempt: { invocationId: 'prev-1', termination: 'confirmed' } }))
+      .rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+  });
+
+  it('a stored CONFIRMED attempt is used as-is: a caller-supplied afterAttempt for a different invocation is irrelevant, not an UNBOUND_RETRY_EVIDENCE refusal', async () => {
+    // The launcher's own evidence (confirmed, safe to retry) always wins;
+    // `afterAttempt` is only ever consulted when there is NOTHING stored.
     const launcher = new SessionLauncher();
     launcher.lastAttemptResult = { termination: 'confirmed', invocationId: 'prev-1' };
     launcher.lastAttemptInvocationId = 'prev-1';
-    await expect(launcher.launchWorker({ afterAttempt: { termination: 'confirmed', invocationId: 'other' } }))
-      .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
+    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run',
+      afterAttempt: { termination: 'confirmed', invocationId: 'other' } }))
+      .rejects.not.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+  });
+
+  it('freshAttempt:true forces unrelated classification even when invocationPath/runDir coincide', async () => {
+    const launcher = new SessionLauncher();
+    launcher.lastAttemptResult = { termination: 'uncertain', invocationId: 'prev-1' };
+    launcher.lastAttemptInvocationId = 'prev-1';
+    launcher.lastAttemptIdentity = { invocationPath: '/plan.json', runDir: '/run' };
+    await expect(launcher.launchWorker({ invocationPath: '/plan.json', runDir: '/run', freshAttempt: true }))
+      .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
   });
 
   it('refuses a conductor-declared startup correction past its single budget', async () => {
@@ -692,11 +700,29 @@ describe('classifyLaunchOutcomeForRecovery', () => {
     expect(classifyLaunchOutcomeForRecovery(null)).toEqual({ reasonCode: null, evidenceSource: null });
   });
 
-  it('derives covering keys from trusted resolved identities only', () => {
-    expect(recoveryScopeKeysForInvocation(
+  it('derives covering keys from trusted resolved identities only, always including the single-host scope', async () => {
+    await expect(recoveryScopeKeysForInvocation(
       { selected: { cli: 'codex', inferenceProvider: 'openai' } }, { invocationId: 'i-1', quotaAccount: 'acct-1' }))
-      .toEqual(['invocation:i-1', 'installation:codex', 'provider:openai', 'quota:acct-1']);
-    expect(recoveryScopeKeysForInvocation({ selected: {} }, {})).toEqual([]);
+      .resolves.toEqual(['invocation:i-1', 'installation:codex', 'provider:openai', 'quota:acct-1', 'host:local']);
+    // No resolvable model/installation/provider/quota identity -- `host:local`
+    // is the only key, never defaulted to a shared installation/provider/
+    // quota scope (#2915 review: model/host scopes were never covered).
+    await expect(recoveryScopeKeysForInvocation({ selected: {} }, {})).resolves.toEqual(['host:local']);
+  });
+
+  it('derives the model scope key and a qualified installation scope key', async () => {
+    const keys = await recoveryScopeKeysForInvocation(
+      { selected: { cli: 'codex', inferenceProvider: 'openai', apiModelId: 'gpt-x' } },
+      { invocationId: 'i-9', installationQualifier: 'sha256:boundary-a' });
+    expect(keys).toEqual(['invocation:i-9', 'model:openai/gpt-x', 'installation:codex:sha256:boundary-a', 'provider:openai', 'host:local']);
+    // A different installationQualifier for the same CLI name produces a
+    // DIFFERENT installation scope key (#2915 review: two installations
+    // under one CLI name shared one scope).
+    const otherKeys = await recoveryScopeKeysForInvocation(
+      { selected: { cli: 'codex', inferenceProvider: 'openai', apiModelId: 'gpt-x' } },
+      { invocationId: 'i-10', installationQualifier: 'sha256:boundary-b' });
+    expect(otherKeys).toContain('installation:codex:sha256:boundary-b');
+    expect(otherKeys).not.toContain('installation:codex:sha256:boundary-a');
   });
 });
 
@@ -757,21 +783,81 @@ describe('recordDirectWorkerOutcome', () => {
   });
 });
 
+describe('recordRecoveryAfterAttempt', () => {
+  it('attributes a pre-spawn-style failure to the SAME qualified installation key the pre-launch gate watches (#2915 P3 qualifier-consistency)', async () => {
+    // Regression: attributing a failure through the UNqualified
+    // `installation:<cli>` key while `canLaunch` watches the QUALIFIED
+    // `installation:<cli>:<qualifier>` key would open a scope canLaunch
+    // never checks -- the gate would never catch its own failures.
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' } };
+      const qualifier = 'sha256:boundary-x';
+      const scopeKeys = await recoveryScopeKeysForInvocation(invocation, { invocationId: 'r-1', installationQualifier: qualifier });
+      expect(scopeKeys).toContain('installation:codex:sha256:boundary-x');
+      breaker.noteLaunched(scopeKeys, 'r-1');
+      await recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, 'r-1', null,
+        Promise.resolve({ termination: 'confirmed', exitCode: null, errorCode: 'ENOENT' }), qualifier);
+      const state = breaker.getState('installation:codex:sha256:boundary-x');
+      expect(state.tracked).toBe(true);
+      expect(state.distinctFailures).toBe(1);
+      // The UNqualified key must NOT have received this failure.
+      expect(breaker.getState('installation:codex').tracked).toBe(false);
+      // The pre-launch gate, watching the qualified key, sees it.
+      expect(breaker.canLaunch({ scopeKeys }).ok).toBe(true); // one failure alone does not yet open
+      for (const id of ['r-2', 'r-3']) {
+        await recordRecoveryAfterAttempt(breaker, scopeKeys, invocation, id, null,
+          Promise.resolve({ termination: 'confirmed', exitCode: null, errorCode: 'ENOENT' }), qualifier);
+      }
+      expect(breaker.canLaunch({ scopeKeys }).ok).toBe(false);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  it('recovers the scope on a launcher-confirmed success, passing the result through unchanged', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const scopeKeys = ['invocation:ok-1', 'installation:codex'];
+      breaker.noteLaunched(scopeKeys, 'ok-1');
+      const result = await recordRecoveryAfterAttempt(breaker, scopeKeys, { selected: { cli: 'codex' } }, 'ok-1', null,
+        Promise.resolve({ termination: 'confirmed', exitCode: 0 }));
+      expect(result).toEqual({ termination: 'confirmed', exitCode: 0 });
+      expect(breaker.snapshot().attemptsCharged).toBe(1);
+    } finally {
+      breaker.destroy();
+    }
+  });
+});
+
+// #2915 P4: determinism requires injecting BOTH the dispatch switch/live
+// signals (so `checkWorkerDispatch`'s real resource sampling never decides
+// the outcome) and the isolation detector (so a host with/without a
+// reachable systemd --user manager behaves identically) -- these tests
+// previously depended on the real host's systemd reachability and failed
+// with "Worker isolation requires a positive memoryMaxGb ceiling" on any
+// host where isolation was actually detected as available.
+const dispatchOnConfig = Object.freeze({ parallelism: { worker_dispatch: true } });
+const healthyLive = Object.freeze({ supported: true, availMemGb: 64, loadRatio: 0.01, memPsiAvg10: 0, memPsiAvg60: 0, workers: 0, freeDiskGb: 64 });
+
 describe('planDirectWorkerLaunch recovery gate', () => {
   it('refuses a covered launch before any spawn and passes an unaffected one to the dispatch gate', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
       for (const id of ['a', 'b', 'c']) breaker.recordFailure(installFailure(id));
       const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
-      const blocked = await planDirectWorkerLaunch({ invocation, scopedBreaker: breaker });
+      const blocked = await planDirectWorkerLaunch({ invocation, scopedBreaker: breaker,
+        config: dispatchOnConfig, live: healthyLive });
       expect(blocked.launched).toBe(false);
       expect(blocked.blocked).toBe(true);
       expect(blocked.recoveryBlocked).toEqual(['installation:codex']);
       // An unrelated CLI is unaffected and reaches the dispatch gate (which
-      // refuses here on degraded isolation without ever spawning).
+      // refuses here on injected degraded isolation, deterministically,
+      // without ever spawning).
       const other = await planDirectWorkerLaunch({
         invocation: { selected: { cli: 'other-cli', inferenceProvider: 'other-backend' }, stdin: 'closed' },
-        scopedBreaker: breaker,
+        scopedBreaker: breaker, config: dispatchOnConfig, live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' },
       });
       expect(other.recoveryBlocked).toBeUndefined();
       expect(other.launched).toBe(false);
@@ -783,8 +869,30 @@ describe('planDirectWorkerLaunch recovery gate', () => {
   it('skips the gate for flat-option callers with no trusted identities', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const out = await planDirectWorkerLaunch({ command: '/nonexistent', args: [], cwd: '/tmp', scopedBreaker: breaker });
+      const out = await planDirectWorkerLaunch({ command: '/nonexistent', args: [], cwd: '/tmp', scopedBreaker: breaker,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' } });
       expect(out.recoveryBlocked).toBeUndefined();
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  it('is inert when worker_dispatch is off: an open scope never blocks, and the breaker is never constructed or consulted (#2915 P0)', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      for (const id of ['a', 'b', 'c']) breaker.recordFailure(installFailure(id));
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      const attemptsChargedBefore = breaker.snapshot().attemptsCharged;
+      const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
+      const out = await planDirectWorkerLaunch({ invocation, scopedBreaker: breaker,
+        config: { parallelism: { worker_dispatch: false } }, live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' } });
+      expect(out.recoveryBlocked).toBeUndefined();
+      expect(out.blocked).toBeUndefined();
+      // The breaker itself is untouched: no launch was ever noted against
+      // the open scope, confirming the gate was never even consulted, not
+      // merely that it happened to pass.
+      expect(breaker.snapshot().attemptsCharged).toBe(attemptsChargedBefore);
     } finally {
       breaker.destroy();
     }
@@ -806,6 +914,68 @@ describe('breaker restart semantics', () => {
       expect(restarted.canLaunch({ scopeKeys: [INSTALL] }).ok).toBe(true);
     } finally {
       restarted.destroy();
+    }
+  });
+});
+
+describe('bounded retained state (#2915 P3: scopes, cohorts and dedup sets never grow without bound)', () => {
+  it('evicts inert (closed, memberless) scopes once maxTrackedScopes is reached, never an open one', () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxTrackedScopes: 5 } });
+    try {
+      // One genuinely OPEN scope, created first so it is the "oldest" by
+      // insertion order -- it must survive eviction regardless.
+      for (const id of ['a', 'b', 'c']) breaker.recordFailure(installFailure(id));
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      // Many distinct CLOSED, memberless scopes (one failure each, never
+      // reaching the distinct-threshold) -- each creates a new tracked
+      // scope record via a fresh CLI name. (Constructed directly, not via
+      // `installFailure`, which hardcodes `scopeKey: INSTALL` regardless
+      // of the `cli` passed -- recordFailure only re-narrows a claim, it
+      // never re-keys an already-matching-rank claim to a different key.)
+      for (let n = 0; n < 20; n += 1) {
+        breaker.recordFailure({ scope: FailureScope.INSTALLATION, scopeKey: scopeKeyFor.installation(`cli-${n}`),
+          invocationId: `solo-${n}`, reasonCode: 'NOT_FOUND', evidenceSource: 'launcher', cli: `cli-${n}` });
+      }
+      expect(breaker.snapshot().scopes.length).toBeLessThanOrEqual(5);
+      // The open scope was never evicted.
+      expect(breaker.getState(INSTALL).tracked).toBe(true);
+      expect(breaker.getState(INSTALL).state).toBe('open');
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  it('evicts the oldest charged-attempt id once maxChargedAttempts is reached', () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxChargedAttempts: 5 } });
+    try {
+      for (let n = 0; n < 50; n += 1) {
+        breaker.noteLaunched(['installation:codex'], `ok-${n}`);
+        breaker.recordSuccess({ scopeKey: 'installation:codex', invocationId: `ok-${n}` });
+      }
+      expect(breaker.snapshot().attemptsCharged).toBeLessThanOrEqual(5);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  it('removes an outstanding scope key entirely once its member set empties (not just emptying the nested map)', () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      breaker.noteLaunched(['installation:codex'], 'a');
+      breaker.noteSettled({ scopeKeys: ['installation:codex'], invocationId: 'a' });
+      // #2915 review: settlement emptied the nested Map but never deleted
+      // the scopeKey itself, retaining the key forever even though no
+      // scope record was ever created (`noteLaunched`/`noteSettled` touch
+      // only `_outstanding`, not `_scopes`).
+      expect(breaker.getState('installation:codex')).toEqual({ scopeKey: 'installation:codex', state: 'closed', tracked: false });
+      // A later, unrelated single launch on the same key must not inherit
+      // 'a' as a frozen-cohort member (the observable proof the key, not
+      // just its contents, was actually removed).
+      breaker.noteLaunched(['installation:codex'], 'b');
+      breaker.recordFailure(installFailure('b'));
+      expect(breaker.getState(INSTALL).cohortSize).toBe(1);
+    } finally {
+      breaker.destroy();
     }
   });
 });
@@ -904,21 +1074,48 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       })).rejects.toMatchObject({ code: RECOVERY_SCOPE_OPEN_CODE });
       await expect(lstat(refusedRunDir)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(breaker.snapshot().attemptsCharged).toBe(3);
-      // Launcher-verified probe → canary → recovery reopens dispatch.
+      // #2915D2: once due, the breaker admits the NEXT REAL launch through
+      // this exact `launchWorker` path as the half-open canary — there is
+      // no separate probe runner. The fixture binary still does not exist,
+      // so this canary fails again at spawn: the scope stays open and the
+      // backoff doubles (120s -> 240s), proving the retry really ran
+      // through production dispatch rather than being skipped or stuck.
       now += 121_000;
-      const probe = breaker.reserveProbe(INSTALL);
-      expect(probe.ok).toBe(true);
-      expect(breaker.completeProbe(probe.reservation.id, { ok: true, evidenceSource: 'launcher' }).transition)
-        .toBe('canary-admitted');
-      const canary = breaker.reserveCanary(INSTALL);
-      expect(canary.ok).toBe(true);
-      expect(breaker.completeCanary(INSTALL, { ok: true, evidenceSource: 'launcher', canaryId: canary.canary.id }).transition)
-        .toBe('recovered');
-      // The retry proceeds (and fails at spawn again — recorded, scope
-      // closed — proving the refusal was the scope, not the fixture).
-      const retry = await launchOnce();
-      expect(retry).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      const canaryAttempt = await launchOnce();
+      expect(canaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
       expect(breaker.snapshot().attemptsCharged).toBe(4);
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
+      // Not due yet at +120s (doubled backoff): still refused, no spawn --
+      // proving the gate is not a one-shot: it keeps gating correctly after
+      // a canary failure, not just before the first one.
+      now += 120_000;
+      await expect(launcher.launchWorker({
+        invocationPath: await fx.freshPlan(),
+        runDir: path.join(fx.root, `run-${attempt + 1}`),
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+        now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' },
+        allowDegraded: true,
+        launchIsolated: () => { throw new Error('must never spawn before the doubled backoff elapses'); },
+      })).rejects.toMatchObject({ code: RECOVERY_SCOPE_OPEN_CODE });
+      // Due at +240s: the next real launch is again admitted as the
+      // canary through this same production surface — no deadlock, the
+      // path back to a real attempt stays reachable after every reopen.
+      // (Degraded isolation never yields a launcher-CONFIRMED success —
+      // see worker-single-invocation.test.ts's own `termination: 'uncertain'`
+      // assertion on a clean exit in degraded mode — so a confirmed-success
+      // recovery through this exact degraded fixture is architecturally
+      // unreachable here; `recordSuccess` closing the scope on a
+      // launcher-verified success is proven directly in the "half-open
+      // canary admission" suite above.)
+      now += 120_000;
+      const secondCanaryAttempt = await launchOnce();
+      expect(secondCanaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(480_000);
+      expect(breaker.snapshot().attemptsCharged).toBe(5);
     } finally {
       resetDirectRecoveryBreaker();
       vi.unstubAllEnvs();

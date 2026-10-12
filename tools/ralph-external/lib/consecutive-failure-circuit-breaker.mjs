@@ -199,18 +199,23 @@ export class ConsecutiveFailureCircuitBreaker extends EventEmitter {
  * - distinctThreshold/windowMs: open a scope at three distinct failures in
  *   120s, or when every member of a frozen cohort of at least two
  *   outstanding attempts fails in that window.
- * - cooldownMs/maxCooldownMs: earliest probe is max(120s cooldown, known
- *   429 reset/Retry-After); failed probes double the cooldown, capped at
- *   900s. Malformed resets fall back to this backoff with bounded jitter.
- * - probeTimeoutMs/probeMaxBytes: one 10s/64KiB half-open probe per scope,
- *   no task prompt; one active probe per scope (never concurrent within a
- *   scope), unrelated scopes probe independently. Hung/expired reservations
- *   are accounted as failed and closed by the expiry sweep.
- * - canaryTimeoutMs: an admitted canary is a tracked reservation bounded by
- *   this deadline; expiry reopens with backoff.
- * - maxProbesPerEpisode/maxCanariesPerEpisode: a launcher-verified relevant
- *   probe success admits exactly one canary, then normal scheduling on
- *   launcher-verified canary success. Unverified successes never recover.
+ * - cooldownMs/maxCooldownMs: earliest admission is max(120s cooldown,
+ *   known 429 reset/Retry-After); a failed canary doubles the cooldown,
+ *   capped at 900s. Malformed resets fall back to this backoff with
+ *   bounded jitter.
+ * - canaryTimeoutMs (half-open canary, #2915D2): once a scope is open and
+ *   due, `canLaunch` admits the NEXT real launch through the existing
+ *   direct-dispatch surface as the single canary for every covering scope
+ *   it is due for — there is no separate probe runner. The admission is a
+ *   tracked reservation bounded by this deadline; an unreported/expired
+ *   canary is accounted as failed and the expiry sweep reopens with
+ *   backoff. A launcher-verified success on that same invocation recovers
+ *   the scope; a launcher-verified failure reopens it. Unverified/worker
+ *   evidence never recovers (`isTrustedRecoveryEvidence`).
+ * - maxTrackedScopes/maxChargedAttempts: explicit caps on retained scope
+ *   and dedup-set state, with LRU eviction of inert entries, so a
+ *   long-running process's bookkeeping never grows without bound (#2915
+ *   review: settled outstanding/scope maps never dropped their keys).
  *
  * @implements #2915
  */
@@ -220,14 +225,12 @@ export const RecoveryPolicy = Object.freeze({
   minOutstanding: 2,
   cooldownMs: 120_000,
   maxCooldownMs: 900_000,
-  probeTimeoutMs: 10_000,
-  probeMaxBytes: 65_536,
   canaryTimeoutMs: 300_000,
-  maxProbesPerEpisode: 4,
-  maxCanariesPerEpisode: 1,
   backoffMultiplier: 2,
   maxJitterMs: 1_000,
   maxRetryAfterSeconds: 86_400,
+  maxTrackedScopes: 500,
+  maxChargedAttempts: 5_000,
 });
 
 /**
@@ -249,11 +252,7 @@ export function validateRecoveryPolicy(policy) {
   positiveMs('cooldownMs', policy.cooldownMs);
   positiveMs('maxCooldownMs', policy.maxCooldownMs);
   if (policy.maxCooldownMs < policy.cooldownMs) fail('maxCooldownMs', 'must be >= cooldownMs');
-  positiveMs('probeTimeoutMs', policy.probeTimeoutMs);
-  positiveMs('probeMaxBytes', policy.probeMaxBytes);
   positiveMs('canaryTimeoutMs', policy.canaryTimeoutMs);
-  positiveInt('maxProbesPerEpisode', policy.maxProbesPerEpisode);
-  positiveInt('maxCanariesPerEpisode', policy.maxCanariesPerEpisode);
   if (!Number.isFinite(policy.backoffMultiplier) || policy.backoffMultiplier < 1) {
     fail('backoffMultiplier', `expected finite number >= 1, got ${policy.backoffMultiplier}`);
   }
@@ -261,6 +260,8 @@ export function validateRecoveryPolicy(policy) {
   if (!Number.isFinite(policy.maxRetryAfterSeconds) || policy.maxRetryAfterSeconds < 0) {
     fail('maxRetryAfterSeconds', `expected finite seconds >= 0, got ${policy.maxRetryAfterSeconds}`);
   }
+  positiveInt('maxTrackedScopes', policy.maxTrackedScopes, 2);
+  positiveInt('maxChargedAttempts', policy.maxChargedAttempts, 2);
   return policy;
 }
 
@@ -286,7 +287,15 @@ const MODEL_CODES = new Set(['MODEL']);
 export const scopeKeyFor = Object.freeze({
   invocation: (id) => `invocation:${id ?? 'unknown'}`,
   model: (key) => `model:${key ?? 'unknown'}`,
-  installation: (cli) => `installation:${cli ?? 'unknown'}`,
+  // `qualifier`, when supplied, distinguishes separately-qualified
+  // installations that share a CLI name (#2915 review: two projects
+  // resolving different installations under `codex` shared one
+  // `installation:codex` scope). Omitted/null preserves the plain
+  // `installation:<cli>` key so existing single-installation callers and
+  // tests are unaffected.
+  installation: (cli, qualifier = null) => qualifier
+    ? `installation:${cli ?? 'unknown'}:${qualifier}`
+    : `installation:${cli ?? 'unknown'}`,
   quota: (account) => `quota:${account ?? 'unknown'}`,
   provider: (name) => `provider:${name ?? 'unknown'}`,
   host: (id) => `host:${id ?? 'local'}`,
@@ -360,6 +369,7 @@ export function attributeFailureScope({
   quotaAccount = null,
   hostId = null,
   corroboratedBackends = null,
+  installationQualifier = null,
 } = {}) {
   const invocation = { scope: FailureScope.INVOCATION, scopeKey: scopeKeyFor.invocation(invocationId), confidence: 'suspected' };
   if (!isTrustedRecoveryEvidence(evidenceSource)) return invocation;
@@ -372,7 +382,7 @@ export function attributeFailureScope({
     // worker-sourced NOT_FOUND returns in the invocation scope above). A
     // missing task subprocess must never implicate the host.
     if (cli == null || cli === '') return invocation;
-    return { scope: FailureScope.INSTALLATION, scopeKey: scopeKeyFor.installation(cli), confidence: 'suspected' };
+    return { scope: FailureScope.INSTALLATION, scopeKey: scopeKeyFor.installation(cli, installationQualifier), confidence: 'suspected' };
   }
   if (QUOTA_CODES.has(reasonCode)) {
     if (quotaAccount == null || quotaAccount === '') return invocation;
@@ -392,7 +402,7 @@ export function attributeFailureScope({
   }
   if (INSTALLATION_CODES.has(reasonCode)) {
     if (cli == null || cli === '') return invocation;
-    return { scope: FailureScope.INSTALLATION, scopeKey: scopeKeyFor.installation(cli), confidence: 'suspected' };
+    return { scope: FailureScope.INSTALLATION, scopeKey: scopeKeyFor.installation(cli, installationQualifier), confidence: 'suspected' };
   }
   if (MODEL_CODES.has(reasonCode)) {
     if (modelKey == null || modelKey === '') return invocation;
@@ -452,10 +462,8 @@ export class ScopedFailureBreaker extends EventEmitter {
       ?? (() => Math.floor(Math.random() * (this.policy.maxJitterMs + 1)));
     this._scopes = new Map();
     this._outstanding = new Map();
-    this._probeSeq = 0;
     this._canarySeq = 0;
     this._chargedAttempts = new Set();
-    this.probesCharged = 0;
     this.canariesCharged = 0;
   }
 
@@ -505,16 +513,17 @@ export class ScopedFailureBreaker extends EventEmitter {
    */
   recordFailure({ scope, scopeKey, invocationId, reasonCode = null, evidenceSource = null,
     modelKey = null, cli = null, inferenceProvider = null, quotaAccount = null, hostId = null,
-    corroboratedBackends = null, resetAtMs = null, retryAfterSeconds = null } = {}) {
+    corroboratedBackends = null, resetAtMs = null, retryAfterSeconds = null, installationQualifier = null } = {}) {
     if (!scope || !scopeKey) throw new Error('recordFailure requires an attributed scope and scopeKey');
     const supported = attributeFailureScope({ reasonCode, evidenceSource, invocationId, modelKey,
-      cli, inferenceProvider, quotaAccount, hostId, corroboratedBackends });
+      cli, inferenceProvider, quotaAccount, hostId, corroboratedBackends, installationQualifier });
     if (scopeRank(supported.scope) < scopeRank(scope)) {
       scope = supported.scope;
       scopeKey = supported.scopeKey;
     }
     const now = this.nowMs();
     const rec = this._scopeRecord(scope, scopeKey);
+    this._touch(rec);
     this._removeOutstanding(scopeKey, invocationId);
 
     // Genuine rolling-window retention: prune only failures older than the
@@ -547,7 +556,20 @@ export class ScopedFailureBreaker extends EventEmitter {
     // with unknown cost kept unknown (never zero).
     this._chargeAttempt(scopeKey, invocationId);
 
-    if (rec.status !== 'closed') return { opened: false, state: 'open', distinctFailures: distinct.size };
+    if (rec.status !== 'closed') {
+      // A failure against an open scope with an outstanding canary
+      // (#2915D2) IS the canary's failure (canLaunch admits at most one
+      // launch per open scope at a time), and reopens immediately with
+      // doubled backoff rather than waiting on the distinct-failure
+      // threshold, which never fires again for an already-open scope.
+      if (rec.activeCanary) {
+        rec.activeCanary = null;
+        this._reopen(rec, now);
+        this._emitSummary(rec, 'canary-failed', { invocationId });
+        return { opened: false, state: 'open', distinctFailures: distinct.size, canaryFailed: true };
+      }
+      return { opened: false, state: 'open', distinctFailures: distinct.size };
+    }
 
     const cohort = rec.cohort ?? new Set();
     const allOutstandingFailed = cohort.size >= this.policy.minOutstanding
@@ -565,7 +587,18 @@ export class ScopedFailureBreaker extends EventEmitter {
   }
 
   /**
-   * A success clears outstanding membership but never closes an open scope.
+   * A success clears outstanding membership but never closes an open scope
+   * by itself — UNLESS the scope is OPEN and currently holds an outstanding
+   * canary reservation (#2915D2), in which case this success resolves it
+   * and recovers the scope (see `canLaunch`). Resolution does not match an
+   * `invocationId` against the reservation: `canLaunch` admits at most one
+   * launch per open scope at a time (every other covering launch is
+   * refused while a canary is outstanding), so by construction the only
+   * attempt that can ever report an outcome against an open scope while its
+   * `activeCanary` is set IS that admitted canary — matching an id here
+   * would only reproduce the exact wiring gap the review found (production
+   * call sites mint the real invocationId AFTER `canLaunch`, so an id
+   * recorded at admission time would never match the id reported back).
    * Every launched attempt is charged exactly once — including successes
    * (#2915 review: successful attempts charged 0, so the task allowance
    * under-counted real spend).
@@ -574,69 +607,120 @@ export class ScopedFailureBreaker extends EventEmitter {
     this._removeOutstanding(scopeKey, invocationId);
     this._chargeAttempt(scopeKey, invocationId);
     const rec = scopeKey ? this._scopes.get(scopeKey) : null;
-    if (rec && rec.status === 'closed') rec.breaker.recordSuccess();
+    if (!rec) return;
+    this._touch(rec);
+    if (rec.status === 'closed') { rec.breaker.recordSuccess(); return; }
+    if (rec.activeCanary) {
+      rec.activeCanary = null;
+      rec.reopens = 0;
+      rec.episodeCooldownMs = this.policy.cooldownMs;
+      rec.resetAtMs = null;
+      rec.nextProbeAtMs = 0;
+      rec.status = 'closed';
+      rec.breaker.reset();
+      this._emitSummary(rec, 'recovered', { invocationId });
+    }
+    // A success for an open scope with NO outstanding canary (expired and
+    // already swept by `expireStaleReservations`) never recovers it by
+    // surprise — only a success against a live canary reservation may.
   }
 
   /**
    * An attempt whose termination the launcher could not confirm is charged
    * to the task allowance but contributes NO failure evidence: uncertain
    * work must never open a scope, and its stop is still unproven (the
-   * stop-before-retry gate, not the breaker, governs any retry of it).
+   * stop-before-retry gate, not the breaker, governs any retry of it). If
+   * this invocation held the admitted canary reservation, release it and
+   * reopen with backoff — an uncertain canary outcome is not proof of
+   * recovery and must not leave the scope silently admitting the next
+   * launch as a canary indefinitely.
    */
   noteUncertainTermination({ scopeKeys = [], invocationId } = {}) {
-    for (const scopeKey of scopeKeys ?? []) this._removeOutstanding(scopeKey, invocationId);
+    for (const scopeKey of scopeKeys ?? []) {
+      this._removeOutstanding(scopeKey, invocationId);
+      const rec = this._scopes.get(scopeKey);
+      if (rec?.activeCanary) {
+        rec.activeCanary = null;
+        this._reopen(rec, this.nowMs());
+        this._emitSummary(rec, 'canary-uncertain', { invocationId });
+      }
+    }
     this._chargeAttempt(scopeKeys?.[0], invocationId);
   }
 
   _chargeAttempt(scopeKey, invocationId) {
     if (invocationId == null || this._chargedAttempts.has(invocationId)) return false;
     this._chargedAttempts.add(invocationId);
+    if (this._chargedAttempts.size > this.policy.maxChargedAttempts) {
+      const oldest = this._chargedAttempts.values().next().value;
+      this._chargedAttempts.delete(oldest);
+    }
     const rec = scopeKey ? this._scopes.get(scopeKey) : null;
     if (rec) rec.attemptsCharged += 1;
     return true;
   }
 
   /**
-   * Synchronous launch gate: false when any covering scope is open, holds a
-   * pending canary, or runs an admitted canary. Checked before every
-   * launch/retry, so covered work stops by the next check with no tick
-   * delay. Expired probe/canary reservations are swept (accounted as
-   * failures, closing the reservation) before the verdict, so a hung probe
-   * can never gate a scope forever.
+   * Synchronous launch gate (#2915D2, half-open canary). A closed covering
+   * scope never blocks. An OPEN covering scope blocks UNLESS it is due
+   * (past its backoff/reset floor) and holds no outstanding canary — in
+   * which case THIS launch is admitted and reserved, for every due covering
+   * scope at once, as their single half-open canary. The admission and the
+   * reservation happen in the same synchronous call, so no tick or
+   * concurrent caller can slip a second launch past the same due window
+   * (there is no separate probe step to race). The caller's own
+   * `recordSuccess`/`recordFailure`/`noteUncertainTermination` after the
+   * real attempt settles the reservation: success recovers every scope it
+   * covered, failure reopens with doubled backoff, and an unreported/expired
+   * reservation is swept as failed by `expireStaleReservations` so a hung
+   * canary can never gate a scope forever (no deadlock: every open scope
+   * always has a bounded, reachable path back to a real launch).
    */
   canLaunch({ invocationId = null, scopeKeys = [] } = {}) {
     this.expireStaleReservations();
+    const covering = [...(scopeKeys ?? [])];
+    if (invocationId != null) covering.push(scopeKeyFor.invocation(invocationId));
+    const openKeys = covering.filter((key) => {
+      const rec = this._scopes.get(key);
+      return rec && rec.status !== 'closed';
+    });
+    if (openKeys.length === 0) return { ok: true, blockedBy: [] };
+    const now = this.nowMs();
     const blockedBy = [];
-    for (const scopeKey of scopeKeys ?? []) {
+    const admissible = [];
+    for (const scopeKey of openKeys) {
       const rec = this._scopes.get(scopeKey);
-      if (!rec) continue;
-      if (rec.status !== 'closed' || rec.canaryPending || rec.activeCanary) blockedBy.push(scopeKey);
+      if (rec.activeCanary) { blockedBy.push(scopeKey); continue; }
+      const dueFloor = Math.max(rec.nextProbeAtMs ?? 0, rec.resetAtMs ?? 0);
+      if (now < dueFloor || !rec.breaker.canExecute()) { blockedBy.push(scopeKey); continue; }
+      admissible.push(scopeKey);
     }
-    if (invocationId != null) {
-      const rec = this._scopes.get(scopeKeyFor.invocation(invocationId));
-      if (rec && (rec.status !== 'closed' || rec.canaryPending || rec.activeCanary)) {
-        blockedBy.push(scopeKeyFor.invocation(invocationId));
-      }
+    if (blockedBy.length > 0) return { ok: false, blockedBy };
+    this._canarySeq += 1;
+    const canaryId = `canary-${this._canarySeq}`;
+    for (const scopeKey of admissible) {
+      const rec = this._scopes.get(scopeKey);
+      rec.activeCanary = { id: canaryId, scopeKey, invocationId, reservedAtMs: now, deadlineMs: now + this.policy.canaryTimeoutMs };
+      rec.canariesCharged += 1;
+      this.canariesCharged += 1;
+      this._touch(rec);
+      this._emitSummary(rec, 'canary-admitted', { invocationId });
     }
-    return { ok: blockedBy.length === 0, blockedBy };
+    return { ok: true, blockedBy: [], canaryId, canaryScopeKeys: admissible };
   }
 
   /**
-   * Account and close every probe/canary reservation past its deadline.
-   * A hung or expired probe is a failed probe: it reopens with backoff and
-   * frees the scope for a fresh reservation once due. Called at the top of
-   * every gate/reservation/completion path, so expiry is always observed by
-   * the next check even when the hung attempt never reports back.
+   * Account and close every canary reservation past its deadline. A hung or
+   * unreported canary is a failed canary: it reopens with backoff and frees
+   * the scope for a fresh admission once due. Called at the top of every
+   * gate/record path, so expiry is always observed by the next check even
+   * when the admitted attempt never reports back at all (process crash,
+   * dropped callback) — this is the backstop that makes the half-open
+   * design deadlock-free.
    */
   expireStaleReservations() {
     const now = this.nowMs();
     for (const rec of this._scopes.values()) {
-      if (rec.activeProbe && now > rec.activeProbe.deadlineMs) {
-        const probeId = rec.activeProbe.id;
-        rec.activeProbe = null;
-        this._reopen(rec, now);
-        this._emitSummary(rec, 'probe-expired', { probeId });
-      }
       if (rec.activeCanary && now > rec.activeCanary.deadlineMs) {
         const canaryId = rec.activeCanary.id;
         rec.activeCanary = null;
@@ -644,152 +728,6 @@ export class ScopedFailureBreaker extends EventEmitter {
         this._emitSummary(rec, 'canary-expired', { canaryId });
       }
     }
-  }
-
-  /**
-   * Reserve one bounded probe (10s/64KiB, no task prompt). One probe per
-   * scope, never concurrent within a scope; unrelated scopes probe
-   * independently. Every reservation consumes the episode probe allowance,
-   * and reservations past the episode max are refused. The deadline and
-   * byte limit are ENFORCED here (expiry sweep + completion binding), not
-   * advisory metadata: an expired reservation is accounted as failed and a
-   * completion for an unknown or already-closed id is refused.
-   */
-  reserveProbe(scopeKey, { kind = 'relevant' } = {}) {
-    this.expireStaleReservations();
-    const rec = this._scopes.get(scopeKey);
-    if (!rec || rec.status !== 'open') {
-      return { ok: false, reason: 'scope-closed' };
-    }
-    if (rec.canaryPending || rec.activeCanary) return { ok: false, reason: 'canary-pending' };
-    // Drive the inner OPEN → HALF_OPEN transition when the cooldown is due.
-    rec.breaker.canExecute();
-    if (rec.activeProbe) return { ok: false, reason: 'probe-already-active', activeProbe: rec.activeProbe.id };
-    if (rec.episodeProbes >= this.policy.maxProbesPerEpisode) {
-      return { ok: false, reason: 'probe-budget-exhausted', episodeProbes: rec.episodeProbes };
-    }
-    const now = this.nowMs();
-    if (now < rec.nextProbeAtMs) return { ok: false, reason: 'not-due', nextProbeAtMs: rec.nextProbeAtMs };
-    this._probeSeq += 1;
-    this.probesCharged += 1;
-    rec.episodeProbes += 1;
-    const reservation = {
-      id: `probe-${this._probeSeq}`,
-      scope: rec.scope,
-      scopeKey,
-      kind,
-      reservedAtMs: now,
-      deadlineMs: now + this.policy.probeTimeoutMs,
-      maxBytes: this.policy.probeMaxBytes,
-    };
-    rec.activeProbe = reservation;
-    return { ok: true, reservation };
-  }
-
-  /**
-   * Complete a probe. Only a RELEVANT success with LAUNCHER-verified evidence
-   * advances toward recovery (admits one canary). A caller-labelled `relevant`
-   * flag alone proves nothing: worker-controlled text or an echo labelled
-   * relevant still lands on `echo-insufficient` and never closes an upstream
-   * outage. Failures from any source reopen with backoff. Completions bind
-   * to the single-use reservation id; unknown or expired ids are refused
-   * after expiry accounting.
-   */
-  completeProbe(probeId, { ok, evidenceSource = null } = {}) {
-    this.expireStaleReservations();
-    const rec = [...this._scopes.values()].find((r) => r.activeProbe?.id === probeId);
-    if (!rec) return { ok: false, reason: 'unknown-probe' };
-    const active = rec.activeProbe;
-    rec.activeProbe = null;
-    const now = this.nowMs();
-    const verified = ok && active.kind === 'relevant' && isTrustedRecoveryEvidence(evidenceSource);
-    if (verified && rec.episodeCanaries < this.policy.maxCanariesPerEpisode) {
-      rec.breaker.recordSuccess();
-      rec.canaryPending = true;
-      this._emitSummary(rec, 'canary-admitted', { probeId });
-      return { ok: true, transition: 'canary-admitted' };
-    }
-    if (ok) {
-      // An echo success, an unverified "relevant" success, or a relevant
-      // probe past the canary budget never closes an upstream outage: stay
-      // open and wait out the cooldown.
-      rec.nextProbeAtMs = now + rec.episodeCooldownMs + this._boundedJitter();
-      const exhausted = rec.episodeProbes >= this.policy.maxProbesPerEpisode;
-      this._emitSummary(rec, exhausted ? 'probes-exhausted' : 'echo-insufficient', { probeId });
-      return { ok: true, transition: exhausted ? 'probes-exhausted' : 'echo-insufficient' };
-    }
-    this._reopen(rec, now);
-    this._emitSummary(rec, 'probe-failed', { probeId });
-    return { ok: true, transition: 'probe-failed' };
-  }
-
-  /**
-   * Admit the single canary a launcher-verified probe earned. The canary is
-   * a tracked outstanding reservation (bounded by canaryTimeoutMs), so a
-   * second probe or launch cannot slip in while it runs.
-   */
-  reserveCanary(scopeKey) {
-    this.expireStaleReservations();
-    const rec = this._scopes.get(scopeKey);
-    if (!rec?.canaryPending) return { ok: false, reason: 'no-canary-pending' };
-    if (rec.episodeCanaries >= this.policy.maxCanariesPerEpisode) return { ok: false, reason: 'canary-budget-exhausted' };
-    if (rec.activeCanary) return { ok: false, reason: 'canary-already-active' };
-    const now = this.nowMs();
-    rec.canaryPending = false;
-    rec.episodeCanaries += 1;
-    this._canarySeq += 1;
-    this.canariesCharged += 1;
-    rec.canariesCharged += 1;
-    rec.activeCanary = {
-      id: `canary-${this._canarySeq}`,
-      scopeKey,
-      reservedAtMs: now,
-      deadlineMs: now + this.policy.canaryTimeoutMs,
-    };
-    return { ok: true, canary: { ...rec.activeCanary, attempt: rec.episodeCanaries } };
-  }
-
-  /**
-   * A launcher-verified canary success recovers the scope; a failure reopens
-   * with backoff. Success binds to the outstanding canary reservation AND
-   * requires launcher-verified evidence: an echo, a worker-controlled text,
-   * or a completion with no reservation never recovers an open scope. The
-   * reservation is single-use — completing it twice is refused.
-   */
-  completeCanary(scopeKey, { ok, evidenceSource = null, canaryId = null } = {}) {
-    this.expireStaleReservations();
-    const rec = this._scopes.get(scopeKey);
-    if (!rec) return { ok: false, reason: 'scope-gone' };
-    if (!rec.activeCanary || (canaryId !== null && rec.activeCanary.id !== canaryId)) {
-      return { ok: false, reason: 'no-canary-reservation' };
-    }
-    if (ok && !isTrustedRecoveryEvidence(evidenceSource)) {
-      // Unverified "success" consumes the reservation but never recovers:
-      // stay open and wait out the cooldown. The next verified probe may
-      // earn a fresh canary; the episode probe budget stays the backstop.
-      const consumed = rec.activeCanary.id;
-      rec.activeCanary = null;
-      rec.episodeCanaries = 0;
-      rec.nextProbeAtMs = this.nowMs() + rec.episodeCooldownMs + this._boundedJitter();
-      this._emitSummary(rec, 'canary-unverified', { canaryId: consumed });
-      return { ok: true, transition: 'canary-unverified' };
-    }
-    if (ok) {
-      rec.activeCanary = null;
-      rec.reopens = 0;
-      rec.episodeCooldownMs = this.policy.cooldownMs;
-      rec.episodeProbes = 0;
-      rec.episodeCanaries = 0;
-      rec.resetAtMs = null;
-      rec.status = 'closed';
-      rec.breaker.reset();
-      this._emitSummary(rec, 'recovered', {});
-      return { ok: true, transition: 'recovered' };
-    }
-    rec.activeCanary = null;
-    this._reopen(rec, this.nowMs());
-    this._emitSummary(rec, 'canary-failed', {});
-    return { ok: true, transition: 'canary-failed' };
   }
 
   getState(scopeKey) {
@@ -805,11 +743,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       distinctFailures: new Set(rec.failures.map((f) => f.invocationId)).size,
       outstanding: this._outstanding.get(scopeKey)?.size ?? 0,
       cohortSize: rec.cohort?.size ?? 0,
-      canaryPending: rec.canaryPending,
-      activeProbe: rec.activeProbe ? { ...rec.activeProbe } : null,
       activeCanary: rec.activeCanary ? { ...rec.activeCanary } : null,
-      episodeProbes: rec.episodeProbes,
-      episodeCanaries: rec.episodeCanaries,
       episodeCooldownMs: rec.episodeCooldownMs,
       nextProbeAtMs: rec.nextProbeAtMs,
       resetAtMs: rec.resetAtMs,
@@ -823,7 +757,6 @@ export class ScopedFailureBreaker extends EventEmitter {
     return {
       scopes: [...this._scopes.keys()].map((key) => this.getState(key)),
       attemptsCharged: this._chargedAttempts.size,
-      probesCharged: this.probesCharged,
       canariesCharged: this.canariesCharged,
     };
   }
@@ -832,7 +765,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     if (scopeKey) {
       const rec = this._scopes.get(scopeKey);
       if (rec) {
-        rec.breaker.reset();
+        rec.breaker.destroy();
         this._scopes.delete(scopeKey);
         this._outstanding.delete(scopeKey);
       }
@@ -854,46 +787,78 @@ export class ScopedFailureBreaker extends EventEmitter {
 
   _scopeRecord(scope, scopeKey) {
     let rec = this._scopes.get(scopeKey);
-    if (!rec) {
-      rec = {
-        scope,
-        scopeKey,
-        // Scope-level status is authoritative for gates and reports; the
-        // inner breaker owns only the probe half-open transitions, whose
-        // timer-driven states must never read as scope recovery. The inner
-        // breaker shares this instance's injected clock (one clock, #2915E).
-        status: 'closed',
-        breaker: new ConsecutiveFailureCircuitBreaker({
-          failureThreshold: 1,
-          cooldownMs: this.policy.cooldownMs,
-          halfOpenMaxProbes: 1,
-          nowMs: this.nowMs,
-        }),
-        failures: [],
-        cohort: null,
-        cohortFrozenAt: null,
-        evidence: new Map(),
-        resetAtMs: null,
-        openedAtMs: null,
-        nextProbeAtMs: 0,
-        episodeCooldownMs: this.policy.cooldownMs,
-        episodeProbes: 0,
-        episodeCanaries: 0,
-        canaryPending: false,
-        activeProbe: null,
-        activeCanary: null,
-        reopens: 0,
-        attemptsCharged: 0,
-        canariesCharged: 0,
-      };
-      this._scopes.set(scopeKey, rec);
-    }
+    if (rec) return rec;
+    this._evictInertScopeIfNeeded();
+    rec = {
+      scope,
+      scopeKey,
+      // Scope-level status is authoritative for gates and reports; the
+      // inner breaker owns only the half-open transitions, whose
+      // timer-driven states must never read as scope recovery. The inner
+      // breaker shares this instance's injected clock (one clock, #2915E).
+      status: 'closed',
+      breaker: new ConsecutiveFailureCircuitBreaker({
+        failureThreshold: 1,
+        cooldownMs: this.policy.cooldownMs,
+        halfOpenMaxProbes: 1,
+        nowMs: this.nowMs,
+      }),
+      failures: [],
+      cohort: null,
+      cohortFrozenAt: null,
+      evidence: new Map(),
+      resetAtMs: null,
+      openedAtMs: null,
+      nextProbeAtMs: 0,
+      episodeCooldownMs: this.policy.cooldownMs,
+      activeCanary: null,
+      reopens: 0,
+      attemptsCharged: 0,
+      canariesCharged: 0,
+      lastTouchedMs: this.nowMs(),
+    };
+    this._scopes.set(scopeKey, rec);
     return rec;
+  }
+
+  /** Last-touched bookkeeping for LRU eviction of inert (closed, memberless) scopes. */
+  _touch(rec) {
+    rec.lastTouchedMs = this.nowMs();
+  }
+
+  /**
+   * Explicit, bounded eviction (#2915 review: settled outstanding/scope maps
+   * never dropped their own keys, so 1,000 successful attempts retained
+   * 1,000+ map entries forever). Only CLOSED scopes with no outstanding
+   * members are eligible — an open scope (or one with outstanding attempts)
+   * is never evicted, so real recovery state is never silently dropped. The
+   * scan is bounded by `maxTrackedScopes`, never unbounded.
+   */
+  _evictInertScopeIfNeeded() {
+    if (this._scopes.size < this.policy.maxTrackedScopes) return;
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const [key, rec] of this._scopes) {
+      if (rec.status !== 'closed' || rec.activeCanary) continue;
+      const outstanding = this._outstanding.get(key);
+      if (outstanding && outstanding.size > 0) continue;
+      if (rec.lastTouchedMs < oldestAt) { oldestAt = rec.lastTouchedMs; oldestKey = key; }
+    }
+    if (oldestKey !== null) {
+      this._scopes.get(oldestKey)?.breaker.destroy();
+      this._scopes.delete(oldestKey);
+      this._outstanding.delete(oldestKey);
+    }
+    // If every tracked scope is open or has outstanding members, there is
+    // nothing safe to evict this call; the bound is best-effort under that
+    // adversarial condition rather than ever discarding live recovery state.
   }
 
   _removeOutstanding(scopeKey, invocationId) {
     const set = this._outstanding.get(scopeKey);
-    if (set && invocationId != null) set.delete(invocationId);
+    if (!set || invocationId == null) return;
+    set.delete(invocationId);
+    if (set.size === 0) this._outstanding.delete(scopeKey);
   }
 
   _resolveResetAtMs({ resetAtMs, retryAfterSeconds }, now) {
@@ -910,21 +875,18 @@ export class ScopedFailureBreaker extends EventEmitter {
     return Math.max(0, Math.min(cap, value));
   }
 
+  /** Reopen (or stay open) with doubled backoff, capped at maxCooldownMs. */
   _reopen(rec, now) {
     rec.reopens += 1;
     rec.episodeCooldownMs = Math.min(
       this.policy.maxCooldownMs,
       this.policy.cooldownMs * (this.policy.backoffMultiplier ** rec.reopens),
     );
-    rec.canaryPending = false;
-    // A reopen starts a fresh probe→canary cycle: the next verified probe
-    // may earn one canary. The episode PROBE budget stays cumulative, so a
-    // persistently failing scope still exhausts and stays open.
-    rec.episodeCanaries = 0;
     rec.openedAtMs = now;
     rec.nextProbeAtMs = Math.max(now + rec.episodeCooldownMs, rec.resetAtMs ?? 0) + this._boundedJitter();
     rec.breaker.cooldownMs = rec.episodeCooldownMs;
     rec.breaker.recordFailure();
+    this._touch(rec);
   }
 
   _emitSummary(rec, transition, extra) {
@@ -942,7 +904,6 @@ export class ScopedFailureBreaker extends EventEmitter {
       remedy: RECOVERY_REMEDIES[rec.scope] ?? RECOVERY_REMEDIES.invocation,
       costUsd: null,
       attemptsCharged: rec.attemptsCharged,
-      episodeProbes: rec.episodeProbes,
       ...(extra ?? {}),
     });
   }

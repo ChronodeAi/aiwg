@@ -598,6 +598,61 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(false); // capacity still held — NOT freed via markTerminal
   });
 
+  // #2915 P0: a pre-spawn exception from the scoped-recovery admission path
+  // (bad breaker state, a thrown import, a malformed `canLaunch` result) is
+  // NOT an uncertain worker outcome — no worker ever ran. It must fail
+  // CLOSED as an ordinary blocked/refused launch, freeing the capacity
+  // reservation, never falling through to the generic uncertain/LIVE path
+  // (#2915 review: a thrown admission error produced `status:'uncertain'`
+  // with one live slot retained and `canStart:false`, despite no launch).
+  it('a pre-spawn scoped-recovery admission error fails CLOSED and frees capacity, never leaking a live slot (#2915 P0)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const throwingBreaker = { canLaunch: () => { throw new Error('synthetic: admission exploded'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work, scopedBreaker: throwingBreaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'p0-admission-throw', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.termination).toBe('confirmed');
+    // Capacity was FREED (markTerminal), not leaked as a live "uncertain" slot.
+    expect(registry.canStart()).toBe(true);
+  });
+
+  // #2915 P0 (do no harm): with `parallelism.worker_dispatch` off, the
+  // scoped-recovery gate must be completely inert — byte-for-byte what
+  // dispatch looked like before this feature existed. (The full `run()`
+  // path cannot exercise this directly: the models RESOLVER itself treats
+  // `worker_dispatch: false` as "disabled" and produces no launchable plan
+  // at all, independent of this bridge's own recovery admission — see the
+  // `mcpFixture` comment above. `resolveRunRecovery` is exported
+  // test-only to prove ITS OWN inertness directly, regardless of what an
+  // injected breaker would otherwise decide.)
+  it('resolveRunRecovery is inert when worker_dispatch is off, even with an injected breaker that would refuse (#2915 P0)', async () => {
+    const refusingBreaker = { canLaunch: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
+    const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' } };
+    const off = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-1', { parallelism: { worker_dispatch: false } });
+    expect(off).toBeNull();
+    const absent = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-2', undefined);
+    expect(absent).toBeNull();
+    const on = await workerInvoke.resolveRunRecovery(refusingBreaker, invocation, {}, 'inv-3', { parallelism: { worker_dispatch: true } });
+    expect(on?.breaker).toBe(refusingBreaker);
+  });
+
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
   // JSON-RPC request id (captured at the transport layer), never a
   // caller-supplied value with no relationship to the wire protocol

@@ -561,21 +561,27 @@ async function loadAiwgConfigModule() {
  * and `dist/src/mcp/tools/`). */
 /**
  * #2915A: resolve the scoped-recovery breaker for one `run()`. Returns null
- * (recovery disabled) when the toolset passes `scopedBreaker: null`;
- * otherwise the explicitly injected breaker or the process-shared
- * direct-recovery breaker, with covering scope keys derived from the
- * trusted resolved invocation (never worker text). The invocation key uses
- * the registry entry id, unique per run.
+ * (recovery disabled) when the toolset passes `scopedBreaker: null`, OR
+ * (#2915 P0, do no harm) when `parallelism.worker_dispatch` is not enabled
+ * in `config` — the recovery gate is additive to that existing switch, so
+ * with dispatch disabled this bridge is byte-for-byte what it was before
+ * this feature existed (#2915 review: the gate previously ran
+ * independently of the switch). Otherwise returns the explicitly injected
+ * breaker or the process-shared direct-recovery breaker, with covering
+ * scope keys derived from the trusted resolved invocation (never worker
+ * text). The invocation key uses the registry entry id, unique per run.
  */
 let cachedRecoveryModule = null;
-async function resolveRunRecovery(scopedBreakerOption, invocation, drivers, entryInvocationId) {
+export async function resolveRunRecovery(scopedBreakerOption, invocation, drivers, entryInvocationId, config) {
   if (scopedBreakerOption !== undefined && !scopedBreakerOption) return null;
+  if (!config?.parallelism?.worker_dispatch) return null;
   if (!cachedRecoveryModule) cachedRecoveryModule = loadRalphExternal('session-launcher.mjs');
   const module = await cachedRecoveryModule;
   const breaker = scopedBreakerOption ?? module.getDirectRecoveryBreaker();
   const quotaAccount = drivers?.[invocation?.selected?.cli]?.qualification?.installation?.accountScope ?? null;
+  const installationQualifier = drivers?.[invocation?.selected?.cli]?.qualification?.installation?.boundary?.digest ?? null;
   return { breaker, module,
-    scopeKeys: module.recoveryScopeKeysForInvocation(invocation, { invocationId: entryInvocationId, quotaAccount }) };
+    scopeKeys: await module.recoveryScopeKeysForInvocation(invocation, { invocationId: entryInvocationId, quotaAccount, installationQualifier }) };
 }
 
 async function loadRalphExternal(relativeFromToolsRoot) {
@@ -1230,20 +1236,41 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       const invocation = plan.invocation;
       // #2915A: scoped-recovery gate for this dispatch. Consults the
       // process-shared direct-recovery breaker (or `options.scopedBreaker`;
-      // `null` disables) using only trusted resolved identities, BEFORE
-      // either transport launches. Refused launches never spawn; launched
-      // attempts note cohort membership and record their launcher-observed
-      // outcome below (process health only — claim-level failures are
-      // task-local by definition and record invocation-scoped).
-      const recovery = await resolveRunRecovery(options.scopedBreaker, invocation, drivers, entry.invocationId);
-      const recoveryScopeKeys = recovery?.scopeKeys ?? [];
-      if (recovery?.breaker) {
-        const gate = recovery.breaker.canLaunch({ scopeKeys: recoveryScopeKeys });
-        if (!gate.ok) {
-          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-            diagnostics: [`recovery scope open: ${gate.blockedBy.join(', ')}`] });
+      // `null` disables; `parallelism.worker_dispatch` off also disables,
+      // see `resolveRunRecovery`) using only trusted resolved identities,
+      // BEFORE either transport launches. Refused launches never spawn;
+      // launched attempts note cohort membership and record their
+      // launcher-observed outcome below (process health only — claim-level
+      // failures are task-local by definition and record invocation-scoped).
+      //
+      // #2915 P0 (fail closed, no leaked slot): this admission block runs
+      // AFTER `registry.create()` already reserved this run's capacity/
+      // identity slot. Any exception here (bad breaker state, a thrown
+      // import, a malformed gate result) must refuse the launch the same
+      // way an ordinary recovery-scope refusal does — `markTerminal`,
+      // freeing the reservation — and must NEVER fall through to the
+      // generic outer `catch`, which keeps the entry LIVE for genuinely
+      // uncertain POST-spawn outcomes. A pre-spawn breaker error is not an
+      // uncertain worker outcome: no worker ever ran, so there is nothing
+      // to stay uncertain about (#2915 review: a thrown admission error
+      // left `canStart:false` with one live slot retained and no worker
+      // launched).
+      let recovery;
+      let recoveryScopeKeys;
+      try {
+        recovery = await resolveRunRecovery(options.scopedBreaker, invocation, drivers, entry.invocationId, snapshot.config);
+        recoveryScopeKeys = recovery?.scopeKeys ?? [];
+        if (recovery?.breaker) {
+          const gate = recovery.breaker.canLaunch({ scopeKeys: recoveryScopeKeys });
+          if (!gate.ok) {
+            return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+              diagnostics: [`recovery scope open: ${gate.blockedBy.join(', ')}`] });
+          }
+          recovery.breaker.noteLaunched(recoveryScopeKeys, entry.invocationId);
         }
-        recovery.breaker.noteLaunched(recoveryScopeKeys, entry.invocationId);
+      } catch (error) {
+        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+          diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
       }
       const recordRecovery = (outcome) => {
         if (!recovery?.breaker) return;
