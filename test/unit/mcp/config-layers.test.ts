@@ -14,7 +14,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 
 import { writeProfileConfig } from "../../../src/mcp/adapters/codex-runtime.js";
 import { resolveToolFilters } from "../../../src/mcp/tool-filters.mjs";
-import { resolveCredentialPolicy } from "../../../src/mcp/credentials.mjs";
+import { resetCredentialPolicyWarnings, resolveCredentialPolicy } from "../../../src/mcp/credentials.mjs";
 import { McpServerRegistry, injectServers } from "../../../src/mcp/registry.js";
 import { McpServerRegistry as RuntimeServerRegistry, injectServers as runtimeInjectServers } from "../../../src/mcp/registry.mjs";
 import { McpProfileRegistry } from "../../../src/mcp/profiles.js";
@@ -57,6 +57,11 @@ function write(dir: string, file: string, data: unknown) {
 const read = (dir: string, file: string) => readFileSync(join(dir, file), "utf-8");
 
 beforeEach(() => {
+  // Relaxation-warning dedup state lives in the credentials module and
+  // persists across tests in this file (including the parameterized
+  // TypeScript/runtime pairs below); reset it so each test observes its own
+  // warnings rather than inheriting a prior test's dedup of the same value.
+  resetCredentialPolicyWarnings();
   root = mkdtempSync(join(tmpdir(), "aiwg-mcp-layers-"));
   org = join(root, "org");
   identity = join(root, "identity");

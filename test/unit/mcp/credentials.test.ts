@@ -34,6 +34,8 @@ import { McpServerRegistry as RuntimeRegistry, injectServers as runtimeInjectSer
 import {
   assertCredentialPolicy,
   credentialPolicyViolations,
+  installPolicyCheckedServer,
+  INSTALL_POLICY_EXEMPT_ENV,
   resolveCredentialPolicy,
 } from "../../../src/mcp/credentials.mjs";
 
@@ -160,6 +162,63 @@ describe("credential policy", () => {
     expect(resolveCredentialPolicy({ floorPolicy: "references", flag: "none", env: {} })).toBe("none");
     // The same attempt relaxes freely once no floor is in play.
     expect(resolveCredentialPolicy({ registryPolicy: "references", flag: "literal", env: {} })).toBe("literal");
+  });
+
+  it("names the enforcing layer's config file in the relaxation warning, once per process per value", () => {
+    const helper = pathToFileURL(resolve(__dirname, "../../../src/mcp/credentials.mjs")).href;
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
+      import { resolveCredentialPolicy } from ${JSON.stringify(helper)};
+      const warnings = [];
+      console.warn = message => warnings.push(message);
+      resolveCredentialPolicy({ floorPolicy: 'references', floorSource: '/synthetic/org/mcp-servers.json', flag: 'literal', env: {} });
+      resolveCredentialPolicy({ floorPolicy: 'references', floorSource: '/synthetic/org/mcp-servers.json', flag: 'literal', env: {} });
+      process.stdout.write(JSON.stringify(warnings));
+    `], { encoding: "utf-8", timeout: 60_000 });
+    const warnings = JSON.parse(output);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('/synthetic/org/mcp-servers.json');
+    expect(warnings[0]).toContain('policy "literal"');
+    expect(warnings[0]).toContain('floor "references"');
+  });
+});
+
+describe("install-generated server credential exemption", () => {
+  it("exempts only AIWG_ROOT on the built-in aiwg entry", () => {
+    expect(INSTALL_POLICY_EXEMPT_ENV).toEqual({ aiwg: ["AIWG_ROOT"] });
+    const checked = installPolicyCheckedServer("aiwg", {
+      command: "aiwg", args: ["mcp", "serve"], env: { AIWG_ROOT: "/synthetic/install/root" },
+    });
+    expect(checked).toEqual({ name: "aiwg", command: "aiwg", args: ["mcp", "serve"], env: undefined });
+    expect(credentialPolicyViolations(checked, "references")).toEqual([]);
+    expect(credentialPolicyViolations(checked, "none")).toEqual([]);
+    expect(() => assertCredentialPolicy([checked], "references")).not.toThrow();
+    expect(() => assertCredentialPolicy([checked], "none")).not.toThrow();
+  });
+
+  it("refuses any other literal env/header on an installed definition under references and none", () => {
+    // A second, non-exempt key on the same exempt entry is still a violation.
+    const extraKey = installPolicyCheckedServer("aiwg", {
+      command: "aiwg", args: ["mcp", "serve"],
+      env: { AIWG_ROOT: "/synthetic/install/root", OTHER_TOKEN: "synthetic-secret" },
+    });
+    expect(extraKey.env).toEqual({ OTHER_TOKEN: "synthetic-secret" });
+    expect(credentialPolicyViolations(extraKey, "references")).toEqual(["env"]);
+    expect(() => assertCredentialPolicy([extraKey], "references")).toThrow(/Refusing to render/);
+    expect(() => assertCredentialPolicy([extraKey], "none")).toThrow(/Refusing to render/);
+
+    // The exemption is scoped to the "aiwg" name - the same key on any other
+    // install-generated server name is not exempt.
+    const otherServer = installPolicyCheckedServer("other", { command: "x", env: { AIWG_ROOT: "/x" } });
+    expect(otherServer.env).toEqual({ AIWG_ROOT: "/x" });
+    expect(() => assertCredentialPolicy([otherServer], "references")).toThrow(/Refusing to render/);
+    expect(() => assertCredentialPolicy([otherServer], "none")).toThrow(/Refusing to render/);
+
+    // A literal header (never exempt) on the built-in entry is also refused.
+    const literalHeader = installPolicyCheckedServer("aiwg", {
+      command: "aiwg", args: ["mcp", "serve"], headers: { Authorization: "Bearer synthetic" },
+    });
+    expect(() => assertCredentialPolicy([literalHeader], "references")).toThrow(/Refusing to render/);
+    expect(() => assertCredentialPolicy([literalHeader], "none")).toThrow(/Refusing to render/);
   });
 });
 
@@ -370,6 +429,29 @@ describe("Codex global MCP subtree isolation", () => {
     })).rejects.toThrow(/Refusing to render/);
     expect(existsSync(join(root, ".codex", "roles-runtime"))).toBe(false);
     expect(readdirSync(join(root, ".codex"))).toEqual([]);
+  });
+
+  it.each([
+    { credentialPolicy: undefined, label: "an omitted policy" },
+    { credentialPolicy: "literal" as const, label: "an explicit literal policy" },
+  ])("resolves and enforces an organisation floor itself, so $label cannot write literals below it", async ({ credentialPolicy }) => {
+    // A direct API call (bypassing the session/CLI layer that would normally
+    // resolve this) still cannot write below a "references" floor it is given.
+    await expect(writeProfileConfig("floor-direct", servers, {
+      ...(credentialPolicy !== undefined ? { credentialPolicy } : {}),
+      floorPolicy: "references",
+    })).rejects.toThrow(/Refusing to render/);
+    expect(existsSync(join(root, ".codex", "roles-runtime"))).toBe(false);
+    expect(readdirSync(join(root, ".codex"))).toEqual([]);
+  });
+
+  it("behaves as before when an explicit policy already satisfies the floor", async () => {
+    const warnings = await writeProfileConfig("floor-satisfied", [
+      { name: "remote", type: "http", url: "https://example.test/mcp", headerEnv: { Authorization: "TOKEN" } },
+    ], { credentialPolicy: "references", floorPolicy: "references" });
+    expect(warnings).toEqual([]);
+    const configPath = join(root, ".codex", "roles-runtime", "floor-satisfied", "config.toml");
+    expect(readFileSync(configPath, "utf-8")).toContain('env_http_headers = { Authorization = "TOKEN" }');
   });
 
   describe.each([

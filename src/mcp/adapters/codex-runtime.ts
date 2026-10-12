@@ -21,7 +21,7 @@ import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncReturns } from 'child_process';
 import { buildServerToml, type McpServerDefinition } from '../registry.js';
-import { assertCredentialPolicy, type McpCredentialPolicy } from '../credentials.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, type McpCredentialPolicy } from '../credentials.mjs';
 import { planToolFilters, type ToolFilters } from '../tool-filters.mjs';
 import { assertConfigDestination, writeConfigAtomic } from '../config-file.mjs';
 import { stripMcpServers } from '../toml-strip-mcp.mjs';
@@ -131,13 +131,27 @@ export async function ensureRuntimeHome(
  * Write a profile-scoped config.toml into the runtime home.
  * Strips the entire mcp_servers subtree from any existing global config.toml
  * and writes only the profile's servers.
+ *
+ * `options.floorPolicy`, when given, is an enforced organisation floor
+ * (see `resolveCredentialPolicy`): this function resolves and enforces it
+ * itself, so a direct caller that omits `credentialPolicy` or passes a
+ * weaker value cannot write literal credentials below the floor. Pass
+ * `floorPolicy` from the same registry whose servers are being written
+ * (`McpServerRegistry#getCredentialPolicyFloor`); omitting it disables floor
+ * enforcement for this call, matching a single registry with no layering.
  */
 export async function writeProfileConfig(
   profile: string,
   servers: McpServerDefinition[],
-  options: { credentialPolicy?: McpCredentialPolicy; toolFilters?: ToolFilters } = {},
+  options: { credentialPolicy?: McpCredentialPolicy; floorPolicy?: McpCredentialPolicy; toolFilters?: ToolFilters } = {},
 ): Promise<string[]> {
-  assertCredentialPolicy(servers, options.credentialPolicy);
+  // env is deliberately excluded: the caller (CLI/session) already resolved
+  // any environment/flag override before calling here, and `credentialPolicy`
+  // carries that result as `flag`; this call only adds the floor enforcement.
+  const resolvedPolicy = resolveCredentialPolicy({
+    flag: options.credentialPolicy, floorPolicy: options.floorPolicy, env: {},
+  });
+  assertCredentialPolicy(servers, resolvedPolicy);
   const toolPlan = options.toolFilters
     ? planToolFilters('codex', servers.map((server) => server.name), options.toolFilters)
     : null;

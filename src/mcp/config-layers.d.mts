@@ -1,5 +1,7 @@
 export interface Layering {
   lowerPolicy?: import('./credentials.mjs').McpCredentialPolicy;
+  /** Config file of the lower layer that set `lowerPolicy`, for diagnostics. */
+  lowerPolicySource?: string;
   ownPolicy?: import('./credentials.mjs').McpCredentialPolicy;
   effectivePolicy?: import('./credentials.mjs').McpCredentialPolicy;
   lower: Map<string, string>;

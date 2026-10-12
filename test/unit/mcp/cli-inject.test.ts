@@ -283,6 +283,25 @@ describe("aiwg mcp install claude", () => {
     expect(result.stderr).toContain(`Refusing to overwrite malformed MCP config ${destination}: invalid JSON`);
     expect(readFileSync(destination, "utf-8")).toBe(damaged);
   });
+
+  it.each(["references", "none"])("succeeds under %s policy: AIWG_ROOT is a named exemption, not an unexamined bypass", policy => {
+    const result = runCliWithOutput(["install", "claude", "--scope", "user"], {
+      AIWG_ROOT: "configured-root", AIWG_MCP_CREDENTIAL_POLICY: policy,
+    });
+    expect(result.status).toBe(0);
+    const destination = join(homeDir, ".claude.json");
+    expect(JSON.parse(readFileSync(destination, "utf-8")).mcpServers.aiwg).toEqual({
+      command: "aiwg", args: ["mcp", "serve"], env: { AIWG_ROOT: "configured-root" },
+    });
+  });
+
+  it.each(["references", "none"])("still succeeds without AIWG_ROOT under %s policy (no literal present at all)", policy => {
+    const result = runCliWithOutput(["install", "claude"], { AIWG_MCP_CREDENTIAL_POLICY: policy });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(projectDir, ".mcp.json"), "utf-8"))).toEqual({
+      mcpServers: { aiwg: { command: "aiwg", args: ["mcp", "serve"] } },
+    });
+  });
 });
 
 const installDestinations = [

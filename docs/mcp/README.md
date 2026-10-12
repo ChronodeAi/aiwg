@@ -79,6 +79,17 @@ These prompts are auto-integrated and available in compatible tools.
 Desktop's Code tab — using project-scoped `.mcp.json`. The generated `aiwg`
 entry has no `env` block and inherits the user's environment. With `--scope
 user`, install writes `AIWG_ROOT` only when it is set in the environment.
+
+`aiwg mcp install` resolves the same registry credential policy (stored
+policy, organisation floor and `AIWG_MCP_CREDENTIAL_POLICY`) as `aiwg mcp
+inject` and asserts it against every install-generated server definition
+before writing, so a `references`/`none` policy still refuses any literal
+credential an install target might carry. `AIWG_ROOT` is a filesystem path
+to the AIWG installation, not an authorization credential, so it is a named,
+narrow exemption from that check - `INSTALL_POLICY_EXEMPT_ENV` in
+`src/mcp/credentials.mjs` - scoped to exactly this key on the built-in
+`aiwg` server entry. It does not exempt any other env/header field, nor any
+other server name.
 `aiwg mcp inject --provider claude --scope user` (or `aiwg mcp install claude
 --scope user`) writes the top-level `mcpServers` of private `~/.claude.json`.
 User config writes always set mode `0600`, including existing files.
@@ -194,8 +205,8 @@ floor - `aiwg mcp credential-policy <policy>` can set it to anything at or stric
 CLI attempts to relax it below that floor are refused. A rendering flag or `AIWG_MCP_CREDENTIAL_POLICY`
 may then freely relax or tighten that personal default for one invocation, but still cannot relax
 below the organisation floor - such an attempt is ignored with a warning once per process per
-attempted value, and the floor is used instead. To change the floor itself, adjust every lower layer
-that imposes a stricter value.
+attempted value, and the floor is used instead. The warning and the "cannot relax" refusal both name
+the config file of the lower layer that set the floor. To change the floor itself, adjust that layer.
 An unrelated save preserves an owned policy without copying an inherited floor; a stale overlay value
 weaker than the floor is dropped with a warning on the next save. Explicit policy writes are preserved,
 including a write equal to the floor. Invalid values in layer files report the file path.
@@ -323,13 +334,16 @@ behavior from before the organisation floor existed (#280): with `AIWG_CONFIG_LA
 no floor, so a command flag or environment value can relax the stored policy.
 When `AIWG_CONFIG_LAYERS` is set and a lower (organisation) layer declares `credentialPolicy`, that
 value becomes an enforced floor that neither the stored policy, the environment nor the rendering flag
-can relax - an attempt warns once per process per attempted value and the floor is used instead.
+can relax - an attempt warns once per process per attempted value, names the config file of the layer
+enforcing the floor, and the floor is used instead.
 Stricter-than-floor values from any source are always allowed. The exported `injectServers` API
-enforces the same floor, including when its policy option is omitted.
+enforces the same floor, including when its policy option is omitted; so does the exported Codex
+runtime writer `writeProfileConfig` when its caller passes `floorPolicy` (see `McpServerRegistry#
+getCredentialPolicyFloor`), and `aiwg mcp install` (see below).
 Policy values must be `literal`, `references` or `none`; present `null`, `""`, `false` and `0` are invalid.
 An empty `AIWG_MCP_CREDENTIAL_POLICY` environment string is treated as unset.
 Set the registry's own policy with `aiwg mcp credential-policy <policy>`; the command refuses a value
-below an enforced organisation floor.
+below an enforced organisation floor and names the enforcing layer's config file.
 `aiwg session --provider codex --profile <p>` applies the same
 policy before setup and launch. Any setup failure prevents launch and reuse of an existing runtime
 config. With `--persist`, successful injection launches against the default Codex home.

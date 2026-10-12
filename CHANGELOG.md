@@ -64,6 +64,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   layer path; an empty environment string is treated as unset.
 - Explicit policy saves preserve the requested value, including one equal to the lower floor. Unrelated
   saves preserve policy ownership and drop stale weaker overlay policies with a warning.
+- Every relaxation warning and "cannot relax" refusal now names the config file of the lower layer
+  enforcing the floor; the stale-overlay-drop warning on an unrelated save follows the same
+  once-per-process-per-value rule as the resolver's own warning, instead of printing unconditionally.
+  The exported Codex runtime writer `writeProfileConfig` now resolves and enforces the floor itself
+  (via an optional `floorPolicy` option), so a direct API call with an omitted or weaker policy can no
+  longer write literal credentials below an organisation floor. `aiwg mcp install` now resolves and
+  asserts the same registry credential policy against every install-generated server definition before
+  writing; `AIWG_ROOT`, a non-secret filesystem path on the built-in `aiwg` entry, is a named, narrow
+  exemption (`INSTALL_POLICY_EXEMPT_ENV`) rather than an unexamined bypass - no other env/header field
+  or server is exempt.
 - Empty profiles inject zero servers in persistent mode. Removing a profile extended by remaining profiles
   is refused with dependent names. Copy-up removal restores lower entries on the same instance, except when
   the lower entry still carries worker qualification: removing that override is refused instead, so removal

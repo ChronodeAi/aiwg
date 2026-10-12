@@ -27,7 +27,7 @@ import {
   prepareClaudePermissions,
   resolveToolFilters,
 } from './tool-filters.mjs';
-import { assertCredentialPolicy, CREDENTIAL_POLICIES, redactCredentialArgs, resolveCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer, redactCredentialArgs, resolveCredentialPolicy } from './credentials.mjs';
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { unmanageGrokBuildMcp } from './grok-build-config.mjs';
@@ -413,12 +413,31 @@ enabled_tools = [
     if (error.code !== 'ENOENT') throw error;
   }
 
-  assertConfigObject(existing, Object.keys(config.content)[0]);
+  const installServerMapKey = Object.keys(config.content)[0];
+  assertConfigObject(existing, installServerMapKey);
+
+  // Install-generated server definitions go through the same resolved
+  // credential policy as `aiwg mcp inject`, before any write. AIWG_ROOT (the
+  // only literal env value any install target's fixed content can ever
+  // carry, and only on the built-in "aiwg" entry) is a named, narrow
+  // exemption - installPolicyCheckedServer/INSTALL_POLICY_EXEMPT_ENV - not
+  // an unexamined bypass: any other literal env/header is still refused.
+  const installRegistry = new McpServerRegistry();
+  assertCredentialPolicy(
+    Object.entries(config.content[installServerMapKey] || {})
+      .map(([name, server]) => installPolicyCheckedServer(name, server)),
+    resolveCredentialPolicy({
+      registryPolicy: await installRegistry.getCredentialPolicy(),
+      floorPolicy: await installRegistry.getCredentialPolicyFloor(),
+      floorSource: await installRegistry.getCredentialPolicyFloorSource(),
+    }),
+  );
 
   // Only the claude target's install content can ever embed a literal credential
-  // (`AIWG_ROOT`, gated to `scope === 'user'` above); every other target's `configs[...]`
-  // entry above is a fixed `aiwg mcp serve` stdio/TOML stanza with no env/headers field,
-  // so there is nothing for assertProjectCredentials to check there.
+  // (`AIWG_ROOT`, gated to `scope === 'user'` above, and exempted above); every
+  // other target's `configs[...]` entry above is a fixed `aiwg mcp serve`
+  // stdio/TOML stanza with no env/headers field, so there is nothing further
+  // for assertProjectCredentials to check there.
   if (target === 'claude' && scope !== 'user') {
     assertProjectCredentials(Object.entries(config.content.mcpServers).map(([name, server]) => ({ name, ...server })), config.path);
   }
@@ -782,6 +801,7 @@ async function handleInject(args) {
     flag: noCredentials ? 'none' : strictCredentials ? 'references' : undefined,
     registryPolicy: await registry.getCredentialPolicy(),
     floorPolicy: await registry.getCredentialPolicyFloor(),
+    floorSource: await registry.getCredentialPolicyFloorSource(),
   });
 
   // Resolve server filter: --profile takes precedence over --servers

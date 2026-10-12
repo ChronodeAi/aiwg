@@ -18,7 +18,7 @@
 import { lstat, mkdtemp, readFile, readlink, realpath, rmdir } from 'fs/promises';
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from 'path';
 import { assertConfigDestination, assertNoSymlinkParents, writeConfigAtomic } from './config-file.mjs';
-import { resolveCredentialPolicy, stricterCredentialPolicy, warnCredentialPolicyRelaxation } from './credentials.mjs';
+import { resolveCredentialPolicy, stricterCredentialPolicy, warnCredentialPolicyRelaxation, warnDroppedOverlayPolicy } from './credentials.mjs';
 
 /**
  * `platform` lets tests validate Windows path semantics (`C:\org`, UNC
@@ -97,6 +97,9 @@ function comparable(entry) {
  * strictest value winning - an enforced organisation floor - and the write
  * layer's own declared value (a personal default) is then bounded below by
  * that floor, never copying the floor itself into the write layer's record.
+ * `lowerPolicySource` names the config file of the lower layer that set the
+ * folded floor's value (the first layer to set it; a later layer repeating
+ * the same strictness does not move attribution), for diagnostics.
  *
  * Returns the merged data and a layering record: the names defined in the
  * write layer, and comparable forms of entries and top-level fields in lower layers.
@@ -109,6 +112,7 @@ export async function loadLayered(layers, filename, collection, defaults) {
   const ownFields = new Set();
   let ownPolicy;
   let lowerPolicy;
+  let lowerPolicySource;
   const writeLayer = layers.length - 1;
   for (const [index, dir] of layers.entries()) {
     const parsed = await readLayer(resolve(dir, filename));
@@ -118,7 +122,9 @@ export async function loadLayered(layers, filename, collection, defaults) {
       ownPolicy = rest.credentialPolicy;
     } else if (Object.hasOwn(rest, 'credentialPolicy')) {
       try {
-        lowerPolicy = stricterCredentialPolicy(lowerPolicy, rest.credentialPolicy);
+        const folded = stricterCredentialPolicy(lowerPolicy, rest.credentialPolicy);
+        if (folded !== lowerPolicy) lowerPolicySource = resolve(dir, filename);
+        lowerPolicy = folded;
       } catch (error) {
         throw new Error(`Invalid MCP credential policy in layer ${resolve(dir, filename)}: ${error.message}`);
       }
@@ -146,7 +152,9 @@ export async function loadLayered(layers, filename, collection, defaults) {
   let effectivePolicy;
   if (ownPolicy !== undefined || lowerPolicy !== undefined) {
     try {
-      effectivePolicy = resolveCredentialPolicy({ registryPolicy: ownPolicy, floorPolicy: lowerPolicy, env: {} });
+      effectivePolicy = resolveCredentialPolicy({
+        registryPolicy: ownPolicy, floorPolicy: lowerPolicy, floorSource: lowerPolicySource, env: {},
+      });
     } catch (error) {
       throw new Error(`Invalid MCP credential policy in layer ${resolve(layers[writeLayer], filename)}: ${error.message}`);
     }
@@ -154,7 +162,7 @@ export async function loadLayered(layers, filename, collection, defaults) {
   } else {
     delete merged.credentialPolicy;
   }
-  return { data: merged, layering: { lower, own, lowerFields, ownFields, ownPolicy, lowerPolicy, effectivePolicy } };
+  return { data: merged, layering: { lower, own, lowerFields, ownFields, ownPolicy, lowerPolicy, lowerPolicySource, effectivePolicy } };
 }
 
 /** True when the entry is defined only below the write layer. */
@@ -193,17 +201,17 @@ export function writeLayerData(data, collection, layering, explicitPolicy = fals
   // Other saves retain policy ownership, without copying an inherited floor.
   if (explicitPolicy || data.credentialPolicy !== layering.effectivePolicy) {
     const effective = resolveCredentialPolicy({
-      flag: data.credentialPolicy, floorPolicy: layering.lowerPolicy, env: {},
+      flag: data.credentialPolicy, floorPolicy: layering.lowerPolicy, floorSource: layering.lowerPolicySource, env: {},
     });
     if (effective !== data.credentialPolicy) {
-      throw new Error(`Cannot relax MCP credential policy floor "${effective}" to "${data.credentialPolicy}".`);
+      const location = layering.lowerPolicySource ? ` (set in ${layering.lowerPolicySource})` : '';
+      throw new Error(`Cannot relax MCP credential policy floor "${effective}"${location} to "${data.credentialPolicy}".`);
     }
     persisted.credentialPolicy = data.credentialPolicy;
   } else if (layering.ownPolicy !== undefined &&
-    resolveCredentialPolicy({ flag: layering.ownPolicy, floorPolicy: layering.lowerPolicy, env: {} }) !== layering.ownPolicy) {
+    resolveCredentialPolicy({ flag: layering.ownPolicy, floorPolicy: layering.lowerPolicy, floorSource: layering.lowerPolicySource, env: {} }) !== layering.ownPolicy) {
     delete persisted.credentialPolicy;
-    warnCredentialPolicyRelaxation(layering.ownPolicy, layering.lowerPolicy);
-    console.warn(`Dropping ignored MCP overlay credential policy "${layering.ownPolicy}" on save.`);
+    warnDroppedOverlayPolicy(layering.ownPolicy, layering.lowerPolicy, layering.lowerPolicySource);
   }
   return persisted;
 }

@@ -29,6 +29,7 @@ export function resolveCredentialPolicy(options?: {
   flag?: string;
   registryPolicy?: string;
   floorPolicy?: string;
+  floorSource?: string;
   env?: Record<string, string | undefined>;
 }): McpCredentialPolicy;
 
@@ -37,4 +38,9 @@ export function stricterCredentialPolicy(
   b: McpCredentialPolicy | undefined,
 ): McpCredentialPolicy | undefined;
 
-export function warnCredentialPolicyRelaxation(candidate: McpCredentialPolicy, floor: McpCredentialPolicy): void;
+export function warnCredentialPolicyRelaxation(candidate: McpCredentialPolicy, floor: McpCredentialPolicy, source?: string): void;
+export function warnDroppedOverlayPolicy(candidate: McpCredentialPolicy, floor: McpCredentialPolicy, source?: string): void;
+export function resetCredentialPolicyWarnings(): void;
+
+export const INSTALL_POLICY_EXEMPT_ENV: Readonly<Record<string, readonly string[]>>;
+export function installPolicyCheckedServer(name: string, server: CredentialBearingServer): CredentialBearingServer;

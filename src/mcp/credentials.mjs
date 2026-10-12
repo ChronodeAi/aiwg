@@ -239,10 +239,43 @@ export function assertCredentialPolicy(servers, policy) {
 // Relaxations can be encountered repeatedly while loading layers and rendering.
 const warnedRelaxations = new Set();
 
-export function warnCredentialPolicyRelaxation(candidate, floor) {
+/**
+ * `source`, when given, is the enforcing layer's config file path (never a
+ * credential value - just a filesystem path) and is named in the message so
+ * the operator knows which layer to change. Deduplicates once per process
+ * per attempted `candidate` value, independent of `source`.
+ */
+export function warnCredentialPolicyRelaxation(candidate, floor, source) {
   if (warnedRelaxations.has(candidate)) return;
   warnedRelaxations.add(candidate);
-  console.warn(`Ignoring MCP credential policy "${candidate}": cannot relax credential policy floor "${floor}".`);
+  const location = source ? ` (set in ${source})` : '';
+  console.warn(`Ignoring MCP credential policy "${candidate}": cannot relax credential policy floor "${floor}"${location}.`);
+}
+
+// Tracked separately from warnedRelaxations: this is a distinct message
+// (the overlay is being dropped from the write layer on save), not the
+// resolver's generic relaxation message, but follows the same once-per-value rule.
+const warnedDroppedOverlays = new Set();
+
+export function warnDroppedOverlayPolicy(candidate, floor, source) {
+  if (warnedDroppedOverlays.has(candidate)) return;
+  warnedDroppedOverlays.add(candidate);
+  const location = source ? ` (set in ${source})` : '';
+  console.warn(`Dropping ignored MCP overlay credential policy "${candidate}": cannot relax credential policy floor "${floor}"${location}.`);
+}
+
+/**
+ * Test-only: clears the per-process relaxation-warning dedup state. Each of
+ * these warnings is designed to fire once per process per attempted value,
+ * which is exactly what a long-running CLI/session process needs - but a
+ * test file that exercises the same candidate value more than once (for
+ * example running the same scenario against both the `.ts` and `.mjs`
+ * registry implementations) needs to reset it between cases to observe the
+ * warning each time, since both implementations share this module's state.
+ */
+export function resetCredentialPolicyWarnings() {
+  warnedRelaxations.clear();
+  warnedDroppedOverlays.clear();
 }
 
 function validatePolicyValue(candidate) {
@@ -266,9 +299,10 @@ function validatePolicyValue(candidate) {
  * such layer. It cannot be relaxed by `registryPolicy`, `env` or `flag`,
  * only tightened further. An attempt to relax below it is ignored, with a
  * warning once per process per attempted value, and the floor is used
- * instead.
+ * instead. `floorSource` (the enforcing layer's config file path) is named
+ * in that warning when given.
  */
-export function resolveCredentialPolicy({ flag, registryPolicy, floorPolicy, env = process.env } = {}) {
+export function resolveCredentialPolicy({ flag, registryPolicy, floorPolicy, floorSource, env = process.env } = {}) {
   let policy = 'literal';
   // Whether any of registryPolicy/env/flag actually supplied a value, as
   // opposed to `policy` merely sitting at the built-in default. The default
@@ -286,7 +320,7 @@ export function resolveCredentialPolicy({ flag, registryPolicy, floorPolicy, env
   if (floorPolicy !== undefined) {
     validatePolicyValue(floorPolicy);
     if (CREDENTIAL_POLICIES.indexOf(policy) < CREDENTIAL_POLICIES.indexOf(floorPolicy)) {
-      if (explicit) warnCredentialPolicyRelaxation(policy, floorPolicy);
+      if (explicit) warnCredentialPolicyRelaxation(policy, floorPolicy, floorSource);
       policy = floorPolicy;
     }
   }
@@ -304,4 +338,30 @@ export function stricterCredentialPolicy(a, b) {
   if (a === undefined) return b;
   if (b === undefined) return a;
   return CREDENTIAL_POLICIES.indexOf(a) >= CREDENTIAL_POLICIES.indexOf(b) ? a : b;
+}
+
+/**
+ * Env keys install-generated server definitions may carry as literal values
+ * without tripping credential-policy checks, keyed by the server name that
+ * may carry them. `AIWG_ROOT` is an install-generated, non-secret filesystem
+ * path (the AIWG installation directory) embedded in the built-in "aiwg"
+ * server's own `env`, not an authorization credential - unlike a registry
+ * server's `env`, which always comes from the operator and is never exempt.
+ * The exemption is scoped to this exact server name and key; it does not
+ * weaken the check for any other env/header field or any other server.
+ */
+export const INSTALL_POLICY_EXEMPT_ENV = Object.freeze({ aiwg: Object.freeze(['AIWG_ROOT']) });
+
+/**
+ * View an install-generated server definition for a credential-policy
+ * check, with `INSTALL_POLICY_EXEMPT_ENV[name]` removed from `env` first.
+ * Use only for install-generated definitions (`aiwg mcp install`); registry
+ * servers rendered by `aiwg mcp inject` must never pass through this - their
+ * `env` is operator-supplied and always subject to the full check.
+ */
+export function installPolicyCheckedServer(name, server) {
+  const exempt = INSTALL_POLICY_EXEMPT_ENV[name];
+  if (!exempt || !hasEntries(server.env)) return { name, ...server };
+  const env = Object.fromEntries(Object.entries(server.env).filter(([key]) => !exempt.includes(key)));
+  return { name, ...server, env: Object.keys(env).length > 0 ? env : undefined };
 }

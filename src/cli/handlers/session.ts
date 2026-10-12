@@ -462,9 +462,10 @@ export const sessionHandler: CommandHandler = {
           const { assertCredentialPolicy, resolveCredentialPolicy } = await import('../../mcp/credentials.mjs');
           const registryPolicy = await registry.getCredentialPolicy();
           const floorPolicy = await registry.getCredentialPolicyFloor();
+          const floorSource = await registry.getCredentialPolicyFloorSource();
           let credentialPolicy;
           try {
-            credentialPolicy = resolveCredentialPolicy({ registryPolicy, floorPolicy });
+            credentialPolicy = resolveCredentialPolicy({ registryPolicy, floorPolicy, floorSource });
             assertCredentialPolicy(resolvedServers, credentialPolicy);
           } catch (err) {
             console.error(`  ${err instanceof Error ? err.message : String(err)}`);
@@ -474,8 +475,11 @@ export const sessionHandler: CommandHandler = {
             injectMcpProfile(provider, profile, cwd, true);
           } else {
             await ensureRuntimeHome(profile);
+            // writeProfileConfig re-resolves and re-enforces the floor itself (so a
+            // direct API call cannot bypass it); passing it here too keeps this
+            // call's diagnostics consistent with the one already performed above.
             const warnings = await writeProfileConfig(profile, resolvedServers, {
-              credentialPolicy,
+              credentialPolicy, floorPolicy,
               toolFilters: resolveToolFilters(await profiles.resolve(profile), 'codex'),
             });
             for (const warning of warnings) console.warn(`  WARN  codex: ${warning}`);
