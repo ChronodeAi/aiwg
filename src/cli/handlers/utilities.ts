@@ -540,6 +540,7 @@ Options:
   --bundle <name>       Limit deployment verification to one bundle
   --scope <scope>       Verification scope: project or user
   --user                Alias for --scope user
+  --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
   --json                Emit machine-readable deployment verification output
   --verbose, -v         Include verbose diagnostics
