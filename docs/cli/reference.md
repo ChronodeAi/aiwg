@@ -1734,8 +1734,8 @@ aiwg mcp install <client>
 **Actions:**
 
 - Generates client-specific config
-- Adds to `.claude/settings.local.json` (Claude Code — CLI and Desktop Code tab; see [MCP README](../mcp/README.md#claude-code))
-- Adds to `.cursor/config.json` (Cursor)
+- Adds to `.mcp.json` (Claude Code — CLI and Desktop Code tab; see [MCP README](../mcp/README.md#claude-code))
+- Adds to `.cursor/mcp.json` (Cursor)
 - Shows manual steps if auto-install fails
 
 **Example:**
@@ -1787,9 +1787,22 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 - `--type <type>` - Server type: `http` (default), `stdio`, `sse`
 - `--url <url>` - URL for http/sse servers
 - `--command <cmd>` - Executable for stdio servers
-- `--args <a,b>` - Comma-separated args for stdio command
+- `--args <a,b>` - Comma-separated args for stdio command. `-flag value`,
+  `--flag value`, and `--flag=value` forms whose flag names a credential kind
+  (`--token`, `--password`, `--api-key`, …) are scanned for literal secrets,
+  including a value that itself starts with a hyphen (`--token -abc`); a
+  following `--flag` with no value form is read as a bare flag, not a value.
+  Single-letter short flags (`-p secret`) and positional `KEY=value` forms are
+  never detected.
 - `--env KEY=VAL` - Environment variable(s) for stdio servers
 - `--headers KEY=VAL` - HTTP headers for http/sse servers
+
+Literal `--env`/`--headers` values are refused when injecting into a
+project-scope (shareable) provider file: only empty strings and supported
+reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be committed.
+Store the real secret in the environment and use `--header-env`/`--env-from`
+references instead, or inject with `--scope user` for providers that document
+a private user destination.
 - `--header-env HEADER=ENV_VAR` - Resolve a remote HTTP/SSE header from an
   environment variable at connection time. The registry stores only the
   variable name. An `Authorization` reference is sent as a Bearer token.

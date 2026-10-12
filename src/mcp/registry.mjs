@@ -1,7 +1,11 @@
+import { isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
+import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
+import { applyJsonToolFilterPlan, claudeSettingsPath, prepareClaudePermissions, planToolFilters } from './tool-filters.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, renderCredentialMaps, validateEnvReferenceName } from './credentials.mjs';
 /**
  * MCP Server Registry (Runtime ESM)
  *
@@ -15,7 +19,7 @@ import { resolveOmpPaths } from '../providers/omp-paths.mjs';
  * @implements #554
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
 import { dirname, resolve } from 'path';
 import { homedir } from 'os';
@@ -74,6 +78,12 @@ function validateCredentialReferences(def) {
       throw new Error(`Invalid MCP header environment variable reference "${envName}"`);
     }
   }
+  for (const [key, envName] of Object.entries(def.envFrom || {})) {
+    if (!ENV_REFERENCE_NAME.test(key)) throw new Error(`Invalid MCP env-from variable name "${key}"`);
+    if (!ENV_REFERENCE_NAME.test(envName)) {
+      throw new Error(`Invalid MCP env-from environment variable reference "${envName}"`);
+    }
+  }
 }
 
 // The typed worker dispatch boundary owns qualification. Legacy runtime edits
@@ -87,8 +97,12 @@ export class McpServerRegistry {
   #configDir;
   #cache = null;
 
+  #layers;
+  #layering = null;
+
   constructor(configDirOverride) {
-    this.#configDir = resolveConfigDir(configDirOverride);
+    this.#layers = resolveConfigLayers(configDirOverride);
+    this.#configDir = this.#layers ? this.#layers[this.#layers.length - 1] : resolveConfigDir(configDirOverride);
   }
 
   getPath() {
@@ -97,6 +111,13 @@ export class McpServerRegistry {
 
   async load() {
     if (this.#cache) return this.#cache;
+
+    if (this.#layers) {
+      const layered = await loadLayered(this.#layers, REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
+      this.#cache = layered.data;
+      this.#layering = layered.layering;
+      return this.#cache;
+    }
 
     const filePath = this.getPath();
     try {
@@ -111,19 +132,36 @@ export class McpServerRegistry {
       this.#cache = { ...DEFAULT_REGISTRY, servers: {} };
     }
 
+    try {
+      resolveCredentialPolicy({ registryPolicy: this.#cache.credentialPolicy, env: {} });
+    } catch (error) {
+      this.#cache = null;
+      throw new Error(`Invalid MCP credential policy in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     return this.#cache;
   }
 
-  async save() {
-    if (!this.#cache) return;
-    await mkdir(this.#configDir, { recursive: true });
-    const filePath = this.getPath();
-    await writeFile(filePath, JSON.stringify(this.#cache, null, 2) + '\n', 'utf-8');
+  async save(data = this.#cache, explicitPolicy = false) {
+    if (!data) return;
+    // A fresh instance has no ownership record yet; load it first so inherited
+    // entries and inherited policy are never copied into the write layer.
+    let layering = this.#layering;
+    if (this.#layers && !layering) {
+      await this.load();
+      layering = this.#layering;
+    }
+    await saveLayerData(this.getPath(), data, 'servers', this.#layers, layering, explicitPolicy);
+    this.#cache = data;
+    if (this.#layers) {
+      this.clearCache();
+      await this.load();
+    }
   }
 
   async add(def) {
     validateCredentialReferences(def);
-    const data = await this.load();
+    const data = structuredClone(await this.load());
 
     if (data.servers[def.name]) {
       throw new Error(`Server "${def.name}" already exists. Use "update" to modify it.`);
@@ -137,22 +175,28 @@ export class McpServerRegistry {
       updatedAt: new Date().toISOString(),
     };
 
-    await this.save();
+    await this.save(data);
   }
 
   async remove(name) {
-    const data = await this.load();
+    const data = structuredClone(await this.load());
 
     if (!data.servers[name]) {
       throw new Error(`Server "${name}" not found.`);
     }
 
+    if (this.#layering && isLowerLayerEntry(this.#layering, name)) {
+      throw new Error(`Server "${name}" is defined in a lower configuration layer; remove it there.`);
+    }
+    if (this.#layering && lowerEntryQualified(this.#layering, name)) {
+      throw new Error(`Server "${name}" overrides a qualified lower-layer entry; removing the override would silently re-expose its qualification. Remove the lower-layer entry in its own layer instead.`);
+    }
     delete data.servers[name];
-    await this.save();
+    await this.save(data);
   }
 
   async update(name, updates) {
-    const data = await this.load();
+    const data = structuredClone(await this.load());
 
     if (!data.servers[name]) {
       throw new Error(`Server "${name}" not found.`);
@@ -169,7 +213,7 @@ export class McpServerRegistry {
       ? data.servers[name].workerQualification : undefined;
     data.servers[name] = next;
 
-    await this.save();
+    await this.save(data);
   }
 
   async get(name) {
@@ -183,7 +227,7 @@ export class McpServerRegistry {
   }
 
   async recordInjection(name, provider) {
-    const data = await this.load();
+    const data = structuredClone(await this.load());
     const server = data.servers[name];
     if (!server) return;
 
@@ -194,7 +238,7 @@ export class McpServerRegistry {
       server.injectedProviders.push(provider);
     }
 
-    await this.save();
+    await this.save(data);
   }
 
   async getInjectedProviders() {
@@ -208,6 +252,36 @@ export class McpServerRegistry {
     return [...providers];
   }
 
+  async getCredentialPolicy() {
+    const data = await this.load();
+    return data.credentialPolicy;
+  }
+
+  /** The enforced organisation floor for this registry, if any layer below the write layer sets one. */
+  async getCredentialPolicyFloor() {
+    await this.load();
+    return this.#layering?.lowerPolicy;
+  }
+
+  /** The config file of the layer that set the enforced floor, for diagnostics. */
+  async getCredentialPolicyFloorSource() {
+    await this.load();
+    return this.#layering?.lowerPolicySource;
+  }
+
+  async setCredentialPolicy(policy) {
+    const data = structuredClone(await this.load());
+    const floorPolicy = this.#layering?.lowerPolicy;
+    const floorSource = this.#layering?.lowerPolicySource;
+    const effective = resolveCredentialPolicy({ flag: policy, floorPolicy, floorSource, env: {} });
+    if (effective !== policy) {
+      const location = floorSource ? ` (set in ${floorSource})` : '';
+      throw new Error(`Cannot relax MCP credential policy floor "${effective}"${location} to "${policy}".`);
+    }
+    data.credentialPolicy = policy;
+    await this.save(data, true);
+  }
+
   clearCache() {
     this.#cache = null;
   }
@@ -217,27 +291,48 @@ export class McpServerRegistry {
 // Provider injection logic
 // ============================================
 
-function buildServerConfig(server, provider) {
+export function buildServerConfig(server, provider) {
   const mcpDefinition = getMcpInjectionDefinition(provider);
+  // TOML providers render references through their own named keys in
+  // buildServerToml; unconditional interpolation would refuse them here even
+  // though the TOML writer handles them.
+  const { env, headers } = mcpDefinition?.serverConfigFormat === 'toml'
+    ? {}
+    : renderCredentialMaps(server, normalizeRuntimeProviderId(provider) || provider);
 
   switch (mcpDefinition?.serverConfigFormat) {
+    case 'claude-code': {
+      if (server.type === 'stdio') {
+        return {
+          command: server.command,
+          args: server.args || [],
+          ...(env ? { env } : {}),
+        };
+      }
+      // Claude Code skips a url entry that has no type.
+      return {
+        type: server.type,
+        url: server.url,
+        ...(headers ? { headers } : {}),
+      };
+    }
     case 'antigravity': {
       if (server.type === 'stdio') {
-        return { command: server.command, args: server.args || [], ...(server.env ? { env: server.env } : {}) };
+        return { command: server.command, args: server.args || [], ...(env ? { env } : {}) };
       }
-      return { serverUrl: server.url, ...(server.headers ? { headers: server.headers } : {}) };
+      return { serverUrl: server.url, ...(headers ? { headers } : {}) };
     }
     case 'standard': {
       if (server.type === 'stdio') {
         return {
           command: server.command,
           args: server.args || [],
-          ...(server.env ? { env: server.env } : {}),
+          ...(env ? { env } : {}),
         };
       }
       return {
         url: server.url,
-        ...(server.headers ? { headers: server.headers } : {}),
+        ...(headers ? { headers } : {}),
       };
     }
 
@@ -248,29 +343,30 @@ function buildServerConfig(server, provider) {
           command: server.command,
           args: server.args || [],
           disabled: false,
-          ...(server.env ? { env: server.env } : {}),
+          ...(env ? { env } : {}),
         };
       }
       return {
         type: server.type,
         url: server.url,
         disabled: false,
-        ...(server.headers ? { headers: server.headers } : {}),
+        ...(headers ? { headers } : {}),
       };
     }
 
     case 'opencode': {
       if (server.type === 'stdio') {
+        // opencode names a local server's variables `environment`.
         return {
           type: 'local',
           command: [server.command, ...(server.args || [])],
-          ...(server.env ? { env: server.env } : {}),
+          ...(env ? { environment: env } : {}),
         };
       }
       return {
         type: 'remote',
         url: server.url,
-        ...(server.headers ? { headers: server.headers } : {}),
+        ...(headers ? { headers } : {}),
       };
     }
 
@@ -295,7 +391,11 @@ function tomlKey(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) ? value : tomlString(value);
 }
 
-function buildServerToml(server) {
+function tomlInlineTable(values) {
+  return `{ ${Object.entries(values).map(([name, value]) => `${tomlKey(name)} = ${tomlString(value)}`).join(', ')} }`;
+}
+
+export function buildServerToml(server) {
   const lines = [];
   lines.push(`[mcp_servers.${tomlKey(server.name)}]`);
 
@@ -305,8 +405,21 @@ function buildServerToml(server) {
       const argsStr = server.args.map(a => tomlString(a)).join(', ');
       lines.push(`args = [${argsStr}]`);
     }
+    if (server.env && Object.keys(server.env).length > 0) lines.push(`env = ${tomlInlineTable(server.env)}`);
+    // Codex forwards a variable only under its own name (env_vars).
+    const forwarded = Object.entries(server.envFrom || {});
+    for (const [key, name] of forwarded) {
+      validateEnvReferenceName(name);
+      if (key !== name) {
+        throw new Error(`MCP server "${server.name}": Codex forwards environment variables under their own name only; env-from ${key}=${name} cannot be rendered. Use ${name}=${name}.`);
+      }
+    }
+    if (forwarded.length > 0) lines.push(`env_vars = [${forwarded.map(([name]) => tomlString(name)).join(', ')}]`);
   } else {
     lines.push(`url = ${tomlString(server.url)}`);
+    if (server.headers && Object.keys(server.headers).length > 0) lines.push(`http_headers = ${tomlInlineTable(server.headers)}`);
+    for (const name of Object.values(server.headerEnv || {})) validateEnvReferenceName(name);
+    if (server.headerEnv && Object.keys(server.headerEnv).length > 0) lines.push(`env_http_headers = ${tomlInlineTable(server.headerEnv)}`);
   }
 
   lines.push(`startup_timeout_sec = 10.0`);
@@ -338,18 +451,39 @@ export async function injectServers(registry, provider, options = {}) {
   }
 
   let allServers = await registry.list();
-  if (serverFilter && serverFilter.length > 0) {
+  if (serverFilter !== undefined) {
     allServers = allServers.filter(s => serverFilter.includes(s.name));
   }
 
+  const toolPlan = options.toolFilters
+    ? planToolFilters(provider, allServers.map(server => server.name), options.toolFilters)
+    : null;
+  if (toolPlan) result.warnings = toolPlan.warnings;
   if (allServers.length === 0) {
     result.error = 'No servers to inject. Use "aiwg mcp add" first.';
     return result;
   }
 
+  assertCredentialPolicy(allServers, resolveCredentialPolicy({
+    flag: options.credentialPolicy, registryPolicy: await registry.getCredentialPolicy(),
+    floorPolicy: await registry.getCredentialPolicyFloor(),
+    floorSource: await registry.getCredentialPolicyFloorSource(),
+  }));
+
+  // The shareable-project decision follows the actual resolved destination,
+  // never the requested scope: a `--scope user` request for a provider without
+  // a user-scope destination still resolves to the project file and is refused.
+  const { userScope, projectRoot } = classifyMcpDestination(provider, options.scope, configPath, projectDir);
+  await assertConfigDestination(configPath, projectRoot);
+  // Every destination inside the project directory is meant to be committed to
+  // version control; home destinations are private, so literals there are not
+  // copied into a shared file.
+  if (projectRoot) {
+    assertProjectCredentials(allServers, configPath, projectCredentialRemedy(provider, projectDir));
+  }
   if (normalizedProvider === 'omp') {
     try {
-      const managed = await manageOmpMcp(configPath, allServers, { dryRun });
+      const managed = await manageOmpMcp(configPath, allServers, { dryRun, userScope, projectRoot });
       if (!dryRun) for (const server of allServers) await registry.recordInjection(server.name, 'omp');
       return { ...result, ...managed };
     } catch (error) {
@@ -361,6 +495,7 @@ export async function injectServers(registry, provider, options = {}) {
     try {
       const managed = await manageGrokBuildMcp(configPath, allServers, {
         dryRun,
+        userScope,
         root: options.scope === 'user'
           ? dirname(dirname(configPath))
           : resolve(projectDir),
@@ -376,13 +511,13 @@ export async function injectServers(registry, provider, options = {}) {
   }
 
   if (mcpDefinition?.configFormat === 'toml') {
-    return injectToml(registry, allServers, configPath, provider, dryRun, result);
+    return injectToml(registry, allServers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan);
   }
 
-  return injectJson(registry, allServers, configPath, provider, dryRun, result);
+  return injectJson(registry, allServers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan, { projectDir, scope: options.scope });
 }
 
-async function injectJson(registry, servers, configPath, provider, dryRun, result) {
+async function injectJson(registry, servers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan = null, location = {}) {
   let existing = {};
   try {
     const content = await readFile(configPath, 'utf-8');
@@ -415,10 +550,24 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
   }
 
   const merged = { ...existing, [mcpKey]: newServers };
+  if (toolPlan) {
+    applyJsonToolFilterPlan(merged, mcpKey, toolPlan);
+  }
+
+  const isClaude = normalizeRuntimeProviderId(provider) === 'claude-code';
+  const settingsPath = isClaude ? claudeSettingsPath(location.projectDir, location.scope) : null;
+  const settings = settingsPath ? await prepareClaudePermissions(
+    settingsPath, toolPlan?.claudePermissions || { deny: [], allow: [] },
+    { userScope, projectRoot, managedDir: dirname(registry.getPath()), mcpPath: configPath },
+  ) : null;
+  if (settings?.active && settingsPath) result.settingsPath = settingsPath;
+  if (settings?.warnings.length) result.warnings = [...(result.warnings || []), ...settings.warnings];
 
   if (!dryRun) {
-    await mkdir(resolve(configPath, '..'), { recursive: true });
-    await writeFile(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+    await writeConfigTransaction([
+      { file: configPath, content: JSON.stringify(merged, null, 2) + '\n', options: { userScope, projectRoot } },
+      ...(settings?.writes || []),
+    ]);
 
     for (const server of servers) {
       if (normalizeRuntimeProviderId(provider) === 'antigravity' && !result.serversInjected.includes(server.name)) continue;
@@ -426,10 +575,11 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
     }
   }
 
+
   return result;
 }
 
-async function injectToml(registry, servers, configPath, provider, dryRun, result) {
+async function injectToml(registry, servers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan = null) {
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
@@ -438,15 +588,15 @@ async function injectToml(registry, servers, configPath, provider, dryRun, resul
   }
 
   for (const server of servers) {
-    const edited = replaceServer(existing, server.name, buildServerToml(server));
+    const filterLines = toolPlan?.tomlLines[server.name] || [];
+    const edited = replaceServer(existing, server.name, [buildServerToml(server), ...filterLines].join('\n'));
     existing = edited.text;
     if (edited.alreadyPresent) result.alreadyPresent.push(server.name);
     result.serversInjected.push(server.name);
   }
 
   if (!dryRun) {
-    await mkdir(resolve(configPath, '..'), { recursive: true });
-    await writeFile(configPath, existing, 'utf-8');
+    await writeConfigAtomic(configPath, existing, { userScope, projectRoot });
 
     for (const server of servers) {
       await registry.recordInjection(server.name, provider);
