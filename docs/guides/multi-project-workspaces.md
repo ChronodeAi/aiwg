@@ -48,7 +48,9 @@ Keep notes, memory, and artifacts associated with the repository they describe.
 > Set up AIWG for storefront and billing-api separately. Show each repository's
 > delivery policy, tracker authority, identity, and artifact destination.
 
-Choose how to retain project material:
+Choose how to retain project material before you initialize a member. The
+choice is harder to change afterwards, because creating the member's `.aiwg/`
+directory changes where memory resolves:
 
 - **Version-control durable records.** Keep reviewed plans, decisions, and
   reusable notes available to collaborators. Ignore only high-churn runtime
@@ -68,8 +70,9 @@ Choose how to retain project material:
 
 The last option is a memory arrangement, not a replacement for member policy.
 A repository without its own config falls back to defaults and cannot express
-its own delivery or tracker policy. The delivery preflight requires a valid,
-unambiguous member config before tracker or git writes.
+its own delivery or tracker policy. The delivery rules tell the assistant to
+stop before tracker or git writes when a member's config is missing or
+ambiguous; that stop is a rule the assistant follows.
 
 Registered user memory is matched by roots or remotes. Explicit memory storage
 configuration takes precedence, then an existing local `.aiwg/` directory, then
@@ -115,8 +118,9 @@ the delivery actions, billing-api read-and-comment access, and ops-runbooks read
 }
 ```
 
-Choose permissions for the intended work, and grant `service-action` and
-`destructive` only where a task needs them. Allowed actions are `read`, `write`, `commit`, `push`,
+Choose permissions for the intended work. Grant `service-action` (operating a
+running service) and `destructive` (deleting or overwriting work) only where a
+task needs them. Allowed actions are `read`, `write`, `commit`, `push`,
 `issue-comment`, `service-action`, and `destructive`. Paths outside every
 listed member, and unlisted actions, are denied by default. The `handoff-only` note explains intent;
 the `allowed` list decides which actions the access check accepts.
@@ -240,19 +244,26 @@ and base revision, avoid overlapping writers, and clean up after integration
 and verification. Preserve unfinished work until its disposition is clear.
 Keep worktrees inside a listed member tree, or list their location as a member:
 a worktree elsewhere is outside the workspace as far as access is concerned.
+A worktree inside a member inherits all of that member's allowed actions. List
+a worktree location as its own member when a task should have narrower access.
 
-Read the configured `parallelism` caps before launching work. These are the
-provider defaults for the three dimensions, not throughput promises:
+Read the configured `parallelism` caps before launching work. The config keys
+are `max_parallel_subagents`, `max_parallel_ralph_loops`, and
+`max_parallel_mc_missions`. Providers default to one of two sets; these are
+starting limits, not throughput promises:
 
-| Provider | Subagents | Ralph loops | Mission Control missions |
+| Providers | Subagents | Ralph loops | Mission Control missions |
 | --- | --- | --- | --- |
-| Claude | 4 | 2 | 4 |
-| Codex | 10 | 3 | 6 |
+| Codex, Copilot, Cursor, Factory, OpenCode, Warp, Devin Desktop, OpenClaw, Hermes | 10 | 3 | 6 |
+| Claude Code and every other provider | 4 | 2 | 4 |
 
 Apply the smallest relevant provider, project, context-budget, and task cap.
-Native delegation caps are assistant-followed rules. Ralph and Mission Control
-also have code checks; these do not imply a universal host-wide cap. Shared-host
-coordination requires a common durable admission store.
+The three caps are not enforced the same way. Subagent caps are rules the
+assistant follows. The Ralph loop cap is checked in code and refuses a launch
+at the limit. The Mission Control cap warns and queues the mission; it does not
+refuse it. None of these is a host-wide limit: sessions started independently
+do not see each other unless they share a durable admission store, the record
+that coordinates launches on a shared host.
 
 CI and review throughput are usually the practical delivery limit. More workers
 do not mean more finished work. Reduce concurrency when verification and
@@ -262,9 +273,10 @@ Start orchestration from the project the work belongs to. Verify each result
 independently by inspecting the actual changes and running the relevant checks;
 a worker's success message is not sufficient evidence.
 
-The effect ledger records signed intent, outcome, and reconciliation. It does
-not authorize actions or guarantee exactly-once execution. A recorded intent
-alone does not establish that the target system accepted the operation.
+The effect ledger is a signed record of what an operation intended and what
+happened, used to reconcile after an interruption. It does not authorize
+actions or guarantee exactly-once execution. A recorded intent alone does not
+establish that the target system accepted the operation.
 
 ## Add checks as complexity grows
 
