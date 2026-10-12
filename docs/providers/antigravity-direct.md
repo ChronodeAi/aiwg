@@ -71,13 +71,12 @@ quoted C text proves the grammar only — it establishes NEITHER exit code
 0 NOR a `SUCCESS` terminal**, and the adapter's parser still rejects it
 (`status !== 'SUCCESS'`).
 
-The brief must reach `agy` as that one NDJSON line, but the shared stdin
-vocabulary is frozen (`closed`, `brief-text`, `brief-json`) and has no such
-frame. The registry therefore declares `stdin: "closed"` with the stdin
-control unqualified: nothing is sent and dispatch is blocked. Delivering the
-frame needs provider-supplied stdin frames in the shared renderer, tracked in
-#2998. Until then this profile is usable only through the manual smoke
-command below.
+The shared `adapter-frame` stdin kind calls the installed adapter's pure
+`buildWorkerStdinFrame(brief)` hook. It returns the exact one NDJSON line
+from `buildAntigravityStdinFrame`, bounded to 1 MiB, delivered only on stdin
+and closed at EOF. Both the launcher and shell framer reuse the installed
+driver path; an unknown kind or missing hook is refused. The stdin control
+remains unqualified until one authenticated smoke run confirms the envelope.
 
 ## Unchanged invariants
 

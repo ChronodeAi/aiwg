@@ -7,14 +7,13 @@ probes (no credential in the throwaway `DSH_HOME`, so the run fails at the
 local credential check before any network call) — never a completed model
 response.
 
-**BLOCKER**: there is no shared, execution-time artifact hook (an owned
-private directory, exclusive/no-follow create, cleanup) in this codebase
-today. `buildWorkerArgs` is therefore pure and never writes the `--patch`
-file described below — it only returns argv containing a deterministic
-path. Nothing in production writes that file yet, so this profile cannot
-actually be dispatched until that shared hook exists. The adapter exports
-pure helpers (`buildDeepSeekHarnessPatch`, `deepSeekHarnessPatchPath`) so
-tests and the manual smoke run below can write the file themselves.
+The shared launcher now writes the pure `buildWorkerArtifacts(invocation)`
+patch declaration into its private run directory, substitutes
+`${artifact:dsh-patch}` in argv, and removes the patch after execution.
+Resolution and preview perform no writes. The declaration is
+`[{name: 'dsh-patch', location: 'run-directory', content: <YAML>}]`;
+workspace-relative locations remain deferred. Controls stay unqualified
+pending an authenticated smoke run.
 
 ## Command
 
@@ -22,12 +21,11 @@ tests and the manual smoke run below can write the file themselves.
 dsh --profile headless --patch <patchPath> --json -
 ```
 
-- `<patchPath>` is a YAML file that, if written by a caller, sets the
+- `<patchPath>` is a launcher-written YAML file that sets the
   `agent-default-model` plugin entry (`provider: deepseek-official`,
   `model`, `reasoningEffort`), the `sandbox-policy` entry
   (`mode: read-only|workspace-write`) and the `approval` entry
-  (`policy: never`). It never contains the brief or a credential. **Nothing
-  writes this file in production today** (see BLOCKER above).
+  (`policy: never`). It never contains the brief or a credential. The launcher writes it exclusively with mode 0600 and cleans it up.
 - The brief travels on stdin via the `-` task argument ("`-` reads stdin",
   `dsh --profile headless --help`), never on argv.
 - `DEEPSEEK_API_KEY` is the only allowlisted environment variable (the
@@ -93,16 +91,6 @@ load and could alter behavior in ways this document cannot characterize.
 
 ## Known gaps (reported, not invented around)
 
-- **BLOCKER — no execution-time artifact hook**: `resolveWorkerInvocation`
-  calls `driver.buildInvocation` (which calls this adapter's
-  `buildWorkerArgs`) during resolution/preview as well as actual dispatch
-  (`src/serve/worker-invocation.ts` ~476), and installed preparation/
-  revalidation calls it again. There is no shared, execution-time artifact
-  hook with an owned private directory, exclusive/no-follow create and
-  cleanup, so `buildWorkerArgs` cannot safely write a file itself — writing
-  on every preview, and two finals sharing a directory overwriting each
-  other's controls, are exactly the risks a pure function avoids. This
-  profile therefore stays undispatchable until that shared hook exists.
 - **`DSH_HOME` isolation**: `getEnvOverrides()` is called with no
   invocation context, so a per-run isolated `DSH_HOME` cannot be
   synthesized without either sharing one `DSH_HOME` across concurrent runs
@@ -118,9 +106,9 @@ load and could alter behavior in ways this document cannot characterize.
 
 Requires an installed `dsh` and a real `DEEPSEEK_API_KEY` (or an
 OpenRouter-compatible route, if configured by patch — not yet qualified).
-The operator writes the patch file themselves (exclusive create, mode
-0600) using the adapter's own pure `buildDeepSeekHarnessPatch()` text, since
-nothing in production writes it yet (see BLOCKER above).
+This manual command writes the patch exclusively with mode 0600 using
+`buildDeepSeekHarnessPatch()`. Normal one-shot execution uses the shared
+launcher artifact hook.
 
 ```sh
 d=$(mktemp -d)

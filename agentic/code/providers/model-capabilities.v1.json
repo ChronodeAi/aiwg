@@ -49,7 +49,7 @@
             "--sandbox",
             "--disable-slash-commands"
           ],
-          "stdin": "closed",
+          "stdin": "adapter-frame",
           "cwd": "${workspace}",
           "envAllowlist": [
             "GEMINI_API_KEY",
@@ -113,7 +113,7 @@
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable through the shared renderer today, so the registry stdin kind is closed (nothing is sent and the CLI fails closed). The profile needs a provider-supplied frame (tracked in #2998): one NDJSON line {\"event\":\"user\",\"message\":<brief>} on stdin, then EOF; no --print flag and no prompt value are ever emitted (--print requires a value, swallows the next argv token when omitted, and still hard-errors on an explicit empty value)",
+                "mapping": "adapter-frame: the installed adapter supplies exact bounded stdin bytes: one NDJSON line {\"event\":\"user\",\"message\":<brief>} on stdin, then EOF; no --print flag and no prompt value are ever emitted (--print requires a value, swallows the next argv token when omitted, and still hard-errors on an explicit empty value)",
                 "evidence": "R: live, fix round 1, conductor probes A/B/C/D/E, 2026-10-11, no login reached. (A) `agy --print --output-format bogus-format </dev/null` -> \"Error: --print took \\\"--output-format\\\" as its prompt...\"; (B) `agy --output-format bogus-format --print </dev/null` -> \"flag needs an argument: -print\"; (C) `--print=` -> \"Error: empty prompt...\"; (D)/(E) `--input-format stream-json --output-format stream-json` with or without `--print` omitted entirely both pass argument validation and reach the same auth stop. D (strings, extraction: ssh noodle 'strings -n 8 ~/.local/bin/agy | grep -n \"stream input\"'): \"stream input message is missing the \\\"event\\\" field\", \"stream input message event %q is not supported yet\", \"stream input \\\"user\\\" message is missing the \\\"message\\\" field\" fix the NDJSON input envelope field names; unqualified until live evidence"
               },
               "structuredOutput": {
@@ -155,7 +155,7 @@
               "GEMINI_API_KEY in envAllowlist is a strings-sourced GUESS, not confirmed to authenticate this CLI. Live fix-round-1 probes (D/E, no login present) show a bare run stops at \"Error: authentication required. Run 'agy' to log in, then retry.\" — this is an interactive Google-account login, not a documented env-key or OpenRouter-style flag. The manual smoke run is BLOCKED until an operator completes an interactive `agy` login on the target host.",
               "The 1.3.3 --effort enum (low|medium|high|xhigh|max) supersedes the stale 1.1.26-pinned three-value set in tools/providers/antigravity-transport.mjs (a separate, unedited legacy transport used by the MCP/doctor bridge, not this direct-shell profile).",
               "Flag validation happens BEFORE auth: live probe F, `agy --print=x --input-format bogus --output-format stream-json`, returned \"Error: unknown --input-format \\\"bogus\\\" (want text or stream-json)\" without reaching the auth stop, confirming --input-format is validated against exactly {text, stream-json} independent of login state.",
-              "The brief must reach agy as one NDJSON user message on stdin (adapter: buildAntigravityStdinFrame). The shared stdin vocabulary is frozen (closed, brief-text, brief-json) and has no such kind, so the registry declares stdin closed and the stdin control unqualified; dispatch is blocked until provider-supplied stdin frames exist (#2998)."
+              "The brief reaches agy through adapter-frame: the installed buildWorkerStdinFrame hook supplies exactly one NDJSON user message and EOF. The stdin control stays unqualified pending one authenticated smoke run."
             ],
             "health": {
               "version": 1,
@@ -276,6 +276,7 @@
             "PATH",
             "ANTHROPIC_API_KEY"
           ],
+          "versionPattern": "^([0-9A-Za-z.+-]{1,128}) \\(Claude Code\\)$",
           "versionArgv": [
             "--version"
           ],
@@ -487,6 +488,7 @@
             "CODEX_HOME",
             "HOME"
           ],
+          "versionPattern": "^codex-cli ([0-9A-Za-z.+-]{1,128})$",
           "versionArgv": [
             "--version"
           ],
@@ -868,6 +870,7 @@
             "CURSOR_API_KEY",
             "HOME"
           ],
+          "versionPattern": "^([0-9A-Za-z.+-]{1,128})$",
           "versionArgv": [
             "--version"
           ],
@@ -1403,7 +1406,7 @@
       "agent": "global-only",
       "skill": "unsupported",
       "globalChild": "native",
-      "identifierSyntax": "Warp saved-profile or run model identifier",
+      "identifierSyntax": "Warp model identifier accepted by `warp-terminal agent run --model`",
       "inheritance": "All delegated work uses run/profile selection",
       "invalidPinFallback": "Profile availability dependent",
       "configTarget": "Warp agent profile or run configuration",
@@ -1416,8 +1419,8 @@
         "id": "warp",
         "provider": "warp",
         "adapterVersion": "1",
-        "supportedVersions": "*",
-        "runtimeDriver": "unavailable",
+        "supportedVersions": "0.2026.10.07.08.29.stable_00",
+        "runtimeDriver": "installed:warp",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -1425,16 +1428,25 @@
         },
         "invocation": {
           "kind": "process",
-          "executable": "oz",
+          "executable": "warp-terminal",
           "argv": [
             "agent",
             "run",
-            "--prompt",
-            "${brief}"
+            "--output-format",
+            "json",
+            "--model",
+            "${model}",
+            "--cwd",
+            "${workspace}",
+            "--skill",
+            "aiwg-brief-${invocationId}",
+            "--no-snapshot"
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "WARP_API_KEY"
+          ],
           "versionArgv": [
             "--version"
           ],
@@ -1459,74 +1471,81 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "*",
+            "supportedVersions": "0.2026.10.07.08.29.stable_00",
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--model MODEL_ID] exact observed model id, never 'auto'/'default'",
+                "evidence": "H: warp-terminal 0.2026.10.07.08.29.stable_00 `agent run --help` documents `--model <MODEL_ID>` ('Override the base model used by this command ... For the default Oz harness, use `oz model list` to see available model IDs') with no enum; unqualified until live model-pin evidence"
               },
               "effort": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no reasoning-effort flag is documented anywhere in the full captured `agent`/`agent run --help`",
+                "evidence": "H: full `agent run --help` capture (.aiwg/working/s1-scratch/cli-help/warp-0.2026.10.07.txt) names no effort/reasoning flag; unknown controls block tasks requiring them"
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable as a CLI flag: no sandbox/permission-mode flag is documented for a local run; only an external boundary is reportable",
+                "evidence": "H: `agent run --help` lists no sandbox/permission-mode flag; unqualified until live evidence"
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no approval/auto-approve flag is documented for this CLI",
+                "evidence": "H: `agent run --help` lists no approval flag; unqualified until live evidence"
               },
               "workdir": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[-C/--cwd CWD] ('Working directory for the agent'), always the absolute resolved workspace, never a cloud `--environment`",
+                "evidence": "H: `agent run --help` documents `-C, --cwd <CWD>`; unqualified until live evidence"
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "[--output-format json], always emitted; no vendor success/error envelope is evidenced (help names the format but not its shape, and binary `strings` hits were too generic to establish grammar), so candidate extraction always returns null and the claims hook refuses all output until an authenticated Oz terminal envelope is observed",
+                "evidence": "H: `agent run --help` documents `--output-format <OUTPUT_FORMAT>` (json|ndjson|pretty|text); R: live no-model probe on noodle 2026-10-11 confirmed the full template reaches the auth stop with no argument error, but the host has no login so no real output was observed; unqualified until live evidence"
               },
               "stdin": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no stdin-mode flag is documented; this profile never sends stdin content",
+                "evidence": "H: `agent run --help` lists no stdin-input flag; unqualified until live evidence"
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no JSON-schema-enforcement flag is documented",
+                "evidence": "H: `agent run --help` lists no schema flag; unqualified until live evidence"
               },
               "stepCap": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no step/turn cap flag is evidenced",
+                "evidence": "H: `agent run --help` lists no step-cap flag; unknown controls block tasks requiring them"
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no workspace-trust flag is documented",
+                "evidence": "H: `agent run --help` advertises no trust flag; unqualified until live evidence"
               },
               "children": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: `--harness claude|codex` (third-party harness mode) is documented but never emitted by this profile (conductor notes, #2905: out of scope); no other fan-out/subagent flag is evidenced for a local run",
+                "evidence": "H: `agent run --help` documents `--model` noting harness-specific behavior under `--harness`, which this profile never passes; unqualified until live evidence"
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "unavailable pending installed profile qualification",
-                "evidence": "synthetic health fixtures do not qualify invocation controls"
+                "mapping": "unavailable: no fallback-model flag is documented",
+                "evidence": "H: `agent run --help` advertises no fallback-model flag; unknown controls block tasks requiring them"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "WARP_API_KEY"
+            ],
             "pitfalls": [
-              "Documentation/help and synthetic observations are not authenticated live qualification.",
+              "Documentation/help and synthetic observations are not authenticated live qualification; the host used for probes (noodle) has no `warp-terminal login`/`WARP_API_KEY`, so every probe stopped at the auth check and never reached a model.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
-              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority."
+              "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
+              "There is NO `oz` symlink on the evidenced host: the real executable is `warp-terminal`, with `agent run` etc. as its subcommands; `runtimeDriver`/`executable` are pinned to that, not to a bare `oz`.",
+              "BRIEF TRANSPORT IS BLOCKED PENDING A SHARED CHANGE: `--prompt` places the brief on argv (never emitted by this profile); `-f/--file` is NOT a member of the required `<--prompt|--saved-prompt|--task-id|--skill>` group (live probe, 2026-10-11) and its own config-file schema is undocumented, so it cannot be assumed to carry the brief; `--skill` is the only remaining required-group member that can carry free text (`agent run --help`: 'Use a skill as the base prompt for the agent' when given without `--prompt`), but its search root relative to `--cwd` and behavior when the skill is missing are UNVERIFIED behind the login gate. The pure adapter derives a distinct `aiwg-brief-<invocationId>` path without writes and refuses unsafe IDs. `buildWarpBriefSkillFile()` (tools/ralph-external/lib/warp-adapter.mjs) exports the exact path/content an execution-time file-generation primitive would need to write before this argv runs; that primitive does not exist in the shared session-launcher today (the same class of gap as #2998 for Antigravity's stdin frame). Needed shared change: an execution-time generated-artifact primitive the session-launcher can call with the adapter-exported `{ relativePath, content }` immediately before spawning the worker process, with invocation identity supplied to the adapter, refusal to overwrite an existing path, cleanup afterward, and no commits of generated skills (pending #3002). Brief transport is NOT available today.",
+              "`--environment`/`-e` (cloud environment/runner) and `--harness claude|codex` (third-party harness mode) are documented but NEVER emitted by this profile; the cloud subcommand is also never emitted. Execution location is unverified until an authenticated run.",
+              "`--no-snapshot` is always emitted: `agent run --help` documents it as disabling the end-of-run workspace snapshot upload. This flag does not establish execution location or absence of other uploads.",
+              "No live success/error output was observed (no login on the evidenced host): `finalOutput`/`structuredOutput` support is grade H/R only, never upgraded past `unqualified`."
             ],
             "health": {
               "version": 1,
@@ -1543,7 +1562,8 @@
               "coverage": "degraded",
               "qualificationTarget": "process-only",
               "evidenceGrades": [
-                "D"
+                "H",
+                "R"
               ],
               "provenance": [
                 {
@@ -1551,6 +1571,12 @@
                   "ref": "03-software-architecture.md §10 warp",
                   "observedAt": "2026-10-07T00:00:00Z",
                   "cliVersion": null
+                },
+                {
+                  "kind": "help",
+                  "ref": ".aiwg/working/s1-scratch/cli-help/warp-0.2026.10.07.txt",
+                  "observedAt": "2026-10-11T00:00:00Z",
+                  "cliVersion": "0.2026.10.07.08.29.stable_00"
                 }
               ],
               "qualificationOwner": "B-OG-40",
@@ -2003,7 +2029,7 @@
             "--profile",
             "headless",
             "--patch",
-            "${patchPath}",
+            "${artifact:dsh-patch}",
             "--json",
             "-"
           ],
@@ -2040,7 +2066,7 @@
             "controls": {
               "model": {
                 "support": "unqualified",
-                "mapping": "--patch YAML overlay would set the agent-default-model plugin entry {provider: \"deepseek-official\", model}; no --model flag exists on `--profile headless --help`. Nothing writes this patch file in production yet (see adapter KNOWN GAP); the override is unverified for enforcement, only for parse-before-model-call.",
+                "mapping": "--patch YAML overlay would set the agent-default-model plugin entry {provider: \"deepseek-official\", model}; no --model flag exists on `--profile headless --help`. The launcher writes the declared patch exclusively into its private run directory and cleans it up; the override is unverified for enforcement, only for parse-before-model-call.",
                 "evidence": "R: dsh 0.2.0-rc.2 --profile headless --dump-config-schema/--dump-default-config (agent-default-model config9, required provider+model); no-model probe on noodle 2026-10-11 confirmed a --patch file is read and parsed before any model call (MISSING_CREDENTIAL still names provider route deepseek-official), never that the override is enforced; unqualified until live model-pin evidence"
               },
               "effort": {
@@ -2103,7 +2129,7 @@
               "DEEPSEEK_API_KEY"
             ],
             "pitfalls": [
-              "BLOCKER: no shared execution-time artifact hook exists (owned private directory, exclusive/no-follow create, cleanup); buildWorkerArgs is pure and never writes the --patch file, so this profile cannot actually dispatch until that hook lands.",
+              "buildWorkerArgs emits ${artifact:dsh-patch}; buildWorkerArtifacts declares the pure overlay. The launcher owns exclusive/no-follow private file creation and cleanup. Controls remain unqualified pending an authenticated run.",
               "Documentation/help, schema-dump and synthetic observations are not authenticated live qualification.",
               "Reaching MISSING_CREDENTIAL on a no-model probe proves the --patch file is parsed before any model call; it proves neither sandbox confinement nor approval semantics, since no probe without a real model call can exercise a tool call.",
               "danger-full-access (the only shipped preset pairing approval:never) is a full bypass and is never emitted; this profile would patch sandbox-policy/approval directly instead, with unverified effect.",
@@ -2654,6 +2680,7 @@
           "stdin": "brief-text",
           "cwd": "${workspace}",
           "envAllowlist": [],
+          "versionPattern": "^Hermes Agent v([0-9A-Za-z.+-]{1,128}) [^\\r\\n]{1,128}$",
           "versionArgv": [
             "--version"
           ],
@@ -3035,6 +3062,7 @@
           "stdin": "closed",
           "cwd": "${workspace}",
           "envAllowlist": [],
+          "versionPattern": "^Muse Code ([0-9A-Za-z.+-]{1,128}) \\([0-9A-Za-z.+-]{1,128}\\)$",
           "versionArgv": [
             "--version"
           ],

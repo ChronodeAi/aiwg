@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/deepseek-harness-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:b2de0e6b19eb09c0b799a4e4b9d6ab33caa78a60fe24ba67dab4fabc9e3aad89",
+    "sha256": "sha256:6cda70f0082a4ac0b1761e8e018f337fa0dd8e43e6b9fc96c3006ba8635ba4cc",
     "adapterIds": ["deepseek-harness-direct"],
     "platforms": ["linux"]
   }

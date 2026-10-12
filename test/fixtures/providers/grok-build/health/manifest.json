@@ -2,10 +2,17 @@
   "scenarioId": "T-OG-03-grok-build-own-grammar",
   "provider": "grok-build",
   "synthetic": true,
+  "cliVersion": "1.0.50",
+  "grammarEvidence": "docs/providers/grok-build-cli-evidence.md#4-output-formats",
   "qualification": "synthetic-only; no account or live timing qualification",
   "framing": "jsonl",
   "fixture": "stream.ndjson",
   "expectedKinds": [
+    "activity",
+    "progress",
+    "activity",
+    "activity",
+    "activity",
     "activity",
     "terminal"
   ],

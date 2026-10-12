@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createRequire } from 'node:module';
 import { satisfies, validRange } from 'semver';
+import { compileWorkerVersionPattern } from './worker-installation.mjs';
 import type { WorkerExecution } from '../config/aiwg-config.js';
 import { normalizeProviderDefinitionId } from '../providers/provider-definitions.js';
 import { qualificationDigest } from './qualification-digest.mjs';
@@ -99,8 +100,8 @@ export interface WorkerAdapterMetadata {
   runtimeDriver: string;
   catalogAdapter: { kind: 'command' | 'file' | 'http' | 'module'; locator: string; parser: string;
     argv?: string[]; timeoutSeconds?: number; maxBytes?: number };
-  invocation: { kind: 'process'; executable: string; argv: string[]; stdin: 'closed' | 'brief-json' | 'brief-text';
-    cwd: '${workspace}'; envAllowlist: string[]; versionArgv: string[]; maxOutputBytes?: number }
+  invocation: { kind: 'process'; executable: string; argv: string[]; stdin: 'closed' | 'brief-json' | 'brief-text' | 'adapter-frame';
+    cwd: '${workspace}'; envAllowlist: string[]; versionArgv: string[]; versionPattern?: string; maxOutputBytes?: number }
     | { kind: 'http'; protocol: 'ollama' | 'llama-cpp' | 'openai-compatible'; healthPath: string;
       modelsPath: string; generatePath: string; timeoutSeconds?: number; maxOutputBytes?: number };
   capabilities: { output: 'native-schema' | 'validated-file' | 'text'; modelPin: 'observed' | 'requested' | 'unsupported';
@@ -116,8 +117,19 @@ const capabilitySchema = requireModelResource('provider-model-capabilities.v1.sc
 const capabilityAjv = addFormats(new Ajv2020({ strict: false, allErrors: true }));
 capabilityAjv.addSchema(capabilitySchema);
 const validateAdapter = capabilityAjv.compile({ $ref: `${capabilitySchema.$id}#/$defs/workerAdapter` });
-export const WorkerAdapterSchema = z.custom<WorkerAdapterMetadata>(value => validateAdapter(value),
-  () => ({ message: `Invalid worker adapter: ${capabilityAjv.errorsText(validateAdapter.errors)}` }));
+export const WorkerAdapterSchema = z.custom<WorkerAdapterMetadata>().superRefine((value, context) => {
+  if (!validateAdapter(value)) {
+    context.addIssue({ code: 'custom', message: `Invalid worker adapter: ${capabilityAjv.errorsText(validateAdapter.errors)}` });
+    return;
+  }
+  try {
+    const invocation = (value as WorkerAdapterMetadata).invocation;
+    if (invocation.kind === 'process' && invocation.versionPattern !== undefined) compileWorkerVersionPattern(invocation.versionPattern);
+  } catch (error) {
+    context.addIssue({ code: 'custom', path: ['invocation', 'versionPattern'],
+      message: `Invalid worker adapter: ${error instanceof Error ? error.message : String(error)}` });
+  }
+});
 const CapabilityEntrySchema = z.object({
   agent: OutcomeSchema,
   skill: OutcomeSchema,

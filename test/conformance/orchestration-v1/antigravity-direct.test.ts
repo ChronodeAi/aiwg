@@ -148,7 +148,7 @@ describe('Antigravity (agy) version-bound profile (B-OG-43)', () => {
     expect(adapter).toMatchObject({ supportedVersions: VERSION, adapterVersion: APPROVED.entry.packageVersion,
       runtimeDriver: APPROVED.entry.reference,
       catalogAdapter: { kind: 'file', locator: 'agentic/code/providers/model-catalog.v1.json' },
-      invocation: { executable: 'agy', stdin: 'closed' },
+      invocation: { executable: 'agy', stdin: 'adapter-frame' },
       qualification: { status: 'unqualified' } });
     expect(adapter.invocation.argv).toEqual(['--input-format', 'stream-json', '--output-format', 'stream-json',
       '--model', '${model}', '--effort', '${effort}', '--sandbox', '--disable-slash-commands']);
@@ -215,6 +215,7 @@ describe('T-OG-15 Antigravity direct command contract (render via production bui
       .toThrow(/explicit model/);
     expect(() => owner.buildWorkerArgs({ ...input, brief: '' }, null, { sandbox: 'read-only' })).toThrow(/non-empty brief/);
     const rendered = owner.buildWorkerArgs(input, null, { sandbox: 'read-only' });
+    expect(owner.buildWorkerArgs({ ...input, brief: undefined, briefPath: '/w/brief' }, null, { sandbox: 'read-only' })).toEqual(rendered);
     expect(rendered).not.toContain('--dangerously-skip-permissions');
     expect(rendered).not.toContain('--remote-control');
     expect(rendered).not.toContain('--mode');
@@ -227,7 +228,7 @@ describe('T-OG-15 Antigravity direct command contract (render via production bui
     const { root, workdir } = await scratch();
     const { file, recordPath } = await fakeConfig(root, 'success');
     const argv = argvFor(workdir);
-    const result = await run([FAKE, ...argv], { cwd: workdir, stdinData: buildAntigravityStdinFrame('synthetic brief content'),
+    const result = await run([FAKE, ...argv], { cwd: workdir, stdinData: workerStdinBytes({ stdin: 'adapter-frame' }, 'synthetic brief content', installed.owner)!,
       env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: file, ANTIGRAVITY_UNRELATED_SECRET: 'fk-synthetic-should-not-pass' } });
     expect(result.code, result.stderr).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
@@ -359,7 +360,7 @@ describe('T-OG-03/20/21/23 Antigravity run identity and terminal signals', () =>
 
   it('AG12 the sole accepted sandbox mode is read-only; workspace-write is unavailable, never invented', () => {
     expect(ANTIGRAVITY_DIRECT_SANDBOX_MODES).toEqual(['read-only']);
-    expect(ANTIGRAVITY_DIRECT_STDIN).toBe('ndjson-user-message');
+    expect(ANTIGRAVITY_DIRECT_STDIN).toBe('adapter-frame');
     expect(ANTIGRAVITY_DIRECT_EFFORT_VALUES).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     // #3: the registry's capabilities.sandboxModes list (what the resolver
     // actually checks) must agree with what the adapter accepts.
@@ -407,15 +408,13 @@ describe('T-OG-03/20/21/23 Antigravity run identity and terminal signals', () =>
     expect(installed.owner.parseOutput([step, init, ok].join('\n') + '\n')).toBeNull();
   });
 
-  it('AG14b the NDJSON brief frame cannot be dispatched until provider-supplied stdin frames exist (#2998)', () => {
-    // The shared stdin vocabulary is frozen (closed, brief-text, brief-json). The registry declares stdin closed and
-    // the stdin control unqualified, so nothing is sent; the shared framer refuses the adapter's frame name outright.
+  it('AG14b the installed adapter supplies exact NDJSON bytes while live stdin authority remains unqualified', () => {
     const adapter = loadProviderModelCapabilities().providers.antigravity.workerHealthAdapter!;
-    expect(adapter.invocation.stdin).toBe('closed');
+    expect(adapter.invocation.stdin).toBe('adapter-frame');
     expect(adapter.invocationProfiles!['direct-shell'].controls.stdin.support).toBe('unqualified');
-    expect(workerStdinBytes({ stdin: adapter.invocation.stdin, selected: { model: MODEL }, cwd: '/w' } as any, 'brief')).toBeNull();
-    expect(() => workerStdinBytes({ stdin: ANTIGRAVITY_DIRECT_STDIN, selected: { model: MODEL }, cwd: '/w' } as any, 'brief'))
-      .toThrow(/Unsupported worker stdin mode/);
+    expect(workerStdinBytes({ stdin: adapter.invocation.stdin } as any, 'brief', installed.owner))
+      .toEqual(buildAntigravityStdinFrame('brief'));
+    expect(() => workerStdinBytes({ stdin: 'unknown' } as any, 'brief', installed.owner)).toThrow(/Unsupported worker stdin mode/);
     expect(adapter.qualification.status).toBe('unqualified');
     expect(() => qualifyWorkerInvocationProfile(adapter, { profile: 'direct-shell', transport: 'shell', cliVersion: '1.3.3' } as any)).toThrow();
   });

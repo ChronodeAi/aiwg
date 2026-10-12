@@ -1,5 +1,6 @@
 // Contract tests for the production Pi headless adapter and the launcher path
 // that consumes it. Everything runs against the committed offline stub.
+import { writeExecutableSync } from '../../helpers/write-executable.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -108,7 +109,7 @@ test('Pi adapter availability fails closed on incompatible Node or a failing pi 
   const { dir, cleanup } = scratch('pi-adapter-node-');
   try {
     const fakeNode = join(dir, 'fake-node');
-    writeFileSync(fakeNode, `#!/bin/sh\nprintf '20.19.0\\n'\n`); chmodSync(fakeNode, 0o755);
+    writeExecutableSync(fakeNode, `#!/bin/sh\nprintf '20.19.0\\n'\n`);
     const execPath = process.execPath;
     Object.defineProperty(process, 'execPath', { value: fakeNode, configurable: true, writable: true });
     try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), false, 'Node < 22.19 is rejected before pi is probed'); }

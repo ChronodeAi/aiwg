@@ -9,6 +9,7 @@ import {
   isPublicUserDocument,
   rewritePublicUserCommands,
 } from './public-command-policy.mjs';
+import { repositoryLinks, withDerivedSummary } from './staged-page-transforms.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const docs = path.join(root, 'docs');
@@ -76,6 +77,17 @@ for (const filename of await markdownFiles(output)) {
     ? rewritten.content
     : insertAfterTitle(rewritten.content, notice);
   await writeFile(filename, withNotice, 'utf8');
+}
+
+// A page without a summary publishes an empty meta description. Derive one
+// from its first paragraph. A relative link that leaves docs/ (to source,
+// tests or addon docs) cannot resolve on the site, so point it at the
+// repository. Both apply to the staged copies; the source files are unchanged.
+for (const filename of await markdownFiles(output)) {
+  const content = await readFile(filename, 'utf8');
+  const relativeDirectory = path.dirname(path.relative(output, filename));
+  const staged = withDerivedSummary(repositoryLinks(content, relativeDirectory));
+  if (staged !== content) await writeFile(filename, staged, 'utf8');
 }
 
 const manifestPath = path.join(output, '_manifest.json');

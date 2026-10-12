@@ -1,4 +1,5 @@
-import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { writeExecutable } from '../../../helpers/write-executable.js';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -87,8 +88,7 @@ describe('CLI vocabulary and legacy compatibility (T-OG-01/15)', () => {
     await mkdir(path.join(root, 'bin'));
     await mkdir(bindPath(invocation.cwd));
     const binary = path.join(root, 'bin/worker');
-    await copyFile(path.join(fixtureRoot, 'fake-worker.mjs'), binary);
-    await chmod(binary, 0o755);
+    await writeExecutable(binary, await readFile(path.join(fixtureRoot, 'fake-worker.mjs'), 'utf8'));
     const brief = 'Synthetic brief: quotes \' " Unicode 雪\n--leading-dash\n';
     await writeFile(bindPath(invocation.briefPath), brief);
     await promisify(execFile)('/bin/sh', ['-c', bindPath(invocation.shellCommand)], {

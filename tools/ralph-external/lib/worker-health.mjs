@@ -8,6 +8,9 @@ import path from 'node:path';
 const digest = value => `sha256:${createHash('sha256').update(value).digest('hex')}`;
 const MAX_EVENTS = 64;
 const MAX_KEYS = 512;
+// Bounded replay horizon beyond the short dedup FIFO. Only exact replay of
+// evicted identities counts as churn; fresh identities reset the streak.
+export const PROGRESS_CHURN_LIMITS = Object.freeze({ historyKeys: 4096, repeatedEvictedKeys: 32 });
 const DEFAULTS = { startupSeconds: 60, checkSeconds: 15, quietSeconds: 90, stallSeconds: 300,
   diagnosticGraceSeconds: 60, terminateGraceSeconds: 5, hardTimeoutSeconds: 1800, maxSteps: 100, stepEnforcement: 'unavailable' };
 const reasons = new Set(['OK', 'AWAITING_HANDSHAKE', 'PROCESS_ONLY', 'ACCEPTED', 'PROGRESS', 'QUIET', 'NO_PROGRESS',
@@ -70,9 +73,17 @@ export function observeProviderHealthEvent(provider, event, source, binding) {
     if (event.event === 'result') return { kind: 'terminal', success: event.result?.status === 'SUCCESS' };
     if (event.event === 'error') return classifyWorkerHealthFailure(event, { source, provider });
   } else if (provider === 'grok-build') {
-    if (event.type === 'message') return { kind: 'activity' };
-    if (event.type === 'result') return { kind: 'terminal', success: event.success !== false && event.is_error !== true };
-    if (event.type === 'error') return { ...classifyWorkerHealthFailure(event, { source, provider }), fatal: true };
+    // streaming-json is ACP NDJSON, not the Messages API stream. Missing
+    // identities stay unknown; a generic tool id is not a session binding.
+    if (source?.kind !== 'stdout') return null;
+    if (event.type === 'error') return { ...classifyWorkerHealthFailure({ type: 'error', message: event.message }, { source, provider }), fatal: true };
+    if (event.type === 'tool_call' || event.type === 'tool_call_update') {
+      if (event.status === 'failed') return { ...classifyWorkerHealthFailure({ type: 'error', message: `tool call ${event.toolCallId ?? 'unknown'} failed` }, { source, provider }), fatal: true };
+      return typeof event.toolCallId === 'string' && event.toolCallId
+        ? { kind: 'progress', key: event.toolCallId } : { kind: 'activity' };
+    }
+    if (['text', 'thought', 'usage', 'plan', 'available_commands'].includes(event.type)) return { kind: 'activity' };
+    if (event.type === 'end') return { kind: 'terminal', success: event.stopReason === 'end_turn', key: event.stopReason ?? 'end' };
   } else if (provider === 'local-http' || provider === 'ollama') {
     if (typeof event.response === 'string' && event.done !== true) return { kind: 'activity' };
     if (event.done === true) return { kind: 'terminal', success: !event.error };
@@ -108,6 +119,8 @@ export function createWorkerHealthObserver(options = {}) {
   const normalize = options.normalizeEvent ?? ((event, source) => observeProviderHealthEvent(options.provider, event, source, binding));
   const buffers = new Map();
   const keys = new Set();
+  const progressHistory = new Set();
+  const replayedKeys = new Set();
   const events = [];
   const gaps = [];
   let sequence = 0, generation = 0, steps = null, total = 0, lastCheck = started, maxGap = 0;
@@ -154,7 +167,32 @@ export function createWorkerHealthObserver(options = {}) {
     const rawKey = event.key ?? event.identity;
     const keyDigest = typeof rawKey === 'string' && rawKey.length <= 4096 ? digest(rawKey) : null;
     if (event.kind === 'progress') {
-      if (!keyDigest || keys.has(keyDigest)) return;
+      if (!keyDigest) return;
+      const qualified = handshakeAt !== null && (profile.progressEvidence?.length || source.kind === 'worktree');
+      if (qualified) activity = time;
+      if (source.kind !== 'worktree' && qualified) {
+        if (unavailable.has('progress-key-churn')) return;
+        const replay = progressHistory.has(keyDigest);
+        if (!replay) replayedKeys.clear();
+        else if (!keys.has(keyDigest)) replayedKeys.add(keyDigest);
+        // Refresh history on replay so a cycling set within this explicit
+        // horizon cannot become novel by evicting its oldest identities.
+        progressHistory.delete(keyDigest);
+        if (progressHistory.size >= PROGRESS_CHURN_LIMITS.historyKeys) progressHistory.delete(progressHistory.values().next().value);
+        progressHistory.add(keyDigest);
+        if (replayedKeys.size >= PROGRESS_CHURN_LIMITS.repeatedEvictedKeys) {
+          unavailable.add('semantic-progress');
+          unavailable.add('progress-key-churn');
+        }
+        if (replay) {
+          if (!keys.has(keyDigest)) {
+            if (keys.size >= MAX_KEYS) keys.delete(keys.values().next().value);
+            keys.add(keyDigest);
+          }
+          return;
+        }
+      }
+      if (keys.has(keyDigest)) return;
       // Bound dedup memory without dropping new progress after saturation.
       // Set insertion order makes this a FIFO window of recent identities.
       if (keys.size >= MAX_KEYS) keys.delete(keys.values().next().value);
@@ -278,7 +316,7 @@ export function createWorkerHealthObserver(options = {}) {
     return snapshot();
   };
   const snapshot = () => ({ version: 1, state,
-    coverage: profile.coverage === 'unobserved' ? 'unobserved' : profile.coverage === 'full' && !gaps.length ? 'full' : 'degraded',
+    coverage: profile.coverage === 'unobserved' ? 'unobserved' : profile.coverage === 'full' && !gaps.length && !unavailable.has('progress-key-churn') ? 'full' : 'degraded',
     handshake, lastObservedAt: utc(observed), lastActivityAt: utc(activity), lastProgressAt: utc(progress), reasonCode,
     termination, transitionCount, restartCount: 0, unavailableSignals: [...unavailable].slice(0, 32), transitionRefs: [],
     observerGeneration: generation, startupDeadlineAt: utc(startupDeadline), hardDeadlineAt: utc(hardDeadline),

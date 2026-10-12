@@ -1,3 +1,4 @@
+import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +22,7 @@ beforeEach(async () => {
   tempRoot = await fs.mkdtemp(path.join(tmpdir(), 'aiwg-steward-prep-'));
   fakeBin = path.join(tempRoot, 'bin');
   await fs.mkdir(fakeBin, { recursive: true });
-  await fs.writeFile(
+  await writeExecutable(
     path.join(fakeBin, 'aiwg'),
     [
       '#!/usr/bin/env bash',
@@ -35,7 +36,6 @@ beforeEach(async () => {
       'sleep 0.02',
       'printf \'{"results":[{"score":0.91,"type":"skill","name":"candidate-%s","capability":"capability for %s"}]}\\n\' "$query" "$query"',
     ].join('\n'),
-    { encoding: 'utf8', mode: 0o755 },
   );
 });
 
@@ -178,7 +178,7 @@ describe('steward-prep-delivery duplicate helper', () => {
     // Stub both temp-dir creators so the test catches the bug whichever one
     // the helper uses.
     for (const command of ['mkdir', 'mktemp']) {
-      await fs.writeFile(
+      await writeExecutable(
         path.join(fakeBin, command),
         [
           '#!/usr/bin/env bash',
@@ -186,7 +186,6 @@ describe('steward-prep-delivery duplicate helper', () => {
           `command -p ${command} "$@"`,
           `sleep "\${AIWG_TEST_SLOW_TEMPDIR_SECONDS:-${slowSeconds}}"`,
         ].join('\n'),
-        { encoding: 'utf8', mode: 0o755 },
       );
     }
 

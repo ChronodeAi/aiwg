@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 /** Preserve process identity and state: zombies still fail the cleanup gate. */
@@ -87,13 +87,17 @@ export function summarizeOmpEvents(events, { exitCode = 0 } = {}) {
 
 /** Owns one native RPC process. Commands correlate by id; prompt ack is never completion. */
 export class OmpRpcClient {
-  constructor({ binary = process.env.AIWG_OMP_BIN || 'omp', args = [], cwd, env = process.env, timeoutMs = 30000, eventLimit = 16 * MAX_FRAME, closeGraceMs = 5000 } = {}) {
+  // `readyTimeoutMs` bounds only the initial RPC-readiness wait; `timeoutMs` keeps bounding every
+  // command and prompt after that, so widening the first-start budget (#2999) never also widens
+  // this client's ordinary command/prompt deadlines.
+  constructor({ binary = process.env.AIWG_OMP_BIN || 'omp', args = [], cwd, env = process.env, timeoutMs = 30000, readyTimeoutMs = timeoutMs,
+    eventLimit = 16 * MAX_FRAME, closeGraceMs = 5000 } = {}) {
     this.closeGraceMs = closeGraceMs; this.timeoutMs = timeoutMs; this.events = []; this.eventBytes = 0; this.eventLimit = eventLimit; this.pending = new Map(); this.counter = 0; this.protocolVersion = 1;
     this.child = spawn(binary, ['--mode', 'rpc', ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     this.decoder = new OmpFrameDecoder(); this.stderr = '';
     this.ready = new Promise((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
     this.ready.catch(() => {});
-    this.readyTimer = setTimeout(() => this.fail(new Error('OMP RPC ready timeout')), timeoutMs);
+    this.readyTimer = setTimeout(() => this.fail(new Error('OMP RPC ready timeout')), readyTimeoutMs);
     this.closed = new Promise(resolve => this.child.once('close', (code) => { this.isClosed = true; try { this.decoder.end(); } catch (e) { this.fail(e); } this.fail(new Error(`OMP RPC exited ${code}`)); resolve(code); }));
     this.child.on('error', e => this.fail(e)); this.child.stdin.on('error', e => this.fail(e));
     this.child.stderr.on('data', b => { this.stderr = (this.stderr + b.toString()).slice(-4096); });
@@ -157,4 +161,27 @@ export class OmpRpcClient {
     })();
     return this.closing;
   }
+}
+
+/**
+ * #2999: a pinned native binary's first cold start competes with whatever else the host is
+ * running (e.g. another CI job) for CPU and page cache, so a fixed RPC-readiness wait can fail
+ * even though the binary is healthy. `warmArgs` touches the binary once, strictly before the RPC
+ * process starts, outside the readiness window (default `--version`, matching the warm-up
+ * `omp-conformance.mjs` already performs) so most of that cold-start cost lands on `warmedMs`
+ * instead of the RPC `readyMs` budget. Callers pass a larger `readyTimeoutMs` (never `timeoutMs`,
+ * which would also widen every later command/prompt deadline on the returned client) for the
+ * first-start budget. All three durations/outcomes are returned so a caller can record them: a
+ * slow start then shows up as a growing number in a conformance report, not only as a timeout.
+ */
+export async function warmAndConnectOmpRpcClient({ binary, cwd, env, warmArgs = ['--version'], warmTimeoutMs = 15000, ...clientOptions }) {
+  const warmStarted = Date.now();
+  const warmup = spawnSync(binary, warmArgs, { cwd, env, encoding: 'utf8', timeout: warmTimeoutMs });
+  const warmedMs = Date.now() - warmStarted;
+  const warmupResult = { status: warmup.status ?? null, signal: warmup.signal ?? null, error: warmup.error ? String(warmup.error.message ?? warmup.error) : null };
+  const readyStarted = Date.now();
+  const client = new OmpRpcClient({ binary, cwd, env, ...clientOptions });
+  try { await client.connect(); }
+  catch (error) { await client.close(); throw error; }
+  return { client, warmup: warmupResult, warmedMs, readyMs: Date.now() - readyStarted };
 }

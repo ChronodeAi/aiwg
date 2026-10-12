@@ -140,3 +140,26 @@ test('WS-R7 private oversized records reach the size bound', async () => {
   await writeFile(path.join(directory, 'exit.json'), ' '.repeat(65537), { mode: 0o600 });
   assert.equal((await sampleWorkerStatus(options(directory))).workers[0].error.code, 'RECORD_TOO_LARGE');
 });
+
+test('WS-R8 an unverified diagnostic worker record cannot downgrade a confirmed exit', async () => {
+  // `identityObservation: 'transport-reported-unverified'` means `worker`
+  // is a diagnostic guess (session-launcher.mjs finish()), never
+  // kernel-verified ownership. A forged -- or merely unlucky -- record
+  // naming some other same-uid pid, resampled right now and compared
+  // against itself, would otherwise manufacture an identity mismatch and
+  // downgrade an exit the launcher's own wait() status already confirmed.
+  const directory = await fixture();
+  const unverified = { ...identity, pid: 99999 };
+  await record(directory, 'process.json', { invocationId: 'fixture-worker', worker: unverified, supervisor: identity,
+    identityObservation: 'transport-reported-unverified', launchTime: new Date(epoch).toISOString(), monotonicStart: '0' });
+  await record(directory, 'exit.json', { invocationId: 'fixture-worker', exitCode: 0, signal: null,
+    endedAt: new Date(epoch + 20000).toISOString(), termination: 'confirmed' });
+  let sampleCalls = 0;
+  const report = await sampleWorkerStatus({ ...options(directory),
+    sampleIdentity: pid => { sampleCalls++; return { ...unverified, pid, startTicks: 'mismatched' }; } });
+  // The unverified worker is never even resampled: there is nothing
+  // reliable to compare a fresh sample against.
+  assert.equal(sampleCalls, 0);
+  assert.equal(report.workers[0].health.termination, 'confirmed');
+  assert.notEqual(report.workers[0].health.reasonCode, 'IDENTITY_CHANGED');
+});

@@ -3,8 +3,9 @@
  * repositories (#2718). Signatures use a throwaway SSH key; the user's global
  * git configuration is isolated for the whole file.
  */
+import { writeExecutableSync } from '../../helpers/write-executable.js';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -98,8 +99,7 @@ describe('git.commit', () => {
     expect((await run(gitCommitVerifier({ repoDir: join(root, 'no-such-repo') }), target)).observation).toMatchObject({ result: 'unknown', reason: 'container-unreadable' });
     expect((await run(gitCommitVerifier({ repoDir: repo, gitBinary: join(root, 'no-such-git') }), target)).observation).toMatchObject({ result: 'unknown', reason: 'container-unreadable' });
     const failing = join(root, 'failing-git');
-    writeFileSync(failing, '#!/bin/sh\nexit 1\n');
-    chmodSync(failing, 0o755);
+    writeExecutableSync(failing, '#!/bin/sh\nexit 1\n');
     expect((await run(gitCommitVerifier({ repoDir: repo, gitBinary: failing }), target)).observation).toMatchObject({ result: 'unknown', reason: 'container-unreadable' });
     expect((await run(gitCommitVerifier({ repoDir: repo }), 'git:HEAD')).observation).toMatchObject({ result: 'unknown', reason: 'malformed-response' });
   });

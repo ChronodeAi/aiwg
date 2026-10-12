@@ -28,8 +28,33 @@ import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
 
 const {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
-  registerWorkerInvokeToolset, WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
+  registerWorkerInvokeToolset: registerProductionToolset,
+  WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
 } = workerInvoke as any;
+
+/** A fixed, generous `readLiveHostResources()`-shaped sample (see
+ * `tools/scripts/resource-preflight.mjs`), injected via the real
+ * `registerWorkerInvokeToolset({ gateInputs: { live } })` test-only seam
+ * (forwarded to `planDirectWorkerLaunch` → `checkWorkerDispatch`) so the
+ * REAL dispatch gate still runs — on fixed synthetic signals instead of
+ * this host's actual load/memory/PSI/disk — making these transport tests
+ * deterministic under load. Comfortably clears every default threshold
+ * (`DEFAULT_DISPATCH_HOST_THRESHOLDS`: 8GB avail mem, load ratio <= 1.0,
+ * mem PSI avg10 <= 30 / avg60 <= 10, 2GB free disk). */
+const HEALTHY_GATE_LIVE = Object.freeze({
+  supported: true, availMemGb: 64, load1: 0.1, cores: 8, loadRatio: 0.05,
+  memPsiAvg10: 0, memPsiAvg60: 0, memPsiAvg300: 0, workers: 0, freeDiskGb: 100,
+});
+
+/** Register the toolset the way every test in this file should: with the
+ * dispatch gate pinned to `HEALTHY_GATE_LIVE`. The real gate reads this
+ * host's load and memory, so a test that launches a worker without pinning
+ * it is refused on a busy CI runner and then times out waiting for a worker
+ * that never started (#3026). A test that passes its own `gateInputs`, for
+ * example to prove a failing signal still refuses, overrides the default. */
+function registerWorkerInvokeToolset(server: any, options: Record<string, unknown> = {}) {
+  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
+}
 
 const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.stringify(v)).digest('hex')}`;
 const roots: string[] = [];
@@ -738,20 +763,6 @@ function fakeNeverClosingChild() {
   setImmediate(() => child.emit('error', new Error('synthetic: worker process unobservable')));
   return child;
 }
-
-/** A fixed, generous `readLiveHostResources()`-shaped sample (see
- * `tools/scripts/resource-preflight.mjs`), injected via the real
- * `registerWorkerInvokeToolset({ gateInputs: { live } })` test-only seam
- * (forwarded to `planDirectWorkerLaunch` → `checkWorkerDispatch`) so the
- * REAL dispatch gate still runs — on fixed synthetic signals instead of
- * this host's actual load/memory/PSI/disk — making these transport tests
- * deterministic under load. Comfortably clears every default threshold
- * (`DEFAULT_DISPATCH_HOST_THRESHOLDS`: 8GB avail mem, load ratio <= 1.0,
- * mem PSI avg10 <= 30 / avg60 <= 10, 2GB free disk). */
-const HEALTHY_GATE_LIVE = Object.freeze({
-  supported: true, availMemGb: 64, load1: 0.1, cores: 8, loadRatio: 0.05,
-  memPsiAvg10: 0, memPsiAvg60: 0, memPsiAvg300: 0, workers: 0, freeDiskGb: 100,
-});
 
 /** Minimal #2887 fixture + driver wiring, closely modeled on the CLI's own
  * `models-direct-invocation.test.ts` fixture builder — reused shape, not a

@@ -37,11 +37,11 @@ import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, c
 import { open, mkdir, rename, unlink, lstat, readdir, realpath } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative, isAbsolute } from 'path';
+import { basename, dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
 import { importImpl } from '../_resolve-impl.mjs';
-import { sampleWorkerIdentity, sameWorkerIdentity, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
+import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
@@ -172,6 +172,56 @@ export function signalOwnedWorker(identity, signal, { sample = sampleWorkerIdent
   try { kill(-identity.pgid, signal); return true; } catch { return false; }
 }
 
+/** Execution-time files in the launcher's private directory. Content producers
+ * are pure; preview paths remain ${artifact:name}. Workspace locations are a
+ * future declaration kind and are refused here. */
+export async function materializeWorkerArtifacts(invocation, runDir) {
+  const artifacts = invocation.artifacts ?? [];
+  if (!Array.isArray(artifacts) || artifacts.length > 16) throw new Error('Worker artifact count exceeds bound');
+  const names = new Set();
+  let total = 0;
+  for (const artifact of artifacts) {
+    if (!artifact || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(artifact.name)
+      || /[^A-Za-z0-9_-]/.test(artifact.name) || names.has(artifact.name) || typeof artifact.content !== 'string'
+      || artifact.location !== undefined && artifact.location !== 'run-directory') throw new Error('Invalid worker artifact declaration');
+    names.add(artifact.name);
+    const size = Buffer.byteLength(artifact.content);
+    total += size;
+    if (size > 1048576 || total > 4194304) throw new Error('Worker artifact bytes exceed bound');
+  }
+  const paths = new Map(artifacts.map(artifact => [artifact.name, join(runDir, `artifact-${artifact.name}`)]));
+  const argv = invocation.argv.map(token => {
+    if (!token.includes('${artifact:')) return token;
+    const match = /^\$\{artifact:([A-Za-z0-9][A-Za-z0-9_-]{0,63})\}$/.exec(token);
+    if (!match || !paths.has(match[1])) throw new Error('Undeclared worker artifact placeholder');
+    return paths.get(match[1]);
+  });
+  const { inspectWorkerPath } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  await inspectWorkerPath(runDir, 'directory');
+  const stat = await lstat(runDir);
+  if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Worker artifact directory must be private and owned');
+  const created = [];
+  const cleanup = async () => {
+    const results = await Promise.allSettled(created.map(filename =>
+      withWorkerPath(filename, target => unlink(target)).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      })));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  };
+  try {
+    for (const artifact of artifacts) {
+      const filename = paths.get(artifact.name);
+      const handle = await withWorkerPath(filename, target => open(target,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      created.push(filename);
+      try { await handle.writeFile(artifact.content); await handle.sync(); }
+      finally { await handle.close(); }
+    }
+    return { argv, cleanup };
+  } catch (error) { await cleanup(); throw error; }
+}
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -203,9 +253,10 @@ async function launchOneWorker(owner, options) {
   const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
   if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
     filename === options.invocationPath || filename === invocation.briefPath
+    || dirname(filename) === runDir && basename(filename).startsWith('artifact-')
     || ['invocation.json', 'process.json', 'exit.json', 'health.json', 'final-evidence.json', 'worker-start.json', 'worker-identity.json', 'worker-exit.json',
       'stdout.log', 'stdout.events.jsonl', 'stderr.log', '.launch-owner'].some(name => filename === join(runDir, name)))) {
-    throw new Error('Worker output paths must be distinct from trusted metadata and capture files');
+    throw new Error('Worker output paths must be distinct from trusted metadata, capture files and artifact- paths');
   }
   for (const filename of Object.values(paths)) {
     if (await inspect(filename, 'output')) throw new Error('Fresh worker output paths are required');
@@ -216,7 +267,7 @@ async function launchOneWorker(owner, options) {
   // Frame stdin before any spawn: brief-json delivers a conductor-built params
   // document on the stdin pipe, never brief text in argv (#2911).
   const { workerStdinBytes } = await importImpl(import.meta.url, 'serve/worker-stdin-frame.mjs');
-  const stdinBytes = workerStdinBytes(invocation, brief);
+  const stdinBytes = workerStdinBytes(invocation, brief, inputs.drivers[invocation.selected.cli]);
   let gate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
   if (!gate.ok) throw new Error('Worker dispatch resource gate refused launch');
   const isolation = options.isolation ?? detectWorkerIsolation();
@@ -237,7 +288,6 @@ async function launchOneWorker(owner, options) {
   const profile = inputs.drivers[invocation.selected.cli].qualification.adapter.invocationProfiles[invocation.selected.profileRef];
   const captures = { stdout: join(runDir, profile.health?.outputFraming === 'jsonl' ? 'stdout.events.jsonl' : 'stdout.log'),
     stderr: join(runDir, 'stderr.log') };
-  const displayArgv = invocation.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
   const writeRecord = options.publishRecord ?? publishWorkerRecord;
   const publishFailures = [];
   let publishing = Promise.resolve();
@@ -251,22 +301,30 @@ async function launchOneWorker(owner, options) {
     publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
     return write;
   };
-  await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
-    previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
-    selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
-    policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
-    expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
-    argvDigest: qualificationDigest(invocation.argv), envNames: invocation.envNames, stdin: invocation.stdin,
-    prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
-    worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
-    health: invocation.health ?? null, transport: invocation.transport,
-    isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
-    limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
-  await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
-    launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
   const handles = [];
   let outcome;
+  let artifacts;
   try {
+    artifacts = await materializeWorkerArtifacts(invocation, runDir);
+    const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
+    await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
+      previousAttemptId: null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
+      policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
+      expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
+      // Retain the legacy digest binding while naming both argv stages explicitly.
+      argvDigest: qualificationDigest(invocation.argv), placeholderArgvDigest: qualificationDigest(invocation.argv),
+      executedArgvDigest: qualificationDigest(artifacts.argv),
+      artifacts: (invocation.artifacts ?? []).map(artifact => ({ name: artifact.name,
+        byteLength: Buffer.byteLength(artifact.content), sha256: bytesDigest(artifact.content) })),
+      envNames: invocation.envNames, stdin: invocation.stdin,
+      prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
+      worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
+      health: invocation.health ?? null, transport: invocation.transport,
+      isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+      limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
+    await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+      launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
     // All captures (including the reserved final) open successfully BEFORE spawn.
     for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
       const handle = await withWorkerPath(filename, target => (options.openCapture ?? open)(target, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
@@ -282,7 +340,7 @@ async function launchOneWorker(owner, options) {
       .map(name => [name, process.env[name]]));
     const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
     outcome = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
-      command: invocation.argv[0], args: invocation.argv.slice(1), cwd: invocation.cwd,
+      command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
@@ -294,19 +352,46 @@ async function launchOneWorker(owner, options) {
       endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     throw error;
   } finally {
-    // Never chmod a worker-replaced pathname; only the inodes we opened.
-    for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
-    await inspect(runDir, 'directory');
-    await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    try { await artifacts?.cleanup(); } finally {
+      // Never chmod a worker-replaced pathname; only the inodes we opened.
+      for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
+      await inspect(runDir, 'directory');
+      await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    }
   }
 }
 
 async function captureOneWorker(owner, ctx) {
   const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
   const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
+  const sampleIdentity = options.sampleIdentity ?? sampleWorkerIdentity;
+  // Separate hook from `sampleIdentity` (the worker-side sampler): this one
+  // samples the launcher's own trusted transport child, never a worker PID,
+  // and tests need to control the two independently (e.g. the transport
+  // dies as soon as it is sampled once, while the worker side is never
+  // reached at all).
+  const sampleNativeSupervisor = options.sampleNativeSupervisor ?? sampleWorkerIdentity;
+  // For our own detached child, spawn waits through setsid/exec; one owned leader sample suffices.
+  const immediate = !hasTransport ? sampleIdentity(child.pid) : null;
+  let identity = immediate?.pid === child.pid && immediate?.pid === immediate?.pgid
+    && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
+  // Pin the transport's own birth identity at the earliest possible moment --
+  // synchronously, before any await can let it exit and be reaped. For
+  // degraded/attached mode `child` IS the transport process (its PID is
+  // `native.mainPid` below), so this sample is as trustworthy as the direct
+  // child's `immediate` sample above. Sampling this only inside the polling
+  // loop (as before) raced a worker that ran and exited fast enough that the
+  // transport itself had already exited by the loop's first `await`,
+  // leaving `nativeSupervisor` permanently null -- a dead process can never
+  // be resampled back to non-null, so no later retry could recover it,
+  // which is exactly the ordering that produced the null `worker` field.
+  // For systemd-unit mode the unit's MainPID is not known synchronously; it
+  // is still resolved once inside observeIdentity.
+  let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
   const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
-  let identity = !hasTransport ? sampleWorkerIdentity(child.pid) : null;
+  let identityObservation = 'pending';
+  let reportedWorker = null;
   let output = Buffer.alloc(0);
   let total = 0;
   let timedOut = false;
@@ -316,9 +401,9 @@ async function captureOneWorker(owner, ctx) {
   let settled = false;
   let waitCode = null;
   let waitSignal = null;
+  let deliveredSignal = null;
   let sawExit = false;
   let sawClose = false;
-  let nativeSupervisor = null;
   const driver = ctx.inputs.drivers[invocation.selected.cli];
   const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
     effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
@@ -338,9 +423,16 @@ async function captureOneWorker(owner, ctx) {
     return health;
   };
   const timers = new Set();
-  const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
+  const later = (fn, ms) => {
+    if (settled) return null;
+    const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t;
+  };
   const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
-  const signal = value => !settled && signalOwnedWorker(identity, value, { supervisor });
+  const signal = value => {
+    if (settled || !signalOwnedWorker(identity, value, { supervisor })) return false;
+    deliveredSignal = value;
+    return true;
+  };
   const readNative = () => { try { return (options.isolationStatus ?? getWorkerIsolationStatus)(outcome.unit); } catch { return null; } };
   const transportRecord = async filename => {
     const target = join(ctx.runDir, filename);
@@ -405,13 +497,14 @@ async function captureOneWorker(owner, ctx) {
   const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
     transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
     nativeSupervisor,
-    worker: identity, launchTime, monotonicStart, ownership: identity && identity.pgid === identity.pid ? 'owned-group' : 'unknown',
+    worker: identity ?? reportedWorker, identityObservation, launchTime, monotonicStart, ownership: identity ? 'owned-group' : 'unknown',
     isolation: outcome.mode, unit: outcome.unit ?? null });
   let resolveDone;
   const done = new Promise(resolve => { resolveDone = resolve; });
   const finish = async () => {
     if (settled) return;
     settled = true;
+    identityObservation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
@@ -429,18 +522,34 @@ async function captureOneWorker(owner, ctx) {
     // worker can plant either file before the trusted transport ever writes
     // it. Treat both as unauthenticated, worker-reported hints only: they may
     // inform diagnostics (`workerTermination`, `nativeSupervisor` fallback)
-    // but MUST NOT set exitCode/signal/termination/confirmed. Those come only
-    // from the kernel-observed wait() status of the launcher's own direct
+    // but MUST NOT set exitCode/signal/termination/confirmed. Authority comes
+    // from successful launcher-owned signal delivery, the wait() status of its direct
     // child (never the worker — `child` here is the trusted transport or the
     // systemd-run wrapper that mirrors the unit's real exit) or, for
     // systemd-unit mode, from `getWorkerIsolationStatus` queried against the
     // unit by name, also not a worker-writable path.
     const workerExit = hasTransport ? await transportRecord('worker-exit.json') : null;
-    const workerStart = hasTransport ? await transportRecord('worker-identity.json') : null;
-    if (workerStart && !identity) { identity = workerStart.worker; nativeSupervisor = workerStart.supervisor; }
-    const exitCode = outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
-    const resultSignal = outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
-      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal;
+    // A worker that exits before the launcher sees it alive leaves only the
+    // transport's start record. Publish it as a diagnostic, labelled
+    // unverified and with ownership unknown: it is never signal authority
+    // (`identity` stays null) and needs the supervisor the launcher sampled.
+    if (!identity && hasTransport && nativeSupervisor) {
+      const workerStart = await transportRecord('worker-identity.json');
+      if (workerStart?.worker && sameWorkerIdentity(workerStart.supervisor, nativeSupervisor)
+        && workerStart.worker.parentPid === nativeSupervisor.pid) {
+        reportedWorker = workerStart.worker;
+        identityObservation = 'transport-reported-unverified';
+      }
+    }
+    // Successful owned-group delivery is a fallback only while both wait
+    // and unit-native exit status are unavailable. Observed status wins.
+    // Failed/refused signals and worker-writable records grant no evidence.
+    const nativeExited = outcome.mode === 'systemd-unit' && [1, 2, 3].includes(native?.execMainCode);
+    const resultSignal = (outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
+      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal)
+      ?? (!sawExit && waitCode === null && waitSignal === null && !nativeExited ? deliveredSignal : null);
+    const exitCode = resultSignal ? null
+      : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
     const result = { invocationId, exitCode, signal: resultSignal,
       endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
       descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
@@ -516,7 +625,10 @@ async function captureOneWorker(owner, ctx) {
     observer.observe(classifyWorkerHealthFailure({ code: errorCode }, { source: { kind: 'stderr' } }));
     later(() => finish(), 0);
   });
-  child.once('exit', (code, sig) => { sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs); });
+  child.once('exit', (code, sig) => {
+    if (settled) return;
+    sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs);
+  });
   // sawExit/waitCode/waitSignal come solely from the 'exit' handler above; a
   // failed spawn (e.g. ENOENT) never emits 'exit' in this Node, so they stay
   // at their unset defaults (false/null/null) here, which is already correct
@@ -532,32 +644,90 @@ async function captureOneWorker(owner, ctx) {
     // monotonic hard cancellation target.
     reportHealth(); stop('HARD_DEADLINE');
   }, hardRemaining());
-  const observeIdentity = async () => {
+  const identityCapture = createWorkerIdentityCapture();
+  const observeIdentity = async (firstSample) => {
     if (settled) return;
-    if (!identity && hasTransport) {
+    let candidate = !hasTransport ? firstSample === undefined ? sampleIdentity(child.pid) : firstSample : null;
+    // Once the transport is observed to have exited, stop trying to acquire
+    // the worker's identity through it: `nativeSupervisor.pid` is a fixed
+    // pid *number*, and after the real transport process is gone the OS can
+    // reuse that number for an unrelated process, so a live resample of "its"
+    // children or a live-resample match against a stale disk record could
+    // silently pivot onto that unrelated process. Nothing further can be
+    // learned this way regardless -- a dead transport can never produce a
+    // new, valid live sample -- so this is a pure safety stop, not a loss.
+    if (hasTransport && !sawExit) {
       const native = outcome.mode === 'systemd-unit' ? readNative() : { mainPid: child.pid };
       const recorded = await transportRecord('worker-identity.json');
-      if (settled) return;
-      nativeSupervisor = sampleWorkerIdentity(native?.mainPid);
+      // Re-check, not just `settled`: the transport's exit can be observed
+      // while this very call is awaiting the disk read above, and resuming
+      // into the containment/children-scan work below on a transport pid
+      // the OS may have already reused is exactly what this guard exists to
+      // prevent -- checking only at entry is not enough once an await
+      // separates the check from the work it is meant to gate.
+      if (settled || sawExit) return;
+      // The transport's own identity cannot change while it is alive. Once
+      // pinned, a later non-null resample is never accepted as a
+      // replacement: if the transport's pid were reused after it exited,
+      // that unrelated process would otherwise become the trusted ancestor
+      // for every containment check below. The first successful sample is
+      // either the launcher's own spawn-time pin (captured above, before any
+      // await could let the transport exit and be reaped) or, for
+      // systemd-unit mode where the unit's MainPID isn't known
+      // synchronously, the first live resample here.
+      nativeSupervisor ??= sampleNativeSupervisor(native?.mainPid);
       const contained = candidatePid => verifyWorkerContainment(candidatePid, { mode: outcome.mode, unit: outcome.unit, nativeSupervisor });
       // A disk record that merely matches a REAL process on resample is not
       // enough: that real process can be any same-UID process on the host.
       // Containment (cgroup for systemd-unit, kernel ppid ancestry for
       // degraded) must also hold before the record is trusted.
+      const current = recorded?.worker ? sampleIdentity(recorded.worker.pid) : null;
       if (recorded && sameWorkerIdentity(recorded.supervisor, nativeSupervisor)
-        && sameWorkerIdentity(recorded.worker, sampleWorkerIdentity(recorded.worker?.pid))
-        && contained(recorded.worker?.pid)) identity = recorded.worker;
-      else {
-        const children = sampleWorkerChildren(nativeSupervisor?.pid);
+        && sameWorkerIdentity(recorded.worker, current)
+        && contained(current?.pid)) {
+        candidate = current;
+        // The transport spawned this worker itself (its sample is past
+        // setsid) and this live sample matches its record field for field:
+        // two concordant observations by different observers. Only the
+        // children scan below can see a pre-setsid fork.
+        if (current.pid === current.pgid && current.uid === process.getuid()) identity ??= current;
+      } else {
+        const children = (options.sampleChildren ?? sampleWorkerChildren)(nativeSupervisor?.pid);
         if (children?.length === 1 && children[0].uid === process.getuid() && children[0].parentPid === nativeSupervisor.pid
-          && contained(children[0].pid)) identity = children[0];
+          && contained(children[0].pid)) {
+          const current = sampleIdentity(children[0].pid);
+          if (current?.parentPid === nativeSupervisor.pid && contained(current.pid)) candidate = current;
+        }
       }
     }
+    // A third-party children scan requires two matching samples: setsid may be pending.
+    // A direct child uses stable capture only when its immediate sample was unusable.
+    const observed = identityCapture.observe(candidate);
+    // The capture's two-matching-samples stability only proves the *same*
+    // process answered twice; it says nothing about whose child it is. A
+    // transport-path candidate reaching here is already launcher/transport
+    // -parented (verified above, before being assigned to `candidate`), but
+    // a direct child's candidate is not -- require it here, or an unrelated
+    // same-uid group leader (e.g. the OS reusing `child.pid` for something
+    // else entirely after our own child exited before the immediate sample)
+    // would be accepted merely for repeating within the window. This is
+    // deliberately checked *after* `identityCapture.observe()`, not before:
+    // rejecting the candidate earlier would starve the capture's own
+    // window/deadline bookkeeping of ever seeing a non-null sample.
+    if (observed && (hasTransport || observed.parentPid === process.pid)) identity ??= observed;
     if (identity) observer.processStarted(identity);
-    recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
-    if (!identity && hasTransport) later(observeIdentity, 50);
+    if (!identity && !identityCapture.expired()) {
+      later(observeIdentity, identityCapture.started() ? 5 : 50); return;
+    }
+    const observation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
+    if (identityObservation !== observation) {
+      identityObservation = observation;
+      recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
+    }
+    // Keep looking for a fresh candidate after an unsuccessful window.
+    if (!identity) later(observeIdentity, 50);
   };
-  observeIdentity();
+  observeIdentity(immediate);
   const sampleLog = async () => {
     const locator = options.healthSessionLog;
     if (!locator || !ctx.profile.health?.sessionLogLocator || !locator.sessionId) return;

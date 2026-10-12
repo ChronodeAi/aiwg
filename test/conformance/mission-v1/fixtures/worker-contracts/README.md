@@ -5,7 +5,9 @@ multi-cli-orchestration proposal dated 2026-10-07: delivery plan B-OG-01,
 configuration spec §§2–5 and test strategy T-OG-01/08/14/15/17/19 (Revision 2
 Tier 0 packs). The latest source includes optional Revision 3 health definitions;
 historical five-feature dispatch records and six-feature records both have shape
-vectors. Health monitoring and lease reconciliation are not implemented here.
+vectors. S1 health-to-lease and Mission reconciliation mapping is frozen as
+pure codec vectors by #2916 (B-OG-54); managed scheduler/MC enforcement is
+not implemented here.
 
 The fragment files are verbatim JSON contracts from configuration spec §4/§5.1.
 They have **no new published schema IDs**. After #2878, #2879 and #2880, the
@@ -90,6 +92,40 @@ owners supply the documented defaults when execution requires them.
 The direct MCP invocation bridge is not part of this change; it is deferred to
 #2892. The frozen `missions` toolset and mission-dispatch descriptor remain
 unchanged.
+
+### #2916 S1 health-to-lease mapping amendment (B-OG-54)
+
+No fragment, manifest digest, schema ID or worker definition is changed: the
+shipped `workerHealthSummary`/`workerEffectiveHealth` shapes, the five/six
+required-feature shapes and the `worker-health.v1` negotiation vectors
+already cover the S1 contract surface, and the exact-match test is untouched.
+The Mission codec owner gains pure mapping only
+(`classifyHealthTrace`, `projectHealthTrace`, `healthLifecycleDigest`,
+`boundTraceText`, `healthReasonLabel`, `stopProofFromHealth`,
+`decideLeaseMapping` in `src/mission-protocol/`): renewal carries no
+progress field, so it cannot assert progress; stop proof is derived from
+owner-observed health summaries, never asserted by the caller, so a late
+final after cancel-disconnect never releases while termination is
+uncertain; lease expiry or cancel-disconnect without derived confirmed stop
+proof retains the uncertain reservation and releases no writer capacity; a
+stale observed generation denies renew/cancel/settle/accept and stale
+evidence is recorded as rejected without ever being stored. Quiet, stalled
+and uncertain project distinctly; productive-work credit requires fresh
+progress evidence (heartbeat replays with a frozen progress watermark earn
+nothing) and no health state earns Mission/Flow completion credit.
+Activity summaries are built only from enum/counter/generation fields plus
+an allowlisted reason label (unlisted free text projects as
+`UNCLASSIFIED#digest`, and the previous-state channel accepts only closed
+observed states), bounded to 1024 UTF-8 bytes with small budgets never
+overflowing; the effect ledger receives digest-only lifecycle refs. The
+reason-code allowlist is pinned by parity test to the B-OG-50 observer
+`reasons` set.
+T-OG-24 registers the S1 vectors as partial with a mocked scheduler
+boundary and no managed imports. Actual renew/fence/stop/settle/release
+wiring (B-OG-12), Mission/Flow/Ralph caller-event mapping (B-OG-16) and
+scheduler/MC crash/restart cases remain **deferred S2+**; the observer
+reason-code allowlist moves together with the B-OG-50 observer `reasons`
+set.
 
 ### #2890 S1 structured-final realization
 
@@ -177,6 +213,7 @@ retaining scenario IDs and documenting any reviewed contract revision.
 | Direct lifecycle, protected verification, optional receipts | B-OG-13/14/15/34 | Conductor, existing launcher/result/evidence owners | Direct schema independence and synthetic shell mechanics delivered; end-to-end lifecycle/verification remains S1 downstream work |
 | MC brief/group/decision and Mission/Flow/Ralph bindings | B-OG-16/23; B-OG-30 | `src/cli/handlers/mc.ts`, Mission conductors, composition-engine validator/runtime, Ralph | Vocabulary, offline Flow value-schema mappings and consumer inventory delivered; Mission/MC lifecycle, completion and accounting **deferred S2+** |
 | Leases, admission, fencing, cancel/reconcile | B-OG-10/12/16 | `src/serve/shared-host-scheduler.ts`, existing admission store, MC/Mission owners | Required managed data shape retained; managed runtime assertions **deferred S2+** |
+| S1 health-to-lease/trace mapping vectors | B-OG-54 / #2916 | `src/mission-protocol/types.ts`, `src/mission-protocol/codecs.ts`, T-OG-24 packs | Pure `classifyHealthTrace`/`projectHealthTrace`/`decideLeaseMapping` with mocked scheduler boundary; B-OG-12/16 run the same vectors as mandatory S2 runtime gates |
 | Live host-resource admission thresholds (`admission.hostResources`) | FR-OG-107 / #2954 | `vscode-extension/schemas/aiwg.config.v1.json`, `src/config/aiwg-config.ts`, dispatch preflight | `parallelism.fragment.json` amended additively with optional `hostResources` (conservative defaults live in `resolveDispatchHostThresholds`); strict exact-match assertions unchanged; shared enforced admission remains **deferred S2+** |
 | Optional health definitions and required-feature compatibility | B-OG-49/50/54/55; B-OG-12/16 for enforcement | Existing launcher/adapters, Mission codecs, scheduler | Five/six-feature shape compatibility only; health-to-lease mappings owned by B-OG-54 and managed enforcement **deferred S2+** |
 | Catalog editor annotation discrepancy | B-OG-29 / #2878 | `schemas/models/model-catalog.v1.schema.json`, catalog loader | Resolved in #2878: the closed owner accepts the exact checked-in annotation; the complete annotated catalog validates through the production loader |
@@ -715,3 +752,54 @@ Final frozen-contract rerun:
 `npx vitest run --config config/vitest.conformance.config.js test/conformance/mission-v1/worker-contracts.test.ts`
 passed **142/142**, including strict fragment/manifest equality and original
 unresolved-intent, admitted-brief and assembled-evidence round trips.
+
+## #2991 / #3002 / #2998 coordinated contract amendment (2026-10-11)
+
+The adapter fragment adds optional bounded `versionPattern` and the
+`adapter-frame` stdin kind. The Mission definition fragment adds the same
+stdin kind and optional generated `artifacts` declarations (name, content,
+optional `location: run-directory`). Manifest SHA-256 bindings are amended;
+exact equality and strict compilation checks remain intact. These are
+intentional shared-contract extensions; no schema ID or subsystem is added.
+Cursor decimal date cores normalize 2026.10.01-e373342 to
+2026.10.1-e373342 once in the version probe; suffixes remain unchanged.
+Subsequent installation qualification also compares the captured raw version
+text with the recorded banner: added leading zeros cannot reuse a normalized
+version pin, including `2026.010.1` versus `2026.10.1`.
+Artifacts are bounded private launcher files with argv placeholders, never
+preview writes. Workspace-relative artifacts remain deferred to S2+ (#2905).
+Antigravity frames are computed by the installed driver and delivered only
+on stdin, must be nonempty, and shell framing binds the trusted host store bytes
+and conductor policy explicitly under `env -i`, without cwd config resolution.
+Launcher records bind substituted argv and artifact names, byte lengths and
+content digests without exposing contents; the placeholder argv digest is retained.
+Output paths cannot collide with reserved `artifact-` paths.
+Provider controls remain unqualified until authenticated smoke
+runs; synthetic fixtures do not grant live authority.
+
+Version patterns are anchored whole-banner expressions with exactly one
+capture, at most 256 characters and two bounded atom repetitions (each at
+most 128). Branching, assertions, backreferences, wildcard/unbounded
+repetition and repeated groups are rejected by the registry loader. Probes
+retain at most 4096 bytes of raw UTF-8 banner evidence. The artifact limits
+are 16 names, 1 MiB per artifact and 4 MiB total UTF-8 bytes (the existing
+invocation-file ceiling can be stricter); names use alphanumerics, underscore
+and hyphen, with an alphanumeric first character.
+
+Review-required fixes validation (2026-10-11): all 12 added regression cases
+fail against the pre-fix uncommitted source and pass with the fixes. The full
+touched unit files report 341 passed, 20 failed and 1 skipped; the touched
+Antigravity/DeepSeek conformance files report 29 passed and 11 failed. All
+31 remaining failure names also reproduce against the pre-fix source (empty
+subprocess stdio/version evidence and MCP fixture disconnects); no new failures
+were introduced. Frozen worker-contract conformance passes 142/142, and every
+fragment's SHA-256 matches the manifest. These fixes change no frozen schema
+fragment, so their existing amended digests remain valid.
+
+`npm run -s typecheck`, `npm run -s lint:schemas` (236 schemas, 0 errors,
+2 existing warnings), `npm run -s lint:orchestration-packs` (21 packs) and
+`git diff --check` pass. Vitest's default config bundling hits EROFS;
+`--configLoader runner --no-cache` starts successfully and produces the results
+above. `node tools/mission-protocol/inventory.mjs --write` remains blocked by
+`spawnSync rg EPERM`; no generated inventory was hand-edited. No vendor/model
+calls or commits were made. Runtime qualification remains deferred.
