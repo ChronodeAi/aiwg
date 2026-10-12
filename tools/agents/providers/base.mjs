@@ -2350,7 +2350,7 @@ export function getAddonCommandFiles(srcRoot, excludeAddons = [], options = {}) 
 }
 
 /**
- * Get all skill directories from all addons
+ * Get skill directories from a direct addon/framework source or all addons
  * @param {string} srcRoot - Source root directory
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
  * @returns {string[]} - Array of skill directory paths
@@ -2358,6 +2358,8 @@ export function getAddonCommandFiles(srcRoot, excludeAddons = [], options = {}) 
 export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
   const addons = discoverAddons(srcRoot);
   const dirs = [];
+  const directDir = getDirectSourceDir(srcRoot, excludeAddons);
+  if (directDir) dirs.push(...listSkillDirs(directDir));
 
   for (const addon of addons) {
     if (excludeAddons.includes(addon.name)) continue;
@@ -2369,6 +2371,21 @@ export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
   }
 
   return dirs;
+}
+
+// `aiwg use <addon>` passes the component itself as --source. Keep bulk
+// repository discovery unchanged, even if the repo has a top-level skills/.
+function getDirectSourceDir(srcRoot, excludeAddons) {
+  if (fs.existsSync(path.join(srcRoot, 'agentic', 'code')) ||
+      excludeAddons.includes(path.basename(path.resolve(srcRoot)))) return null;
+  const dir = path.join(srcRoot, 'skills');
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
+  const relative = path.relative(fs.realpathSync(srcRoot), fs.realpathSync(dir));
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    console.warn(`Warning: Skipping direct skills directory ${dir}: resolves outside source root ${srcRoot}`);
+    return null;
+  }
+  return dir;
 }
 
 /**
