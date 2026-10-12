@@ -6,9 +6,13 @@ plural `aiwg sessions` namespace.
 ## Catalog location
 
 The default catalog is `.aiwg/sessions/catalog.sqlite` in the inferred
-AIWG/Git project root. Override it with `--db <path>`. Read-only commands infer
-the workspace from an explicit `--workspace`, the canonical current project
-root, or a sole catalog workspace, in that order. Multiple candidates fail
+AIWG/Git project root, or the canonical cwd when there is no project.
+Override it with `--db <path>` (relative to cwd). `--workspace <path-or-id>`
+selects a workspace within that catalog; it does not select a different database.
+Read-only commands infer the workspace from an explicit `--workspace`, the
+canonical current project root, a matching canonical cwd in the catalog, or
+a sole catalog workspace, in that order. An empty catalog uses the canonical
+cwd. Multiple unmatched candidates fail
 with `WORKSPACE_AMBIGUOUS`; AIWG never chooses between them. Mutation commands
 continue to require an explicit workspace. Install and verify the optional
 SQLite runtime before using catalog commands:
@@ -26,6 +30,40 @@ the package falls back to `node-gyp`; install Python 3, `make`, and a C/C++
 compiler supported by your Node platform, then repeat the feature install.
 `aiwg sessions doctor --json` reports `CATALOG_UNAVAILABLE` with the same
 installer command when the package is absent or unusable.
+
+Imports for another workspace remain in the selected catalog. The
+`import-discovered` result names the database and gives a read-back command.
+For example, after importing `/work/other` from `/work/project`, read the same
+sessions from either directory with:
+
+```sh
+aiwg sessions list --workspace /work/other --db /work/project/.aiwg/sessions/catalog.sqlite
+aiwg sessions show <native-session-id> --workspace /work/other --db /work/project/.aiwg/sessions/catalog.sqlite
+```
+
+From `/work/other` (without a project), `--db` is necessary: the default
+catalog there is a separate `/work/other/.aiwg/sessions/catalog.sqlite`.
+With the importing project's `--db`, the matching cwd selects `/work/other`
+without `--workspace`, for `list`, `timeline`, and `search`.
+
+`list` and `timeline` report `coverage.catalogScope`, including the selected
+database, total visible sessions, other workspace IDs and their counts, and
+a hint naming `--workspace` and `--db`. `show` and `search` report the same
+information in `catalogScope`; a missing `show` includes it in error details.
+Counts exclude tombstoned sessions and uncommitted imports. `list`, `timeline`
+and `search` remain scoped to the selected workspace.
+
+`show` accepts an internal `session_…` ID, an exact provider-native ID, or
+a unique prefix of either. Exact IDs take precedence over prefixes. Without
+`--workspace`, native references search the whole selected catalog, so the
+importing project can show a uniquely identified imported transcript directly.
+Internal `session_…` references retain the inferred workspace scope. Explicit
+`--workspace` scopes all references. Ambiguous native IDs or prefixes return
+`SESSION_AMBIGUOUS`, listing each candidate's internal ID, provider and workspace
+in both text and JSON errors. Select `--workspace` or an internal ID from `list`.
+When Claude subagent artifacts repeat the parent's native ID, a unique parent
+takes precedence only when every other match is identified as a subagent by
+the adapter's stored boolean metadata, within the same provider and workspace.
 
 ## Commands
 
@@ -46,8 +84,8 @@ aiwg sessions list [--provider <id>] [--workspace <id>] [--tag <tag>]
                    [--min-coverage <0..1>] [--json]
 aiwg sessions timeline [--workspace <id>] [--gap <duration>]
                        [--min-coverage <0..1>] [--json]
-aiwg sessions show <session-id> [--json]
-aiwg sessions search <query> --workspace <id>
+aiwg sessions show <session-id> [--workspace <path-or-id>] [--json]
+aiwg sessions search <query> [--workspace <path-or-id>]
                      [--provider <id>] [--date-from <rfc3339>] [--date-to <rfc3339>]
                      [--participant <role>] [--model <id>] [--role <role>]
                      [--tool <name>] [--tag <tag>] [--entity <entity>]

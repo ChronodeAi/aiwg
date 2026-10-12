@@ -154,10 +154,10 @@ Commands:
   grok-export <id> --workspace <path> --out <dir>  Export one CLI transcript
   grok-id <file> --format json|streaming-json  Read a headless session ID
   import <file> --source-id <id>  Import a supported provider JSONL source
-  list [--limit N] [--cursor N]   List normalized sessions
-  timeline [--gap 30m]            Report chronological activity segments
-  show <session-id>               Show a session with events and tags
-  search <query> --workspace <id> Search authorized normalized content
+  list [--workspace <path-or-id>] [--limit N] [--cursor N]  List normalized sessions
+  timeline [--workspace <path-or-id>] [--gap 30m]  Report chronological activity segments
+  show <session-id> [--workspace <path-or-id>]  Show a session with events and tags
+  search <query> [--workspace <path-or-id>]  Search authorized normalized content
   extract [session-id] --workspace <id> Extract structural candidates
   export plan --workspace <id> --out <file> <session-id...>  Select sessions into a reviewable plan
   export build --plan <file> --out <dir>  Build a Fortemi Knowledge Shard from a plan
@@ -180,7 +180,12 @@ Commands:
 Options:
   --json          Emit the versioned JSON contract
   --dry-run       Preview a mutation without changing state
-  --db <path>     Override .aiwg/sessions/catalog.sqlite
+  --db <path>     Select a catalog; relative paths resolve from cwd
+  --workspace <path-or-id>  Select the workspace within that catalog for reads
+                   (default: current project, matching cwd, or sole catalog workspace)
+                   Catalog defaults to <project-or-cwd>/.aiwg/sessions/catalog.sqlite
+                   Imports for other workspaces stay in the selected catalog;
+                   use --db to read that catalog from another directory
   --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
@@ -197,7 +202,7 @@ Options:
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter
   --consumer <id> Select a named memory consumer for promotion
-  --workspace <id>, --tag <tag>, --limit <n>, --cursor <n>
+  --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
   --max-documents <n>  Explicit extraction safety limit; returns a partial receipt
   --include-bytes  Embed registered-output bytes in session export shards
@@ -211,6 +216,12 @@ Search filters:
   --control-events exclude|include|only (default: exclude)
   Query syntax: FTS5 terms, quoted phrases, prefixes, AND/OR/NOT
   Follow the opaque nextCursor with the same query and filters
+
+Show identifiers:
+  Internal session_ IDs, exact provider-native IDs, or unique prefixes
+  Native IDs search the selected catalog unless --workspace is explicit
+  Internal session_ IDs retain the default workspace scope
+  Ambiguous IDs list candidates; select --workspace or an internal ID from list
 
 Analytics / forensics:
   --session <id>, --date-from <rfc3339>, --date-to <rfc3339>
@@ -328,7 +339,10 @@ async function executeCommand(
           limit,
           cursor,
         });
-        const coverage = repository.getCoverage(workspaceId);
+        const coverage = {
+          ...repository.getCoverage(workspaceId),
+          catalogScope: catalogScope(ctx, args, repository, workspaceId),
+        };
         const response = {
           items: result.items,
           page: {
@@ -365,7 +379,10 @@ async function executeCommand(
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const gapMs = timelineGap(args.values.get('--gap'));
         const items = deriveSessionTimeline(repository.listTimelineInputs(workspaceId), gapMs);
-        const coverage = repository.getCoverage(workspaceId);
+        const coverage = {
+          ...repository.getCoverage(workspaceId),
+          catalogScope: catalogScope(ctx, args, repository, workspaceId),
+        };
         const response = {
           schemaVersion: '1.0.0',
           workspaceId,
@@ -397,13 +414,37 @@ async function executeCommand(
       }
       case 'show': {
         const id = requiredPositional(args, 0, 'session-id');
-        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
-        const session = repository.getSession(id, workspaceId);
-        if (!session) throw new CliError('SESSION_NOT_FOUND', `session not found: ${id}`, EXIT.unavailable);
+        const explicit = args.values.has('--workspace');
+        const catalogMatches = explicit ? undefined : repository.findSessionsByReference(id);
+        // Provider-native IDs and their prefixes may themselves start with
+        // session_. Exact internal IDs still take precedence.
+        const scoped = explicit || catalogMatches?.some((session) => session.sessionId === id)
+          || (id.startsWith('session_')
+            && !catalogMatches?.some((session) => session.nativeSessionId.startsWith(id)));
+        const workspaceId = scoped
+          ? readAuthorizationContext(ctx, args, command, repository).workspaceId
+          : projectRootCandidate(ctx.cwd) ?? normalizeWorkspaceId(ctx.cwd, '.');
+        const scope = catalogScope(ctx, args, repository, workspaceId);
+        // Native IDs identify provider transcripts across this local catalog.
+        // Explicit workspace selection and internal IDs retain workspace scope.
+        const matches = scoped ? repository.findSessionsByReference(id, workspaceId) : catalogMatches!;
+        if (matches.length > 1) {
+          throw new CliError('SESSION_AMBIGUOUS',
+            `session reference is ambiguous: ${id}; candidates: ${matches.map((session) =>
+              `${session.sessionId} (provider=${session.provider}, workspace=${JSON.stringify(session.workspaceId)})`).join(', ')}; select --workspace or use an internal session ID from sessions list`,
+            EXIT.usage, { catalogScope: scope, candidates: matches.map((session) => ({
+              sessionId: session.sessionId, provider: session.provider, workspaceId: session.workspaceId,
+            })) });
+        }
+        const session = matches[0];
+        if (!session) throw new CliError('SESSION_NOT_FOUND',
+          `session not found: ${id}${scope.hint ? `; ${scope.hint}` : ''}`,
+          EXIT.unavailable, { catalogScope: scope });
         return ok(command, {
           session,
-          tags: repository.listTags(id, workspaceId),
-          events: repository.listEvents(id, workspaceId),
+          tags: repository.listTags(session.sessionId, session.workspaceId),
+          events: repository.listEvents(session.sessionId, session.workspaceId),
+          catalogScope: catalogScope(ctx, args, repository, session.workspaceId),
         });
       }
       case 'search': {
@@ -431,6 +472,7 @@ async function executeCommand(
         });
         return ok(command, {
           items: result.items,
+          catalogScope: catalogScope(ctx, args, repository, workspaceId),
           page: { limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
             nextCursor: result.nextCursor },
         });
@@ -1533,6 +1575,11 @@ async function importDiscovered(
         manifestId: manifest.manifestId,
         receipt,
         resumable: receipt.run.status !== 'complete',
+        catalog: {
+          database: databasePath(ctx, args),
+          workspaceId: manifest.workspaceId,
+          hint: `Read these sessions from either directory with aiwg sessions list --workspace ${JSON.stringify(manifest.workspaceId)} --db ${JSON.stringify(databasePath(ctx, args))}`,
+        },
       });
     } finally {
       repository.close();
@@ -1853,7 +1900,24 @@ function openRepository(ctx: HandlerContext, args: ParsedArgs): SessionRepositor
 
 function databasePath(ctx: HandlerContext, args: ParsedArgs): string {
   if (args.values.has('--db')) return resolve(ctx.cwd, args.values.get('--db')!);
-  return resolve(projectRootCandidate(ctx.cwd) ?? ctx.cwd, '.aiwg/sessions/catalog.sqlite');
+  return resolve(projectRootCandidate(ctx.cwd) ?? normalizeWorkspaceId(ctx.cwd, '.'), '.aiwg/sessions/catalog.sqlite');
+}
+
+function catalogScope(
+  ctx: HandlerContext, args: ParsedArgs, repository: SessionRepository, workspaceId: string,
+) {
+  const workspaces = repository.listWorkspaceSessionCounts();
+  const otherWorkspaces = workspaces.filter((workspace) => workspace.workspaceId !== workspaceId);
+  const database = databasePath(ctx, args);
+  return {
+    database,
+    workspaceId,
+    total: workspaces.reduce((total, workspace) => total + workspace.count, 0),
+    otherWorkspaces,
+    hint: otherWorkspaces.length
+      ? `Other workspaces in this catalog: ${otherWorkspaces.map((workspace) => `${JSON.stringify(workspace.workspaceId)} (${workspace.count} sessions)`).join(', ')}. Select one with --workspace <path-or-id>; from another directory also pass --db ${JSON.stringify(database)}.`
+      : null,
+  };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -1951,6 +2015,16 @@ function readAuthorizationContext(
     };
   }
   const candidates = repository.listWorkspaceIds();
+  const current = normalizeWorkspaceId(ctx.cwd, '.');
+  if (candidates.includes(current) || candidates.length === 0) {
+    return {
+      actorId: 'local-catalog-owner',
+      workspaceId: current,
+      operation,
+      catalogScope: 'workspace',
+      mode: 'local-owner',
+    };
+  }
   if (candidates.length === 1) {
     return {
       actorId: 'local-catalog-owner',
@@ -1960,24 +2034,13 @@ function readAuthorizationContext(
       mode: 'local-owner',
     };
   }
-  if (candidates.length > 1) {
-    throw new CliError(
-      'WORKSPACE_AMBIGUOUS',
-      'current workspace cannot be inferred safely; pass --workspace explicitly',
-      EXIT.usage,
-      {
-        candidates,
-        example: `aiwg sessions ${operation} --workspace ${JSON.stringify(candidates[0])}`,
-      },
-    );
-  }
   throw new CliError(
-    'WORKSPACE_REQUIRED',
-    'current workspace cannot be inferred; pass --workspace explicitly',
+    'WORKSPACE_AMBIGUOUS',
+    'current workspace cannot be inferred safely; pass --workspace explicitly',
     EXIT.usage,
     {
-      candidates: [],
-      example: `aiwg sessions ${operation} --workspace <path-or-id>`,
+      candidates,
+      example: `aiwg sessions ${operation} --workspace ${JSON.stringify(candidates[0])}`,
     },
   );
 }
@@ -2237,7 +2300,10 @@ function printHuman(value: Envelope): void {
   }
   if (value.command === 'sessions.timeline' && value.data
     && typeof value.data === 'object' && 'items' in value.data) {
-    const data = value.data as { items: Array<Record<string, unknown>>; coverage?: { status?: string } };
+    const data = value.data as {
+      items: Array<Record<string, unknown>>;
+      coverage?: { status?: string; catalogScope?: { hint?: string | null } };
+    };
     for (const item of data.items) {
       console.log([
         item.startAt ?? '<unknown-time>',
@@ -2251,6 +2317,7 @@ function printHuman(value: Envelope): void {
       ].join(' '));
     }
     console.log(`Coverage: ${data.coverage?.status ?? 'unknown'}`);
+    if (data.coverage?.catalogScope?.hint) console.log(data.coverage.catalogScope.hint);
     return;
   }
   console.log(JSON.stringify(value.data, null, 2));
