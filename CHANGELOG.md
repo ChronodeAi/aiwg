@@ -83,6 +83,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `aiwg doctor --probe-workers` print the same hint when it still applies,
   and generated project context now states the dispatch state plainly. See
   [Turn On Direct Worker Dispatch](docs/getting-started/worker-dispatch.md).
+- The CI-safe stub UAT lane (`npm run uat`) now automates nine previously
+  human-run agentic UAT scenarios: the provider x role compilation matrix
+  (MW-023, MW-001 count), `regenerate` flag validation and idempotency
+  (MW-018, MW-019), the `worker_dispatch: false` dispatch gate (WD-002),
+  generated-context dispatch-state wording (CX-001), the
+  `regenerate`/`refresh`/`doctor --probe-workers` dispatch hints (IN-002),
+  and `clean:providers`' preservation of operator-owned provider config
+  (SE-002). A new opt-in lane (`npm run uat:workers-live`,
+  `config/vitest.uat-workers-live.config.js`) covers `doctor
+  --probe-workers`' install-readiness matrix (WD-001) against fixture worker
+  CLIs — no real worker CLI or network access involved.
 
 ### Changed
 

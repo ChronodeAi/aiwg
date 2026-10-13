@@ -10,7 +10,13 @@ import path from 'path';
 export default defineConfig({
   root: path.resolve(import.meta.dirname, '..'),
   test: {
-    include: ['test/uat/ralph-external.uat.ts', 'test/uat/daemon-supervisor.test.mjs', 'test/uat/rlm-cli.uat.ts', 'test/uat/aiwg-config-flow.uat.ts', 'test/uat/project-local-flow.uat.ts'],
+    include: [
+      'test/uat/ralph-external.uat.ts', 'test/uat/daemon-supervisor.test.mjs', 'test/uat/rlm-cli.uat.ts',
+      'test/uat/aiwg-config-flow.uat.ts', 'test/uat/project-local-flow.uat.ts',
+      'test/uat/mw-provider-matrix.uat.ts', 'test/uat/regenerate-flags.uat.ts',
+      'test/uat/worker-dispatch-gate.uat.ts', 'test/uat/context-dispatch-state.uat.ts',
+      'test/uat/dispatch-hints.uat.ts', 'test/uat/clean-providers.uat.ts',
+    ],
     exclude: ['test/uat/ralph-live-*.uat.ts'],
     environment: 'node',
     globals: false,
