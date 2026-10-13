@@ -1239,6 +1239,41 @@ export class ScopedFailureBreaker extends EventEmitter {
     return { released };
   }
 
+  /**
+   * Read-only precondition check (#2915 round 8, D4): whether `invocationId`
+   * currently holds a `dispatched` reservation with `stop: 'unresolved'` on
+   * THIS breaker — exactly the condition the MCP `reconcile_stopped`
+   * operation (src/mcp/tools/worker-invoke.mjs) must verify before calling
+   * `reconcileStopEvidence`, so that operation only ever accepts (and only
+   * ever reports as "applied") a reconciliation against a reservation that
+   * genuinely needs one. Never mutates, never throws.
+   */
+  hasUnresolvedStop(invocationId) {
+    if (invocationId == null) return false;
+    for (const entry of this._reservations.values()) {
+      if (entry.token.invocationId === invocationId && entry.phase === 'dispatched' && entry.stop === 'unresolved') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Read-only enumeration (#2915 round 8, D4): every reservation on THIS
+   * breaker currently sitting `dispatched` with `stop: 'unresolved'` — the
+   * exact set an ordinary (no `invocation_id`) MCP `status` call surfaces as
+   * "pending reconciliation", and the same set `admit()`'s own
+   * `blocking-markers:<N>` reservation-capacity diagnostic already counts.
+   * Never mutates, never throws.
+   */
+  listUnresolvedStops(now = this.nowMs()) {
+    const out = [];
+    for (const entry of this._reservations.values()) {
+      if (entry.phase === 'dispatched' && entry.stop === 'unresolved') {
+        out.push({ invocationId: entry.token.invocationId, scopes: [...entry.token.coveringKeys], ageMs: Math.max(0, now - entry.token.mintedAtMs) });
+      }
+    }
+    return out;
+  }
+
   getState(scopeKey) {
     const rec = this._scopes.get(scopeKey);
     if (!rec) return { scopeKey, state: 'closed', tracked: false };
