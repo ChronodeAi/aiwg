@@ -118,6 +118,24 @@ aiwg decision stats --provider claude --group-by caller --json
 follow-up: delete or truncate the ledger file yourself if it grows too
 large; both commands tolerate a missing file.
 
+## Caller tags
+
+Orchestration skills/rules pass `--caller <skill-or-rule>:<checkpoint>` at
+each bounded-decision point so `aiwg decision stats --group-by caller`
+reports adoption per checkpoint. Add a row here whenever a new checkpoint is
+introduced elsewhere — this is the one place the full set is listed:
+
+| Caller tag | Source | Checkpoint |
+|---|---|---|
+| `address-issues:worker-pick` | `address-issues` skill | Worker/model/effort pick per dispatch |
+| `address-issues:failure-triage` | `address-issues` skill | Environmental vs real failure |
+| `address-issues:review-verdict` | `address-issues` skill | Review verdict follow-up |
+| `address-issues:minor-triage` | `address-issues` skill | Reviewer minors: fix now vs defer |
+| `aiwg-mission:worker-pick` | `aiwg-mission` skill | Worker/model/effort pick |
+| `aiwg-mission:failure-triage` | `aiwg-mission` skill | Environmental vs real failure |
+| `subagent-scoping:worker-pick` | `subagent-scoping` rule, Rule 9 (Tier 0) | Worker/model/effort pick |
+| `subagent-scoping:failure-triage` | `subagent-scoping` rule, Rule 9 (Tier 0) | Environmental vs real failure |
+
 ## Examples
 
 ```bash

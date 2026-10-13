@@ -9,6 +9,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `address-issues`, `aiwg-mission`, and `subagent-scoping` Rule 9 (Tier 0 direct handoff) now pass a
+  `--caller <skill-or-rule>:<checkpoint>` tag at each Jev-first bounded-decision checkpoint (worker/model/effort
+  pick, environmental-vs-real failure triage, and — in `address-issues` — review-verdict follow-up and
+  reviewer-minor fix-now-vs-defer), so `aiwg decision stats --group-by caller` reports adoption per
+  checkpoint. Every checkpoint still degrades to the prior LLM-decides-it-yourself behavior on `fallback`
+  or when the decision engine isn't configured — the `--caller` tag is additive, never a hard dependency.
+  The full caller-tag table is documented in the `decision-offload` skill.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
