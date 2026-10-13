@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { spawnSync } from "child_process";
+import { spawnSync, spawn } from "child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, lstatSync, readdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from "node:os";
@@ -25,9 +25,41 @@ vi.mock("os", async importOriginal => {
   const os = await importOriginal<typeof import("os")>();
   return { ...os, homedir: vi.fn(() => os.tmpdir()) };
 });
+
+/**
+ * A minimal fake async child: an EventEmitter-shaped object with a
+ * `stdin.write`/`stdin.end` pair (used by `loginInProfile`'s credential-safe
+ * API-key path, #3062 second review finding 1) and a `kill()`. Defaults to
+ * emitting `exit(0, null)` on the next microtask; tests needing a
+ * different outcome override `spawn`'s mock implementation per call.
+ */
+function makeFakeAsyncChild() {
+  const listeners: Record<string, Array<(...eventArgs: unknown[]) => void>> = {};
+  const child = {
+    stdin: { write: vi.fn(), end: vi.fn() },
+    kill: vi.fn(),
+    on(event: string, cb: (...eventArgs: unknown[]) => void) {
+      (listeners[event] ??= []).push(cb);
+      return child;
+    },
+    emit(event: string, ...eventArgs: unknown[]) {
+      for (const cb of listeners[event] ?? []) cb(...eventArgs);
+    },
+  };
+  return child;
+}
+
 vi.mock("child_process", async importOriginal => {
   const childProcess = await importOriginal<typeof import("child_process")>();
-  return { ...childProcess, spawnSync: vi.fn(() => ({ status: 0 })) };
+  return {
+    ...childProcess,
+    spawnSync: vi.fn(() => ({ status: 0 })),
+    spawn: vi.fn(() => {
+      const child = makeFakeAsyncChild();
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    }),
+  };
 });
 // Defaults to an attached terminal (#3062) so pre-existing tests exercising
 // launchWithProfile/loginInProfile without a terminal-awareness angle keep
@@ -317,16 +349,30 @@ describe("Codex runtime-home config permissions", () => {
       const runtimeHome = await ensureRuntimeHome("isolated");
       vi.mocked(isInteractive).mockReturnValue(false);
       vi.stubEnv("AIWG_TEST_CODEX_KEY", "sk-test-secret-value");
-      vi.mocked(spawnSync).mockClear();
+      vi.mocked(spawn).mockClear();
       await loginInProfile("isolated", { apiKeyEnv: "AIWG_TEST_CODEX_KEY" });
-      expect(spawnSync).toHaveBeenCalledTimes(1);
-      const [command, args, options] = vi.mocked(spawnSync).mock.calls[0]!;
+      // #3062 second review, finding 1: this path is now an async `spawn()`
+      // (never `spawnSync`'s `input` option, which a NODE_DEBUG=child_process
+      // dump would print) — see test/unit/mcp/codex-login-credential-safety.test.ts
+      // for the end-to-end diagnostic-safety probe.
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [command, args, options] = vi.mocked(spawn).mock.calls[0]!;
       expect(command).toBe("codex");
       expect(args).toEqual(["login", "--with-api-key"]);
-      expect(options?.input).toBe("sk-test-secret-value");
+      // The key is written to the live stdin stream, never passed as a
+      // spawn option (there is no `input` option on async `spawn`).
+      expect((options as { input?: unknown } | undefined)?.input).toBeUndefined();
+      const child = vi.mocked(spawn).mock.results[0]!.value as ReturnType<typeof makeFakeAsyncChild>;
+      expect(child.stdin.write).toHaveBeenCalledWith("sk-test-secret-value");
+      expect(child.stdin.end).toHaveBeenCalled();
       expect(options?.env?.HOME).toBe(runtimeHome);
-      // The secret must never appear on argv.
+      // The named variable is removed from the child's own environment —
+      // it must only ever reach the child over stdin.
+      expect(options?.env?.AIWG_TEST_CODEX_KEY).toBeUndefined();
+      // The secret must never appear on argv, nor (by construction) any
+      // env value.
       expect(args.join(" ")).not.toContain("sk-test-secret-value");
+      expect(Object.values(options?.env ?? {})).not.toContain("sk-test-secret-value");
     });
 
     it("errors when apiKeyEnv names an unset variable, without spawning anything", async () => {

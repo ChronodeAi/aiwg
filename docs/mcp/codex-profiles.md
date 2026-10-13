@@ -100,11 +100,18 @@ aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
 ```
 
 This reads the key from `$OPENAI_API_KEY` and feeds it to `codex login
---with-api-key` over stdin only — the key itself never appears on argv, in logs, or
-in any error message; only the variable *name* does. If the named variable is
-unset, the error names the variable (never a value, since there was none). Without
-a terminal and without `--api-key-env`, the command errors naming the argument
-instead of hanging waiting for input nobody can supply.
+--with-api-key` over stdin only — the key itself never appears on argv, in logs, in
+any error message, or (second review, finding 1) in the `codex` child process's own
+environment or in native `NODE_DEBUG=child_process` diagnostics; only the variable
+*name* ever travels around. If the named variable is unset, the error names the
+variable (never a value, since there was none). Without a terminal and without
+`--api-key-env`, the command errors naming the argument instead of hanging waiting
+for input nobody can supply.
+
+This command requires the built CLI (`npm run build:cli` in a source checkout, or
+an installed `aiwg`) — if the compiled module is missing it reports that directly
+instead of attempting to load TypeScript source and failing deep inside an unrelated
+import (#3062 second review, finding 3).
 
 ## Running A Profile Session Headless
 

@@ -19,8 +19,8 @@ import { readFile, mkdir, symlink, access, readdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { spawnSync, type SpawnSyncReturns } from 'child_process';
-import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'child_process';
+import { boundedSpawnSync, resolveSyncProcessTimeoutMs } from '../../process/bounded-child-process.mjs';
 import { isInteractive } from '../../cli/env.js';
 import { exitCodeForSpawnResult } from '../../cli/child-process-result.js';
 import { buildServerToml, type McpServerDefinition } from '../registry.js';
@@ -279,6 +279,91 @@ export function launchWithProfile(
 }
 
 /**
+ * Build a child environment that excludes `envVarName` and any other
+ * variable holding the identical value (#3062 second review, finding 1):
+ * the API key must never be visible in the child's own environment, only
+ * on its stdin, including as a coincidental duplicate under some other
+ * name.
+ */
+function envWithoutSecretValue(
+  base: NodeJS.ProcessEnv,
+  envVarName: string,
+  secretValue: string,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    if (key === envVarName) continue;
+    if (value === secretValue) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
+/**
+ * Async, credential-safe launch of `codex login --with-api-key` (#3062
+ * second review, finding 1). This is an *interactive-site exception* to
+ * the synchronous bounded-child-process helper — not a sync call at all,
+ * so the sync-child-process gate does not (and should not) apply to it.
+ *
+ * `boundedSpawnSync`'s `input` option places the secret inside the
+ * options object `child_process` hands to its native binding, which
+ * `NODE_DEBUG=child_process` (and any other dump of those options)
+ * prints verbatim — confirmed by the review with a live probe. An async
+ * `spawn()` has no `input` option at all: the key is written directly to
+ * the already-created child's own `stdin` stream, after the options
+ * object was already built and handed off, so it is never part of any
+ * options object, logged value, or thrown Error. The 'network'-tier bound
+ * (same as the previous synchronous call) is enforced here by hand, with
+ * the same SIGKILL-and-enriched-message contract the bounded helper
+ * itself uses, since this call can no longer go through that helper.
+ */
+function spawnCodexLoginWithApiKey(
+  apiKey: string,
+  env: Record<string, string>,
+): Promise<{ status: number | null; signal: NodeJS.Signals | null; error?: Error }> {
+  const tier = 'network' as const;
+  const boundMs = resolveSyncProcessTimeoutMs(tier);
+  return new Promise((resolve) => {
+    const child = spawn('codex', ['login', '--with-api-key'], {
+      env,
+      stdio: ['pipe', 'inherit', 'inherit'],
+    });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      resolve({
+        status: null,
+        signal: 'SIGKILL',
+        error: Object.assign(
+          new Error(`\`codex login --with-api-key\` exceeded the '${tier}' tier bound of ${boundMs}ms and was killed (SIGKILL).`),
+          { code: 'ETIMEDOUT' },
+        ),
+      });
+    }, boundMs);
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status: null, signal: null, error: err });
+    });
+    child.on('exit', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status: code, signal });
+    });
+    // Written directly to the live stream — never part of the spawn
+    // options object above, so NODE_DEBUG=child_process (and any dump of
+    // those options) cannot print it.
+    child.stdin!.write(apiKey);
+    child.stdin!.end();
+  });
+}
+
+/**
  * Run `codex login` within a profile's runtime home to isolate OAuth tokens.
  *
  * Headless (#3062): pass `apiKeyEnv` to log in non-interactively. codex-cli
@@ -291,10 +376,10 @@ export function launchWithProfile(
  * and without a terminal, this refuses instead of spawning the interactive
  * OAuth flow, which would hang waiting for input nobody can supply.
  *
- * NOTE: there is currently no CLI command wired to this parameter — see the
- * `codex-login` entry in tools/testing/sync-spawn-allowlist.json and the
- * #3062 slice report for the open question (`aiwg mcp profile login` is
- * documented but not implemented; wiring it is a separate decision).
+ * Wired to `aiwg mcp profile login <name> [--api-key-env <NAME>]`
+ * (`src/mcp/cli.mjs`, #3069). The `apiKeyEnv` branch never places the key
+ * in a spawn options object or the child's own environment — see
+ * `spawnCodexLoginWithApiKey()`'s doc comment.
  */
 export async function loginInProfile(
   profile: string,
@@ -316,15 +401,12 @@ export async function loginInProfile(
       );
     }
     console.log(`\n  Logging in to profile "${profile}" with an API key from $${options.apiKeyEnv}...`);
-    // Bounded (#3062): `--with-api-key` reads the key from stdin and exits —
-    // it never hands over the terminal — so this is safe to bound like any
-    // other child process. `input` carries the key on stdin only; it is
-    // never placed on argv.
-    const result = boundedSpawnSync('codex', ['login', '--with-api-key'], 'network', {
-      input: apiKey,
-      env,
-      stdio: ['pipe', 'inherit', 'inherit'],
-    });
+    // Credential-safe async launch (#3062 second review, finding 1): the
+    // key never enters a spawn options object, env dump, log line, or
+    // thrown value — see spawnCodexLoginWithApiKey()'s own doc comment for
+    // why this can no longer be the synchronous bounded helper.
+    const safeEnv = envWithoutSecretValue(env, options.apiKeyEnv, apiKey);
+    const result = await spawnCodexLoginWithApiKey(apiKey, safeEnv);
     if (result.status !== 0) {
       // #3062 review item 7: surface the bounded helper's `error`/`signal`
       // detail (e.g. the enriched timeout message naming the bound and
