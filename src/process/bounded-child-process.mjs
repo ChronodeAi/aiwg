@@ -39,13 +39,32 @@
  * from inside a single blocking native call: the calling thread is blocked
  * in a C++ synchronous spawn, so no JS timer can run to escalate.
  *
- * These wrappers therefore use `killSignal: 'SIGKILL'` directly. SIGKILL
- * cannot be caught, blocked or ignored, so the bound is a hard guarantee —
- * confirmed with a real child that traps and ignores SIGTERM (see
- * `test/unit/process/bounded-child-process.test.mjs`): with `killSignal:
- * 'SIGTERM'` the call hangs indefinitely; with `'SIGKILL'` it returns at the
- * bound, every time. Callers that want a specific signal may still pass
- * `killSignal` explicitly; it is honored as-is.
+ * These wrappers therefore always kill with `killSignal: 'SIGKILL'` and
+ * ignore any `killSignal` a caller passes in `options` — honoring a
+ * caller-supplied `'SIGTERM'` would silently reopen exactly the hang this
+ * module exists to close for a child that traps and ignores it. SIGKILL
+ * cannot be caught, blocked or ignored, so the *direct child* reliably dies
+ * at the bound — confirmed with a real child that traps and ignores SIGTERM
+ * (see `test/unit/process/bounded-child-process.test.mjs`): with
+ * `killSignal: 'SIGTERM'` the call hangs indefinitely; with `'SIGKILL'` it
+ * returns at the bound, every time.
+ *
+ * ## What SIGKILL does *not* guarantee: descendant cleanup
+ *
+ * These wrappers bound one synchronous call to one direct child process.
+ * SIGKILL is sent to that child only — never to a process group or a
+ * descendant tree. A direct child that itself spawned a grandchild (for
+ * example a backgrounded, detached, or double-forked process) is not
+ * supervised here: that grandchild is not signaled, is not waited for, and
+ * may keep running after this call returns (see
+ * `test/fixtures/process/spawn-detached-pipe-holder.mjs` and its test for a
+ * concrete case). A synchronous Node call cannot supervise a process tree —
+ * doing so needs an asynchronous process-group/session owner, which is a
+ * different mechanism than what `execSync`/`execFileSync`/`spawnSync` give
+ * us. Callers that spawn a tool known to background work of its own are
+ * responsible for that tool's own cleanup contract; this module only
+ * guarantees the direct child is gone and the calling thread is unblocked
+ * by the stated bound.
  *
  * @module src/process/bounded-child-process
  */
@@ -145,6 +164,19 @@ function effectiveTimeoutMs(tier, options) {
 }
 
 /**
+ * Whether a `stdio[0]` (stdin slot) value describes the parent's own stdin —
+ * the form Node would otherwise inherit from. Covers the string shorthand,
+ * the literal fd `0`, and the `process.stdin` stream object itself; leaves
+ * `'pipe'`, `'ignore'`, other fds, and unrelated stream objects alone.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isParentStdinDescriptor(value) {
+  return value === 'inherit' || value === 0 || value === process.stdin;
+}
+
+/**
  * A bounded call never inherits stdin; stdout/stderr may still be inherited
  * for progress output. Leaves `options` untouched when the caller supplies
  * `input` (Node feeds stdin from that value regardless of `stdio`, and
@@ -159,7 +191,7 @@ function withoutInheritedStdin(options) {
   if (options.stdio === 'inherit') {
     return { ...options, stdio: ['ignore', 'inherit', 'inherit'] };
   }
-  if (Array.isArray(options.stdio) && options.stdio[0] === 'inherit') {
+  if (Array.isArray(options.stdio) && isParentStdinDescriptor(options.stdio[0])) {
     const stdio = options.stdio.slice();
     stdio[0] = 'ignore';
     return { ...options, stdio };
@@ -169,8 +201,10 @@ function withoutInheritedStdin(options) {
 
 /**
  * Build the final Node options: bounded stdin, resolved timeout, and a
- * SIGKILL default kill signal (callers may still pass their own
- * `killSignal`, which is honored as-is).
+ * forced `killSignal: 'SIGKILL'`. Unlike `timeout`, `killSignal` is not
+ * negotiable: a caller-supplied `killSignal` (e.g. `'SIGTERM'`) is
+ * overwritten, not honored, because a child that ignores it would defeat
+ * the bound this module exists to guarantee (see the module header).
  *
  * @param {Record<string, unknown> | undefined} options
  * @param {number} boundMs
@@ -181,7 +215,7 @@ function toNodeOptions(options, boundMs) {
   return {
     ...base,
     timeout: boundMs,
-    killSignal: base.killSignal ?? 'SIGKILL',
+    killSignal: 'SIGKILL',
   };
 }
 
@@ -197,15 +231,33 @@ function describeCommand(command, args) {
  * errors untouched, so existing catch blocks that inspect those fields (or
  * just catch-and-ignore) keep working.
  *
- * @template {Error & {code?: string}} E
+ * `signal` disambiguates *why* `ETIMEDOUT` fired: when it is `'SIGKILL'` the
+ * direct child itself was still running and got killed at the bound: the
+ * common case. When it is anything else (including `null`), the direct
+ * child had already exited — `status`/`signal` on the result reflect its
+ * real exit — but this call was still blocked waiting for its stdout/stderr
+ * pipe to reach EOF, which only happens once every process holding that
+ * pipe's write end (the child *and* any surviving descendant it handed the
+ * fd to) has closed it. A surviving, pipe-holding descendant reproduces
+ * that even though the child it came from is long gone (see
+ * `test/fixtures/process/spawn-detached-pipe-holder.mjs`).
+ *
+ * @template {Error & {code?: string, signal?: string | null}} E
  * @param {E | null | undefined} error
- * @param {{description: string, tier: string, boundMs: number}} context
+ * @param {{description: string, tier: string, boundMs: number, signal?: string | null}} context
  * @returns {E | null | undefined}
  */
-function enrichTimeoutError(error, { description, tier, boundMs }) {
+function enrichTimeoutError(error, { description, tier, boundMs, signal }) {
   if (!error || error.code !== 'ETIMEDOUT') return error;
+  const effectiveSignal = signal !== undefined ? signal : error.signal;
+  const killClause = effectiveSignal === 'SIGKILL'
+    ? 'the direct child was killed (SIGKILL)'
+    : 'the direct child had already exited, but this call was still waiting for its stdout/stderr pipe to close';
   error.message =
-    `\`${description}\` exceeded the '${tier}' tier bound of ${boundMs}ms and was killed (SIGKILL). ` +
+    `\`${description}\` exceeded the '${tier}' tier bound of ${boundMs}ms; ${killClause}. ` +
+    `Any descendant the child spawned (detached, backgrounded, or otherwise ignoring signals) is not supervised ` +
+    `by this call and may still be running — holding that pipe open is enough to trigger this timeout even after ` +
+    `the child itself has exited. ` +
     (tier === 'long' ? `Set ${AIWG_SYNC_LONG_TIMEOUT_MS_ENV} to a larger number of milliseconds, or 0 to remove the bound. ` : '') +
     error.message;
   return error;
@@ -261,9 +313,15 @@ export function boundedExecFileSync(file, args, tier, options) {
  * inserted before `options`. Unlike the native API, `args` is always
  * required (pass `[]` for none) so tier can occupy a fixed position.
  *
- * `spawnSync` never throws; on timeout the returned object has
- * `status: null`, `signal: 'SIGKILL'` and an `error` with
- * `code: 'ETIMEDOUT'` whose message has been enriched in place.
+ * `spawnSync` never throws; on timeout the returned object has an `error`
+ * with `code: 'ETIMEDOUT'` whose message has been enriched in place. In the
+ * common case the direct child was still running and gets killed at the
+ * bound, so `status: null` and `signal: 'SIGKILL'`. If the direct child had
+ * already exited but a surviving descendant is still holding its
+ * stdout/stderr pipe open, `status`/`signal` instead reflect that real exit
+ * (e.g. `status: 0`, `signal: null`) while `error.code` is still
+ * `'ETIMEDOUT'` — check `error`, not just `status`/`signal`, to detect the
+ * timeout in that case.
  *
  * @param {string} command
  * @param {readonly string[]} args
@@ -276,6 +334,6 @@ export function boundedSpawnSync(command, args, tier, options) {
   const boundMs = effectiveTimeoutMs(tier, options);
   const nodeOptions = toNodeOptions(options, boundMs);
   const result = nodeSpawnSync(command, args, nodeOptions);
-  enrichTimeoutError(result.error, { description: describeCommand(command, args), tier, boundMs });
+  enrichTimeoutError(result.error, { description: describeCommand(command, args), tier, boundMs, signal: result.signal });
   return result;
 }

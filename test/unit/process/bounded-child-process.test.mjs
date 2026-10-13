@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import {
   AIWG_SYNC_LONG_TIMEOUT_MS_ENV,
@@ -15,6 +17,29 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = join(here, '../../fixtures/process');
 const ignoreSigtermScript = join(fixtures, 'ignore-sigterm.mjs');
 const readStdinScript = join(fixtures, 'read-stdin.mjs');
+const pipeHolderScript = join(fixtures, 'spawn-detached-pipe-holder.mjs');
+
+/** Best-effort SIGKILL of a pid recorded in `pidFile`; never throws. */
+function killRecordedPid(pidFile) {
+  if (!pidFile || !existsSync(pidFile)) return;
+  try {
+    const pid = Number(readFileSync(pidFile, 'utf8').trim());
+    if (Number.isInteger(pid) && pid > 0) process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone or never existed — fine, this is just cleanup.
+  }
+  rmSync(pidFile, { force: true });
+}
+
+/** True while `pid` still exists (kill with signal 0 is a liveness probe). */
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe('resolveSyncProcessTimeoutMs — tier bounds and env override', () => {
   const originalEnv = process.env[AIWG_SYNC_LONG_TIMEOUT_MS_ENV];
@@ -115,6 +140,53 @@ describe('boundedSpawnSync — stdin is never inherited', () => {
     });
     expect(result.stdout?.trim()).toBe('DATA:hello-from-input');
   });
+
+  it('normalizes the literal fd 0 (parent stdin) in position 0 (#3062 finding 5)', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: [0, 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    expect(result.stdout?.trim()).toBe('EOF');
+  });
+
+  it('normalizes the process.stdin stream object in position 0 (#3062 finding 5)', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: [process.stdin, 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    expect(result.stdout?.trim()).toBe('EOF');
+  });
+
+  it('leaves an explicit non-zero fd in position 0 alone (not a parent-stdin form)', () => {
+    // Open a real fd (not 0) backed by a file with known content; if this
+    // helper wrongly rewrote it to 'ignore' the child would read EOF
+    // instead of the file's content.
+    const file = join(tmpdir(), `aiwg-bounded-stdin-fd-${process.pid}-${Date.now()}.txt`);
+    writeFileSync(file, 'hello-from-fd');
+    const fd = openSync(file, 'r');
+    try {
+      const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+        stdio: [fd, 'pipe', 'pipe'],
+        encoding: 'utf8',
+      });
+      expect(result.stdout?.trim()).toBe('DATA:hello-from-fd');
+    } finally {
+      closeSync(fd);
+      rmSync(file, { force: true });
+    }
+  });
+
+  it('leaves `stdio: "pipe"` (default-equivalent) alone', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    // Nothing is written to the child's stdin, so a 'pipe' stdin (unlike
+    // 'ignore') simply never delivers any bytes — still an EOF read, but
+    // for a different reason than the normalization under test; the point
+    // here is only that this call does not hang or error.
+    expect(result.stdout?.trim()).toBe('EOF');
+  });
 });
 
 describe('boundedSpawnSync — a child that ignores SIGTERM does not outlive the bound', () => {
@@ -131,6 +203,64 @@ describe('boundedSpawnSync — a child that ignores SIGTERM does not outlive the
     expect(result.error?.code).toBe('ETIMEDOUT');
     expect(result.error?.message).toContain("'long' tier bound of 300ms");
     expect(result.error?.message).toContain(ignoreSigtermScript);
+    // The direct child was the thing still running at the bound, so the
+    // message says it was killed outright (not "already exited").
+    expect(result.error?.message).toContain('the direct child was killed (SIGKILL)');
+    expect(result.error?.message).toContain('descendant');
+  });
+
+  it('ignores a caller-supplied killSignal and still kills with SIGKILL (#3062 finding 2)', () => {
+    const boundMs = 300;
+    const graceMs = 2_000;
+    const start = Date.now();
+    // A real caller might reasonably ask for a gentler signal; honoring it
+    // would reopen exactly the hang this module exists to close for a
+    // child (like this fixture) that ignores SIGTERM.
+    const result = boundedSpawnSync('node', [ignoreSigtermScript], 'long', {
+      timeout: boundMs,
+      killSignal: 'SIGTERM',
+    });
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(boundMs + graceMs);
+    expect(result.signal).toBe('SIGKILL');
+    expect(result.error?.code).toBe('ETIMEDOUT');
+  });
+});
+
+describe('boundedSpawnSync — a surviving descendant that holds the inherited pipe open (#3062 finding 2)', () => {
+  let pidFile;
+
+  afterEach(() => {
+    killRecordedPid(pidFile);
+    pidFile = undefined;
+  });
+
+  it('still returns within a generous bound, and does not (cannot) clean up the descendant', () => {
+    pidFile = join(tmpdir(), `aiwg-pipe-holder-${process.pid}-${Date.now()}.pid`);
+    // Generous relative to how fast the fixture itself runs (spawn + write +
+    // exit, no real work): large enough that CI scheduling noise doesn't
+    // flip which of the two ETIMEDOUT paths fires, small enough to keep the
+    // suite fast either way.
+    const boundMs = 3_000;
+    const graceMs = 5_000;
+    const start = Date.now();
+    const result = boundedSpawnSync('node', [pipeHolderScript, pidFile], 'long', { timeout: boundMs });
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(boundMs + graceMs);
+    // Still bounded: the call returns (at or before the tier bound) instead
+    // of hanging forever on the held-open pipe.
+    expect(result.error?.code).toBe('ETIMEDOUT');
+    expect(result.error?.message).toContain('descendant');
+
+    // The descendant really did survive this call returning — proving the
+    // module's documented limitation (no process-tree supervision) rather
+    // than merely asserting it.
+    expect(existsSync(pidFile)).toBe(true);
+    const grandchildPid = Number(readFileSync(pidFile, 'utf8').trim());
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+    expect(isAlive(grandchildPid)).toBe(true);
   });
 });
 
