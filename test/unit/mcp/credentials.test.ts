@@ -19,6 +19,7 @@ import { join, resolve, sep } from "node:path";
 import { stripMcpServers } from "../../../src/mcp/toml-strip-mcp.mjs";
 import { parseTOML } from "toml-eslint-parser";
 import { ensureRuntimeHome, writeProfileConfig, launchWithProfile, loginInProfile, removeRuntimeHome } from "../../../src/mcp/adapters/codex-runtime.js";
+import { isInteractive } from "../../../src/cli/env.js";
 
 vi.mock("os", async importOriginal => {
   const os = await importOriginal<typeof import("os")>();
@@ -28,6 +29,10 @@ vi.mock("child_process", async importOriginal => {
   const childProcess = await importOriginal<typeof import("child_process")>();
   return { ...childProcess, spawnSync: vi.fn(() => ({ status: 0 })) };
 });
+// Defaults to an attached terminal (#3062) so pre-existing tests exercising
+// launchWithProfile/loginInProfile without a terminal-awareness angle keep
+// their original behavior; the dedicated headless tests override this.
+vi.mock("../../../src/cli/env.js", () => ({ isInteractive: vi.fn(() => true) }));
 
 import { McpServerRegistry, injectServers, getProviderConfigPath, buildServerConfig, buildServerToml, type McpServerDefinition, type InjectProvider } from "../../../src/mcp/registry.js";
 import { McpServerRegistry as RuntimeRegistry, injectServers as runtimeInjectServers, getProviderConfigPath as runtimeGetProviderConfigPath, buildServerConfig as runtimeBuildServerConfig, buildServerToml as runtimeBuildServerToml } from "../../../src/mcp/registry.mjs";
@@ -231,6 +236,7 @@ describe("Codex runtime-home config permissions", () => {
     vi.stubEnv("USERPROFILE", root);
     vi.stubEnv("CODEX_HOME", join(root, ".codex"));
     vi.mocked(homedir).mockReturnValue(root);
+    vi.mocked(isInteractive).mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -264,6 +270,82 @@ describe("Codex runtime-home config permissions", () => {
       expect(options?.env?.HOME).toBe(runtimeHome);
       expect(options?.env?.CODEX_HOME).toBe(runtimeHome);
     }
+  });
+
+  describe("headless launch/login (#3062)", () => {
+    it("bounds `codex exec <prompt>` instead of handing over the terminal, with or without a tty", async () => {
+      const runtimeHome = await ensureRuntimeHome("isolated");
+      for (const attached of [false, true]) {
+        vi.mocked(isInteractive).mockReturnValue(attached);
+        vi.mocked(spawnSync).mockClear();
+        const result = launchWithProfile("isolated", ["exec", "do the thing"]);
+        expect(result.status).toBe(0);
+        expect(spawnSync).toHaveBeenCalledTimes(1);
+        const [command, args, options] = vi.mocked(spawnSync).mock.calls[0]!;
+        expect(command).toBe("codex");
+        expect(args).toEqual(["exec", "do the thing"]);
+        expect(options?.timeout).toBeGreaterThan(0);
+        expect(options?.env?.HOME).toBe(runtimeHome);
+        // Bounded calls never inherit stdin regardless of the requested stdio.
+        expect(Array.isArray(options?.stdio) ? options.stdio[0] : options?.stdio).toBe("ignore");
+      }
+    });
+
+    it("refuses to launch the interactive TUI without a terminal, spawning nothing", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      vi.mocked(spawnSync).mockClear();
+      expect(() => launchWithProfile("isolated")).toThrow(/requires one to be attached/);
+      expect(() => launchWithProfile("isolated", ["--version"])).toThrow(/requires one to be attached/);
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
+
+    it("launches the interactive TUI unchanged when a terminal is attached", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(true);
+      vi.mocked(spawnSync).mockClear();
+      const result = launchWithProfile("isolated", ["--version"]);
+      expect(result.status).toBe(0);
+      const [command, args, options] = vi.mocked(spawnSync).mock.calls[0]!;
+      expect(command).toBe("codex");
+      expect(args).toEqual(["--version"]);
+      expect(options?.timeout).toBeUndefined();
+      expect(options?.stdio).toBe("inherit");
+    });
+
+    it("logs in non-interactively via --with-api-key when apiKeyEnv is given, without a terminal", async () => {
+      const runtimeHome = await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      vi.stubEnv("AIWG_TEST_CODEX_KEY", "sk-test-secret-value");
+      vi.mocked(spawnSync).mockClear();
+      await loginInProfile("isolated", { apiKeyEnv: "AIWG_TEST_CODEX_KEY" });
+      expect(spawnSync).toHaveBeenCalledTimes(1);
+      const [command, args, options] = vi.mocked(spawnSync).mock.calls[0]!;
+      expect(command).toBe("codex");
+      expect(args).toEqual(["login", "--with-api-key"]);
+      expect(options?.input).toBe("sk-test-secret-value");
+      expect(options?.env?.HOME).toBe(runtimeHome);
+      // The secret must never appear on argv.
+      expect(args.join(" ")).not.toContain("sk-test-secret-value");
+    });
+
+    it("errors when apiKeyEnv names an unset variable, without spawning anything", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      expect(process.env.AIWG_TEST_CODEX_KEY_UNSET).toBeUndefined();
+      vi.mocked(spawnSync).mockClear();
+      await expect(loginInProfile("isolated", { apiKeyEnv: "AIWG_TEST_CODEX_KEY_UNSET" }))
+        .rejects.toThrow(/AIWG_TEST_CODEX_KEY_UNSET.*is not set/);
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
+
+    it("refuses the interactive OAuth login without a terminal and without apiKeyEnv, spawning nothing", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      vi.mocked(spawnSync).mockClear();
+      await expect(loginInProfile("isolated")).rejects.toThrow(/requires an interactive terminal, or an API key/);
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
   });
 
   it.each([false, true])("writes owner-only config.toml (pre-existing: %s)", async preExisting => {

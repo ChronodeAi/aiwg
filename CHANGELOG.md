@@ -37,6 +37,44 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   install/clone/build-shaped work) rather than where the call site lives (#3062). The remaining
   interactive sites (an editor, codex exec/login, the configured provider binary, and arbitrary
   manifest-defined shell commands/scripts) are unchanged and documented in the allow-list.
+- Every remaining interactive call site is now headless-safe (#3062): any input a person would
+  supply interactively has a command-line argument, and without a terminal attached a missing
+  argument refuses immediately (naming it) instead of spawning anything.
+  - `aiwg config edit --print-path` prints the resolved config file path and exits — the headless
+    equivalent of opening `$EDITOR`/`$VISUAL`. Without a terminal and without `--print-path`,
+    `aiwg config edit` now refuses, naming it and `aiwg config set <key> <value>`.
+  - `aiwg session --prompt <text>` / `--prompt-file <path>` runs a provider headless: `claude
+    --print`, `codex exec`, `opencode run --format json`, or `dsh --profile headless`, bounded
+    (`long` tier) with stdin ignored, regardless of whether a terminal is attached. Without a
+    terminal and without a prompt, a spawnable provider now refuses instead of hanging waiting for
+    one; a provider with no evidenced non-interactive form refuses `--prompt`/`--prompt-file`
+    rather than guessing an invocation. `aiwg session --provider codex --profile <p> --prompt
+    <text>` maps to `codex exec <text>` inside that profile's runtime home
+    (`launchWithProfile(profile, ['exec', text])`), likewise bounded.
+  - `loginInProfile()` (`src/mcp/adapters/codex-runtime.ts`) accepts an `apiKeyEnv` option that
+    runs `codex login --with-api-key`, reading the key from that environment variable over stdin
+    (never argv) — codex-cli's own documented non-interactive login. No CLI command currently
+    reaches this parameter (`aiwg mcp profile login`, documented in `docs/mcp/codex-profiles.md`,
+    has no implementation); without `apiKeyEnv` and without a terminal, the function refuses
+    instead of launching the interactive OAuth flow.
+  - `aiwg setup-run` manifest steps (`script`/`verify`/`detect`/`os-config`) run bounded with
+    stdin ignored whenever no terminal is attached, instead of inheriting stdio and potentially
+    hanging on a command that tries to prompt; with a terminal, unchanged. A step may now declare
+    `interactive: true` in its manifest to be refused up front (naming the step) instead of run at
+    all when no terminal is attached.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution editor launch is marked on the
+    sync-spawn allow-list; it already refuses to reach the editor without a terminal (prints the
+    file to edit instead), unchanged by this work.
+- `aiwg init` and `aiwg setup project` accept `--worker-dispatch enable|decline` (#3062), answering
+  the direct-worker-dispatch opt-in question directly instead of leaving it unanswerable headless:
+  `enable` writes `parallelism.worker_dispatch: true` and nothing else; `decline` writes
+  `setup.worker_dispatch_offer: "declined"` and nothing else. Honored with or without a terminal
+  (suppressing the interactive question either way) and even when fewer than two worker CLIs are
+  detected — an explicit choice overrides the presence-only detection gate. `--dry-run` never
+  writes it; `aiwg setup project --json` reports the would-be choice under
+  `worker_dispatch_offer.applied_choice`. An unrecognized value exits non-zero naming
+  `enable`/`decline`. The one-line hint shown without a terminal and without the argument now also
+  names `--worker-dispatch`.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is

@@ -33,6 +33,32 @@ CI, dry runs), `aiwg regenerate`, `aiwg refresh`, and `aiwg doctor --probe-worke
 print a single reminder line instead (naming the enable command) when dispatch is
 still off and two or more worker CLIs are detected.
 
+### Answering headlessly
+
+`aiwg init` and `aiwg setup project` both accept `--worker-dispatch enable|decline`
+directly, so a script or agent running either command without a terminal can answer
+the question without waiting for the interactive prompt or leaving it unanswered:
+
+```bash
+aiwg init --non-interactive --worker-dispatch enable
+aiwg setup project --yes --worker-dispatch decline
+```
+
+- `enable` writes `parallelism.worker_dispatch: true` and nothing else;
+  `decline` writes `setup.worker_dispatch_offer: "declined"` and nothing else.
+- With a terminal attached, passing the argument still answers the question
+  directly — it is never asked.
+- The argument is honored even when fewer than two worker CLIs are detected: an
+  explicit choice always overrides the presence-only detection gate above.
+- `--dry-run` never writes, even with the argument — it reports what would be
+  written instead (`aiwg setup project --json --dry-run` reports it under
+  `worker_dispatch_offer.applied_choice`).
+- An unrecognized value (anything other than `enable`/`decline`) exits non-zero
+  naming the accepted values.
+- Without a terminal and without the argument, behavior is unchanged (the
+  one-line reminder above) except that the reminder now also names
+  `--worker-dispatch` as the direct, headless way to answer it.
+
 If you say no, AIWG remembers the decline (`setup.worker_dispatch_offer: "declined"`
 — a setup preference, kept separate from the worker-policy settings above) and
 stops offering it entirely: the question is not asked again, and none of the

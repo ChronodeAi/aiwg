@@ -5,6 +5,8 @@ import path from 'node:path';
 import { parseDocument, stringify } from 'yaml';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { findPackageRoot } from '../find-package-root.js';
+import { isInteractive } from '../env.js';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { sha256 } from '../../security/artifact-trust.js';
 import type { ArtifactVerificationResult } from '../../security/artifact-verifier.js';
 import { artifactVerifyHandler } from './artifact-verify.js';
@@ -74,6 +76,13 @@ interface SetupStep {
   depends_on?: string[];
   when?: string;
   routes?: Array<{ platform: string; steps: SetupStep[] }>;
+  /**
+   * If true, this step itself prompts directly (beyond the generic
+   * possibility that any shell command/script might) and requires an
+   * interactive terminal. `setup-run` refuses a marked step up front,
+   * before running it, when no terminal is attached (#3062).
+   */
+  interactive?: boolean;
 }
 
 interface LoadedManifest {
@@ -728,11 +737,26 @@ function commandResult(status: number | null): { ok: boolean; status: number } {
   return { ok: code === 0, status: code };
 }
 
+/**
+ * Run one manifest-author-defined shell command (#3062).
+ *
+ * Without a terminal, a command that tries to prompt must fail fast instead
+ * of hanging forever: bounded (long tier, stdin ignored). With a terminal,
+ * unchanged — inherited stdio, unbounded, so a human can actually answer a
+ * prompt the command issues.
+ */
 function runShell(command: string, cwd: string, env: NodeJS.ProcessEnv): { ok: boolean; status: number } {
+  if (!isInteractive()) {
+    const result = boundedSpawnSync(command, [], 'long', {
+      cwd, env, shell: true, stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    return commandResult(result.status);
+  }
   // sync-spawn: interactive manifest-shell-command — runs an arbitrary
   // manifest-author-defined shell command with inherited stdio; it may
-  // itself prompt (see tools/testing/sync-spawn-allowlist.json). Not a
-  // candidate for a bounded timeout.
+  // itself prompt (see tools/testing/sync-spawn-allowlist.json). Reached
+  // only when isInteractive() is true (#3062) — the no-terminal path above
+  // uses the bounded helper instead. Not a candidate for a bounded timeout.
   const result = spawnSync(command, { cwd, env, shell: true, stdio: 'inherit' });
   return commandResult(result.status);
 }
@@ -747,6 +771,13 @@ function isDestructiveScript(filePath: string): boolean {
 
 function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, params: Record<string, string>, targetOs: string, confirmed: boolean, recovery = false): { ok: boolean; status: number; failedStep?: string } {
   if (!stepPlatformMatches(targetOs, step)) return { ok: true, status: 0 };
+  // A step marked `interactive: true` (#3062) declares that it prompts
+  // directly; refuse it up front without a terminal instead of letting it
+  // run and fail at an arbitrary bounded timeout.
+  if (step.interactive && !isInteractive()) {
+    console.error(`setup-run: step '${step.id}' is marked interactive and requires a terminal; re-run from an interactive shell.`);
+    return { ok: false, status: 2, failedStep: step.id };
+  }
   const env = { ...process.env, ...params };
   console.log(`[setup] Step ${step.id} (${step.type})`);
   if (step.type === 'script') {
@@ -758,11 +789,18 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
       console.error(`setup-run: refusing destructive step '${step.id}' without --yes/--confirm`);
       return { ok: false, status: 2, failedStep: step.id };
     }
-    // sync-spawn: interactive manifest-script-step — runs an arbitrary
-    // manifest-author-defined script file with inherited stdio; it may
-    // itself prompt (see tools/testing/sync-spawn-allowlist.json). Not a
-    // candidate for a bounded timeout.
-    const result = spawnSync(scriptPath, [], { cwd: manifestDir, env, stdio: 'inherit' });
+    // Without a terminal, a script that tries to prompt must fail fast
+    // instead of hanging forever: bounded (long tier, stdin ignored). With
+    // a terminal, unchanged (#3062).
+    const result = isInteractive()
+      // sync-spawn: interactive manifest-script-step — runs an arbitrary
+      // manifest-author-defined script file with inherited stdio; it may
+      // itself prompt (see tools/testing/sync-spawn-allowlist.json). Reached
+      // only when isInteractive() is true (#3062) — the no-terminal path
+      // uses the bounded helper instead. Not a candidate for a bounded
+      // timeout.
+      ? spawnSync(scriptPath, [], { cwd: manifestDir, env, stdio: 'inherit' })
+      : boundedSpawnSync(scriptPath, [], 'long', { cwd: manifestDir, env, stdio: ['ignore', 'inherit', 'inherit'] });
     const ran = commandResult(result.status);
     if (!ran.ok) return { ...ran, failedStep: step.id };
     const verifies = Array.isArray(step.verify) ? step.verify : step.verify ? [step.verify] : [];

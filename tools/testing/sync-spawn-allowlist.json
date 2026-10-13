@@ -5,37 +5,43 @@
       "file": "src/config/cli.ts",
       "anchor": "editor-launch",
       "kind": "interactive",
-      "reason": "Launches $EDITOR/$VISUAL on the config file; the user interacts with it directly."
+      "reason": "Launches $EDITOR/$VISUAL on the config file; the user interacts with it directly. Reached only when isInteractive() is true (#3062) and --print-path was not given; headless callers use --print-path or `aiwg config set` instead."
     },
     {
       "file": "src/mcp/adapters/codex-runtime.ts",
       "anchor": "codex-exec",
       "kind": "interactive",
-      "reason": "Hands the terminal to the codex binary the user is meant to talk to."
+      "reason": "Hands the terminal to the codex binary the user is meant to talk to. Reached only when extraArgs is not already a non-interactive form (e.g. `exec <prompt>`) and isInteractive() is true (#3062); the non-interactive/no-terminal paths use the bounded helper or refuse instead."
     },
     {
       "file": "src/mcp/adapters/codex-runtime.ts",
       "anchor": "codex-login",
       "kind": "interactive",
-      "reason": "Runs the codex OAuth login flow, which prompts the user directly."
+      "reason": "Runs the codex OAuth login flow, which prompts the user directly. Reached only when no apiKeyEnv was given and isInteractive() is true (#3062); headless callers pass apiKeyEnv (codex login --with-api-key) instead."
     },
     {
       "file": "src/cli/handlers/session.ts",
       "anchor": "harness-launch",
       "kind": "interactive",
-      "reason": "Hands the terminal to the configured provider binary (claude/codex/...) the user is meant to talk to."
+      "reason": "Hands the terminal to the configured provider binary (claude/codex/...) the user is meant to talk to. Reached only when no --prompt/--prompt-file was supplied and isInteractive() is true (#3062); headless callers pass --prompt/--prompt-file instead."
     },
     {
       "file": "src/cli/handlers/setup-manifest.ts",
       "anchor": "manifest-shell-command",
       "kind": "interactive",
-      "reason": "Runs an arbitrary manifest-author-defined shell command with inherited stdio; it may itself prompt."
+      "reason": "Runs an arbitrary manifest-author-defined shell command with inherited stdio; it may itself prompt. Reached only when isInteractive() is true (#3062); the no-terminal path uses the bounded helper instead."
     },
     {
       "file": "src/cli/handlers/setup-manifest.ts",
       "anchor": "manifest-script-step",
       "kind": "interactive",
-      "reason": "Runs an arbitrary manifest-author-defined script file with inherited stdio; it may itself prompt."
+      "reason": "Runs an arbitrary manifest-author-defined script file with inherited stdio; it may itself prompt. Reached only when isInteractive() is true (#3062); the no-terminal path uses the bounded helper instead."
+    },
+    {
+      "file": "tools/contrib/sync-upstream.mjs",
+      "anchor": "conflict-editor-launch",
+      "kind": "interactive",
+      "reason": "Opens $EDITOR on a conflicted file from the interactive conflict-resolution menu; the user interacts with it directly. handleConflicts() returns before reaching this call whenever !process.stdin.isTTY (#3062), so it is reached only when attached to a terminal."
     }
   ]
 }

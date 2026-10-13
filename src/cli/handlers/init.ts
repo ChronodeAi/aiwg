@@ -33,8 +33,11 @@ import {
   detectInstalledWorkerClis,
   evaluateWorkerDispatchOffer,
   workerDispatchOfferQuestion,
-  workerDispatchOfferHint,
+  workerDispatchOfferHintWithArg,
+  parseWorkerDispatchArg,
+  type WorkerDispatchArgValue,
 } from '../../models/worker-dispatch-offer.js';
+import { EXIT_CODES } from '../errors.js';
 import type { ParallelismConfig, SetupConfig } from '../../config/aiwg-config.js';
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -109,11 +112,42 @@ async function askProviders(rl: readline.Interface, signal?: AbortSignal): Promi
  * Non-interactive / --yes / no-TTY runs never prompt and never touch the
  * config (#3050 item 2) — they only print one line naming the enable
  * command, when two or more worker CLIs are detected and dispatch is not
- * already on or declined.
+ * already on or declined. The hint also names `--worker-dispatch` (#3062):
+ * that argument answers the same question headlessly.
  */
 function renderWorkerDispatchHintIfApplicable(parallelism: ParallelismConfig | undefined, setup: SetupConfig | undefined): void {
   const offer = evaluateWorkerDispatchOffer(parallelism, setup, detectInstalledWorkerClis());
-  if (offer.shouldOffer) ui.dim(`  ${workerDispatchOfferHint(offer.detected)}`);
+  if (offer.shouldOffer) ui.dim(`  ${workerDispatchOfferHintWithArg(offer.detected)}`);
+}
+
+/** Extract a flag's value, e.g. `--worker-dispatch enable` -> `'enable'`. */
+function flagValue(args: string[], name: string): string | undefined {
+  const idx = args.indexOf(name);
+  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+/** One-line description of what an explicit `--worker-dispatch` choice would write. */
+function describeWorkerDispatchWrite(arg: WorkerDispatchArgValue): string {
+  return arg === 'enable'
+    ? 'enable parallelism.worker_dispatch'
+    : 'record a worker-dispatch decline (setup.worker_dispatch_offer)';
+}
+
+/**
+ * Resolve an explicit `--worker-dispatch` choice into a decision to apply to
+ * a brand-new config (#3062). Under `--dry-run`, writes nothing — reports
+ * what would be written instead and returns `undefined` so the caller never
+ * applies it to the config it builds.
+ */
+function resolveWorkerDispatchDecisionForNewConfig(
+  arg: WorkerDispatchArgValue,
+  dryRun: boolean | undefined,
+): WorkerDispatchDecision | undefined {
+  if (dryRun) {
+    ui.dim(`  Would ${describeWorkerDispatchWrite(arg)} (--dry-run writes nothing).`);
+    return undefined;
+  }
+  return { kind: arg };
 }
 
 /** A decision from the worker-dispatch consent prompt, keyed to where it is recorded. */
@@ -168,6 +202,17 @@ export const initHandler: CommandHandler = {
       process.env['CI'] === 'true';
     const projectDir = ctx.cwd;
 
+    // `--worker-dispatch enable|decline` answers the worker-dispatch offer
+    // directly (#3062), with or without a terminal, and is honored even when
+    // fewer than two worker CLIs are detected — an explicit choice overrides
+    // the presence-only detection gate.
+    let workerDispatchArg: WorkerDispatchArgValue | undefined;
+    try {
+      workerDispatchArg = parseWorkerDispatchArg(flagValue(ctx.args, '--worker-dispatch'));
+    } catch (err) {
+      return { exitCode: EXIT_CODES.USAGE, message: err instanceof Error ? err.message : String(err) };
+    }
+
     ui.blank();
     console.log(`  ${ui.brandMark()} ${ui.bold('AIWG Baseline Config')}`);
     ui.rule();
@@ -190,7 +235,21 @@ export const initHandler: CommandHandler = {
       // already run, instead of leaving it undiscoverable. `--dry-run` must
       // never prompt and never write (review item 1) — it degrades to the
       // same hint-only behavior as non-interactive runs.
-      if (nonInteractive || ctx.dryRun) {
+      // #3062: an explicit `--worker-dispatch` argument always answers the
+      // question directly (bypassing the ask/hint entirely) except under
+      // `--dry-run`, which still writes nothing — it reports what would be
+      // written instead.
+      if (workerDispatchArg) {
+        if (ctx.dryRun) {
+          ui.dim(`  Would ${describeWorkerDispatchWrite(workerDispatchArg)} (--dry-run writes nothing).`);
+        } else if (workerDispatchArg === 'enable') {
+          await writeAiwgConfig(projectDir, { ...existing, parallelism: { ...existing.parallelism, worker_dispatch: true } });
+          ui.success('  Enabled parallelism.worker_dispatch.');
+        } else {
+          await writeAiwgConfig(projectDir, { ...existing, setup: { ...existing.setup, worker_dispatch_offer: 'declined' } });
+          ui.success('  Recorded worker-dispatch decline (setup.worker_dispatch_offer).');
+        }
+      } else if (nonInteractive || ctx.dryRun) {
         renderWorkerDispatchHintIfApplicable(existing.parallelism, existing.setup);
       } else {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -221,7 +280,11 @@ export const initHandler: CommandHandler = {
         doctor: 'aiwg doctor',
         sync: 'aiwg sync',
       };
-      renderWorkerDispatchHintIfApplicable(undefined, undefined);
+      if (workerDispatchArg) {
+        workerDispatchDecision = resolveWorkerDispatchDecisionForNewConfig(workerDispatchArg, ctx.dryRun);
+      } else {
+        renderWorkerDispatchHintIfApplicable(undefined, undefined);
+      }
     } else {
       // Interactive wizard
       const rl = readline.createInterface({
@@ -255,8 +318,13 @@ export const initHandler: CommandHandler = {
 
         // #3050: offer direct worker dispatch inside the same wizard — but
         // `--dry-run` must never prompt or write anything from the offer
-        // (review item 1), so it degrades to the hint instead.
-        if (ctx.dryRun) {
+        // (review item 1), so it degrades to the hint instead. An explicit
+        // `--worker-dispatch` argument (#3062) always answers the question
+        // directly instead of asking or hinting, still subject to `--dry-run`
+        // writing nothing.
+        if (workerDispatchArg) {
+          workerDispatchDecision = resolveWorkerDispatchDecisionForNewConfig(workerDispatchArg, ctx.dryRun);
+        } else if (ctx.dryRun) {
           renderWorkerDispatchHintIfApplicable(undefined, undefined);
         } else {
           workerDispatchDecision = await askWorkerDispatchOffer(rl, undefined, undefined, ctx.signal);

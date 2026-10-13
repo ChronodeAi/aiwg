@@ -8,7 +8,7 @@
  *   validate            — Validate all config files
  *   reset [<key>]       — Reset key or all config to defaults
  *   path                — Print the active config directory path
- *   edit                — Open config in $EDITOR
+ *   edit [--print-path] — Open config in $EDITOR/$VISUAL, or print its path headlessly
  *   gitignore           — Show/check/fix .gitignore for AIWG runtime dirs
  *
  * Global flags:
@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
+import { isInteractive } from '../cli/env.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -75,7 +76,7 @@ export async function main(args: string[]): Promise<void> {
       break;
 
     case 'edit':
-      await handleEdit(config);
+      await handleEdit(config, subArgs);
       break;
 
     case 'gitignore':
@@ -694,9 +695,34 @@ function handlePath(config: UserConfig): void {
   console.log(config.getPath());
 }
 
-async function handleEdit(config: UserConfig): Promise<void> {
-  const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+/**
+ * `aiwg config edit [--print-path]` (#3062). `--print-path` is the headless
+ * equivalent: it prints the resolved config file path and exits, so scripts
+ * and agents can read/edit the file themselves (or compose with
+ * `aiwg config get`/`set`) instead of needing $EDITOR. Without a terminal
+ * and without `--print-path`, this refuses instead of spawning an editor
+ * that would hang waiting for input nobody can supply.
+ */
+async function handleEdit(config: UserConfig, args: string[] = []): Promise<void> {
   const configPath = `${config.getPath()}/config.yaml`;
+
+  if (args.includes('--print-path')) {
+    // Ensure the config file exists before pointing a caller at it.
+    await config.ensureDir();
+    console.log(configPath);
+    return;
+  }
+
+  if (!isInteractive()) {
+    throw new AiwgError({
+      code: 'ERR_NON_INTERACTIVE_EDIT',
+      message: 'aiwg config edit requires an interactive terminal to open $EDITOR/$VISUAL.',
+      hint: 'Use `aiwg config set <key> <value>` to change a value headlessly, or `aiwg config edit --print-path` to get the file path and edit it yourself.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+
+  const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
 
   // Ensure the config file exists before opening
   await config.ensureDir();
@@ -705,7 +731,9 @@ async function handleEdit(config: UserConfig): Promise<void> {
   try {
     // sync-spawn: interactive editor-launch — launches $EDITOR/$VISUAL on the
     // config file; the user interacts with it directly (see tools/testing/
-    // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
+    // sync-spawn-allowlist.json). Reached only when isInteractive() is true
+    // (#3062) — the no-terminal path above refuses before spawning anything.
+    // Not a candidate for a bounded timeout.
     execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
   } catch (err) {
     throw new AiwgError({
@@ -886,7 +914,8 @@ Subcommands:
     [--provider gitea|github|local] [--available-label NAME ...]
   reset [<key>]       Reset key or all config to defaults
   path                Print config directory path
-  edit                Open config in $EDITOR
+  edit                Open config in $EDITOR/$VISUAL (requires a terminal)
+  edit --print-path   Print the config file path instead of opening an editor
   gitignore           Show/check/fix .gitignore AIWG entries
 
 Global flags:

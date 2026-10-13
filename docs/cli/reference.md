@@ -60,6 +60,36 @@ contains access or refresh tokens.
 
 ---
 
+## Running Headless
+
+A few commands hand the terminal to an interactive process by design (an editor, a
+provider binary the user is meant to talk to, an OAuth login flow). The rule
+(#3062): **every input those steps would otherwise ask for interactively has a
+command-line argument.** Without an interactive terminal attached (no TTY, or a CI
+environment), supplying every required argument runs the command fully headless;
+missing one refuses immediately — before spawning anything — naming the missing
+argument. With a terminal attached, behavior is unchanged except where an argument
+is supplied, in which case the headless form is used even then.
+
+| Command | Headless argument(s) | Without a terminal and without the argument |
+| --- | --- | --- |
+| `aiwg config edit` | `--print-path` (prints the config file path; or use `aiwg config set <key> <value>`) | Refuses, naming both alternatives |
+| `aiwg session` (any spawnable provider) | `--prompt <text>` / `--prompt-file <path>` | Refuses, naming `--prompt`/`--prompt-file` |
+| `aiwg session --provider codex --profile <p>` | `--prompt <text>` / `--prompt-file <path>` (maps to `codex exec <text>` inside the profile's runtime home) | Refuses, naming `--prompt`/`--prompt-file` |
+| `aiwg setup-run` steps (`script`/`verify`/`detect`/`os-config`) | none needed — runs bounded with stdin ignored instead of hanging | N/A (never required; see below) |
+| `aiwg setup-run` step marked `interactive: true` | none — manifest authors should avoid depending on one in headless pipelines | Refuses up front, naming the step |
+| `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
+
+`aiwg setup-run` steps don't need a headless argument because a manifest step's shell
+command/script is already bounded (stdin ignored) whenever no terminal is attached —
+see [the SetupManifest reference](../configuration/setup-manifest.md#running-headless-3062)
+for the `interactive: true` per-step marker that refuses a step outright instead of
+waiting out the bound.
+
+See each command's own section below for its full headless argument details.
+
+---
+
 ## Table of Contents
 
 - [Maintenance Commands](#maintenance-commands)
@@ -1201,6 +1231,8 @@ aiwg session mcp                    # inject configured MCPs first, then launch
 aiwg session --provider codex       # explicit provider
 aiwg session mcp --provider cursor  # MCP inject for cursor + start instructions
 aiwg session --no-repair            # skip auto-repair (still checks and reports)
+aiwg session --prompt "fix the failing test"   # headless: one-shot, bounded, exits (#3062)
+aiwg session --prompt-file ./task.md           # headless, prompt read from a file
 ```
 
 **Options:**
@@ -1210,6 +1242,9 @@ aiwg session --no-repair            # skip auto-repair (still checks and reports
 - `--no-repair` - Skip auto-repair; still runs health checks and reports issues
 - `--profile <name>` - Launch with a named MCP profile (ephemeral by default — does not modify your provider's default config). For Claude: passes a temp config via `--mcp-config`. For Codex: sets up a per-profile runtime home via `~/.codex/roles-runtime/<profile>/`
 - `--persist` - When combined with `--profile`, writes servers to the provider's default config instead of using an ephemeral temp file
+- `--prompt <text>` / `--prompt-file <path>` - Run headless: maps to the provider's documented non-interactive CLI form (`claude --print`, `codex exec`, `opencode run --format json`, `dsh --profile headless`) instead of handing over the terminal. Mutually exclusive with each other. The headless run is bounded (10 minutes by default, `AIWG_SYNC_LONG_TIMEOUT_MS` to override) and never inherits stdin.
+
+**Running headless (#3062):** without an interactive terminal attached, `aiwg session` refuses with a usage error naming `--prompt`/`--prompt-file` instead of launching a provider binary that would hang waiting for a terminal that doesn't exist. Supplying `--prompt`/`--prompt-file` runs headless even when a terminal *is* attached. A provider with no evidenced non-interactive CLI form (anything not listed above) refuses `--prompt`/`--prompt-file` rather than guessing an invocation.
 
 **Pre-flight sequence:**
 
@@ -1324,13 +1359,14 @@ scripts, delivery policy). Distinct from `aiwg new` (which scaffolds a
 brand-new project tree).
 
 ```bash
-aiwg init [--force] [--non-interactive | --yes]
+aiwg init [--force] [--non-interactive | --yes] [--worker-dispatch enable|decline]
 ```
 
 **Options:**
 
 - `--force` - Overwrite an existing `.aiwg/aiwg.config`
 - `--non-interactive`, `--yes` - Skip prompts and accept detected defaults
+- `--worker-dispatch enable|decline` - Answer the direct-worker-dispatch opt-in question directly (#3062), with or without a terminal — see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly). An invalid value exits non-zero naming `enable`/`decline`.
 
 **Capabilities:** cli, project, config, setup
 **Tools:** Read, Write
@@ -1347,8 +1383,15 @@ agent/skill during the guided setup conversation rather than used as the first
 user-facing step.
 
 ```bash
-aiwg setup project [--yes] [--dry-run] [--target <dir>]
+aiwg setup project [--yes] [--dry-run] [--target <dir>] [--worker-dispatch enable|decline]
 ```
+
+`--worker-dispatch enable|decline` answers the direct-worker-dispatch opt-in
+question directly (#3062), with or without a terminal, and is honored even when
+fewer than two worker CLIs are detected. `--dry-run` never writes it — with
+`--json` the would-be choice is reported under
+`worker_dispatch_offer.applied_choice`. An invalid value exits non-zero naming
+`enable`/`decline`. See [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly).
 
 The helper detects Git remotes and proposes `remotes.primary`,
 `remotes.issue_tracker`, optional `remotes.customer_issue_tracker`,
@@ -5512,7 +5555,8 @@ aiwg config <subcommand> [args] [--config-dir <path>]
 - `validate` - Check the config file against the schema
 - `reset` - Restore defaults
 - `path` - Print the resolved config file path
-- `edit` - Open the config in `$EDITOR`
+- `edit` - Open the config in `$EDITOR`/`$VISUAL` (requires an interactive terminal)
+- `edit --print-path` - Print the resolved config file path instead of opening an editor; works headless
 
 **Options:**
 
@@ -5522,6 +5566,11 @@ aiwg config <subcommand> [args] [--config-dir <path>]
 **Tools:** Read, Write, Bash
 
 Resolution order: `$AIWG_CONFIG` env var → `--config-dir` flag → `~/.aiwg/` → `~/.config/aiwg/`.
+
+**Running headless (#3062):** `aiwg config edit` without an interactive terminal refuses
+instead of spawning `$EDITOR`/`$VISUAL` and hanging — it names `aiwg config set <key>
+<value>` and `aiwg config edit --print-path` as the headless alternatives. `aiwg config
+edit --print-path` always works headless, with or without a terminal.
 
 ---
 

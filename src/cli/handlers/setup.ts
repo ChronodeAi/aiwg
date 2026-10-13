@@ -28,8 +28,9 @@ import { normalizeProviderDefinitionId } from '../../providers/provider-definiti
 import {
   detectInstalledWorkerClis,
   evaluateWorkerDispatchOffer,
-  workerDispatchOfferHint,
+  workerDispatchOfferHintWithArg,
   workerDispatchOfferQuestion,
+  WORKER_DISPATCH_ARG_VALUES,
   type WorkerDispatchOfferDecision,
 } from '../../models/worker-dispatch-offer.js';
 
@@ -77,7 +78,13 @@ export interface SetupProjectOptions {
   customerTrackerActorVia?: TrackerVia;
   providers?: string[];
   confirm?: boolean;
-  /** Set only by the interactive wizard, when the worker-dispatch opt-in question was asked (#3050). */
+  /**
+   * Set by the interactive wizard when the worker-dispatch opt-in question
+   * was asked and answered (#3050), or directly by `--worker-dispatch
+   * enable|decline` (#3062) — either way, applying it to the plan clears
+   * `workerDispatchOffer.shouldOffer`, which is also how the explicit flag
+   * suppresses the interactive question (see `applyInteractivePrompts`).
+   */
   workerDispatchChoice?: 'enable' | 'decline';
 }
 
@@ -181,6 +188,10 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
     trackerActorVia: parseEnum(flagValue(args, '--tracker-actor-via'), TRACKER_VIA, '--tracker-actor-via'),
     customerTrackerActorLogin: flagValue(args, '--customer-tracker-actor-login'),
     customerTrackerActorVia: parseEnum(flagValue(args, '--customer-tracker-actor-via'), TRACKER_VIA, '--customer-tracker-actor-via'),
+    // #3062: answers the worker-dispatch question directly, with or without
+    // a terminal, and suppresses the interactive question below (see
+    // `SetupProjectOptions.workerDispatchChoice`'s doc comment).
+    workerDispatchChoice: parseEnum(flagValue(args, '--worker-dispatch'), WORKER_DISPATCH_ARG_VALUES, '--worker-dispatch'),
     providers: (() => {
       const providers = parseStringList(flagValue(args, '--providers'));
       return providers ? normalizeProviders(providers) : undefined;
@@ -603,6 +614,12 @@ export const setupHandler: CommandHandler = {
     // is structured data on the JSON object, never a separate
     // human-readable line — a stray print after the JSON would make
     // `setup project --json` unparseable (review item 6).
+    // #3062: an explicit `--worker-dispatch` argument clears `shouldOffer`
+    // the same way an answered prompt does, so `applied_choice` (alongside
+    // the top-level `dry_run` flag) is how `--json --dry-run` reports what
+    // the argument would have written — `previewBlocks()` deliberately
+    // excludes `parallelism`/`setup` (an unrelated, pre-existing contract),
+    // so this field carries that information instead of widening it.
     if (options.json) {
       console.log(JSON.stringify({
         project_dir: plan.projectDir,
@@ -613,13 +630,13 @@ export const setupHandler: CommandHandler = {
         config: previewBlocks(plan.next),
         worker_dispatch_offer: plan.workerDispatchOffer.shouldOffer
           ? { should_offer: true, detected: plan.workerDispatchOffer.detected,
-              hint: workerDispatchOfferHint(plan.workerDispatchOffer.detected) }
-          : { should_offer: false },
+              hint: workerDispatchOfferHintWithArg(plan.workerDispatchOffer.detected) }
+          : { should_offer: false, ...(options.workerDispatchChoice ? { applied_choice: options.workerDispatchChoice } : {}) },
       }, null, 2));
     } else {
       printPlan(plan);
       if (plan.workerDispatchOffer.shouldOffer) {
-        ui.info(workerDispatchOfferHint(plan.workerDispatchOffer.detected));
+        ui.info(workerDispatchOfferHintWithArg(plan.workerDispatchOffer.detected));
       }
     }
 

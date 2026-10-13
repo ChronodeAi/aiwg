@@ -14,11 +14,20 @@
  *   aiwg session --provider codex       # explicit provider
  *   aiwg session mcp --provider cursor  # MCP inject for cursor + start instructions
  *   aiwg session --no-repair            # skip auto-repair (still check and report)
+ *   aiwg session --prompt "<text>"      # headless: one-shot, bounded, exits (#3062)
+ *   aiwg session --prompt-file <path>   # headless from a file instead of argv
+ *
+ * Without a terminal attached, launching a spawnable provider with no
+ * `--prompt`/`--prompt-file` would hand over a terminal that does not exist
+ * and hang. `--prompt`/`--prompt-file` map to each provider's documented
+ * non-interactive CLI form (see `HEADLESS_SESSION_FLAGS` below); providers
+ * without an evidenced one refuse instead of guessing.
  *
  * @issue #884
  */
 
 import { spawnSync } from 'child_process';
+import { readFile } from 'node:fs/promises';
 import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { existsSync } from 'node:fs';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -26,6 +35,7 @@ import { ensureRuntimeHome, writeProfileConfig, launchWithProfile } from '../../
 import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { forceUpdateCheck } from '../../update/checker.mjs';
 import { updateInstallation } from '../../update/service.mjs';
+import { isInteractive } from '../env.js';
 import {
   readAiwgConfig,
   getDeploymentSummary,
@@ -79,6 +89,10 @@ interface SessionArgs {
   profile: string | undefined;
   /** Persist profile injection to provider config (default: ephemeral) */
   persist: boolean;
+  /** Headless prompt text (#3062) — mutually exclusive with promptFile */
+  prompt: string | undefined;
+  /** Headless prompt file path (#3062) — mutually exclusive with prompt */
+  promptFile: string | undefined;
 }
 
 function parseSessionArgs(args: string[]): SessionArgs {
@@ -87,6 +101,8 @@ function parseSessionArgs(args: string[]): SessionArgs {
   let noRepair = false;
   let profile: string | undefined;
   let persist = false;
+  let prompt: string | undefined;
+  let promptFile: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -100,10 +116,14 @@ function parseSessionArgs(args: string[]): SessionArgs {
       profile = args[++i];
     } else if (a === '--persist') {
       persist = true;
+    } else if (a === '--prompt' && args[i + 1]) {
+      prompt = args[++i];
+    } else if (a === '--prompt-file' && args[i + 1]) {
+      promptFile = args[++i];
     }
   }
 
-  return { mcp, provider, noRepair, profile, persist };
+  return { mcp, provider, noRepair, profile, persist, prompt, promptFile };
 }
 
 // ── Pre-flight steps ─────────────────────────────────────────────────────────
@@ -343,8 +363,45 @@ function injectMcpProfile(
 // ── Launch ────────────────────────────────────────────────────────────────────
 
 /**
+ * Flags that make a provider's CLI read one prompt and exit, keyed by the
+ * provider ids this file compares against elsewhere (canonical ids plus the
+ * `claude-code`/`openai` aliases a stored, un-normalized project config can
+ * still surface — see `resolveProvider`). Sourced from the worker-adapter
+ * evidence already qualified for these binaries (#3062):
+ *   - claude/claude-code → `--print`            (claude-adapter.mjs buildSessionArgs)
+ *   - codex/openai       → `exec` subcommand    (codex-adapter.mjs buildSessionArgs)
+ *   - opencode           → `run --format json`  (opencode-adapter.mjs buildSessionArgs)
+ *   - deepseek-harness   → `--profile headless` (deepseek-harness-adapter.mjs; matches
+ *                           PROVIDER_CONFIGS['deepseek-harness'].promptPrefix already)
+ * Providers without an evidenced non-interactive CLI form (e.g. antigravity's
+ * NDJSON-over-stdin protocol) are deliberately absent — `headlessSessionArgs`
+ * returns `null` for them rather than guessing an invocation.
+ */
+const HEADLESS_SESSION_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  claude: ['--print'],
+  'claude-code': ['--print'],
+  codex: ['exec'],
+  openai: ['exec'],
+  opencode: ['run', '--format', 'json'],
+  'deepseek-harness': ['--profile', 'headless'],
+};
+
+/** Build the final argv for a headless (`--prompt`/`--prompt-file`) launch, or `null` if unsupported. */
+function headlessSessionArgs(provider: string, binaryArgs: string[], prompt: string): string[] | null {
+  const flags = HEADLESS_SESSION_FLAGS[provider];
+  if (!flags) return null;
+  return [...binaryArgs, ...flags, prompt];
+}
+
+/**
  * Launch a spawnable provider binary, replacing the current process (exec-style).
  * For IDE-integrated providers, print guidance and exit.
+ *
+ * `prompt`, when given, selects the headless path (#3062): the provider is
+ * launched with its documented non-interactive form, bounded and with stdin
+ * ignored, regardless of whether a terminal is attached. Without `prompt`
+ * and without a terminal, this refuses before spawning anything that would
+ * hang.
  */
 function launchProvider(
   provider: string,
@@ -352,6 +409,7 @@ function launchProvider(
   mcpConfigPath?: string | null,
   profile?: string | null,
   settingsPath?: string | null,
+  prompt?: string | null,
 ): HandlerResult {
   const cfg = getProviderConfig(provider);
 
@@ -372,13 +430,17 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
     return { exitCode: 0 };
   }
 
-  // Spawnable — hand off the terminal
+  // Spawnable — hand off the terminal (or run headless, see below)
   console.log(`\n── Launching ${cfg.name} ──\n`);
 
   // Codex + profile: use runtime-home adapter (#892)
   if ((provider === 'codex' || provider === 'openai') && profile) {
     console.log(`  Using runtime home for profile "${profile}"`);
-    const result = launchWithProfile(profile);
+    // Headless (#3062): `launchWithProfile` itself bounds/refuses based on
+    // whether extraArgs is a non-interactive form and whether a terminal is
+    // attached — see its own doc comment.
+    const extraArgs = prompt ? ['exec', prompt] : [];
+    const result = launchWithProfile(profile, extraArgs);
     return { exitCode: result.status ?? 0 };
   }
 
@@ -393,9 +455,41 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
     }
   }
 
+  if (prompt) {
+    const headlessArgs = headlessSessionArgs(provider, binaryArgs, prompt);
+    if (!headlessArgs) {
+      return {
+        exitCode: 1,
+        message:
+          `Provider '${cfg.name}' has no evidenced non-interactive CLI form; --prompt/--prompt-file ` +
+          `is not supported for it. Run \`aiwg session --provider ${provider}\` from a terminal instead.`,
+      };
+    }
+    // Bounded (#3062): a headless run never hands over the terminal, so it
+    // is safe to bound and to never inherit stdin — it must never block
+    // waiting for input nobody can supply.
+    const result = boundedSpawnSync(cfg.binary!, headlessArgs, 'long', {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: process.env as Record<string, string>,
+    });
+    return { exitCode: result.status ?? 0 };
+  }
+
+  if (!isInteractive()) {
+    return {
+      exitCode: 1,
+      message:
+        'aiwg session requires an interactive terminal to launch a provider without a prompt. ' +
+        'Pass --prompt <text> or --prompt-file <path> to run headless.',
+    };
+  }
+
   // sync-spawn: interactive harness-launch — hands the terminal to the
-  // provider binary the user is meant to talk to (see tools/testing/
-  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
+  // provider binary the user is meant to talk to, when no --prompt/
+  // --prompt-file was supplied (see tools/testing/sync-spawn-allowlist.json).
+  // Reached only when isInteractive() is true (#3062) — the headless and
+  // no-terminal paths above are handled before this point. Not a candidate
+  // for a bounded timeout.
   const result = spawnSync(cfg.binary!, binaryArgs, {
     stdio: 'inherit',
     env: process.env as Record<string, string>,
@@ -415,12 +509,51 @@ export const sessionHandler: CommandHandler = {
   aliases: [],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
-    const { mcp, provider: explicitProvider, noRepair, profile, persist } = parseSessionArgs(ctx.args);
+    const {
+      mcp, provider: explicitProvider, noRepair, profile, persist,
+      prompt: promptArg, promptFile,
+    } = parseSessionArgs(ctx.args);
     const cwd = ctx.cwd || process.cwd();
+
+    // ── Resolve headless prompt (#3062) — before any pre-flight spawn ──────
+    if (promptArg && promptFile) {
+      return { exitCode: 2, message: 'aiwg session: pass only one of --prompt or --prompt-file.' };
+    }
+    let prompt: string | undefined = promptArg;
+    if (!prompt && promptFile) {
+      let fileText: string;
+      try {
+        fileText = await readFile(promptFile, 'utf-8');
+      } catch (err) {
+        return {
+          exitCode: 1,
+          message: `aiwg session: could not read --prompt-file '${promptFile}': ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      prompt = fileText.trim();
+      if (!prompt) {
+        return { exitCode: 1, message: `aiwg session: --prompt-file '${promptFile}' is empty.` };
+      }
+    }
 
     // ── Resolve provider ─────────────────────────────────────────
     const provider = await resolveProvider(explicitProvider, cwd);
     const providerCfg = PROVIDER_CONFIGS[provider];
+
+    // Without a terminal, a spawnable provider launched with no prompt would
+    // hand over a terminal that does not exist and hang. Fail fast, before
+    // any pre-flight step runs a child process (#3062). IDE-integrated
+    // providers only ever print guidance — never spawn — so they don't need
+    // a prompt to stay safe headless.
+    if (!prompt && isSpawnableProvider(provider) && !isInteractive()) {
+      return {
+        exitCode: 1,
+        message:
+          `aiwg session requires --prompt <text> or --prompt-file <path> when no interactive terminal is ` +
+          `attached (provider '${provider}' launches a binary that would otherwise hand over the terminal ` +
+          'and hang).',
+      };
+    }
 
     const profileSuffix = profile ? ` · profile: ${profile}` : '';
     console.log(`\n── aiwg session ── provider: ${providerCfg?.name ?? provider}${profileSuffix} ──\n`);
@@ -535,6 +668,6 @@ export const sessionHandler: CommandHandler = {
 
     // ── Step 5: Launch ────────────────────────────────────────────
     return launchProvider(provider, mcpInjected, mcpConfigPath,
-      persist && (provider === 'codex' || provider === 'openai') ? null : profile, settingsPath);
+      persist && (provider === 'codex' || provider === 'openai') ? null : profile, settingsPath, prompt);
   },
 };

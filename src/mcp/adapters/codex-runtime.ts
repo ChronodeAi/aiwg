@@ -21,6 +21,7 @@ import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncReturns } from 'child_process';
 import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
+import { isInteractive } from '../../cli/env.js';
 import { buildServerToml, type McpServerDefinition } from '../registry.js';
 import { assertCredentialPolicy, resolveCredentialPolicy, type McpCredentialPolicy } from '../credentials.mjs';
 import { planToolFilters, type ToolFilters } from '../tool-filters.mjs';
@@ -185,9 +186,27 @@ export async function writeProfileConfig(
 }
 
 /**
+ * True iff `extraArgs` already selects one of codex's documented
+ * non-interactive forms, so launching with them is safe to bound (#3062).
+ * `exec` is the only evidenced one today (`codex exec <prompt>`; see
+ * tools/ralph-external/lib/codex-adapter.mjs). Anything else — including no
+ * args at all — hands the terminal to the interactive TUI.
+ */
+function isNonInteractiveCodexInvocation(extraArgs: string[]): boolean {
+  return extraArgs[0] === 'exec';
+}
+
+/**
  * Launch Codex with a profile's runtime home.
  * Sets CODEX_HOME and HOME to the runtime home so Codex reads its profile-scoped config and
  * OAuth tokens are written to the runtime home (isolated from other profiles).
+ *
+ * Headless (#3062): when `extraArgs` is already a non-interactive form (see
+ * {@link isNonInteractiveCodexInvocation}), the call never hands over the
+ * terminal, so it is bounded like any other child process and never inherits
+ * stdin. Otherwise this launches the interactive TUI, which requires a
+ * terminal — without one, this refuses instead of spawning something that
+ * would hang.
  */
 export function launchWithProfile(
   profile: string,
@@ -208,9 +227,28 @@ export function launchWithProfile(
     CODEX_HOME: rtHome,
   };
 
+  if (isNonInteractiveCodexInvocation(extraArgs)) {
+    // Bounded (#3062): `codex exec <prompt>` never hands over the terminal.
+    return boundedSpawnSync('codex', extraArgs, 'long', {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env,
+    }) as SpawnSyncReturns<Buffer>;
+  }
+
+  if (!isInteractive()) {
+    throw new Error(
+      `Launching codex for profile "${profile}" with no arguments hands over the terminal and requires one to be attached.\n` +
+      'Pass a non-interactive form instead — e.g. run `aiwg session --provider codex --profile ' +
+      `${profile} --prompt "<text>"\` (maps to \`codex exec <text>\`).`,
+    );
+  }
+
   // sync-spawn: interactive codex-exec — replaces the terminal with the codex
-  // binary the user is meant to talk to (see tools/testing/
-  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
+  // binary the user is meant to talk to, when extraArgs is not already a
+  // non-interactive form (see tools/testing/sync-spawn-allowlist.json).
+  // Reached only when isInteractive() is true (#3062) — the non-interactive
+  // and no-terminal paths above are handled before this point. Not a
+  // candidate for a bounded timeout.
   return spawnSync('codex', extraArgs, {
     stdio: 'inherit',
     env,
@@ -219,24 +257,77 @@ export function launchWithProfile(
 
 /**
  * Run `codex login` within a profile's runtime home to isolate OAuth tokens.
+ *
+ * Headless (#3062): pass `apiKeyEnv` to log in non-interactively. codex-cli
+ * documents `--with-api-key` for exactly this (verified: `codex login
+ * --help`, codex-cli 0.162.1 — "Read the API key from stdin (e.g. `printenv
+ * OPENAI_API_KEY | codex login --with-api-key`)"); this function reads
+ * `process.env[apiKeyEnv]` and feeds it to codex over stdin, so the key
+ * itself never appears on argv or in a process listing — only the
+ * environment-variable *name* is ever passed around. Without `apiKeyEnv`
+ * and without a terminal, this refuses instead of spawning the interactive
+ * OAuth flow, which would hang waiting for input nobody can supply.
+ *
+ * NOTE: there is currently no CLI command wired to this parameter — see the
+ * `codex-login` entry in tools/testing/sync-spawn-allowlist.json and the
+ * #3062 slice report for the open question (`aiwg mcp profile login` is
+ * documented but not implemented; wiring it is a separate decision).
  */
-export async function loginInProfile(profile: string): Promise<void> {
+export async function loginInProfile(
+  profile: string,
+  options: { apiKeyEnv?: string } = {},
+): Promise<void> {
   await ensureRuntimeHome(profile);
   const rtHome = runtimeHomePath(profile);
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    HOME: rtHome,
+    CODEX_HOME: rtHome,
+  };
+
+  if (options.apiKeyEnv) {
+    const apiKey = process.env[options.apiKeyEnv];
+    if (!apiKey) {
+      throw new Error(
+        `Environment variable "${options.apiKeyEnv}" is not set; cannot log in to profile "${profile}" non-interactively.`,
+      );
+    }
+    console.log(`\n  Logging in to profile "${profile}" with an API key from $${options.apiKeyEnv}...`);
+    // Bounded (#3062): `--with-api-key` reads the key from stdin and exits —
+    // it never hands over the terminal — so this is safe to bound like any
+    // other child process. `input` carries the key on stdin only; it is
+    // never placed on argv.
+    const result = boundedSpawnSync('codex', ['login', '--with-api-key'], 'network', {
+      input: apiKey,
+      env,
+      stdio: ['pipe', 'inherit', 'inherit'],
+    });
+    if (result.status !== 0) {
+      throw new Error(`codex login --with-api-key failed with exit code ${result.status ?? 'unknown'}`);
+    }
+    return;
+  }
+
+  if (!isInteractive()) {
+    throw new Error(
+      `Logging in to profile "${profile}" requires an interactive terminal, or an API key.\n` +
+      'Pass { apiKeyEnv: "<ENV_VAR_NAME>" } to read the key from that environment variable ' +
+      '(never pass the key itself on the command line), or run `codex login` yourself with ' +
+      `CODEX_HOME=${rtHome}.`,
+    );
+  }
 
   console.log(`\n  Running codex login in profile "${profile}" runtime home...`);
   console.log(`  Auth tokens will be isolated to: ${rtHome}\n`);
 
   // sync-spawn: interactive codex-login — runs the codex OAuth login flow,
   // which prompts the user directly (see tools/testing/
-  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
+  // sync-spawn-allowlist.json). Reached only when isInteractive() is true
+  // and no apiKeyEnv was given (#3062). Not a candidate for a bounded
+  // timeout.
   const result = spawnSync('codex', ['login'], {
     stdio: 'inherit',
-    env: {
-      ...(process.env as Record<string, string>),
-      HOME: rtHome,
-      CODEX_HOME: rtHome,
-    },
+    env,
   });
 
   if (result.status !== 0) {

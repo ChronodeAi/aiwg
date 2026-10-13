@@ -361,6 +361,14 @@ async function handleConflicts(conflicts, strategy, cwd) {
         const editor = process.env.EDITOR || 'vi';
         console.log(`Opening ${firstFile} in ${editor}...`);
         try {
+          // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
+          // the conflicted file; the user interacts with it directly (see
+          // tools/testing/sync-spawn-allowlist.json). Reached only when
+          // process.stdin.isTTY is true (#3062) — the early `if
+          // (!process.stdin.isTTY)` return above this function's readline
+          // setup means a headless caller never reaches here; it gets the
+          // printed resolution options (which name this file) instead. Not a
+          // candidate for a bounded timeout.
           execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
         } catch (err) {
           console.log(`${colors.red}✗${colors.reset} Failed to open editor`);

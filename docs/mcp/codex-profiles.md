@@ -90,6 +90,23 @@ aiwg mcp profile login ops --provider codex
 This calls `codex login` with `HOME` set to the profile runtime home. Useful for
 pre-authenticating profiles before starting a session.
 
+> **Implementation status:** the `loginInProfile()` function this calls through
+> (`src/mcp/adapters/codex-runtime.ts`) exists and is headless-safe (#3062) — pass
+> an environment-variable name holding an API key and it runs `codex login
+> --with-api-key` non-interactively — but there is currently no `aiwg mcp profile
+> login` CLI subcommand wired to it (`src/mcp/cli.mjs`'s `handleProfile` switch does
+> not have a `login` case). Until that command exists, pre-authenticate a profile by
+> running `codex login` yourself with `CODEX_HOME` set to the profile's runtime home
+> (`~/.codex/roles-runtime/<profile>/`), or by starting a session with that profile
+> (`aiwg session --provider codex --profile <profile>`), which triggers the same
+> interactive OAuth flow on first use.
+
+**Running headless (#3062):** without a terminal, launching a codex session with a
+profile and no `--prompt`/`--prompt-file` refuses instead of hanging waiting for a
+terminal (same rule as the plain, non-profile launch). Pass `--prompt`/`--prompt-file`
+to run `codex exec <prompt>` inside the profile's runtime home instead, bounded and
+with stdin ignored.
+
 ## Shared State Policy
 
 The `SharedStatePolicy` controls which files are symlinked (shared) vs isolated per

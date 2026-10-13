@@ -271,4 +271,90 @@ describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
       expect(rlQueue.answers).toEqual(['y']);
     });
   });
+
+  describe('--worker-dispatch argument (#3062)', () => {
+    it('rejects an invalid value, naming the accepted values, without writing', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--worker-dispatch', 'bogus']));
+      expect(result.exitCode).not.toBe(0);
+      expect(result.message).toMatch(/--worker-dispatch must be one of: enable, decline/);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      expect(await readAiwgConfig(tmpDir)).toBeNull();
+    });
+
+    it('enables directly, headless, with only one detected worker CLI (explicit choice overrides detection)', async () => {
+      detected.clis = ['codex']; // below the 2-CLI auto-offer threshold
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--worker-dispatch', 'enable']));
+      expect(result.exitCode).toBe(0);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.parallelism?.worker_dispatch).toBe(true);
+    });
+
+    it('declines directly, headless, without ever asking', async () => {
+      detected.clis = ['codex', 'muse'];
+      rlQueue.answers = []; // nothing queued — a prompt attempt would fail with no answer
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--worker-dispatch', 'decline']));
+      expect(result.exitCode).toBe(0);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.setup?.worker_dispatch_offer).toBe('declined');
+    });
+
+    it('suppresses the interactive question when given with a terminal attached', async () => {
+      detected.clis = ['codex', 'muse'];
+      rlQueue.answers = ['', '']; // providers + add-scripts only; dispatch question must not be asked
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--worker-dispatch', 'enable']));
+      expect(result.exitCode).toBe(0);
+      expect(rlQueue.answers).toEqual([]);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.parallelism?.worker_dispatch).toBe(true);
+    });
+
+    it('--dry-run never applies the argument, on a new config (pre-existing: `aiwg init --dry-run` still writes the rest of the baseline config unconditionally; only the worker-dispatch field is in scope here)', async () => {
+      detected.clis = ['codex', 'muse'];
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--dry-run', '--worker-dispatch', 'enable']));
+      expect(result.exitCode).toBe(0);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.parallelism?.worker_dispatch).not.toBe(true);
+      expect(cfg!.setup?.worker_dispatch_offer).toBeUndefined();
+    });
+
+    it('--dry-run writes nothing even with the argument, on an existing config', async () => {
+      const { emptyConfig, writeAiwgConfig, readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
+      detected.clis = ['codex', 'muse'];
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--dry-run', '--worker-dispatch', 'decline']));
+      expect(result.exitCode).toBe(0);
+
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.setup?.worker_dispatch_offer).toBeUndefined();
+    });
+
+    it('applies an explicit enable on an existing config headless, overriding a prior decline', async () => {
+      const { emptyConfig, writeAiwgConfig, readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = emptyConfig(['claude']);
+      cfg.setup = { worker_dispatch_offer: 'declined' };
+      await writeAiwgConfig(tmpDir, cfg);
+      detected.clis = ['codex', 'muse'];
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--worker-dispatch', 'enable']));
+      expect(result.exitCode).toBe(0);
+
+      const updated = await readAiwgConfig(tmpDir);
+      expect(updated!.parallelism?.worker_dispatch).toBe(true);
+    });
+  });
 });

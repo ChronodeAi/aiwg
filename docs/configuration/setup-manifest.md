@@ -180,12 +180,28 @@ modes.
 
 | Field        | Type               | Description                                                                            |
 | ------------ | ------------------ | -------------------------------------------------------------------------------------- |
-| `id`         | string             | Unique step identifier. Referenced by `depends_on` and `on_fail`. Required.            |
-| `type`       | enum (above)       | Execution mode. Required.                                                              |
-| `platform`   | string or string[] | Platform filter. Omit to run on all declared platforms.                                |
-| `depends_on` | string[]           | Step IDs that must complete successfully before this step runs.                        |
-| `when`       | string             | Condition expression; step skipped if false. References params by name.                |
-| `on_fail`    | string             | Recovery procedure ID to invoke on failure. The literal `recover` invokes the default. |
+| `id`          | string             | Unique step identifier. Referenced by `depends_on` and `on_fail`. Required.            |
+| `type`        | enum (above)       | Execution mode. Required.                                                              |
+| `platform`    | string or string[] | Platform filter. Omit to run on all declared platforms.                                |
+| `depends_on`  | string[]           | Step IDs that must complete successfully before this step runs.                        |
+| `when`        | string             | Condition expression; step skipped if false. References params by name.                |
+| `on_fail`     | string             | Recovery procedure ID to invoke on failure. The literal `recover` invokes the default. |
+| `interactive` | bool, default `false` | This step itself prompts directly and requires a terminal. `aiwg setup-run` refuses a marked step up front (naming it) instead of running it when no terminal is attached (#3062). |
+
+### Running headless (#3062)
+
+Without an interactive terminal attached, `script`/`verify`/`detect`/`os-config` steps
+run bounded (10 minutes by default, `AIWG_SYNC_LONG_TIMEOUT_MS` to override) with stdin
+ignored: a step whose command tries to prompt fails fast instead of hanging `aiwg
+setup-run` forever. With a terminal attached, behavior is unchanged — a step's
+command/script gets inherited stdio so a person can actually answer a prompt it issues.
+
+Mark a step `interactive: true` when it is known to prompt directly; `aiwg setup-run`
+then refuses it up front, before running anything, whenever no terminal is attached —
+clearer than waiting for the bounded timeout. `type: ask` steps already always refuse
+`aiwg setup-run` unconditionally (resolve the value via `params` instead); `interactive`
+is for `script`/`verify`/`detect`/`os-config` steps whose underlying command/script may
+prompt on its own.
 
 ### Type-specific fields
 

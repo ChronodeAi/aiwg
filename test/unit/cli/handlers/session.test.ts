@@ -5,6 +5,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -28,6 +31,7 @@ const {
   mockEnsureRuntimeHome,
   mockWriteProfileConfig,
   mockLaunchWithProfile,
+  mockIsInteractive,
 } = vi.hoisted(() => ({
   mockSpawnSync: vi.fn(),
   mockExistsSync: vi.fn(),
@@ -51,6 +55,11 @@ const {
   mockEnsureRuntimeHome: vi.fn(),
   mockWriteProfileConfig: vi.fn(),
   mockLaunchWithProfile: vi.fn(),
+  // Defaults to an attached terminal (#3062) so pre-existing tests that
+  // exercise pre-flight/launch logic unrelated to headlessness keep their
+  // original behavior. The dedicated headless/no-terminal describe block
+  // below overrides this per test.
+  mockIsInteractive: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../../../../src/mcp/profiles.js', () => ({
@@ -67,6 +76,10 @@ vi.mock('../../../../src/mcp/adapters/codex-runtime.js', () => ({
   ensureRuntimeHome: mockEnsureRuntimeHome,
   writeProfileConfig: mockWriteProfileConfig,
   launchWithProfile: mockLaunchWithProfile,
+}));
+
+vi.mock('../../../../src/cli/env.js', () => ({
+  isInteractive: mockIsInteractive,
 }));
 
 vi.mock('child_process', () => ({
@@ -144,6 +157,7 @@ function setupHappyPath(): void {
 describe('sessionHandler Claude profile permissions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockReadAiwgConfig.mockResolvedValue(null);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
@@ -257,6 +271,7 @@ describe('sessionHandler Claude profile permissions', () => {
 describe('sessionHandler Codex profile credential policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -307,7 +322,7 @@ describe('sessionHandler Codex profile credential policy', () => {
       credentialPolicy: 'references',
       toolFilters: { allow: ['safe__list'], deny: ['safe__delete'] },
     });
-    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test');
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', []);
   });
 
   it.each(['codex', 'openai'].flatMap(provider =>
@@ -357,6 +372,7 @@ describe('sessionHandler metadata', () => {
 describe('sessionHandler.execute — provider resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -397,6 +413,7 @@ describe('sessionHandler.execute — provider resolution', () => {
 describe('sessionHandler.execute — arg parsing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -435,6 +452,7 @@ describe('sessionHandler.execute — arg parsing', () => {
 describe('sessionHandler.execute — version check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -464,6 +482,7 @@ describe('sessionHandler.execute — version check', () => {
 describe('sessionHandler.execute — doctor and repair', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
@@ -533,6 +552,7 @@ describe('sessionHandler.execute — doctor and repair', () => {
 describe('sessionHandler.execute — deployment check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockForceUpdateCheck.mockResolvedValue(undefined);
@@ -578,6 +598,7 @@ describe('sessionHandler.execute — deployment check', () => {
 describe('sessionHandler.execute — launch behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockForceUpdateCheck.mockResolvedValue(undefined);
     mockReadAiwgConfig.mockResolvedValue(null);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
@@ -642,9 +663,109 @@ describe('sessionHandler.execute — launch behavior', () => {
   });
 });
 
+describe('sessionHandler.execute — headless prompt (#3062)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupHappyPath();
+    mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
+    mockIsSpawnableProvider.mockReturnValue(true);
+    mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
+    mockForceUpdateCheck.mockResolvedValue(undefined);
+    mockReadAiwgConfig.mockResolvedValue(null);
+  });
+
+  it('refuses a spawnable provider with no terminal and no prompt, spawning nothing', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx([]));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/--prompt/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
+  });
+
+  it('runs headless (bounded, stdin ignored) when --prompt is given with no terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hello there']));
+    expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch).toBeDefined();
+    expect(launch![1]).toEqual(['--print', 'hello there']);
+    expect(launch![2]).toMatchObject({ timeout: expect.any(Number), stdio: ['ignore', 'inherit', 'inherit'] });
+  });
+
+  it('runs headless when --prompt is given even with a terminal attached (#3062 rule 4)', async () => {
+    mockIsInteractive.mockReturnValue(true);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hi']));
+    expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch![1]).toEqual(['--print', 'hi']);
+  });
+
+  it('reads the prompt from --prompt-file', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const dir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
+    const file = join(dir, 'prompt.txt');
+    writeFileSync(file, '  file prompt text  \n');
+    try {
+      const result = await sessionHandler.execute(makeCtx(['--prompt-file', file]));
+      expect(result.exitCode).toBe(0);
+      const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+      expect(launch![1]).toEqual(['--print', 'file prompt text']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects --prompt and --prompt-file together, spawning nothing', async () => {
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'a', '--prompt-file', '/tmp/aiwg-3062-unused']));
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toMatch(/only one of/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('errors for a missing --prompt-file without spawning anything', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt-file', '/does/not/exist-aiwg-3062.txt']));
+    expect(result.exitCode).toBe(1);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('refuses a spawnable provider with no evidenced headless CLI form', async () => {
+    mockGetProviderConfig.mockReturnValue({ name: 'Factory AI', binary: 'factory-cli', guidanceMessage: null });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'factory', '--prompt', 'hi']));
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/no evidenced non-interactive/);
+    expect(mockSpawnSync.mock.calls.some(([command]) => command === 'factory-cli')).toBe(false);
+  });
+
+  it('never requires a prompt for an IDE-integrated (non-spawnable) provider', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockIsSpawnableProvider.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'Cursor', binary: null, guidanceMessage: 'Open Cursor in your project.' });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'cursor']));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('maps codex exec with a profile through launchWithProfile', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
+    mockLaunchWithProfile.mockReturnValue({ status: 0 });
+    mockResolveServers.mockResolvedValue([]);
+    mockResolveProfile.mockResolvedValue({});
+    mockCredentialPolicy.mockResolvedValue('references');
+    mockWriteProfileConfig.mockResolvedValue([]);
+    const result = await sessionHandler.execute(
+      makeCtx(['--provider', 'codex', '--profile', 'test', '--prompt', 'do the thing', '--no-repair']),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', ['exec', 'do the thing']);
+  });
+});
+
 describe('sessionHandler.execute — MCP injection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });

@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Interface as ReadlineInterface } from 'readline';
@@ -290,5 +290,106 @@ describe('aiwg setup project — worker dispatch opt-in offer (#3050)', () => {
     expect(result.exitCode).toBe(0);
     const printed = JSON.parse(String(logSpy.mock.calls[0]![0])) as { worker_dispatch_offer?: { should_offer: boolean } };
     expect(printed.worker_dispatch_offer).toEqual({ should_offer: false });
+  });
+
+  describe('--worker-dispatch argument (#3062)', () => {
+    let isolatedHome: string;
+
+    beforeEach(() => {
+      // Enabling worker_dispatch makes writeAiwgConfig validate worker-model
+      // defaults (reads AIWG_HOME + AIWG_CONFIG); point both at isolated
+      // locations instead of a real home install (mirrors the equivalent
+      // `aiwg init` test file's isolation).
+      isolatedHome = mkdtempSync(join(tmpdir(), 'aiwg-setup-worker-offer-home-'));
+      vi.stubEnv('AIWG_HOME', process.cwd());
+      vi.stubEnv('AIWG_CONFIG', join(isolatedHome, 'config'));
+      vi.stubEnv('HOME', isolatedHome);
+      vi.stubEnv('USERPROFILE', isolatedHome);
+    });
+
+    afterEach(() => {
+      rmSync(isolatedHome, { recursive: true, force: true });
+    });
+
+    it('rejects an invalid value, naming the accepted values, without writing', async () => {
+      const ctx: HandlerContext = {
+        args: ['project', '--yes', '--worker-dispatch', 'bogus'],
+        rawArgs: ['setup', 'project', '--yes', '--worker-dispatch', 'bogus'],
+        cwd: tmp, frameworkRoot: tmp,
+      } as HandlerContext;
+      await expect(setupHandler.execute(ctx)).rejects.toThrow(/--worker-dispatch must be one of: enable, decline/);
+      expect(() => readConfig(tmp)).toThrow();
+    });
+
+    it('enables directly, headless, with only one detected worker CLI (explicit choice overrides detection)', async () => {
+      detected.clis = ['codex']; // below the 2-CLI auto-offer threshold
+      const ctx: HandlerContext = {
+        args: ['project', '--yes', '--worker-dispatch', 'enable'],
+        rawArgs: ['setup', 'project', '--yes', '--worker-dispatch', 'enable'],
+        cwd: tmp, frameworkRoot: tmp,
+      } as HandlerContext;
+      const result = await setupHandler.execute(ctx);
+      expect(result.exitCode).toBe(0);
+      const cfg = readConfig(tmp) as { parallelism?: Record<string, unknown> };
+      expect(cfg.parallelism?.worker_dispatch).toBe(true);
+    });
+
+    it('declines directly, headless, without asking (suppresses the question even though CI is unset)', async () => {
+      detected.clis = ['codex', 'muse'];
+      const ctx: HandlerContext = {
+        args: ['project', '--yes', '--worker-dispatch', 'decline'],
+        rawArgs: ['setup', 'project', '--yes', '--worker-dispatch', 'decline'],
+        cwd: tmp, frameworkRoot: tmp,
+      } as HandlerContext;
+      const result = await setupHandler.execute(ctx);
+      expect(result.exitCode).toBe(0);
+      const cfg = readConfig(tmp) as { setup?: Record<string, unknown> };
+      expect(cfg.setup?.worker_dispatch_offer).toBe('declined');
+    });
+
+    it('suppresses the interactive consent prompt (empty queue would otherwise fall through to a timeout default)', async () => {
+      detected.clis = ['codex', 'muse'];
+      const plan = await buildSetupProjectPlan({ projectDir: tmp, yes: true, workerDispatchChoice: 'enable' });
+      expect(plan.workerDispatchOffer.shouldOffer).toBe(false);
+      // applyInteractivePrompts would only ask when shouldOffer is true, so a
+      // fake rl with an *empty* queue proves the question was never reached
+      // (fakeRl('') would otherwise answer every remaining question with '').
+      const prompted = await applyInteractivePrompts(plan, fakeRl(''));
+      expect(prompted.workerDispatchChoice).toBeUndefined(); // not re-asked; the explicit choice already applied
+      const next = await buildSetupProjectPlan({ projectDir: tmp, yes: true, workerDispatchChoice: 'enable', ...prompted });
+      expect(next.next.parallelism?.worker_dispatch).toBe(true);
+    });
+
+    it('--dry-run writes nothing even with the argument, and --json reports the applied choice', async () => {
+      detected.clis = ['codex', 'muse'];
+      const ctx: HandlerContext = {
+        args: ['project', '--yes', '--json', '--dry-run', '--worker-dispatch', 'enable'],
+        rawArgs: ['setup', 'project', '--yes', '--json', '--dry-run', '--worker-dispatch', 'enable'],
+        cwd: tmp, frameworkRoot: tmp,
+      } as HandlerContext;
+      const result = await setupHandler.execute(ctx);
+      expect(result.exitCode).toBe(0);
+      expect(() => readConfig(tmp)).toThrow();
+
+      const printed = JSON.parse(String(logSpy.mock.calls[0]![0])) as {
+        dry_run?: boolean;
+        worker_dispatch_offer?: { should_offer: boolean; applied_choice?: string };
+      };
+      expect(printed.dry_run).toBe(true);
+      expect(printed.worker_dispatch_offer).toEqual({ should_offer: false, applied_choice: 'enable' });
+    });
+
+    it('is accepted even when fewer than two worker CLIs are detected', async () => {
+      detected.clis = [];
+      const ctx: HandlerContext = {
+        args: ['project', '--yes', '--worker-dispatch', 'enable'],
+        rawArgs: ['setup', 'project', '--yes', '--worker-dispatch', 'enable'],
+        cwd: tmp, frameworkRoot: tmp,
+      } as HandlerContext;
+      const result = await setupHandler.execute(ctx);
+      expect(result.exitCode).toBe(0);
+      const cfg = readConfig(tmp) as { parallelism?: Record<string, unknown> };
+      expect(cfg.parallelism?.worker_dispatch).toBe(true);
+    });
   });
 });
