@@ -2,12 +2,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolveProjectAiwgDir } from '../../src/config/project-artifacts-runtime.mjs';
 import { createProtocol } from '../../agentic/code/addons/testing-quality/lib/profiles.mjs';
 import { inventoryWorkspace, sampleFrame } from '../../agentic/code/addons/testing-quality/lib/inventory.mjs';
 import { validateContract } from '../../agentic/code/addons/testing-quality/lib/contracts.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}`;
@@ -19,7 +21,14 @@ const save = async (name, value) => fs.writeFile(path.join(destination, name), J
 // its failures; a lane declaration is not actual runner registration evidence.
 try { boundedExecFileSync(process.execPath, ['tools/testing/check-test-registration.mjs'], 'quick', { cwd: root, stdio: 'inherit' }); }
 catch (error) {
-  await save('ownership-failure.json', { status: error.status ?? null, message: 'Runner ownership gate failed; no prior report was reused.' });
+  // #3062 finding 17: error.message carries the enriched timeout
+  // explanation (tier/bound) when this is ETIMEDOUT rather than a real
+  // ownership-gate failure; status alone does not distinguish the two.
+  await save('ownership-failure.json', {
+    status: error.status ?? null,
+    message: 'Runner ownership gate failed; no prior report was reused.',
+    detail: error.message ?? null,
+  });
   throw new Error(`Runner ownership failed; inspect ${destination}/ownership-failure.json`);
 }
 const ownership = JSON.parse(await fs.readFile(path.join(root, 'test-results/test-registration.json'), 'utf8'));

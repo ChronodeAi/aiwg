@@ -167,6 +167,7 @@ try {
     },
   );
   if (discover.status !== 0) {
+    if (discover.error) console.error(discover.error.message);
     console.error(discover.stdout);
     console.error(discover.stderr);
     fail(`Fortemi Core prebuilt fallback discovery exited with status ${discover.status}`);
@@ -192,6 +193,7 @@ try {
       },
     );
     if (show.status !== 0) {
+      if (show.error) console.error(show.error.message);
       console.error(show.stdout);
       console.error(show.stderr);
       fail(`Fortemi Core prebuilt fallback metadata lookup exited with status ${show.status}`);
@@ -221,6 +223,9 @@ try {
     maxBuffer: 64 * 1024 * 1024,
   });
   if (install.status !== 0) {
+    // #3062 finding 17: install.error carries the enriched `long`-tier
+    // timeout explanation that status/stdout/stderr alone do not.
+    if (install.error) console.error(install.error.message);
     console.error(install.stdout);
     console.error(install.stderr);
     fail(`packed production install exited with status ${install.status}`);
@@ -243,6 +248,7 @@ try {
     },
   );
   if (installedDiscover.status !== 0) {
+    if (installedDiscover.error) console.error(installedDiscover.error.message);
     console.error(installedDiscover.stdout);
     console.error(installedDiscover.stderr);
     fail(`packed production install discover smoke exited with status ${installedDiscover.status}`);
@@ -283,6 +289,7 @@ try {
         },
       );
       if (run.status !== 0) {
+        if (run.error) console.error(run.error.message);
         console.error(run.stdout);
         console.error(run.stderr);
         fail(`packed production executable skill ${executable.name} failed via ${selector === record.id ? 'stable ID' : 'name'} (status ${run.status})`);

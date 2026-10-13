@@ -22,7 +22,9 @@
  * Usage: node tools/cli/check-install-size.mjs [--verbose]
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const PACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_PACKED_BUDGET_KB', 23_000);
 const UNPACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_UNPACKED_BUDGET_KB', 70_000);
@@ -62,8 +64,10 @@ function parseNpmPackJson(stdout) {
 
 try {
   // `npm pack --dry-run --json` returns an array with one entry per tarball.
-  // We use the first entry (single package).
-  const raw = boundedExecSync('npm pack --dry-run --json', 'quick', { stdio: ['ignore', 'pipe', 'pipe'] });
+  // We use the first entry (single package). `long`, not `quick`: this runs
+  // npm's pack lifecycle (prepack → tools/release/release:fortemi-index),
+  // not just a local metadata read (#3062 finding 6).
+  const raw = boundedExecSync('npm pack --dry-run --json', 'long', { stdio: ['ignore', 'pipe', 'pipe'] });
   const out = parseNpmPackJson(raw.toString());
   const pkg = Array.isArray(out) ? out[0] : out;
   if (!pkg || typeof pkg.size !== 'number') {

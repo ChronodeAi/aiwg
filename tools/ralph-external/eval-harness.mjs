@@ -18,9 +18,11 @@
  * @issue #1776 (#1585 Track 3)
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * Fields that MUST NEVER reach the optimizing agent. The default set matches
@@ -106,7 +108,13 @@ export class EvalHarness {
         const stdout = boundedExecSync(cmd, 'long', { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
         return { code: 0, stdout };
       } catch (err) {
-        return { code: err.status ?? 1, stdout: (err.stdout || '').toString() + (err.stderr || '').toString() };
+        const captured = (err.stdout || '').toString() + (err.stderr || '').toString();
+        // A `long`-tier timeout (#3062 finding 17) would otherwise be lost
+        // here: err.stdout/err.stderr do not carry the enriched bound
+        // explanation (naming the tier, bound, and AIWG_SYNC_LONG_TIMEOUT_MS
+        // override) — only err.message does.
+        const timeoutNote = err.code === 'ETIMEDOUT' ? `\n${err.message}` : '';
+        return { code: err.status ?? 1, stdout: captured + timeoutNote };
       }
     });
   }

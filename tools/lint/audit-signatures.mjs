@@ -111,7 +111,9 @@ if (!args.quiet) {
   console.log(`Running \`npm audit signatures\` (waivers: ${activeWaivers.size} active, ${expiredWaivers.length} expired)…`);
 }
 
-const result = boundedSpawnSync('npm', ['audit', 'signatures', '--json'], 'quick', {
+// `network`, not `quick` (#3062 finding 6): this verifies package
+// provenance/signatures against the npm registry, not a local-only query.
+const result = boundedSpawnSync('npm', ['audit', 'signatures', '--json'], 'network', {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,

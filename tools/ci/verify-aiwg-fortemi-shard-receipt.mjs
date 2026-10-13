@@ -55,6 +55,10 @@ function run(command, args, options = {}) {
     stdio: options.capture ? 'pipe' : 'inherit',
   });
   if (result.status !== 0) {
+    // #3062 finding 17: result.error carries the enriched timeout
+    // explanation (tier/bound/override) that the exit code alone does
+    // not — matters here since the `cargo test` call below uses `long`.
+    if (result.error) console.error(result.error.message);
     fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
   }
   return result.stdout?.trim() ?? '';
@@ -63,7 +67,10 @@ function run(command, args, options = {}) {
 function runBytes(command, args, options = {}) {
   const tier = options.tier ?? 'quick';
   const result = boundedSpawnSync(command, args, tier, { cwd: options.cwd ?? root, encoding: null });
-  if (result.status !== 0) fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
+  if (result.status !== 0) {
+    if (result.error) console.error(result.error.message);
+    fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
+  }
   return result.stdout;
 }
 

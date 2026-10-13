@@ -50,7 +50,9 @@ function exec(command, options = {}) {
  * @returns {Object} { passed: boolean, errors: number, warnings: number, details: Array }
  */
 export function runMarkdownLint(projectRoot = process.cwd()) {
-  const result = exec(`npm exec markdownlint-cli2 "**/*.md"`, { cwd: projectRoot });
+  // `network`, not the default `quick` (#3062 finding 6): `npm exec` can
+  // resolve/install the binary from the registry on demand.
+  const result = exec(`npm exec markdownlint-cli2 "**/*.md"`, { cwd: projectRoot, tier: 'network' });
 
   if (result.success) {
     return {

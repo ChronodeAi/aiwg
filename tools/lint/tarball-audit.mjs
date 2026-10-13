@@ -87,13 +87,19 @@ if (!args.quiet) {
   console.log(`Auditing tarball top-level entries against ${args.allowlist}…`);
 }
 
-const result = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'quick', {
+// `long`, not `quick` (#3062 finding 6): runs npm's pack lifecycle
+// (prepack → tools/release/release:fortemi-index), not just a local
+// metadata read.
+const result = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'long', {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024, // pack JSON can be large on big trees
 });
 
 if (result.status !== 0) {
+  // #3062 finding 17: result.error carries the enriched `long`-tier
+  // timeout explanation that the exit code alone does not.
+  if (result.error) console.error(result.error.message);
   console.error(`✗ \`npm pack --dry-run --json\` exited with status ${result.status}`);
   if (result.stderr) console.error(result.stderr);
   process.exit(2);

@@ -44,6 +44,9 @@ const sanitizer = boundedSpawnSync(process.execPath, [
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 if (sanitizer.error || sanitizer.status !== 0) {
+  // #3062 finding 17: sanitizer.error carries the enriched `long`-tier
+  // timeout explanation that status alone does not.
+  if (sanitizer.error) console.error(sanitizer.error.message);
   console.error('SQLite CI gate failed session regression corpus sanitization.');
   process.exit(sanitizer.status || 1);
 }

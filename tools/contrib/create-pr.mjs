@@ -86,11 +86,14 @@ async function promptYesNo(question, defaultValue = false) {
 /**
  * Execute git command
  * @param {string} command - Git command
+ * @param {'quick'|'network'} [tier] - Bound tier; defaults to 'quick' for
+ *   local-only commands (#3062 finding 6 — callers that hit the remote,
+ *   e.g. push, must pass 'network' explicitly).
  * @returns {string} Command output
  */
-function execGit(command) {
+function execGit(command, tier = 'quick') {
   try {
-    return boundedExecSync(command, 'quick', {
+    return boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
@@ -128,7 +131,7 @@ function isBranchPushed(branch) {
  */
 function pushBranch(branch) {
   console.log(`\nPushing branch to origin...`);
-  execGit(`git push -u origin ${branch}`);
+  execGit(`git push -u origin ${branch}`, 'network');
   console.log('✓ Branch pushed to origin');
 }
 

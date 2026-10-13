@@ -38,14 +38,20 @@ if (packageJson.license !== expectedLicense) {
   fail(`package.json must declare ${expectedLicense}; found ${JSON.stringify(packageJson.license)}`);
 }
 
-const pack = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'quick', {
+// `long`, not `quick` (#3062 finding 6): runs npm's pack lifecycle
+// (prepack → tools/release/release:fortemi-index), not just a local
+// metadata read.
+const pack = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'long', {
   cwd: repoRoot,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,
 });
 
 if (pack.status !== 0) {
-  fail(`npm pack --dry-run --json exited with status ${pack.status}\n${pack.stderr}`);
+  // #3062 finding 17: pack.error carries the enriched `long`-tier timeout
+  // explanation that the exit code alone does not.
+  const timeoutNote = pack.error ? `${pack.error.message}\n` : '';
+  fail(`npm pack --dry-run --json exited with status ${pack.status}\n${timeoutNote}${pack.stderr}`);
 }
 
 let result;

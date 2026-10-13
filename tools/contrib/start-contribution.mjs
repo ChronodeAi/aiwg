@@ -189,12 +189,12 @@ function addRemotes(fork, upstream, cwd) {
 
   // Fetch both remotes
   console.log('Fetching remotes...');
-  const fetchOrigin = exec('git fetch origin', { cwd });
+  const fetchOrigin = exec('git fetch origin', { cwd, tier: 'network' });
   if (!fetchOrigin.success) {
     console.warn('⚠ Warning: Failed to fetch origin');
   }
 
-  const fetchUpstream = exec('git fetch upstream', { cwd });
+  const fetchUpstream = exec('git fetch upstream', { cwd, tier: 'network' });
   if (!fetchUpstream.success) {
     console.warn('⚠ Warning: Failed to fetch upstream');
   }
@@ -395,7 +395,7 @@ function deployAgents(cwd) {
     };
   }
 
-  const result = exec(`node ${deployScript} --target ${cwd} --mode sdlc`, { cwd });
+  const result = exec(`node ${deployScript} --target ${cwd} --mode sdlc`, { cwd, tier: 'long' });
 
   if (!result.success) {
     return {
@@ -533,7 +533,7 @@ async function main() {
   if (!isGitRepo(cwd)) {
     // Clone the fork if git repo doesn't exist
     console.log('Cloning fork...');
-    const cloneResult = exec(`git clone https://github.com/${fork}.git ${cwd}`);
+    const cloneResult = exec(`git clone https://github.com/${fork}.git ${cwd}`, { tier: 'long' });
     if (!cloneResult.success) {
       console.error('✗ Error: Failed to clone fork:', cloneResult.stderr);
       process.exit(1);

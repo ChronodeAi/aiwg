@@ -19,7 +19,9 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function printHelp() {
   console.log(`aiwg new — Scaffold a new AIWG project
@@ -302,6 +304,11 @@ function createOrUpdateSettings(aiwgPath, provider) {
       console.log('Deploying SDLC agents...');
       const agentRes = boundedSpawnSync('node', [deployPath, ...agentArgs], 'long', { stdio: 'inherit' });
       if (agentRes.status !== 0) {
+        // `agentRes.error` carries the enriched timeout explanation (tier,
+        // bound, AIWG_SYNC_LONG_TIMEOUT_MS override) that `status` alone
+        // does not (#3062 finding 17) — print it so a `long`-tier bound
+        // is not indistinguishable from a real deploy failure.
+        if (agentRes.error) console.warn(agentRes.error.message);
         console.warn('Agent deployment returned non-zero status');
       }
 
@@ -310,6 +317,7 @@ function createOrUpdateSettings(aiwgPath, provider) {
       const cmdArgs = ['--deploy-commands', '--provider', provider, '--mode', 'sdlc'];
       const cmdRes = boundedSpawnSync('node', [deployPath, ...cmdArgs], 'long', { stdio: 'inherit' });
       if (cmdRes.status !== 0) {
+        if (cmdRes.error) console.warn(cmdRes.error.message);
         console.warn('Command deployment returned non-zero status');
       }
     }

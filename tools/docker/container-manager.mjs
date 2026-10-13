@@ -173,7 +173,9 @@ export class ContainerManager {
 
     args.push(fullImage);
 
-    const result = boundedExecSync(`docker ${args.join(' ')}`, 'quick', { encoding: 'utf8' }).trim();
+    // `long`, not `quick` (#3062 finding 6): `docker run` can implicitly
+    // pull the image if the local build cache was invalidated.
+    const result = boundedExecSync(`docker ${args.join(' ')}`, 'long', { encoding: 'utf8' }).trim();
     const containerId = result.slice(0, 12);
 
     // Store container ID
