@@ -22,7 +22,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -87,7 +87,7 @@ if (!args.quiet) {
   console.log(`Auditing tarball top-level entries against ${args.allowlist}…`);
 }
 
-const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+const result = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'quick', {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024, // pack JSON can be large on big trees

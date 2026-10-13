@@ -10,7 +10,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,7 +38,7 @@ if (packageJson.license !== expectedLicense) {
   fail(`package.json must declare ${expectedLicense}; found ${JSON.stringify(packageJson.license)}`);
 }
 
-const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+const pack = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'quick', {
   cwd: repoRoot,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,

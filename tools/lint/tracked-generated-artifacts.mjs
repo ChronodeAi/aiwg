@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 
 const forbiddenPrefixes = [
   'coverage/',
@@ -35,7 +35,7 @@ const allowPrefixes = [
 ];
 
 function gitLsFiles() {
-  return execFileSync('git', ['ls-files'], { encoding: 'utf8' })
+  return boundedExecFileSync('git', ['ls-files'], 'quick', { encoding: 'utf8' })
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
