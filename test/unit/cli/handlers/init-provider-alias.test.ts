@@ -6,6 +6,7 @@
  * provider even though `--provider dsh` works everywhere else (#2161).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { clearInteractiveEnv } from '../../../helpers/interactive-env.js';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -62,7 +63,7 @@ describe('init interactive provider picker', () => {
   let tmpDir: string;
   const originalStdinTTY = process.stdin.isTTY;
   const originalStdoutTTY = process.stdout.isTTY;
-  const originalCi = process.env['CI'];
+  let restoreInteractiveEnv: () => void = () => {};
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
@@ -70,15 +71,14 @@ describe('init interactive provider picker', () => {
     // non-interactive; force the interactive wizard so the picker runs.
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    delete process.env['CI'];
+    restoreInteractiveEnv = clearInteractiveEnv();
     warn.mockClear();
   });
 
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: originalStdinTTY, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: originalStdoutTTY, configurable: true });
-    if (originalCi === undefined) delete process.env['CI'];
-    else process.env['CI'] = originalCi;
+    restoreInteractiveEnv();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

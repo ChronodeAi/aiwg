@@ -52,24 +52,33 @@ export function isInteractive(explicitNonInteractive = false): boolean {
 }
 
 /**
+ * Variables that mark a continuous-integration environment. Exported so tests
+ * that need the interactive path can clear exactly what `isCI()` reads.
+ */
+export const CI_ENV_VARS: readonly string[] = [
+  'CI',
+  'CONTINUOUS_INTEGRATION',
+  'BUILD_NUMBER',
+  'RUN_ID',
+  'GITHUB_ACTIONS',
+  'GITLAB_CI',
+  'CIRCLECI',
+  'TRAVIS',
+  'BUILDKITE',
+  'JENKINS_URL',
+  'TF_BUILD', // Azure DevOps
+  'TEAMCITY_VERSION',
+];
+
+/** Other variables `isInteractive()` reads. */
+export const INTERACTIVE_ENV_VARS: readonly string[] = ['TERM', 'DEBIAN_FRONTEND'];
+
+/**
  * Return true iff we're running in a continuous-integration environment.
  * Checks the common CI env vars set by major CI systems.
  */
 export function isCI(): boolean {
-  const ciVars = [
-    'CI',
-    'CONTINUOUS_INTEGRATION',
-    'BUILD_NUMBER',
-    'RUN_ID',
-    'GITHUB_ACTIONS',
-    'GITLAB_CI',
-    'CIRCLECI',
-    'TRAVIS',
-    'BUILDKITE',
-    'JENKINS_URL',
-    'TF_BUILD', // Azure DevOps
-    'TEAMCITY_VERSION',
-  ];
+  const ciVars = CI_ENV_VARS;
   for (const v of ciVars) {
     const val = process.env[v];
     if (val && val !== '0' && val.toLowerCase() !== 'false') return true;

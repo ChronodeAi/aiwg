@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { clearInteractiveEnv } from '../../../helpers/interactive-env.js';
 import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -60,6 +61,7 @@ function makeCtx(tmpDir: string, args: string[] = []): HandlerContext {
   } as HandlerContext;
 }
 
+let restoreInteractiveEnv: () => void = () => {};
 const ARTIFACT_ENV_KEYS = ['AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR'] as const;
 
 describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
@@ -86,7 +88,7 @@ describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
     // worker_dispatch makes writeAiwgConfig validate worker-model defaults
     // (reads AIWG_HOME + AIWG_CONFIG); point both at isolated locations
     // instead of a real home install.
-    vi.stubEnv('CI', '');
+    restoreInteractiveEnv = clearInteractiveEnv();
     vi.stubEnv('AIWG_HOME', process.cwd());
     vi.stubEnv('AIWG_CONFIG', join(isolatedHome, 'config'));
     vi.stubEnv('HOME', isolatedHome);
@@ -100,6 +102,7 @@ describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
     rmSync(isolatedHome, { recursive: true, force: true });
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    restoreInteractiveEnv();
     for (const key of ARTIFACT_ENV_KEYS) {
       const value = previousArtifactEnv[key];
       if (value === undefined) delete process.env[key];
