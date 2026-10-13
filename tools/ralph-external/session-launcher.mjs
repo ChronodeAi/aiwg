@@ -2831,7 +2831,16 @@ export function classifyLaunchOutcomeForRecovery(result) {
 let _directRecoveryBreaker = null;
 
 export function getDirectRecoveryBreaker() {
-  if (!_directRecoveryBreaker) _directRecoveryBreaker = new ScopedFailureBreaker();
+  // #2915 round 8 review 8 (C3 follow-up, "production deadlines use
+  // Date.now(), not a monotonic clock"): the real production singleton is
+  // the one place this matters -- a wall-clock adjustment (NTP step, manual
+  // change, DST) must never shorten or lengthen a canary/commit deadline
+  // this breaker is already tracking. `performance.now()` is monotonic and
+  // every comparison `ScopedFailureBreaker` makes is relative to another
+  // reading of this SAME clock, so this is a safe, isolated override —
+  // `ScopedFailureBreaker`'s own constructor default stays `Date.now()` for
+  // every other (in particular, every test) caller.
+  if (!_directRecoveryBreaker) _directRecoveryBreaker = new ScopedFailureBreaker({ nowMs: () => performance.now() });
   return _directRecoveryBreaker;
 }
 

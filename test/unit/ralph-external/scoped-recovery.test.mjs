@@ -103,6 +103,16 @@ function trustedQuotaFailure(id, cli, extra = {}) {
 // immediately settles as 'uncertain' so a pure check never leaves a
 // dangling reservation that would perturb a later assertion in the same
 // test (the old `canLaunch` alone never mutated state for a closed scope).
+// #2915 round 8 review 8 (C1, "outcome settlement retains unresolved
+// execution"): every settlement below now carries `confirmedStop: true` —
+// these helpers simulate a complete, self-contained synthetic attempt with
+// no real descendant process for the breaker to ever confirm the stop of,
+// so (unlike production evidence) the test itself IS the confirmation that
+// nothing is left running. Omitting it here would leave every one of these
+// helpers' reservations permanently retained (by design — see `settle()`),
+// which is exactly what the DEDICATED retention tests below construct by
+// hand via raw `breaker.admit`/`beginDispatch`/`commitDispatch`/`settle`
+// calls that deliberately omit `confirmedStop`.
 // #2915 round 8 (D3): every settled attempt below goes through the SAME
 // beginDispatch -> commitDispatch bracket production dispatch now requires
 // (inside the D2 hook) before `settle()` ever applies a real outcome, so
@@ -123,7 +133,7 @@ function probe(breaker, scopeKeys) {
   const admission = breaker.admit({ invocationId, scopeKeys });
   if (admission.ok) {
     dispatchReservation(breaker, admission.token, invocationId);
-    breaker.settle(admission.token, { kind: 'uncertain' });
+    breaker.settle(admission.token, { kind: 'uncertain', confirmedStop: true });
   }
   return admission;
 }
@@ -134,7 +144,7 @@ function fail(breaker, scopeKeys, invocationId, evidence = {}) {
   dispatchReservation(breaker, admission.token, invocationId);
   const watched = evidence.scopeKey ?? scopeKeys[0];
   const before = breaker.getState(watched).state;
-  const settled = breaker.settle(admission.token, { kind: 'failed', ...evidence });
+  const settled = breaker.settle(admission.token, { kind: 'failed', confirmedStop: true, ...evidence });
   const after = breaker.getState(watched).state;
   return { admitted: true, settled, opened: before !== 'open' && after === 'open',
     canaryFailed: admission.token.canaryKeys.includes(watched), token: admission.token };
@@ -144,14 +154,14 @@ function succeed(breaker, scopeKeys, invocationId) {
   const admission = breaker.admit({ invocationId, scopeKeys });
   if (!admission.ok) return { admitted: false, blockedBy: admission.blockedBy };
   dispatchReservation(breaker, admission.token, invocationId);
-  return { admitted: true, settled: breaker.settle(admission.token, { kind: 'succeeded' }), token: admission.token };
+  return { admitted: true, settled: breaker.settle(admission.token, { kind: 'succeeded', confirmedStop: true }), token: admission.token };
 }
 
 function uncertain(breaker, scopeKeys, invocationId) {
   const admission = breaker.admit({ invocationId, scopeKeys });
   if (!admission.ok) return { admitted: false, blockedBy: admission.blockedBy };
   dispatchReservation(breaker, admission.token, invocationId);
-  return { admitted: true, settled: breaker.settle(admission.token, { kind: 'uncertain' }), token: admission.token };
+  return { admitted: true, settled: breaker.settle(admission.token, { kind: 'uncertain', confirmedStop: true }), token: admission.token };
 }
 
 // Convenience: an evidence object shaped like `installFailure(id)`/
@@ -1593,9 +1603,16 @@ describe('#2915 round 8 (D4): observeStandaloneUnitSettlement boundary behavior'
       await new Promise(resolve => setImmediate(resolve));
       expect(stopCalls).toBe(1);
       // Never a fabricated confirmation: the reservation settles as
-      // uncertain WITHOUT confirmedStop, so a canary this admission held
-      // would retain (or gain) unresolved-execution protection rather than
-      // being released as if stopped.
+      // uncertain WITHOUT confirmedStop, so this dispatched reservation
+      // RETAINS unresolved-execution protection rather than being released
+      // as if stopped (#2915 round 8 review 8, C1: ordinary settlement must
+      // never release a dispatched reservation without confirmed stop).
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1);
+      expect(breaker.reservationPhase(admitted.token)).toBe('dispatched');
+      // Confirmed stop evidence arriving later (e.g. an operator or a
+      // subsequent observer cycle) still resolves it -- the same
+      // one-more-call contract canary-deadline expiry already uses.
+      expect(breaker.reconcileStopEvidence({ invocationId: 'obs-after', confirmedStop: true })).toEqual({ released: 1 });
       expect(breaker.snapshot().reservationsOutstanding).toBe(0);
     } finally {
       breaker.destroy();
@@ -2807,13 +2824,25 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // never-throws-just-resolves contract entirely.
       const throwingDriver = { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } };
       await expect(launchEnoent({ codex: throwingDriver })).rejects.toThrow('synthetic capture-setup failure');
-      // Not leaked: the canary reservation was settled (uncertain), so the
-      // scope is still open with the normal doubled backoff, and -- the
-      // real proof -- the NEXT due attempt is still admitted as a fresh
-      // canary rather than being refused forever by a stuck, never-settled
-      // reservation.
+      // Not leaked: the canary reservation WAS settled (uncertain) -- it is
+      // not a stuck, never-settled reservation (the old defect this test
+      // guards against). But degraded isolation can never supply confirmed
+      // descendant-stop evidence for this exception path (`resolveStopEvidence`
+      // always reports `confirmedStop: false` for degraded mode), so #2915
+      // round 8 review 8 (C1) now RETAINS this reservation's execution
+      // protection instead of silently releasing it: the scope stays open
+      // with the normal doubled backoff, but a further canary is refused
+      // until the unresolved stop is reconciled -- never a second worker
+      // dispatched over unconfirmed descendants.
       expect(breaker.getState(INSTALL).state).toBe('open');
+      expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
       now += breaker.getState(INSTALL).episodeCooldownMs;
+      await expect(launchEnoent()).rejects.toMatchObject({ code: RECOVERY_SCOPE_OPEN_CODE });
+      // Operator/independent reconciliation (the documented recovery path
+      // for a degraded canary's unresolved stop) frees the scope again.
+      const invocationId = breaker.getState(INSTALL).blockingMarker.invocationId;
+      expect(breaker.reconcileStopEvidence({ invocationId, confirmedStop: true })).toEqual({ released: 1 });
+      expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
       const nextCanary = await launchEnoent();
       expect(nextCanary).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
     } finally {
