@@ -60,6 +60,7 @@ import {
   refundDirectWorkerAllowance,
   reserveLedgerCorrection,
   releaseLedgerSlot,
+  releaseLedgerPolicy,
   resolveStopEvidence,
   observeStandaloneUnitSettlement,
 } from '../../../tools/ralph-external/session-launcher.mjs';
@@ -3633,6 +3634,141 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     }
   });
 
+  // #2915 round 8 follow-up: `policy` is now published ATOMICALLY (temp
+  // file + fsync + `link()`), closing the crash window a bare exclusive-
+  // create-then-write left open -- a crash between the write and the link
+  // must leave the chain usable by the next reserver, never poisoned.
+  it('a crash between the policy temp-file write and the link leaves the chain usable by the next reserver', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-policy-crash-'));
+    try {
+      const taskChainDigest = 'policy-crash-before-link-chain';
+      await expect(reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 2,
+        afterPolicyWrite: () => { throw new Error('simulated crash before link'); } }))
+        .rejects.toThrow('simulated crash before link');
+      // Never half-published: no `policy` exists for this chain yet.
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir)).find((name) => !name.startsWith('.policy-tmp-')));
+      await expect(lstat(path.join(chainDir, 'policy'))).rejects.toMatchObject({ code: 'ENOENT' });
+      // A fresh reserve for the exact same chain still works.
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-2', maxAttempts: 2 });
+      expect(ledger.n).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A leftover temp file from exactly that crash window (in `ledger/`, not
+  // in any chain directory) is inert: nothing in this ledger ever
+  // enumerates `ledger/`'s own entries, so it can never be mistaken for
+  // part of any chain, old or new.
+  it('a leftover policy publish temp file in ledger/ is ignored and does not affect any chain', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-policy-leftover-temp-'));
+    try {
+      const taskChainDigest = 'policy-leftover-temp-chain';
+      const ledgerDir = path.join(root, 'ledger');
+      await mkdir(ledgerDir, { recursive: true, mode: 0o700 });
+      const leftoverTemp = path.join(ledgerDir, '.policy-tmp-simulated-crash');
+      await writeFile(leftoverTemp,
+        JSON.stringify({ version: 1, taskChainDigest, maxAttempts: 99, maxCorrections: 1 }), { mode: 0o600 });
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 2 });
+      expect(ledger.n).toBe(1);
+      // Untouched -- never read as this (or any) chain's policy, never
+      // prevented a fresh publish.
+      const leftover = await readFile(leftoverTemp, 'utf8');
+      expect(JSON.parse(leftover).maxAttempts).toBe(99);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('two concurrent first reservers publishing the same policy both succeed and exactly one policy is published', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-policy-concurrent-same-'));
+    try {
+      const taskChainDigest = 'concurrent-policy-same-chain';
+      const results = await Promise.allSettled([
+        reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'a', maxAttempts: 4 }),
+        reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'b', maxAttempts: 4 }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
+      const ledgerDir = path.join(root, 'ledger');
+      const entries = await readdir(ledgerDir);
+      // Exactly one chain directory, and no leftover temp file (both
+      // reservers' own `finally` ran).
+      expect(entries.filter((name) => !name.startsWith('.policy-tmp-'))).toHaveLength(1);
+      expect(entries.filter((name) => name.startsWith('.policy-tmp-'))).toHaveLength(0);
+      const chainDir = path.join(ledgerDir, entries[0]);
+      expect((await readdir(chainDir)).filter((name) => name === 'policy')).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('two concurrent first reservers with different policies: exactly one wins and the other refuses with the mismatch code', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-policy-concurrent-diff-'));
+    try {
+      const taskChainDigest = 'concurrent-policy-diff-chain';
+      const results = await Promise.allSettled([
+        reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'a', maxAttempts: 3 }),
+        reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'b', maxAttempts: 7 }),
+      ]);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toMatchObject({ code: ALLOWANCE_POLICY_MISMATCH_CODE });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // D1.10's nlink-1 rule has one deliberate, narrow exception for `policy`
+  // (see `statLedgerChainEntry`'s doc comment): a reader that catches it at
+  // nlink 2 -- the atomic-publish dance's own transient second link --
+  // must not refuse the chain once that link count resolves back to 1.
+  it('a reader observing the transient policy link count does not refuse', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-policy-link-transient-'));
+    try {
+      const taskChainDigest = 'policy-link-transient-chain';
+      await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 3 });
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir))[0]);
+      const policyPath = path.join(chainDir, 'policy');
+      const extraLink = path.join(ledgerDir, '.policy-extra-link-probe');
+      // Simulate exactly the transient state the atomic-publish dance's own
+      // temp file produces: `policy` briefly has a second hard link.
+      await link(policyPath, extraLink);
+      // Removed well within the bounded recheck window -- the same thing a
+      // concurrent publisher's own `finally` does in practice.
+      setImmediate(() => { unlink(extraLink).catch(() => {}); });
+      const ledger2 = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-2', maxAttempts: 3 });
+      expect(ledger2.n).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 round 8: `reserveLedgerCorrection` re-validates the chain
+  // directory itself (not merely trusting the attempt handle's own
+  // reserve-time validation), because another process can write into the
+  // SAME chain directory in the gap between an attempt being reserved and
+  // its correction being reserved.
+  it('a correction reserved later through an attempt handle re-validates the chain directory, catching a foreign file written in between', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-correction-revalidate-'));
+    try {
+      const taskChainDigest = 'correction-revalidate-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 3 });
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir))[0]);
+      // Simulate another process writing a foreign file into the chain
+      // directory AFTER the attempt was reserved but BEFORE the correction
+      // is.
+      await writeFile(path.join(chainDir, 'unexpected-junk.txt'), 'x', { mode: 0o600 });
+      await expect(reserveLedgerCorrection({ ledger, reasonCode: 'STDIN_WAIT' })).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   // #2915 round 8: replaces the removed early, UNGATED `launchWorker` check
   // with a proof that the real enforcement -- entirely inside the gated
   // `launchOneWorker` path, bound to the admission's own ledger handle --
@@ -4060,6 +4196,35 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // Releasing a never-reserved slot is a reported no-op, not an error.
       const neverReserved = await releaseLedgerSlot({ captureRoot: root, taskChainDigest, attempt: 999 });
       expect(neverReserved).toEqual({ released: false, invocationId: null, reason: 'slot was not reserved' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 round 8 follow-up (D1.9 extension): `--ledger-release <digest>
+  // policy` removes `policy` ONLY once the chain has no attempt or
+  // correction entry left at all -- otherwise a fresh reserve for the same
+  // digest could publish a new policy with a different budget while old
+  // charged slots stay in place, regranting spent allowance.
+  it('the operator policy release refuses while slots exist and is allowed on an otherwise-empty chain', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-operator-policy-release-'));
+    try {
+      const taskChainDigest = 'operator-policy-release-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 1 });
+      await expect(releaseLedgerPolicy({ captureRoot: root, taskChainDigest }))
+        .rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      // Freeing the one slot makes the chain otherwise-empty.
+      const released = await releaseLedgerSlot({ captureRoot: root, taskChainDigest, attempt: ledger.n });
+      expect(released.released).toBe(true);
+      const policyReleased = await releaseLedgerPolicy({ captureRoot: root, taskChainDigest });
+      expect(policyReleased).toEqual({ released: true });
+      // A fresh reserve for the SAME digest can now publish a different
+      // policy -- the chain was genuinely reset, not merely patched.
+      const fresh = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-2', maxAttempts: 9 });
+      expect(fresh.maxAttempts).toBe(9);
+      // Releasing an already-absent policy is a reported no-op.
+      const alreadyGone = await releaseLedgerPolicy({ captureRoot: root, taskChainDigest: 'never-reserved-chain' });
+      expect(alreadyGone).toEqual({ released: false, reason: 'chain directory does not exist' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

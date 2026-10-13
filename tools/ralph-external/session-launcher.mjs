@@ -34,7 +34,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
 import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync, constants } from 'fs';
-import { open, mkdir, rename, unlink, lstat, readdir, realpath } from 'node:fs/promises';
+import { open, mkdir, rename, unlink, lstat, readdir, realpath, link } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, relative, isAbsolute } from 'path';
@@ -1411,9 +1411,13 @@ export async function stableTaskChainDigest(request, briefDigest) {
 //     conductor-owned, validated the same anchored/no-follow way as every
 //     other launcher-private metadata directory.
 //  2. `policy` pins `{maxAttempts, maxCorrections}` for the chain's whole
-//     lifetime: the first reserver creates it exclusively; every later
-//     reserver reads and compares, refusing on mismatch
-//     (`ALLOWANCE_POLICY_MISMATCH_CODE`).
+//     lifetime, published ATOMICALLY (temp file + fsync + `link()` into the
+//     chain directory, never a bare exclusive-create-then-write) so a crash
+//     mid-publish can never leave a half-written `policy` that poisons the
+//     whole chain -- it leaves, at worst, an inert leftover temp file next
+//     to the chain directory. The first reserver to win the `link()`
+//     publishes; every later reserver reads and compares, refusing on
+//     mismatch (`ALLOWANCE_POLICY_MISMATCH_CODE`).
 //  3. Reserve = exclusive-create the lowest-numbered `attempt-<n>` that is
 //     not already taken, for n in 1..maxAttempts. Authorization comes
 //     ONLY from that create succeeding, never from a directory listing.
@@ -1440,9 +1444,10 @@ export async function stableTaskChainDigest(request, briefDigest) {
 //     attempt handle: charged when it charges, refunded when it refunds.
 //  9. Operator recovery (C1): a reservation whose owning process died
 //     before dispatch stays consumed forever -- there is no age/pid/
-//     liveness inference of any kind. `releaseLedgerSlot` is the one
-//     explicit, operator-invoked escape hatch, for a chain with no running
-//     conductor.
+//     liveness inference of any kind. `releaseLedgerSlot` (one attempt) and
+//     `releaseLedgerPolicy` (the whole chain's `policy`, only once nothing
+//     else remains in it) are the explicit, operator-invoked escape
+//     hatches, for a chain with no running conductor.
 //  10. Directory contents are validated on every touch: only regular,
 //     single-link, 0600, conductor-owned files with one of the four
 //     canonical name shapes are tolerated; anything else refuses the whole
@@ -1562,21 +1567,115 @@ async function createLedgerFileExclusive(dir, name, content) {
   return true;
 }
 
-/** D1.2: the first reserver for this chain creates `policy` exclusively;
- * every later reserver reads it back and must match EXACTLY, including
- * `maxCorrections` -- which is never the caller's `maxAttempts`, always the
- * one correction ceiling (`MAX_STARTUP_CORRECTIONS`, declared below with
- * `startupCorrectionGate`) that actually exists in this codebase today. */
-async function ensureLedgerPolicy(dir, taskChainDigest, maxAttempts) {
-  const maxCorrections = MAX_STARTUP_CORRECTIONS;
-  const target = 'policy';
-  const created = await createLedgerFileExclusive(dir, target, JSON.stringify({ version: 1, taskChainDigest, maxAttempts, maxCorrections }));
-  if (created) return { maxAttempts, maxCorrections };
-  const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+// Bounded wait for one re-stat of `policy` when it is caught at nlink 2 --
+// see `statLedgerPolicyEntry`'s doc comment for why that is not, by itself,
+// evidence of tampering. Short enough to never meaningfully delay a reserve
+// call; long enough that the SAME process's own `finally` (which unlinks
+// the publish temp file within microseconds of the `link()` that created
+// the second name) has always run by the time it elapses.
+const LEDGER_POLICY_LINK_RECHECK_MS = 25;
+
+/** Stats one ledger-chain entry through the anchored, no-follow path, with
+ * ONE deliberate exception for `policy`: the atomic-publish dance in
+ * `ensureLedgerPolicy` below momentarily creates a SECOND hard link to
+ * `policy`'s own temp file (between its `link()` succeeding and that same
+ * call's `finally` unlinking the temp name), so a concurrent reader can
+ * observe `policy` at nlink 2 for a brief, bounded instant that is not
+ * evidence of a real hard link -- only of racing that cleanup. Content and
+ * ownership are NOT relaxed for this case, only the nlink check, and only
+ * for `policy`: one short, bounded wait and a single re-stat distinguishes
+ * the transient case (nlink back to 1) from a genuine extra hard link
+ * (still 2), which is refused exactly like any other canonical-file
+ * violation. Every other entry (attempt/correction slots and their
+ * `.charged` markers) keeps the unconditional nlink-1 rule -- nothing ever
+ * legitimately double-links them. */
+async function statLedgerChainEntry(dir, name) {
+  const target = join(dir, name);
+  let stat = await withWorkerPath(target, t => lstat(t));
+  if (name === 'policy' && stat.nlink === 2) {
+    await new Promise(resolve => setTimeout(resolve, LEDGER_POLICY_LINK_RECHECK_MS));
+    stat = await withWorkerPath(target, t => lstat(t));
+  }
+  return stat;
+}
+
+/** Bounded, validated read of `policy`'s content, reusing
+ * `statLedgerChainEntry`'s transient-nlink tolerance (never `boundedPrivateRead`,
+ * which enforces nlink===1 unconditionally and has no notion of this
+ * ledger-specific transient window). Refuses -- never resets -- on any
+ * ownership, mode, size or JSON/duplicate-key problem, exactly like every
+ * other ledger read. */
+async function readLedgerPolicyFile(dir) {
+  let stat;
+  try { stat = await statLedgerChainEntry(dir, 'policy'); }
+  catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger policy is missing or not inspectable (${error.message})`); }
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600 || stat.size === 0 || stat.size > 4096) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger policy is missing, insecurely-moded, not owned or hard-linked');
+  }
+  const target = join(dir, 'policy');
+  const handle = await withWorkerPath(target, t => open(t, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
   let bytes;
-  try { bytes = await boundedPrivateRead(join(dir, target), 4096, inspect, false, true); }
-  catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger policy is missing, insecurely-moded or not owned (${error.message})`); }
-  const policy = strictLedgerJson(bytes.toString('utf8'));
+  try {
+    const buffer = Buffer.alloc(stat.size);
+    await handle.read(buffer, 0, buffer.length, 0);
+    bytes = buffer;
+  } finally { await handle.close(); }
+  const value = strictLedgerJson(bytes.toString('utf8'));
+  if (value === undefined) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger policy is not valid JSON or has a duplicate member name');
+  return value;
+}
+
+/**
+ * D1.2, published atomically: the first reserver writes the FULL policy
+ * content to a throwaway, unpredictably-named temp file in the PARENT
+ * `ledger/` directory (never inside the chain directory -- that would make
+ * `validateLedgerChainDirectory` refuse a concurrent reserver on a name it
+ * does not recognize), fsyncs it, then publishes it with one `link()` call.
+ * `link()` is atomic: either it fails and `policy` is untouched, or it
+ * succeeds and `policy` is immediately, fully populated -- there is no
+ * window in which a reader can observe an empty or partially-written
+ * policy, which is exactly the crash-poisons-the-whole-chain gap a plain
+ * exclusive-create-then-write left open. `EEXIST` means another reserver
+ * published first: this reads theirs back (`readLedgerPolicyFile`) and
+ * compares, exactly as before. The temp file is always unlinked in a
+ * `finally`, whether this call won, lost, or threw.
+ *
+ * `afterPolicyWrite` (test-only -- production never passes it) runs after
+ * the temp file is written and fsynced but BEFORE the publishing `link()`,
+ * so tests can inject a failure in exactly that window and prove the
+ * crash leaves the chain usable by the next reserver (a leftover temp file
+ * in `ledger/`, never a half-written `policy`).
+ */
+async function ensureLedgerPolicy(dir, ledgerRoot, taskChainDigest, maxAttempts, afterPolicyWrite) {
+  const maxCorrections = MAX_STARTUP_CORRECTIONS;
+  const content = JSON.stringify({ version: 1, taskChainDigest, maxAttempts, maxCorrections });
+  const tempName = `.policy-tmp-${randomUUID()}`;
+  const tempPath = join(ledgerRoot, tempName);
+  let tempHandle;
+  try {
+    tempHandle = await withWorkerPath(tempPath, target =>
+      open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+  } catch (error) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger policy temp file could not be created (${error.message})`);
+  }
+  try {
+    try { await tempHandle.writeFile(content); await tempHandle.sync(); }
+    finally { await tempHandle.close(); }
+    if (afterPolicyWrite) await afterPolicyWrite();
+    try {
+      await withWorkerPath(dir, async dirAnchor => {
+        const policyTarget = join(dirAnchor, 'policy');
+        await withWorkerPath(tempPath, async tempAnchor => { await link(tempAnchor, policyTarget); });
+      });
+      return { maxAttempts, maxCorrections };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      // Someone else published first -- read and compare theirs below.
+    }
+  } finally {
+    await withWorkerPath(tempPath, target => unlink(target)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
+  const policy = await readLedgerPolicyFile(dir);
   if (!policy || typeof policy !== 'object' || policy.version !== 1 || policy.taskChainDigest !== taskChainDigest
     || !Number.isSafeInteger(policy.maxAttempts) || policy.maxAttempts < 1
     || !Number.isSafeInteger(policy.maxCorrections) || policy.maxCorrections < 1) {
@@ -1594,12 +1693,16 @@ const ATTEMPT_CHARGED_NAME_RE = /^attempt-([1-9][0-9]*)\.charged$/;
 const CORRECTION_NAME_RE = /^correction-([1-9][0-9]*)$/;
 const CORRECTION_CHARGED_NAME_RE = /^correction-([1-9][0-9]*)\.charged$/;
 
-/** D1.10: only regular, single-link, conductor-owned, exactly-0600 files
- * with one of the four canonical name shapes are tolerated anywhere in a
- * chain directory; anything else -- a symlink, a hard link, a loosely-moded
- * file, an out-of-range index, or a name this ledger never writes --
- * refuses the WHOLE admission rather than being silently skipped. Runs on
- * every reserve, against whatever `policy` already pinned. */
+/** D1.10: only regular, single-link (see `statLedgerChainEntry` for
+ * `policy`'s own narrow, deliberate exception), conductor-owned, exactly-
+ * 0600 files with one of the four canonical name shapes are tolerated
+ * anywhere in a chain directory; anything else -- a symlink, a hard link, a
+ * loosely-moded file, an out-of-range index, or a name this ledger never
+ * writes -- refuses the WHOLE admission rather than being silently
+ * skipped. Runs on every reserve (attempt AND correction, D1.8), against
+ * whatever `policy` already pinned -- a correction reserved moments after
+ * its attempt handle re-runs this against the CURRENT directory contents,
+ * never trusting that nothing changed since the attempt's own reserve. */
 async function validateLedgerChainDirectory(dir, policy) {
   let entries;
   try { entries = await withWorkerPath(dir, target => readdir(target)); }
@@ -1624,7 +1727,7 @@ async function validateLedgerChainDirectory(dir, policy) {
       }
     }
     let stat;
-    try { stat = await withWorkerPath(join(dir, name), target => lstat(target)); }
+    try { stat = await statLedgerChainEntry(dir, name); }
     catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger entry '${name}' is not inspectable (${error.message})`); }
     if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) {
       ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger entry '${name}' is not a canonical conductor-owned 0600 regular file`);
@@ -1636,8 +1739,21 @@ async function validateLedgerChainDirectory(dir, policy) {
  * directory, refuses a legacy flat record (C7) and a win32 target (C6),
  * creates/reads the chain's pinned policy, and validates every existing
  * entry against it -- the shared pre-flight every file-mode reserve (attempt
- * or correction) runs before touching a numbered slot. */
-async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts }) {
+ * or correction) runs before touching a numbered slot.
+ *
+ * The parent `ledger/` directory's OWN entries are deliberately never
+ * enumerated or validated here: it holds one chain subdirectory per digest
+ * (named by `ledgerChainDir`), at most one legacy `<digest>.json` record
+ * (checked by name, above), and -- only ever transiently -- a `policy`
+ * publish temp file (`.policy-tmp-<random>`, from `ensureLedgerPolicy`).
+ * None of those three name shapes can ever collide, so a crash-orphaned
+ * temp file left behind in `ledger/` is simply inert: nothing reads it,
+ * nothing lists it, and it is never mistaken for part of any chain. It is
+ * deliberately left in place rather than opportunistically swept by age --
+ * an age-based heuristic is exactly the kind of inference this design
+ * otherwise refuses to make (C1), and a crash in this one-write window is
+ * rare enough that unbounded accumulation is not a practical concern. */
+async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, afterPolicyWrite }) {
   if (process.platform === 'win32') {
     ledgerFail(LEDGER_RECORD_INVALID_CODE,
       'Persistent allowance ledger requires POSIX private-directory and no-follow guarantees unavailable on this platform (win32); omit captureRoot for the in-process ledger');
@@ -1649,7 +1765,7 @@ async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts }) 
   await assertPrivateLedgerDirectory(ledgerRoot);
   await mkdir(dir, { mode: 0o700, recursive: true });
   await assertPrivateLedgerDirectory(dir);
-  const policy = await ensureLedgerPolicy(dir, taskChainDigest, maxAttempts);
+  const policy = await ensureLedgerPolicy(dir, ledgerRoot, taskChainDigest, maxAttempts, afterPolicyWrite);
   await validateLedgerChainDirectory(dir, policy);
   return { dir, policy };
 }
@@ -1824,7 +1940,12 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
   // snapshot of availability") -- production never passes this; tests use
   // it to deterministically interleave a concurrent refund between a
   // scanner's two passes instead of depending on real fs scheduling.
-  rescan } = {}) {
+  rescan,
+  // Test-only passthrough into `ensureLedgerPolicy`'s atomic-publish dance
+  // (see its own doc comment) -- fires after the policy temp file is
+  // written and fsynced but before it is published, so a test can inject a
+  // failure in exactly that window. Production never passes this.
+  afterPolicyWrite } = {}) {
   if (typeof taskChainDigest !== 'string' || !taskChainDigest || typeof invocationId !== 'string' || !invocationId
     || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
     ledgerFail(LEDGER_RECORD_INVALID_CODE, 'reserveDirectWorkerAllowance requires taskChainDigest, invocationId and a positive integer maxAttempts');
@@ -1836,7 +1957,7 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
     return { mode: 'in-process', captureRoot: null, taskChainDigest, invocationId, kind: 'attempt', n,
       dir: null, maxAttempts: chain.maxAttempts, state: 'reserved', debited: false, correction: null };
   }
-  const { dir, policy } = await ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts });
+  const { dir, policy } = await ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, afterPolicyWrite });
   const n = await reserveLedgerSlotFile(dir, 'attempt', policy.maxAttempts, invocationId, { beforeRescan: rescan });
   if (n == null) {
     const occupied = await describeOccupiedLedgerSlots(dir, 'attempt', policy.maxAttempts);
@@ -1950,6 +2071,13 @@ export async function refundDirectWorkerAllowance(ledger) {
  * refuses without touching any slot; an already-bound or already-exhausted
  * correction refuses with the SAME "already corrected" message
  * `startupCorrectionGate` has always produced.
+ *
+ * File mode RE-VALIDATES the chain directory (`validateLedgerChainDirectory`)
+ * before touching a correction slot, rather than trusting the attempt
+ * handle's own reserve-time validation: another process can write into the
+ * SAME chain directory in the gap between an attempt being reserved and its
+ * correction being reserved, and "validated moments earlier" is not
+ * sufficient once that is possible.
  */
 export async function reserveLedgerCorrection({ ledger, reasonCode } = {}) {
   if (!ledger) return { ok: false, reason: 'No task chain to correct' };
@@ -1962,6 +2090,7 @@ export async function reserveLedgerCorrection({ ledger, reasonCode } = {}) {
     const chain = _inProcessLedgerChains.get(ledger.taskChainDigest);
     n = chain ? reserveLedgerSlotInProcess(chain.corrections, ceiling, ledger.invocationId) : null;
   } else {
+    await validateLedgerChainDirectory(ledger.dir, { maxAttempts: ledger.maxAttempts, maxCorrections: ceiling });
     n = await reserveLedgerSlotFile(ledger.dir, 'correction', ceiling, ledger.invocationId);
   }
   if (n == null) return startupCorrectionGate({ correctionsUsed: ceiling, reasonCode });
@@ -2002,6 +2131,47 @@ export async function releaseLedgerSlot({ captureRoot, taskChainDigest, attempt 
   if (invocationId === undefined) return { released: false, invocationId: null, reason: 'slot was not reserved' };
   await refundLedgerSlotFile(dir, 'attempt', attempt);
   return { released: true, invocationId: invocationId ?? null };
+}
+
+/**
+ * The operator counterpart to `releaseLedgerSlot`, for `policy` itself
+ * (`--ledger-release <taskChainDigest> policy`). Removing `policy` while
+ * any attempt or correction entry still exists would let a FRESH reserve
+ * for the same digest publish a NEW policy with a different budget while
+ * the old charged/occupied slots stay in place -- exactly the "regrant
+ * spent allowance" failure the whole design exists to prevent -- so this
+ * refuses outright whenever the chain directory has anything in it besides
+ * `policy`. Only ever useful on a chain that is otherwise already empty
+ * (every attempt/correction already individually released or never
+ * reserved), and only ever needed to recover a chain whose `policy`
+ * publish itself crashed in the narrow pre-link window `ensureLedgerPolicy`
+ * documents.
+ */
+export async function releaseLedgerPolicy({ captureRoot, taskChainDigest } = {}) {
+  if (!captureRoot) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'releaseLedgerPolicy requires a persistent captureRoot');
+  if (typeof taskChainDigest !== 'string' || !taskChainDigest) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'releaseLedgerPolicy requires taskChainDigest');
+  if (process.platform === 'win32') {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Persistent allowance ledger is unavailable on this platform (win32)');
+  }
+  const dir = ledgerChainDir(captureRoot, taskChainDigest);
+  await assertPrivateLedgerDirectory(captureRoot);
+  await assertPrivateLedgerDirectory(join(captureRoot, 'ledger'));
+  await assertPrivateLedgerDirectory(dir);
+  let entries;
+  try { entries = await withWorkerPath(dir, target => readdir(target)); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { released: false, reason: 'chain directory does not exist' };
+    throw error;
+  }
+  if (entries.some((name) => name !== 'policy')) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'refusing to release policy: the chain still has attempt or correction entries');
+  }
+  try { await withWorkerPath(join(dir, 'policy'), target => unlink(target)); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { released: false, reason: 'policy was not present' };
+    throw error;
+  }
+  return { released: true };
 }
 
 /**

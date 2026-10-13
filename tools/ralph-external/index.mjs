@@ -59,25 +59,32 @@ export function parseWorkerStatusArgs(args) {
 /**
  * #2915 round 8 (D1.9/C1): strict grammar for the one explicit operator
  * recovery command for the per-task-chain allowance ledger --
- * `--ledger-release <taskChainDigest> <n> --capture-root DIR`. There is no
- * age/pid/liveness inference anywhere in the ledger itself; this is the
- * only way an uncharged, stranded reservation is ever freed, and it is
- * documented (see `printHelp`) as being only for a task chain with no
- * running conductor.
+ * `--ledger-release <taskChainDigest> <n>|policy --capture-root DIR`. There
+ * is no age/pid/liveness inference anywhere in the ledger itself; this is
+ * the only way an uncharged, stranded reservation (or, for `policy`, a
+ * chain whose policy publish itself crashed and is now otherwise empty) is
+ * ever freed, and it is documented (see `printHelp`) as being only for a
+ * task chain with no running conductor.
  */
 export function parseLedgerReleaseArgs(args) {
   const idx = args.indexOf('--ledger-release');
-  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n> --capture-root DIR';
+  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n>|policy --capture-root DIR';
   if (idx === -1) throw new Error(usage);
   const taskChainDigest = args[idx + 1];
-  const attemptRaw = args[idx + 2];
-  if (!taskChainDigest || taskChainDigest.startsWith('--') || !attemptRaw || attemptRaw.startsWith('--')) {
+  const targetRaw = args[idx + 2];
+  if (!taskChainDigest || taskChainDigest.startsWith('--') || !targetRaw || targetRaw.startsWith('--')) {
     throw new Error(usage);
   }
-  if (!/^[1-9][0-9]*$/.test(attemptRaw)) throw new Error('--ledger-release attempt number must be a positive integer');
-  const attempt = Number(attemptRaw);
-  if (!Number.isSafeInteger(attempt)) throw new Error('--ledger-release attempt number must be a positive integer');
-  const result = { taskChainDigest, attempt, captureRoot: null };
+  let target;
+  if (targetRaw === 'policy') {
+    target = { kind: 'policy' };
+  } else {
+    if (!/^[1-9][0-9]*$/.test(targetRaw)) throw new Error(usage);
+    const attempt = Number(targetRaw);
+    if (!Number.isSafeInteger(attempt)) throw new Error(usage);
+    target = { kind: 'attempt', attempt };
+  }
+  const result = { taskChainDigest, target, captureRoot: null };
   const rest = [...args.slice(0, idx), ...args.slice(idx + 3)];
   const seen = new Set();
   for (let i = 0; i < rest.length; i++) {
@@ -360,6 +367,13 @@ USAGE:
                           the only way a stranded, uncharged reservation is
                           ever released. Only for a task chain with no
                           running conductor.
+  ralph-external --ledger-release <taskChainDigest> policy --capture-root DIR
+                          Removes a chain's policy file. Refuses if the
+                          chain still has ANY attempt or correction entry
+                          (charged or not) — only for a chain that is
+                          otherwise already empty, to recover one whose
+                          policy publish itself crashed. Only for a task
+                          chain with no running conductor.
 
 ARGUMENTS:
   <objective>             Task objective (required for new loop)
@@ -665,15 +679,18 @@ async function main() {
     return;
   }
   // #2915 round 8 (D1.9): operator recovery for the allowance ledger --
-  // read-only with respect to everything except the one uncharged slot
-  // named, and performs no provider probing, loop state or Mission work.
+  // read-only with respect to everything except the one uncharged slot (or
+  // the otherwise-empty chain's `policy`) named, and performs no provider
+  // probing, loop state or Mission work.
   if (args.includes('--ledger-release')) {
     let parsed;
     try { parsed = parseLedgerReleaseArgs(args); }
     catch (error) { console.error(error.message); process.exitCode = 1; return; }
     try {
-      const { releaseLedgerSlot } = await import('./session-launcher.mjs');
-      const result = await releaseLedgerSlot(parsed);
+      const { releaseLedgerSlot, releaseLedgerPolicy } = await import('./session-launcher.mjs');
+      const result = parsed.target.kind === 'policy'
+        ? await releaseLedgerPolicy({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest })
+        : await releaseLedgerSlot({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest, attempt: parsed.target.attempt });
       console.log(JSON.stringify(result));
       process.exitCode = 0;
     } catch (error) {
