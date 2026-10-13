@@ -4,10 +4,11 @@
  *
  * These pin the guidance contracts that generated-context and skill tests
  * do not cover: concrete check-in numbers in the Tier 0 procedure,
- * Jev-first checkpoints with LLM fallback and no hard dependency,
- * and the absence of unimplemented flags/tags the lane verified as missing
- * in code (--caller from #2946; rule summary/bound activation from
- * #2942/#2645/#2646; doctor --groups / steward --group).
+ * Jev-first checkpoints with LLM fallback and no hard dependency, the
+ * per-checkpoint `--caller` tags now that #2946 landed, and the absence of
+ * unimplemented flags/tags the lane verified as missing in code (rule
+ * summary/bound activation from #2942/#2645/#2646; doctor --groups /
+ * steward --group).
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -88,11 +89,40 @@ describe('Jev decision checkpoints (#2947)', () => {
     expect(read(SCOPING)).toContain('Before worker/model/effort picks');
   });
 
-  it('checkpoints degrade without the decision engine and use no --caller tag', () => {
-    for (const file of [ADDRESS_ISSUES, MISSION, SCOPING]) {
+  it('each checkpoint carries a `<skill-or-rule>:<checkpoint>` --caller tag and still degrades cleanly without the decision engine', () => {
+    const expectedTags: Record<string, string[]> = {
+      [ADDRESS_ISSUES]: [
+        'address-issues:worker-pick',
+        'address-issues:failure-triage',
+        'address-issues:review-verdict',
+        'address-issues:minor-triage',
+      ],
+      [MISSION]: ['aiwg-mission:worker-pick', 'aiwg-mission:failure-triage'],
+      [SCOPING]: ['subagent-scoping:worker-pick', 'subagent-scoping:failure-triage'],
+    };
+    for (const [file, tags] of Object.entries(expectedTags)) {
       const text = read(file);
-      expect(text).toContain('fallback');
-      expect(text).not.toContain('--caller');
+      expect(text, file).toContain('fallback');
+      for (const tag of tags) {
+        expect(text, `${file} missing --caller ${tag}`).toContain(`--caller ${tag}`);
+      }
+    }
+  });
+
+  it('decision-offload lists every introduced --caller tag in one table', () => {
+    const text = read(DECISION_OFFLOAD);
+    const tags = [
+      'address-issues:worker-pick',
+      'address-issues:failure-triage',
+      'address-issues:review-verdict',
+      'address-issues:minor-triage',
+      'aiwg-mission:worker-pick',
+      'aiwg-mission:failure-triage',
+      'subagent-scoping:worker-pick',
+      'subagent-scoping:failure-triage',
+    ];
+    for (const tag of tags) {
+      expect(text, tag).toContain(tag);
     }
   });
 
