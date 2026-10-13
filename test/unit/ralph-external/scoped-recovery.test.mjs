@@ -876,13 +876,19 @@ describe('stop-before-retry gate (session-launcher)', () => {
     expect(anonymous.code).toBe(UNBOUND_RETRY_EVIDENCE_CODE);
   });
 
-  it('refuses a conductor-declared startup correction past its single budget', async () => {
-    const launcher = new SessionLauncher();
-    await expect(launcher.launchWorker({ correctStartup: { reasonCode: 'AUTH', correctionsUsed: 0 } }))
-      .rejects.toMatchObject({ code: 'STARTUP_CORRECTION_REFUSED' });
-    await expect(launcher.launchWorker({ correctStartup: { reasonCode: 'STDIN_WAIT', correctionsUsed: 1 } }))
-      .rejects.toMatchObject({ code: 'STARTUP_CORRECTION_REFUSED' });
-  });
+  // #2915 review 5 ("changed disabled behavior"): `launchWorker` itself
+  // used to run `startupCorrectionGate` against the CALLER-supplied
+  // `correctionsUsed` before any plan was even loaded, UNGATED by whether
+  // recovery was enabled at all -- refusing calls `origin/main` (which has
+  // no `correctStartup` concept) would have let through unmodified. Real
+  // enforcement now lives entirely inside the gated `launchOneWorker` path:
+  // see `a conductor-declared startup correction past the real ledger's
+  // recorded budget is refused through the gated path` and
+  // `disabled-dispatch-is-inert for correctStartup/retryOf` in the
+  // `allowance ledger` describe block below for the end-to-end proofs.
+  // `startupCorrectionGate`'s own pure reason/budget logic is covered by
+  // the `startup correction budget (session-launcher)` describe block
+  // further down in this file.
 });
 
 describe('retry linkage (#2915 final review step 4: retryOf replaces freshAttempt/afterAttempt/path-pair)', () => {
@@ -1670,6 +1676,47 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
       expect(JSON.parse(await readFile(path.join(fx.root, 'retry-run-genuine', 'invocation.json'), 'utf8')))
         .toMatchObject({ previousAttemptId: 'genuine-prev' });
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 review 5 ("disabled-dispatch equivalence"): stop-before-retry is
+  // MANDATORY, not opt-in (#2915B) -- a distinct, always-on safety control,
+  // never part of the opt-in scoped-failure-breaker feature the global
+  // `worker_dispatch` switch gates. Unlike `correctStartup` (moved fully
+  // behind `admission.ledger` above), `options.retryOf` verification must
+  // keep refusing an unconfirmed predecessor even with dispatch disabled --
+  // gating it on `worker_dispatch` would silently remove this guarantee
+  // exactly when a conductor might disable recovery for other reasons.
+  it('retryOf verification remains mandatory even with the global dispatch switch disabled', async () => {
+    const fx = await enoentFixtureRoot();
+    const launcher = new SessionLauncher();
+    try {
+      const invocationPath = await fx.freshPlan();
+      const saved = JSON.parse(await readFile(invocationPath, 'utf8'));
+      const taskDigest = await stableTaskChainDigest(saved.request, saved.invocation.briefDigest);
+      const uncertainRunDir = path.join(fx.root, 'uncertain-predecessor');
+      await mkdir(uncertainRunDir, { mode: 0o700 });
+      await writeFile(path.join(uncertainRunDir, '.launch-owner'), 'uncertain-prev', { mode: 0o600 });
+      await writeFile(path.join(uncertainRunDir, 'invocation.json'),
+        JSON.stringify({ invocationId: 'uncertain-prev', origin: 'launcher', taskDigest }), { mode: 0o600 });
+      // Present, well-formed, identity-matching -- but NOT confirmed.
+      await writeFile(path.join(uncertainRunDir, 'exit.json'),
+        JSON.stringify({ invocationId: 'uncertain-prev', termination: 'uncertain' }), { mode: 0o600 });
+      await expect(launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'retry-run-disabled'),
+        retryOf: { invocationId: 'uncertain-prev', runDir: uncertainRunDir },
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        // The global dispatch switch is off -- `admitDirectWorker` would
+        // return `{ gated: false }` and never consult the breaker/ledger at
+        // all -- yet this refusal must still fire.
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded',
+          child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      })).rejects.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
     } finally {
       vi.unstubAllEnvs();
       await rm(fx.root, { recursive: true, force: true });
@@ -2523,6 +2570,92 @@ describe('allowance ledger (#2915 review 4, finding 8)', () => {
       })).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
       expect(spawns.count).toBe(0);
       expect((await lstat(insecureRecordPath)).mode & 0o777).toBe(0o666);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 review 5 ("changed disabled behavior"): replaces the removed
+  // early, UNGATED `launchWorker` check (which validated `correctStartup`
+  // against the CALLER's own claimed `correctionsUsed` before any plan was
+  // even loaded) with a proof that the real enforcement -- entirely inside
+  // the gated `launchOneWorker` path, keyed off the actual ledger record --
+  // still refuses a second correction for this exact task chain.
+  it('a conductor-declared startup correction past the real ledger-recorded budget is refused through the gated path, ignoring the caller-claimed count', async () => {
+    const fx = await ledgerFixtureRoot(5);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    try {
+      // First correction: the real ledger has none recorded yet. The
+      // qualified reason ('STDIN_WAIT') is accepted, a correction is
+      // recorded, and the attempt proceeds to real dispatch (failing
+      // ENOENT on its own merits, same as any other attempt).
+      const first = await fx.freshPlan();
+      const firstResult = await launcher.launchWorker({
+        invocationPath: first.invocationPath, runDir: path.join(fx.root, 'correct-run-1'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+        correctStartup: { reasonCode: 'STDIN_WAIT', correctionsUsed: 0 },
+      });
+      expect(firstResult).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      expect(spawns.count).toBe(1);
+      // Second correction for the SAME task chain: the caller again (now
+      // wrongly) claims zero used, but the real ledger records one --
+      // authoritative ledger state, never the caller's own claim, refuses
+      // this one before dispatch.
+      const second = await fx.freshPlan();
+      await expect(launcher.launchWorker({
+        invocationPath: second.invocationPath, runDir: path.join(fx.root, 'correct-run-2'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+        correctStartup: { reasonCode: 'STDIN_WAIT', correctionsUsed: 0 },
+      })).rejects.toMatchObject({ code: 'STARTUP_CORRECTION_REFUSED' });
+      expect(spawns.count).toBe(1); // the second attempt never reached dispatch
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 review 5 ("changed disabled behavior"): with the global dispatch
+  // switch off, `admitDirectWorker` returns `{ gated: false }` before any
+  // breaker or ledger work, and `launchOneWorker`'s correction check is
+  // itself gated on `admission.ledger` -- never constructed when not
+  // gated. A `correctStartup` value that WOULD refuse through the gated
+  // path (unqualified reason, already-exhausted budget) must therefore
+  // behave exactly as `origin/main` (which has no `correctStartup` concept
+  // at all): reach real dispatch and fail on its own merits, never
+  // `STARTUP_CORRECTION_REFUSED`.
+  it('disabled-dispatch-is-inert for correctStartup: an unqualified, budget-exceeded correction never refuses when recovery is off', async () => {
+    const fx = await ledgerFixtureRoot(5);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    try {
+      const { invocationPath } = await fx.freshPlan();
+      const result = await launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'disabled-correct-run'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+        correctStartup: { reasonCode: 'AUTH', correctionsUsed: 99 },
+      });
+      expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      expect(spawns.count).toBe(1);
+      expect(result.attemptOutcome).toBeUndefined(); // disabled dispatch: no new field at all
+      // No ledger directory was ever created under captureRoot.
+      await expect(lstat(path.join(fx.captureRoot, 'ledger'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       resetDirectRecoveryBreaker();
       vi.unstubAllEnvs();

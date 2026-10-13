@@ -1872,27 +1872,28 @@ export class SessionLauncher extends EventEmitter {
    * `options.correctStartup: { reasonCode, correctionsUsed }` enforces the
    * one-qualified-startup-correction budget on a conductor-declared
    * correction retry (startupCorrectionGate): unqualified causes and second
-   * corrections are refused here, within the task's existing allowance
-   * (which the caller enforces). There is no automatic correction loop.
+   * corrections are refused, within the task's existing allowance. There is
+   * no automatic correction loop.
+   *
+   * Both checks are gated recovery behavior, not a general launch
+   * precondition: enforcement happens entirely INSIDE `launchOneWorker`,
+   * after admission has determined whether recovery is actually gated for
+   * this attempt (global `worker_dispatch` AND per-CLI enablement — see
+   * `admitDirectWorker`). Retry-predecessor verification runs there every
+   * time `options.retryOf` is supplied, same as any other run; the
+   * correction-budget check there only runs once a real ledger exists
+   * (`admission.ledger`), never against a caller-supplied `correctionsUsed`.
+   * `launchWorker` itself must never pre-empt either refusal before a plan
+   * is even loaded — a prior round's early, UNGATED `correctStartup` check
+   * here refused calls origin/main would have let through unmodified, since
+   * neither option exists on origin/main at all (#2915 review 5, "changed
+   * disabled behavior"). Stop-before-retry is MANDATORY regardless of
+   * `worker_dispatch`, by design (#2915B) — it is a distinct, always-on
+   * safety control, not part of the opt-in scoped-failure-breaker feature
+   * the dispatch switch gates.
    */
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
-    // #2915 review 5 (finding 4): the retry-predecessor check moved INTO
-    // `launchOneWorker` (after the plan and the resolved driver's
-    // `workerWritableRoots` are both available) so the exclusion that
-    // check depends on is production-resolved, never omitted. This early
-    // gate no longer duplicates it — `launchOneWorker` throws
-    // `UNBOUND_RETRY_EVIDENCE_CODE` itself when `options.retryOf` is
-    // present and fails verification, at the same point it resolves
-    // `verifiedPreviousAttemptId` for the new attempt's own record.
-    if (options?.correctStartup !== undefined) {
-      const gate = startupCorrectionGate(options.correctStartup ?? {});
-      if (!gate.ok) {
-        const error = new Error(`Startup correction refused: ${gate.reason}`);
-        error.code = 'STARTUP_CORRECTION_REFUSED';
-        throw error;
-      }
-    }
     this.workerLaunchPending = true;
     try {
       const result = await launchOneWorker(this, options);
