@@ -1193,6 +1193,56 @@ describe('planDirectWorkerLaunch recovery gate', () => {
     }
   });
 
+  // #2915 review 5 (finding 4, "unauthenticated or reused authority"): a
+  // fabricated `admission` object -- never minted by `admitDirectWorker` --
+  // previously dispatched exactly as if the scope had been genuinely
+  // checked and found closed. This is an authentication bypass: calling
+  // `planDirectWorkerLaunch` with a borrowed admission requires NO prior
+  // call to `admitDirectWorker` at all.
+  it('refuses a fabricated borrowed admission instead of dispatching on unauthenticated authority', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
+      // Shapes a real caller could plausibly forge: a plain object with no
+      // `token`/`breaker`, claiming to be gated-and-admitted.
+      const fabricated = { gated: true };
+      // `planDirectWorkerLaunch` is deliberately NOT declared `async` (see
+      // its own doc comment: synchronous, byte-for-byte legacy return for
+      // disabled dispatch) -- the borrowed-admission validation runs in
+      // its synchronous body, so the throw happens synchronously here,
+      // never as a rejected Promise.
+      expect(() => planDirectWorkerLaunch({ invocation, scopedBreaker: breaker, config: dispatchOnConfig, live: healthyLive,
+        admission: fabricated, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/not a value admitDirectWorker returned/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 5 (finding 4): ONE genuine admission, reused for a SECOND
+  // distinct dispatch attempt, previously launched twice -- each admission
+  // must authorize exactly one launch.
+  it('refuses to launch twice off ONE genuine borrowed admission', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig, invocation: { selected: { cli: 'codex' } },
+        invocationId: 'reuse-1', scopedBreaker: breaker, drivers: {} });
+      expect(admission.gated).toBe(true);
+      const first = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
+      expect(first.launched).toBe(true);
+      // Same synchronous-throw reasoning as the fabricated-admission test
+      // above -- the borrowed-admission check runs before any `async` IIFE.
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/already used to authorize a launch/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
   it('is inert when worker_dispatch is off: an open scope never blocks, and the breaker is never constructed or consulted (#2915 P0)', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
@@ -1397,6 +1447,87 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     };
     return { f, root, cwd, brief, final, freshPlan, drivers };
   }
+
+  // #2915 review 5 (finding 4, "unauthenticated or reused authority"): the
+  // writable-root exclusion `verifyRetryPredecessor` itself already
+  // supports was never actually wired into production `launchWorker` --
+  // this proves a forged predecessor record planted inside the worker's
+  // own writable worktree (the default `workerWritableRoots` fallback, no
+  // special driver config needed) is refused through the REAL end-to-end
+  // `launcher.launchWorker({ retryOf })` call, not merely the
+  // `verifyRetryPredecessor` helper in isolation.
+  it('refuses a forged retry predecessor planted inside the worker-writable root, through the real launchWorker path', async () => {
+    const fx = await enoentFixtureRoot();
+    const launcher = new SessionLauncher();
+    try {
+      const invocationPath = await fx.freshPlan();
+      const saved = JSON.parse(await readFile(invocationPath, 'utf8'));
+      const taskDigest = await stableTaskChainDigest(saved.request, saved.invocation.briefDigest);
+      // Planted INSIDE fx.cwd -- the worker's own writable worktree, which
+      // falls back to being the default `workerWritableRoots` entry when
+      // (as here) the driver declares none of its own.
+      const forgedRunDir = path.join(fx.cwd, 'forged-predecessor');
+      await mkdir(forgedRunDir, { mode: 0o700 });
+      await writeFile(path.join(forgedRunDir, '.launch-owner'), 'forged-prev', { mode: 0o600 });
+      await writeFile(path.join(forgedRunDir, 'invocation.json'),
+        JSON.stringify({ invocationId: 'forged-prev', origin: 'launcher', taskDigest }), { mode: 0o600 });
+      await writeFile(path.join(forgedRunDir, 'exit.json'),
+        JSON.stringify({ invocationId: 'forged-prev', termination: 'confirmed' }), { mode: 0o600 });
+      let spawned = false;
+      await expect(launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'retry-run'),
+        retryOf: { invocationId: 'forged-prev', runDir: forgedRunDir },
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => { spawned = true; return { mode: 'degraded',
+          child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }; },
+      })).rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+      expect(spawned).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // The positive counterpart: a GENUINE predecessor outside any
+  // worker-writable root is still accepted end-to-end through the same
+  // real `launchWorker({ retryOf })` wiring -- the writable-root exclusion
+  // must refuse forged/misplaced evidence without blocking legitimate
+  // retries.
+  it('accepts a genuine retry predecessor outside the worker-writable root, through the real launchWorker path', async () => {
+    const fx = await enoentFixtureRoot();
+    const launcher = new SessionLauncher();
+    try {
+      const invocationPath = await fx.freshPlan();
+      const saved = JSON.parse(await readFile(invocationPath, 'utf8'));
+      const taskDigest = await stableTaskChainDigest(saved.request, saved.invocation.briefDigest);
+      // Outside fx.cwd entirely -- a conductor-owned predecessor location,
+      // never inside the worker's own writable worktree.
+      const genuineRunDir = path.join(fx.root, 'genuine-predecessor');
+      await mkdir(genuineRunDir, { mode: 0o700 });
+      await writeFile(path.join(genuineRunDir, '.launch-owner'), 'genuine-prev', { mode: 0o600 });
+      await writeFile(path.join(genuineRunDir, 'invocation.json'),
+        JSON.stringify({ invocationId: 'genuine-prev', origin: 'launcher', taskDigest }), { mode: 0o600 });
+      await writeFile(path.join(genuineRunDir, 'exit.json'),
+        JSON.stringify({ invocationId: 'genuine-prev', termination: 'confirmed' }), { mode: 0o600 });
+      const result = await launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'retry-run-genuine'),
+        retryOf: { invocationId: 'genuine-prev', runDir: genuineRunDir },
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded',
+          child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      });
+      expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      expect(JSON.parse(await readFile(path.join(fx.root, 'retry-run-genuine', 'invocation.json'), 'utf8')))
+        .toMatchObject({ previousAttemptId: 'genuine-prev' });
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
 
   it('refuses a launch while the scope is open and resumes after a verified canary', async () => {
     const fx = await enoentFixtureRoot();

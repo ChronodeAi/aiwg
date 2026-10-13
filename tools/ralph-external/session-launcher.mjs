@@ -263,6 +263,22 @@ async function launchOneWorker(owner, options) {
   if (writableRootsContainRunDir) {
     throw new Error('Run metadata must be outside worker-writable roots');
   }
+  // #2915 review 5 (finding 4, "unauthenticated or reused authority"):
+  // `verifyRetryPredecessor`'s own `workerWritableRoots` exclusion was
+  // never wired into production -- `SessionLauncher.launchWorker` called
+  // it BEFORE any plan was even loaded, with no resolved driver and so no
+  // `workerWritableRoots` to pass, leaving a forged predecessor record
+  // planted inside a worker-writable directory able to pass through the
+  // real `launchWorker` unchecked. Resolving the plan first (here, after
+  // `writableRoots` is already computed above for the run-directory check)
+  // is what it takes to pass the SAME production-resolved roots into this
+  // check too.
+  let verifiedPreviousAttemptId = null;
+  if (options?.retryOf !== undefined) {
+    const exitRecord = await verifyRetryPredecessor(options.retryOf,
+      { newInvocationPath: options?.invocationPath, inspect, workerWritableRoots: writableRoots });
+    verifiedPreviousAttemptId = exitRecord.invocationId;
+  }
   const paths = { stdout: invocation.stdoutPath, stderr: invocation.stderrPath, final: invocation.finalPath };
   if (new Set(Object.values(paths)).size !== 3 || Object.values(paths).some(filename =>
     filename === options.invocationPath || filename === invocation.briefPath
@@ -395,11 +411,12 @@ async function launchOneWorker(owner, options) {
     // (never its path) — the same instructions, not the same
     // attempt-specific paths. (Computed once, above, before admission.)
     await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
-      // #2915 step 4: set only after `verifyRetryPredecessor` (SessionLauncher.launchWorker)
-      // independently confirmed the predecessor's owned, launcher-written,
-      // confirmed-terminal evidence for this exact task — never from an
-      // unverified caller claim.
-      previousAttemptId: options.verifiedPreviousAttemptId ?? null,
+      // #2915 step 4: set only after `verifyRetryPredecessor` (above, now
+      // resolved HERE with the production `workerWritableRoots` wired in —
+      // #2915 review 5 finding 4) independently confirmed the predecessor's
+      // owned, launcher-written, confirmed-terminal evidence for this exact
+      // task — never from an unverified caller claim.
+      previousAttemptId: verifiedPreviousAttemptId,
       requestId: invocationId, taskDigest, role: saved.request.role,
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
@@ -1244,6 +1261,18 @@ async function writeLedgerRecord(dir, name, record, inspect) {
 // which has no server-owned capture root.
 const _inProcessLedger = new Map(); // taskChainDigest -> record (same shape as the on-disk one)
 
+// #2915 review 5 (finding 4, "unauthenticated or reused authority"):
+// `planDirectWorkerLaunch`'s borrowed-admission path (below) previously
+// trusted ANY caller-supplied `admission` object unconditionally -- a
+// fabricated stand-in (e.g. `{}`) dispatched exactly as if a real
+// `admitDirectWorker` call had authorized it, and ONE genuine admission
+// object, if passed to two distinct dispatch attempts, launched twice.
+// Every genuine admission `admitDirectWorker` mints is a freshly
+// allocated object -- this WeakSet enforces "one admission authorizes
+// exactly one launch" without retaining any strong reference (admissions
+// are naturally garbage-collected once their invocation concludes).
+const _consumedBorrowedAdmissions = new WeakSet();
+
 export function resetInProcessAllowanceLedger() { _inProcessLedger.clear(); }
 
 function inProcessLedgerRecord(taskChainDigest, maxAttempts) {
@@ -1803,12 +1832,14 @@ export class SessionLauncher extends EventEmitter {
    */
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
-    let verifiedPreviousAttemptId = null;
-    if (options?.retryOf !== undefined) {
-      const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-      const exitRecord = await verifyRetryPredecessor(options.retryOf, { newInvocationPath: options?.invocationPath, inspect });
-      verifiedPreviousAttemptId = exitRecord.invocationId;
-    }
+    // #2915 review 5 (finding 4): the retry-predecessor check moved INTO
+    // `launchOneWorker` (after the plan and the resolved driver's
+    // `workerWritableRoots` are both available) so the exclusion that
+    // check depends on is production-resolved, never omitted. This early
+    // gate no longer duplicates it — `launchOneWorker` throws
+    // `UNBOUND_RETRY_EVIDENCE_CODE` itself when `options.retryOf` is
+    // present and fails verification, at the same point it resolves
+    // `verifiedPreviousAttemptId` for the new attempt's own record.
     if (options?.correctStartup !== undefined) {
       const gate = startupCorrectionGate(options.correctStartup ?? {});
       if (!gate.ok) {
@@ -1819,7 +1850,7 @@ export class SessionLauncher extends EventEmitter {
     }
     this.workerLaunchPending = true;
     try {
-      const result = await launchOneWorker(this, { ...options, verifiedPreviousAttemptId });
+      const result = await launchOneWorker(this, options);
       // Informational only: no longer consulted by the retry gate above
       // (which is now `options.retryOf`-driven and disk-verified every
       // time), kept for callers/diagnostics that read the launcher's own
@@ -2741,6 +2772,21 @@ export function planDirectWorkerLaunch({
     return launch();
   }
   if (borrowedAdmission !== undefined) {
+    // #2915 review 5 (finding 4): the borrowed admission must be a value
+    // `admitDirectWorker` itself returned -- never a caller-fabricated
+    // stand-in -- and may authorize at most ONE launch. A genuine
+    // admission is either exactly `{ gated: false }` (not gated), a
+    // refusal (`{ gated: true, refused: {...} }`), or a successful one
+    // carrying both `token` and `breaker` (the exact objects `admit()`
+    // minted) -- never anything else.
+    if (borrowedAdmission === null || typeof borrowedAdmission !== 'object' || typeof borrowedAdmission.gated !== 'boolean'
+      || (borrowedAdmission.gated && !borrowedAdmission.refused && (!borrowedAdmission.token || typeof borrowedAdmission.breaker?.settle !== 'function'))) {
+      throw new Error('Borrowed admission is not a value admitDirectWorker returned; refusing to dispatch on unauthenticated authority');
+    }
+    if (_consumedBorrowedAdmissions.has(borrowedAdmission)) {
+      throw new Error('Borrowed admission was already used to authorize a launch; each admission authorizes exactly one dispatch');
+    }
+    _consumedBorrowedAdmissions.add(borrowedAdmission);
     // Borrowed: never re-admit, never settle — the outer caller's own
     // try/finally owns settlement of this exact admission end-to-end.
     if (borrowedAdmission.refused) {
