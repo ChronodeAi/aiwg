@@ -22,6 +22,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 
 export interface TranscribeResult {
   ok: boolean;
@@ -142,7 +143,8 @@ export function resolveAdapter(opts: AdapterOptions = {}): VisionAdapter {
 
 export function pdftoppmAvailable(): boolean {
   try {
-    return spawnSync('pdftoppm', ['-v'], { encoding: 'utf8' }).status === 0 || spawnSync('pdftoppm', ['-h'], { encoding: 'utf8' }).status !== null;
+    return boundedSpawnSync('pdftoppm', ['-v'], 'quick', { encoding: 'utf8' }).status === 0
+      || boundedSpawnSync('pdftoppm', ['-h'], 'quick', { encoding: 'utf8' }).status !== null;
   } catch {
     return false;
   }
@@ -160,7 +162,8 @@ export function rasterizePdf(pdfPath: string, outDir: string, dpi = 200): number
   fs.mkdirSync(outDir, { recursive: true });
   // pdftoppm writes <prefix>-<n>.png with its own zero-padding based on page count.
   const prefix = path.join(outDir, 'page');
-  const r = spawnSync('pdftoppm', ['-png', '-r', String(dpi), pdfPath, prefix], { encoding: 'utf8' });
+  // Rasterizing a multi-page PDF can take a while; long tier (#3062).
+  const r = boundedSpawnSync('pdftoppm', ['-png', '-r', String(dpi), pdfPath, prefix], 'long', { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`pdftoppm failed: ${r.stderr || r.status}`);
   // Normalize names to page-NNN.png (3-digit zero-pad).
   let count = 0;

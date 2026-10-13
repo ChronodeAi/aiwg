@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,7 +66,8 @@ function writeProviderMetadata(root, provider, manifest) {
 }
 
 function createDeterministicArchive(sourceDir, archivePath) {
-  const result = spawnSync('tar', [
+  // Packaging a local plugin directory; quick tier (#3062).
+  const result = boundedSpawnSync('tar', [
     '--sort=name',
     '--mtime=@0',
     '--owner=0',
@@ -77,7 +78,7 @@ function createDeterministicArchive(sourceDir, archivePath) {
     '-C',
     path.dirname(sourceDir),
     path.basename(sourceDir),
-  ], { encoding: 'utf8' });
+  ], 'quick', { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`Could not create deterministic archive: ${result.stderr || 'tar failed'}`);
 }
 

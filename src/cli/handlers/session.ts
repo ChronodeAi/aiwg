@@ -19,6 +19,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { existsSync } from 'node:fs';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { ensureRuntimeHome, writeProfileConfig, launchWithProfile } from '../../mcp/adapters/codex-runtime.js';
@@ -136,9 +137,12 @@ async function checkAndUpdateVersion(noRepair: boolean): Promise<boolean> {
  * Uses the same script runner path as doctorHandler to avoid duplication.
  */
 function runDoctor(_frameworkRoot: string, cwd: string): boolean {
-  const result = spawnSync(
+  // Self-invocation of the aiwg binary, not the harness launch below; bounded
+  // as a long-tier call (#3062) since `aiwg doctor` can touch the network.
+  const result = boundedSpawnSync(
     process.execPath,
     [process.argv[1]!, 'doctor'],
+    'long',
     { stdio: 'inherit', cwd },
   );
   return (result.status ?? 1) === 0;
@@ -157,9 +161,12 @@ function repairInstallation(
 ): boolean {
   // Strategy 1: sync (update + redeploy)
   console.log('\n  Attempting auto-repair via `aiwg sync`...');
-  const syncResult = spawnSync(
+  // Self-invocation of the aiwg binary; bounded as a long-tier call (#3062)
+  // since `aiwg sync` updates and redeploys (network + install-shaped work).
+  const syncResult = boundedSpawnSync(
     process.execPath,
     [process.argv[1]!, 'sync'],
+    'long',
     { stdio: 'inherit', cwd },
   );
 
@@ -232,9 +239,11 @@ async function redeployFrameworks(
 
 function injectMcp(provider: string, cwd: string): boolean {
   console.log(`\n  Injecting configured MCP servers into ${provider}...`);
-  const result = spawnSync(
+  // Self-invocation of the aiwg binary; bounded as a long-tier call (#3062).
+  const result = boundedSpawnSync(
     process.execPath,
     [process.argv[1]!, 'mcp', 'inject', '--provider', provider],
+    'long',
     { stdio: 'inherit', cwd },
   );
   if (result.status !== 0) {
@@ -270,9 +279,11 @@ function injectMcpProfile(
 
   if (persist) {
     // Persistent: write to provider's default config
-    const result = spawnSync(
+    // Self-invocation of the aiwg binary; bounded as a long-tier call (#3062).
+    const result = boundedSpawnSync(
       process.execPath,
       [process.argv[1]!, 'mcp', 'inject', '--provider', provider, '--profile', profileName],
+      'long',
       { stdio: 'inherit', cwd },
     );
     if (result.status !== 0) {
@@ -293,7 +304,8 @@ function injectMcpProfile(
   // Claude/others: generate a temp config file
   const tmpPath = `${process.env.TMPDIR ?? '/tmp'}/aiwg-mcp-${profileName}-${provider}-${Date.now()}.json`;
 
-  const result = spawnSync(
+  // Self-invocation of the aiwg binary; bounded as a long-tier call (#3062).
+  const result = boundedSpawnSync(
     process.execPath,
     [
       process.argv[1]!, 'mcp', 'inject',
@@ -302,6 +314,7 @@ function injectMcpProfile(
       '--ephemeral',
       '--out', tmpPath,
     ],
+    'long',
     { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf-8', cwd },
   );
 
@@ -380,6 +393,9 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
     }
   }
 
+  // sync-spawn: interactive harness-launch — hands the terminal to the
+  // provider binary the user is meant to talk to (see tools/testing/
+  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
   const result = spawnSync(cfg.binary!, binaryArgs, {
     stdio: 'inherit',
     env: process.env as Record<string, string>,

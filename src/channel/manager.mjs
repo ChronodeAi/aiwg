@@ -13,9 +13,10 @@ import fs from 'fs/promises';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execFileSync, execSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import os from 'os';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
+import { boundedExecFileSync, boundedExecSync } from '../process/bounded-child-process.mjs';
 import {
   assertCanonicalInstallation,
   createInstallationIdentity,
@@ -300,8 +301,8 @@ export async function switchToEdge() {
         const sparseConfig = path.join(config.edgePath, '.git', 'info', 'sparse-checkout');
         const hasSparse = await fs.access(sparseConfig).then(() => true).catch(() => false);
         if (!hasSparse) {
-          execSync('git sparse-checkout init --cone', { cwd: config.edgePath, stdio: 'pipe' });
-          execSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecSync('git sparse-checkout init --cone', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
         }
       } catch {
         // Sparse checkout is optional — older git may not support it
@@ -319,11 +320,12 @@ export async function switchToEdge() {
     console.log(`Cloning repository to ${config.edgePath}...`);
     await fs.mkdir(path.dirname(config.edgePath), { recursive: true });
     try {
-      execSync(`git clone --branch main ${REPO_URL} "${config.edgePath}"`, { stdio: 'inherit' });
+      // Cloning the full repository; long tier (#3062).
+      boundedExecSync(`git clone --branch main ${REPO_URL} "${config.edgePath}"`, 'long', { stdio: 'inherit' });
       // Exclude dogfooding artifacts from edge clones — users want framework source only
       try {
-        execSync('git sparse-checkout init --cone', { cwd: config.edgePath, stdio: 'pipe' });
-        execSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecSync('git sparse-checkout init --cone', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
       } catch {
         // Sparse checkout is optional — older git versions may not support it
         console.log('Note: sparse checkout not available, .aiwg/ will be present in edge install.');
@@ -419,7 +421,7 @@ export async function switchToNext() {
   console.log('');
 
   try {
-    execFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@next'], { stdio: 'inherit' });
+    boundedExecFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@next'], 'long', { stdio: 'inherit' });
   } catch (error) {
     console.error('Failed to install aiwg@next:', error.message);
     console.error('Check that npm is available and you have write access to the global prefix.');
@@ -453,7 +455,7 @@ export async function switchToNightly() {
   console.log('');
 
   try {
-    execFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@nightly'], { stdio: 'inherit' });
+    boundedExecFileSync(status.identity.managerExecutable, ['install', '--global', 'aiwg@nightly'], 'long', { stdio: 'inherit' });
   } catch (error) {
     console.error('Failed to install aiwg@nightly:', error.message);
     console.error('Check that npm is available and you have write access to the global prefix.');
@@ -570,11 +572,11 @@ export async function getVersionInfo() {
   if (config.channel === 'edge') {
     // Get git info for edge channel
     try {
-      const gitHash = execSync('git rev-parse --short HEAD', {
+      const gitHash = boundedExecSync('git rev-parse --short HEAD', 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();
-      const gitBranch = execSync('git branch --show-current', {
+      const gitBranch = boundedExecSync('git branch --show-current', 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();

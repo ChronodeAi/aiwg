@@ -1,4 +1,41 @@
 {
   "$schema": "https://aiwg.io/schemas/sync-spawn-allowlist.v1.json",
-  "entries": []
+  "entries": [
+    {
+      "file": "src/config/cli.ts",
+      "anchor": "editor-launch",
+      "kind": "interactive",
+      "reason": "Launches $EDITOR/$VISUAL on the config file; the user interacts with it directly."
+    },
+    {
+      "file": "src/mcp/adapters/codex-runtime.ts",
+      "anchor": "codex-exec",
+      "kind": "interactive",
+      "reason": "Hands the terminal to the codex binary the user is meant to talk to."
+    },
+    {
+      "file": "src/mcp/adapters/codex-runtime.ts",
+      "anchor": "codex-login",
+      "kind": "interactive",
+      "reason": "Runs the codex OAuth login flow, which prompts the user directly."
+    },
+    {
+      "file": "src/cli/handlers/session.ts",
+      "anchor": "harness-launch",
+      "kind": "interactive",
+      "reason": "Hands the terminal to the configured provider binary (claude/codex/...) the user is meant to talk to."
+    },
+    {
+      "file": "src/cli/handlers/setup-manifest.ts",
+      "anchor": "manifest-shell-command",
+      "kind": "interactive",
+      "reason": "Runs an arbitrary manifest-author-defined shell command with inherited stdio; it may itself prompt."
+    },
+    {
+      "file": "src/cli/handlers/setup-manifest.ts",
+      "anchor": "manifest-script-step",
+      "kind": "interactive",
+      "reason": "Runs an arbitrary manifest-author-defined script file with inherited stdio; it may itself prompt."
+    }
+  ]
 }

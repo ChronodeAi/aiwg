@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import {
   accessSync,
   constants,
@@ -50,7 +50,7 @@ function resolveExecutable(name, options = {}) {
   if (existsSync(besideNode)) return canonicalPath(besideNode);
   try {
     const finder = process.platform === 'win32' ? 'where.exe' : 'which';
-    const found = execFileSync(finder, [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const found = boundedExecFileSync(finder, [name], 'quick', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .split(/\r?\n/, 1)[0]?.trim();
     return found ? canonicalPath(found) : null;
   } catch {

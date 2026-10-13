@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { FEATURE_CATALOG, getFeature, type FeatureDefinition } from './catalog.js';
@@ -69,9 +69,10 @@ export async function installFeature(name: string, options: InstallFeatureOption
   await prepareFeatureManifest(feature, root);
 
   const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm');
-  const result = spawnSync(
+  const result = boundedSpawnSync(
     npmCommand,
     ['install', '--prefix', root, '--no-audit', '--no-fund'],
+    'long',
     { stdio: 'inherit', env: process.env },
   );
   if (result.error) throw result.error;

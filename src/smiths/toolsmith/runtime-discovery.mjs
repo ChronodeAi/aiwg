@@ -8,6 +8,7 @@
  */
 
 import { execSync } from 'child_process';
+import { boundedExecSync } from '../../process/bounded-child-process.mjs';
 import { readFile, writeFile, mkdir, access } from 'fs/promises';
 import { existsSync, constants } from 'fs';
 import { resolve, join, dirname } from 'path';
@@ -140,10 +141,10 @@ export class RuntimeDiscovery {
           }
         }
       } else if (os === 'darwin') {
-        const version = execSync('sw_vers -productVersion', { encoding: 'utf-8' }).trim();
+        const version = boundedExecSync('sw_vers -productVersion', 'quick', { encoding: 'utf-8' }).trim();
         osVersion = `macOS ${version}`;
       } else if (os === 'win32') {
-        osVersion = execSync('ver', { encoding: 'utf-8' }).trim();
+        osVersion = boundedExecSync('ver', 'quick', { encoding: 'utf-8' }).trim();
       }
     } catch (error) {
       console.warn('Could not detect OS version:', error.message);
@@ -172,7 +173,7 @@ export class RuntimeDiscovery {
       // Disk space
       if (platform() === 'win32') {
         // Windows: use wmic
-        const output = execSync('wmic logicaldisk get size,freespace', { encoding: 'utf-8' });
+        const output = boundedExecSync('wmic logicaldisk get size,freespace', 'quick', { encoding: 'utf-8' });
         const lines = output.trim().split('\n').slice(1);
         let totalFree = 0;
         for (const line of lines) {
@@ -184,7 +185,7 @@ export class RuntimeDiscovery {
         diskFreeGb = Math.round((totalFree / (1024 ** 3)) * 10) / 10;
       } else {
         // Unix: use df
-        const output = execSync('df -k .', { encoding: 'utf-8' });
+        const output = boundedExecSync('df -k .', 'quick', { encoding: 'utf-8' });
         const lines = output.trim().split('\n');
         if (lines.length > 1) {
           const parts = lines[1].trim().split(/\s+/);
@@ -365,7 +366,7 @@ export class RuntimeDiscovery {
   async #findToolPath(toolName) {
     try {
       const cmd = platform() === 'win32' ? 'where' : 'which';
-      const path = execSync(`${cmd} ${toolName}`, { encoding: 'utf-8' })
+      const path = boundedExecSync(`${cmd} ${toolName}`, 'quick', { encoding: 'utf-8' })
         .trim()
         .split('\n')[0];
       return path;
@@ -503,7 +504,7 @@ export class RuntimeDiscovery {
     if (platform() === 'win32') return undefined;
 
     try {
-      const manPath = execSync(`man -w ${toolName}`, {
+      const manPath = boundedExecSync(`man -w ${toolName}`, 'quick', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       }).trim();

@@ -317,12 +317,12 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       console.log(`  State:     ${installation.state}`);
 
       // Scheduler backend detection
-      const { execSync } = await import('child_process');
+      const { boundedExecSync } = await import('../../process/bounded-child-process.mjs');
       let schedulerBackend = 'external trigger required (system cron/systemd/CI)';
       let chronyInstalled = false;
 
       try {
-        execSync('which chronyc 2>/dev/null || which chronyd 2>/dev/null', { stdio: 'pipe' });
+        boundedExecSync('which chronyc 2>/dev/null || which chronyd 2>/dev/null', 'quick', { stdio: 'pipe' });
         chronyInstalled = true;
       } catch {
         // chrony not found

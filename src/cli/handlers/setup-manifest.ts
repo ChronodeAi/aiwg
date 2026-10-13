@@ -729,6 +729,10 @@ function commandResult(status: number | null): { ok: boolean; status: number } {
 }
 
 function runShell(command: string, cwd: string, env: NodeJS.ProcessEnv): { ok: boolean; status: number } {
+  // sync-spawn: interactive manifest-shell-command — runs an arbitrary
+  // manifest-author-defined shell command with inherited stdio; it may
+  // itself prompt (see tools/testing/sync-spawn-allowlist.json). Not a
+  // candidate for a bounded timeout.
   const result = spawnSync(command, { cwd, env, shell: true, stdio: 'inherit' });
   return commandResult(result.status);
 }
@@ -754,6 +758,10 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
       console.error(`setup-run: refusing destructive step '${step.id}' without --yes/--confirm`);
       return { ok: false, status: 2, failedStep: step.id };
     }
+    // sync-spawn: interactive manifest-script-step — runs an arbitrary
+    // manifest-author-defined script file with inherited stdio; it may
+    // itself prompt (see tools/testing/sync-spawn-allowlist.json). Not a
+    // candidate for a bounded timeout.
     const result = spawnSync(scriptPath, [], { cwd: manifestDir, env, stdio: 'inherit' });
     const ran = commandResult(result.status);
     if (!ran.ok) return { ...ran, failedStep: step.id };

@@ -20,6 +20,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncReturns } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { buildServerToml, type McpServerDefinition } from '../registry.js';
 import { assertCredentialPolicy, resolveCredentialPolicy, type McpCredentialPolicy } from '../credentials.mjs';
 import { planToolFilters, type ToolFilters } from '../tool-filters.mjs';
@@ -207,6 +208,9 @@ export function launchWithProfile(
     CODEX_HOME: rtHome,
   };
 
+  // sync-spawn: interactive codex-exec — replaces the terminal with the codex
+  // binary the user is meant to talk to (see tools/testing/
+  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
   return spawnSync('codex', extraArgs, {
     stdio: 'inherit',
     env,
@@ -223,6 +227,9 @@ export async function loginInProfile(profile: string): Promise<void> {
   console.log(`\n  Running codex login in profile "${profile}" runtime home...`);
   console.log(`  Auth tokens will be isolated to: ${rtHome}\n`);
 
+  // sync-spawn: interactive codex-login — runs the codex OAuth login flow,
+  // which prompts the user directly (see tools/testing/
+  // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
   const result = spawnSync('codex', ['login'], {
     stdio: 'inherit',
     env: {
@@ -281,7 +288,8 @@ export async function removeRuntimeHome(profile: string): Promise<boolean> {
   const rtHome = runtimeHomePath(profile);
   if (!existsSync(rtHome)) return false;
 
-  const result = spawnSync('rm', ['-rf', rtHome], { stdio: 'inherit' });
+  // Local filesystem delete; bounded as a quick-tier call (#3062).
+  const result = boundedSpawnSync('rm', ['-rf', rtHome], 'quick', { stdio: 'inherit' });
   return result.status === 0;
 }
 

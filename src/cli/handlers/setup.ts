@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { existsSync } from 'fs';
 import type { Interface as ReadlineInterface } from 'readline';
 import type {
@@ -189,7 +189,7 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
 }
 
 export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
-  const result = spawnSync('git', ['-C', projectDir, 'remote', '-v'], {
+  const result = boundedSpawnSync('git', ['-C', projectDir, 'remote', '-v'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -210,14 +210,14 @@ export function detectGitRemotes(projectDir: string): GitRemoteInfo[] {
 }
 
 function detectDefaultBranch(projectDir: string): string {
-  const symbolic = spawnSync('git', ['-C', projectDir, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
+  const symbolic = boundedSpawnSync('git', ['-C', projectDir, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const fromOrigin = symbolic.stdout.trim().replace(/^origin\//, '');
   if (symbolic.status === 0 && fromOrigin) return fromOrigin;
 
-  const branch = spawnSync('git', ['-C', projectDir, 'branch', '--show-current'], {
+  const branch = boundedSpawnSync('git', ['-C', projectDir, 'branch', '--show-current'], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -225,7 +225,7 @@ function detectDefaultBranch(projectDir: string): string {
 }
 
 function gitConfig(projectDir: string, key: string): string | undefined {
-  const result = spawnSync('git', ['-C', projectDir, 'config', '--get', key], {
+  const result = boundedSpawnSync('git', ['-C', projectDir, 'config', '--get', key], 'quick', {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });

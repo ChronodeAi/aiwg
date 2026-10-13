@@ -10,6 +10,7 @@
  */
 
 import { execSync } from 'child_process';
+import { boundedExecSync } from '../../process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 import type { RegistryAdapter, SkillResult, SkillDetails, InstallOptions } from '../types.js';
@@ -158,7 +159,7 @@ export class OpenClawAdapter implements RegistryAdapter {
     if (fs.existsSync(openclawDir)) return true;
 
     try {
-      execSync('openclaw --version 2>/dev/null', { encoding: 'utf-8' });
+      boundedExecSync('openclaw --version 2>/dev/null', 'quick', { encoding: 'utf-8' });
       return true;
     } catch {
       return false;

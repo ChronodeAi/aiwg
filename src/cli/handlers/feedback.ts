@@ -20,7 +20,7 @@
  * @issue #885
  */
 
-import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import os from 'os';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { readAiwgConfig } from '../../config/aiwg-config.js';
@@ -86,7 +86,7 @@ async function collectSystemContext(cwd: string): Promise<SystemContext> {
   // aiwg version from package.json if available
   let aiwgVersion = 'unknown';
   try {
-    const r = spawnSync(process.execPath, [process.argv[1]!, 'version'], {
+    const r = boundedSpawnSync(process.execPath, [process.argv[1]!, 'version'], 'quick', {
       encoding: 'utf-8',
       stdio: 'pipe',
     });
@@ -278,7 +278,7 @@ async function promptSelect(question: string, options: string[], signal?: AbortS
 
 function hasGhCli(): boolean {
   try {
-    const r = spawnSync('gh', ['--version'], { stdio: 'pipe' });
+    const r = boundedSpawnSync('gh', ['--version'], 'quick', { stdio: 'pipe' });
     return r.status === 0;
   } catch {
     return false;
@@ -287,9 +287,11 @@ function hasGhCli(): boolean {
 
 function submitViaGh(title: string, body: string, type: FeedbackType): boolean {
   const label = type === 'bug' ? 'bug' : type === 'feature' ? 'enhancement' : type === 'doc' ? 'documentation' : 'feedback';
-  const result = spawnSync(
+  // Creates a GitHub issue via the `gh` CLI (network call); network tier (#3062).
+  const result = boundedSpawnSync(
     'gh',
     ['issue', 'create', '--repo', GITHUB_REPO, '--title', title, '--body', body, '--label', label],
+    'network',
     { stdio: 'inherit' },
   );
   return result.status === 0;
@@ -310,7 +312,8 @@ function submitViaBrowser(title: string, body: string): void {
       : process.platform === 'win32'
         ? 'start'
         : 'xdg-open';
-    spawnSync(openCmd, [urlStr], { stdio: 'ignore' });
+    // Fire-and-forget local browser launch; quick tier (#3062).
+    boundedSpawnSync(openCmd, [urlStr], 'quick', { stdio: 'ignore' });
     console.log(`\n  Opened GitHub in your browser to file the issue.`);
     console.log(`  If the browser did not open, visit:\n  ${urlStr}`);
   } catch {

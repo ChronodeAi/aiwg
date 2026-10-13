@@ -703,6 +703,9 @@ async function handleEdit(config: UserConfig): Promise<void> {
 
   const { execSync } = await import('child_process');
   try {
+    // sync-spawn: interactive editor-launch — launches $EDITOR/$VISUAL on the
+    // config file; the user interacts with it directly (see tools/testing/
+    // sync-spawn-allowlist.json). Not a candidate for a bounded timeout.
     execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
   } catch (err) {
     throw new AiwgError({
@@ -743,7 +746,7 @@ For project-level config: aiwg config show --project [--json]
 
   // Lazy-import to keep startup cost low for unrelated subcommands.
   const { readAiwgConfig, resolveRemotes, getProjectDir } = await import('./aiwg-config.js');
-  const { spawnSync } = await import('child_process');
+  const { boundedSpawnSync } = await import('../process/bounded-child-process.mjs');
 
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
@@ -761,7 +764,7 @@ For project-level config: aiwg config show --project [--json]
 
   // Resolve each declared remote name to its URL via git. Best-effort.
   function getUrl(name: string): string | null {
-    const r = spawnSync('git', ['-C', projectDir, 'remote', 'get-url', name], {
+    const r = boundedSpawnSync('git', ['-C', projectDir, 'remote', 'get-url', name], 'quick', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -854,13 +857,14 @@ For project-level config: aiwg config show --project [--json]
 }
 
 async function handleGitignore(args: string[]): Promise<void> {
-  const { spawnSync } = await import('child_process');
+  const { boundedSpawnSync } = await import('../process/bounded-child-process.mjs');
   // Locate the gitignore CLI script relative to this compiled module
   // (#1228). At runtime this module lives at `dist/src/config/cli.js`,
   // so we need three `..` segments to reach the package root where
   // `tools/cli/` is shipped (see package.json `files`).
   const scriptPath = path.resolve(_scriptDir, '../../../tools/cli/config-gitignore.mjs');
-  const result = spawnSync(process.execPath, [scriptPath, ...args], { stdio: 'inherit' });
+  // Local script editing .gitignore blocks; quick tier (#3062).
+  const result = boundedSpawnSync(process.execPath, [scriptPath, ...args], 'quick', { stdio: 'inherit' });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }

@@ -31,8 +31,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Interactive-by-design calls (an editor, a login flow, handing the terminal to a harness binary) are
   exempted via a `// sync-spawn: interactive <anchor>` comment at the call site paired with an entry
   in `tools/testing/sync-spawn-allowlist.json`; the gate fails (even in report mode) on a stale
-  allow-list entry or one with an unsupported `kind`. The allow-list starts empty; no call sites are
-  exempted yet.
+  allow-list entry or one with an unsupported `kind`.
+- Every non-interactive synchronous child-process call under `src/` now goes through the bounded
+  helper above, each with a tier chosen by what the command does (local query, network call, or
+  install/clone/build-shaped work) rather than where the call site lives (#3062). The remaining
+  interactive sites (an editor, codex exec/login, the configured provider binary, and arbitrary
+  manifest-defined shell commands/scripts) are unchanged and documented in the allow-list.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is

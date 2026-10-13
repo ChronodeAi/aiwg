@@ -8,7 +8,7 @@
  */
 
 import fs from 'fs';
-import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
 import fsp from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
@@ -622,7 +622,7 @@ async function collectFiles(
 function dropGitignored(targetDir: string, files: string[]): string[] {
   if (files.length === 0) return files;
   try {
-    const result = spawnSync('git', ['check-ignore', '--stdin'], {
+    const result = boundedSpawnSync('git', ['check-ignore', '--stdin'], 'quick', {
       cwd: targetDir,
       input: `${files.join('\n')}\n`,
       encoding: 'utf8',

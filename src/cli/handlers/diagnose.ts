@@ -28,6 +28,7 @@ import { getLoggerInfo } from '../log.js';
 import { readAiwgConfig, getProjectDir } from '../../config/aiwg-config.js';
 import { getLogger } from '../log.js';
 import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -92,7 +93,8 @@ export const diagnoseHandler: CommandHandler = {
 
       // tar it up via system tar. We rely on GNU/BSD tar being present;
       // degrade gracefully if not.
-      const tar = spawnSync('tar', ['-czf', outPath, '-C', stage, '.'], { stdio: 'pipe' });
+      // Packaging a small local diagnostics bundle; quick tier (#3062).
+      const tar = boundedSpawnSync('tar', ['-czf', outPath, '-C', stage, '.'], 'quick', { stdio: 'pipe' });
       if (tar.status !== 0) {
         ui.error(`tar failed: ${tar.stderr?.toString() ?? '(no stderr)'}`);
         ui.info(`Bundle contents staged at: ${stage}`);
