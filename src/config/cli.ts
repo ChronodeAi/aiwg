@@ -23,6 +23,7 @@ import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
 import { isInteractive } from '../cli/env.js';
+import { exitCodeForSpawnResult } from '../cli/child-process-result.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -894,6 +895,14 @@ async function handleGitignore(args: string[]): Promise<void> {
   // Local script editing .gitignore blocks; quick tier (#3062).
   const result = boundedSpawnSync(process.execPath, [scriptPath, ...args], 'quick', { stdio: 'inherit' });
   if (result.status !== 0) {
+    // #3062 review item 7: already correctly treats a null status
+    // (timeout/signal) as failure (`process.exit(result.status ?? 1)`
+    // below); surface the bounded helper's diagnostic too — `stdio:
+    // 'inherit'` means a normal script failure already printed its own
+    // output, but a bounded-helper timeout/kill would otherwise never be
+    // reported anywhere.
+    const { message } = exitCodeForSpawnResult(result, 'aiwg config gitignore');
+    if (message) console.error(message);
     process.exit(result.status ?? 1);
   }
 }

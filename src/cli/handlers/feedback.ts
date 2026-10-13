@@ -26,6 +26,7 @@ import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { readAiwgConfig } from '../../config/aiwg-config.js';
 import { createPromptInterface, askString, askChoice } from '../prompt-utils.js';
 import { debug } from '../log.js';
+import { exitCodeForSpawnResult } from '../child-process-result.js';
 
 // ── GitHub repo ───────────────────────────────────────────────────────────────
 
@@ -294,6 +295,11 @@ function submitViaGh(title: string, body: string, type: FeedbackType): boolean {
     'network',
     { stdio: 'inherit' },
   );
+  // #3062 review item 7: already correctly treats a null status
+  // (timeout/signal) as failure; surface the bounded helper's diagnostic
+  // under AIWG_DEBUG — the caller falls back to the browser either way.
+  const { message } = exitCodeForSpawnResult(result, 'gh issue create');
+  if (message) debug('cli:feedback:gh', message);
   return result.status === 0;
 }
 
