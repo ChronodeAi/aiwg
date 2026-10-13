@@ -49,7 +49,7 @@ The diagnostic names the file and invalid field. Common causes are:
 - `conformance` without both `validation.hook` and `validation.standardVersion`;
 - an extra field not defined by the schema.
 
-Compare the profile with [the custom-profile guide](./custom-output-modes.md) and [the schema](../schemas/output-mode-profile.schema.json).
+Compare the profile with [the custom-profile guide](./custom-output-modes.md) and the output-mode-profile schema.
 
 ## Two modes conflict
 

@@ -92,7 +92,7 @@ Agent loops support multi-provider execution. While Warp context is deployed via
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation including `--provider` options.
 
 ---
 
@@ -132,4 +132,4 @@ MCP servers in Warp are configured via the UI, not via a file. Add AIWG as an MC
 
 Alternatively, open Settings and add the MCP server from there.
 
-See the [Warp MCP Sidecar Guide](warp-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
+See the [Warp MCP Sidecar Guide](../../integrations/warp-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.

@@ -131,7 +131,7 @@ Run `opencode models` to list available models.
 aiwg ralph "Fix all tests" --completion "npm test passes" --provider opencode --model anthropic/claude-sonnet-5
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation.
 
 ---
 
@@ -162,4 +162,4 @@ aiwg mcp serve
 aiwg mcp install opencode
 ```
 
-See the [OpenCode MCP Sidecar Guide](opencode-mcp-sidecar.md) for complete setup.
+See the [OpenCode MCP Sidecar Guide](../../integrations/opencode-mcp-sidecar.md) for complete setup.

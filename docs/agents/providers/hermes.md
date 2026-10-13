@@ -264,7 +264,7 @@ flowchart TB
   class HLOAD,ALOAD,CLOAD,RLOAD winner
 ```
 
-![Polished version (placeholder — generate from #1248 prompts)](../architecture-overview/images/06-hermes-resolver.png)
+(Polished version - placeholder to be generated from #1248 prompts)
 
 > **Each context source is capped at 20,000 chars** (`CONTEXT_FILE_MAX_CHARS` in v0.13.0 `agent/prompt_builder.py:824`). Above that, head/tail truncation kicks in with a `[...truncated]` marker. The thin `.hermes.md` AIWG emits (~450 chars) is well under the cap, and the deployed `AGENTS.md` (which inlines top-7 CRITICAL rule priming as `### Rule:` sections) is currently well below the hard cap.
 
@@ -659,7 +659,7 @@ Hermes hosts plugins at `plugins/` (kanban, memory, observability, disk-cleanup,
 
 - [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs)
 - [AIWG MCP server reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md#mcp)
-- [Local models guide](../models/local-models.md)
+- [Local models guide](../../models/local-models.md)
 - [agentskills.io skill standard](https://agentskills.io)
 - Integration plan: `.aiwg/planning/hermes-aiwg-integration-plan.md`
 - Context research: `.aiwg/planning/hermes-context-research.md`

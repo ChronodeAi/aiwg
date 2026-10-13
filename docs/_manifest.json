@@ -128,7 +128,7 @@
     "user-level-project-memory",
     "local-issues",
     "issue-label-taxonomy",
-    "ralph-guide",
+    "agent-loop-guide",
     "simple-language-translations",
     "mention-utilities",
     "deploy-generators",
@@ -1047,10 +1047,10 @@
       "parent": "reference"
     },
     {
-      "id": "ralph-guide",
+      "id": "agent-loop-guide",
       "title": "Agent Loop Guide",
       "summary": "Iterative AI task execution with automatic recovery",
-      "file": "ralph-guide.md",
+      "file": "agent-loop-guide.md",
       "parent": "reference"
     },
     {
