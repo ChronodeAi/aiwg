@@ -9,7 +9,6 @@
  *
  * Usage: node tools/decision/ccp-qualification-evidence.mjs
  */
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,6 +18,9 @@ import {
   executeQualificationPlan, pairedPreparationLatencyInterval, prepareAdapterRequest, verifyQualificationArtifacts,
   writeQualificationEvidenceManifest, DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION,
 } from '../../dist/src/decision/index.js';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = process.cwd();
 const evidenceRoot = 'docs/decision/evidence/compile-cache-ccp-v1';

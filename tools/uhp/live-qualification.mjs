@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'node:path';
 import process from 'node:process';
 import { UhpClient, UHP_VERSION, resolveUhpProfile } from '../../dist/src/uhp/index.js';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function option(name) {
   const index = process.argv.indexOf(name);

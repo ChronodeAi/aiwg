@@ -10,8 +10,10 @@
  */
 
 import { spawnSync } from 'child_process';
-import { boundedSpawnSync } from '../../../src/process/bounded-child-process.mjs';
 import { existsSync, readFileSync } from 'fs';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * Escalation levels

@@ -7,8 +7,10 @@
  * @module tools/ralph/ralph-abort
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { MultiLoopStateManager } from './state-manager-sync.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function displayActiveLoops(stateManager) {
   const activeLoops = stateManager.listActiveLoops();

@@ -1,11 +1,13 @@
 // Opt-in component qualification against the owned agentic-sandbox issuer fixture.
 import assert from 'node:assert/strict';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import { createKeycloakDesktopVerifier, desktopBrowserAudience } from '../../apps/cockpit/bridge/src/desktop-identity-keycloak.mjs';
 import { createDesktopIssuerTransport } from '../../apps/cockpit/bridge/src/desktop-issuer-transport.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = resolve(process.argv[2] ?? '');
 assert(process.argv[2], 'Owned fixture directory required');

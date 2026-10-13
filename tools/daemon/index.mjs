@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createClient } from './ipc-client.mjs';
 import { TmuxManager, formatStatusDashboard } from './tmux-manager.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -811,7 +812,7 @@ Options:
         if (useTmux) {
           try {
             const { execFileSync } = await import('child_process');
-            const { boundedExecSync } = await import('../../src/process/bounded-child-process.mjs');
+            const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
             const { createHash, randomBytes } = await import('crypto');
             const { PTYAdapter } = await import('./pty-adapter.mjs');
 
@@ -943,7 +944,7 @@ Options:
           // Also stop tmux session if one was created
           if (session.tmuxSession) {
             try {
-              const { boundedExecSync } = await import('../../src/process/bounded-child-process.mjs');
+              const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
               boundedExecSync(`tmux kill-session -t ${session.tmuxSession} 2>/dev/null`, 'quick', { stdio: 'ignore' });
             } catch { /* tmux session may already be gone */ }
           }

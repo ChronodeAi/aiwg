@@ -10,8 +10,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { EventEmitter } from 'node:events';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 export class TmuxManager extends EventEmitter {
   constructor(options = {}) {

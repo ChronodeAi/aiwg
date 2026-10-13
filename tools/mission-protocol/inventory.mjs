@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const baselinePath = path.join(root, 'schemas/mission-protocol/inventory-v1.json');

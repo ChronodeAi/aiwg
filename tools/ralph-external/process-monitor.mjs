@@ -12,12 +12,31 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
 import { hostname } from 'node:os';
 import { join, dirname } from 'path';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { constants } from 'node:fs';
 import { open, opendir, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createWorkerHealthObserver } from './lib/worker-health.mjs';
+
+// This module is loaded standalone in some contexts (e.g. staged/partial
+// installs, or copied in isolation for a test) without its sibling
+// tools/_resolve-impl.mjs, or without src/dist/ nearby for it to resolve.
+// boundedExecFileSync is only needed by getProcessHealth()'s `ps` sampling
+// below; degrade that one feature instead of failing to load this module
+// at all for everything else (#3062 finding 1 — regression covered by
+// `WS19 staged installed monitor loads with no src/dist or MC state` in
+// test/conformance/orchestration-v1/worker-status.test.ts). The
+// `../_resolve-impl.mjs` import itself must be dynamic here, not a
+// top-level static import: a missing *static* import specifier fails
+// module linking before any of this module's own code (including a
+// try/catch) ever runs.
+let boundedExecFileSync = null;
+try {
+  const { importImpl } = await import('../_resolve-impl.mjs');
+  ({ boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs'));
+} catch {
+  boundedExecFileSync = null;
+}
 
 /** Side-effect-free Linux sample. Unknown identity never grants signal authority. */
 export function sampleWorkerIdentity(pid) {
@@ -312,6 +331,8 @@ export class ProcessMonitor extends EventEmitter {
         status: 'dead',
       };
     }
+
+    if (!boundedExecFileSync) return null; // degraded standalone load (see module header) — no bounded helper available
 
     try {
       // Use ps command to get process stats

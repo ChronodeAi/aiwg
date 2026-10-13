@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = resolve(import.meta.dirname, '../..');
 const output = resolve(root, 'schemas/catalog/domains/repository-json-schemas.json');

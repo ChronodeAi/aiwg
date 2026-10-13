@@ -9,9 +9,10 @@ import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { boundedExecFileSync, boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync, boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,

@@ -11,6 +11,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { glob } from 'glob';
+import { importImpl } from '../_resolve-impl.mjs';
 
 /**
  * Migration validation error
@@ -137,7 +138,7 @@ export class MigrationTool {
       const requiredSpace = aiwgSize * 2; // Need 2x for backup
 
       // Get available disk space (platform-specific)
-      const { boundedExecSync } = await import('../../src/process/bounded-child-process.mjs');
+      const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
       let availableBytes;
 
       if (process.platform === 'win32') {

@@ -10,10 +10,11 @@
 
 import os from 'os';
 import { readFileSync } from 'fs';
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 // Markers a current Claude Code session actually sets (CLI and Desktop Code
 // tab); mirrors the `claude` provider's `detection.env` in

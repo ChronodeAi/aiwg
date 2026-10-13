@@ -23,9 +23,11 @@
  */
 
 import { readFileSync } from 'fs';
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = process.cwd();
 const tempRoot = mkdtempSync(join(tmpdir(), 'aiwg-feature-export-package-'));

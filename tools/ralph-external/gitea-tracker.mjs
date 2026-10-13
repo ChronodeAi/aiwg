@@ -7,10 +7,12 @@
  * @implements @.aiwg/requirements/design-ralph-external.md
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const GITEA_TOKEN_PATH = join(homedir(), '.config', 'gitea', 'token');
 const GITEA_API_BASE = 'https://git.integrolabs.net/api/v1';

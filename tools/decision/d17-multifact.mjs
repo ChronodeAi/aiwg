@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /** D17-MF calibrated multi-fact probe (#2850). Offline by default; collection uses tools/decision/heldout-study.mjs. */
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, writeFile, realpath } from 'node:fs/promises';
 import { resolve, join, relative, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { register } from 'tsx/esm/api';
+import { importImpl } from '../_resolve-impl.mjs';
+
 register();
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;

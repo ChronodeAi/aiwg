@@ -12,7 +12,9 @@
  * @issue #683 (missing file caused aiwg sync to exit 254 silently)
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function parseArg(args, flag) {
   const idx = args.indexOf(flag);
