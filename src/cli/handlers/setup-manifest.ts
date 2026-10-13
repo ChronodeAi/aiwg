@@ -10,6 +10,8 @@ import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { sha256 } from '../../security/artifact-trust.js';
 import type { ArtifactVerificationResult } from '../../security/artifact-verifier.js';
 import { artifactVerifyHandler } from './artifact-verify.js';
+import { requireFlagValue, MissingFlagValueError } from '../flag-parsing.js';
+import { exitCodeForSpawnResult } from '../child-process-result.js';
 
 type Severity = 'error' | 'warning';
 
@@ -192,16 +194,27 @@ Safety:
   Mutating execution refuses to run without explicit confirmation.
   Provider-orchestrated manifests are never handed to an agent unless their
   exact bytes have status verified under the explicit trust policy.
+
+Headless input steps (#3062):
+  A 'type: ask' step resolves its declared 'params' the same way a 'script'
+  step's env vars do (--param/--params-file/env/default); if every declared
+  param is already resolved it runs headless, otherwise it is refused,
+  naming the missing param names — this CLI has no interactive-capture
+  mechanism for 'ask' steps, with or without a terminal. A step marked
+  'interactive: true' runs an arbitrary script whose questions cannot be
+  enumerated; without a terminal it is refused outright. Every selected
+  step (including nested 'platform-route' steps) is preflighted for both
+  conditions before any step executes — never partway through.
 `;
 
+/**
+ * A value-taking flag present without a usable value is a usage error, not
+ * "not given" (#3062 review item 11) — delegates to the shared strict
+ * parser. Callers (the three handlers below) catch `MissingFlagValueError`
+ * and report it before any preflight check, spawn, or write.
+ */
 function flagValue(args: readonly string[], name: string): string | undefined {
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === name) {
-      const value = args[i + 1];
-      return value && !value.startsWith('--') ? value : undefined;
-    }
-  }
-  return undefined;
+  return requireFlagValue(args, name);
 }
 
 function hasFlag(args: readonly string[], ...names: string[]): boolean {
@@ -732,9 +745,17 @@ function planLines(manifest: SetupManifest, manifestPath: string, target: Return
   return lines.join('\n') + '\n';
 }
 
-function commandResult(status: number | null): { ok: boolean; status: number } {
-  const code = status === null ? 1 : status;
-  return { ok: code === 0, status: code };
+/**
+ * #3062 review item 7: a `null` status already falls through to `code = 1`
+ * (not success); this also surfaces the bounded helper's `error`/`signal`
+ * diagnostic (e.g. the enriched timeout message naming the bound and
+ * override variable) instead of silently dropping it.
+ */
+function commandResult(result: { status: number | null; error?: Error | null; signal?: NodeJS.Signals | null }): { ok: boolean; status: number } {
+  const outcome = exitCodeForSpawnResult(result);
+  if (outcome.message) console.error(`[setup] ${outcome.message}`);
+  const code = result.status === null ? 1 : result.status;
+  return { ok: code === 0 && !result.error && !result.signal, status: code };
 }
 
 /**
@@ -750,7 +771,7 @@ function runShell(command: string, cwd: string, env: NodeJS.ProcessEnv): { ok: b
     const result = boundedSpawnSync(command, [], 'long', {
       cwd, env, shell: true, stdio: ['ignore', 'inherit', 'inherit'],
     });
-    return commandResult(result.status);
+    return commandResult(result);
   }
   // sync-spawn: interactive manifest-shell-command — runs an arbitrary
   // manifest-author-defined shell command with inherited stdio; it may
@@ -758,7 +779,7 @@ function runShell(command: string, cwd: string, env: NodeJS.ProcessEnv): { ok: b
   // only when isInteractive() is true (#3062) — the no-terminal path above
   // uses the bounded helper instead. Not a candidate for a bounded timeout.
   const result = spawnSync(command, { cwd, env, shell: true, stdio: 'inherit' });
-  return commandResult(result.status);
+  return commandResult(result);
 }
 
 function isDestructiveScript(filePath: string): boolean {
@@ -769,13 +790,97 @@ function isDestructiveScript(filePath: string): boolean {
   return /\brm\s+-rf\b|\b(cp|mv)\s+-f\b|>\s*\S+/.test(text);
 }
 
+/**
+ * Param names a `type: ask` step resolves (#3062 review item 10). Reuses
+ * the same `params` field `type: script` steps already use to pass env
+ * vars — there is no separate "ask step input" field in the schema, and
+ * this is the same mechanism, just read by the `ask` branch below instead
+ * of passed to a script.
+ */
+function askStepParams(step: SetupStep): string[] {
+  return step.params ?? [];
+}
+
+/** Which of an `ask` step's declared params are not yet resolved (missing from `--param`/params-file/env/default). */
+function missingAskParams(step: SetupStep, params: Record<string, string>): string[] {
+  return askStepParams(step).filter((name) => params[name] === undefined);
+}
+
+/**
+ * Preflight every selected step (recursively into `platform-route` nested
+ * steps) for conditions that would block it from running at all, and
+ * return one message per blocker — never a partial list halted at the
+ * first step (#3062 review item 13: refusal must happen before ANY step
+ * executes, not inside the per-step sequential loop).
+ *
+ *   - `interactive: true` without a terminal: its prompts cannot be
+ *     enumerated or supplied via `--param` at all (review item 10) — an
+ *     arbitrary script's questions are not statically knowable.
+ *   - `type: ask` with no declared `params`, or with declared params not
+ *     all resolved: this CLI has no interactive capture mechanism for
+ *     `ask` steps (none exists in this codebase to reuse, so refusing is
+ *     the documented behavior rather than a guess — see the module doc on
+ *     `runStep`'s `ask` branch) — missing names are reported so `--param`
+ *     can supply them.
+ *
+ * Recovery steps are deliberately not preflighted here: which recovery
+ * procedure (if any) runs is only known after a step fails, so `runStep`
+ * re-checks the same two conditions for them individually, immediately
+ * before each recovery step actually executes.
+ */
+function collectPreflightBlockers(
+  steps: SetupStep[],
+  targetOs: string,
+  params: Record<string, string>,
+  terminalPresent: boolean,
+): string[] {
+  const blockers: string[] = [];
+  for (const step of steps) {
+    if (!stepPlatformMatches(targetOs, step)) continue;
+    if (step.interactive && !terminalPresent) {
+      blockers.push(
+        `step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied via --param) ` +
+        'and requires a terminal',
+      );
+    }
+    if (step.type === 'ask') {
+      const names = askStepParams(step);
+      if (names.length === 0) {
+        blockers.push(
+          `ask step '${step.id}' declares no params to resolve via --param; interactive capture for ask ` +
+          "steps is not implemented — declare 'params' on the step and supply them with --param <name>=<value>",
+        );
+      } else {
+        const missing = missingAskParams(step, params);
+        if (missing.length > 0) {
+          blockers.push(
+            `ask step '${step.id}' is missing required param(s): ${missing.join(', ')} (supply with --param ` +
+            '<name>=<value>; interactive capture for ask steps is not implemented)',
+          );
+        }
+      }
+    }
+    if (step.type === 'platform-route') {
+      const route = step.routes?.find((item) => item.platform === targetOs);
+      if (route) blockers.push(...collectPreflightBlockers(route.steps, targetOs, params, terminalPresent));
+    }
+  }
+  return blockers;
+}
+
 function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, params: Record<string, string>, targetOs: string, confirmed: boolean, recovery = false): { ok: boolean; status: number; failedStep?: string } {
   if (!stepPlatformMatches(targetOs, step)) return { ok: true, status: 0 };
   // A step marked `interactive: true` (#3062) declares that it prompts
   // directly; refuse it up front without a terminal instead of letting it
-  // run and fail at an arbitrary bounded timeout.
+  // run and fail at an arbitrary bounded timeout. For a top-level selected
+  // step this is already caught by `collectPreflightBlockers` before any
+  // step runs (review item 13); this remains the only gate for a recovery
+  // step, which isn't known until a step actually fails.
   if (step.interactive && !isInteractive()) {
-    console.error(`setup-run: step '${step.id}' is marked interactive and requires a terminal; re-run from an interactive shell.`);
+    console.error(
+      `setup-run: step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied via ` +
+      '--param) and requires a terminal; re-run from an interactive shell.',
+    );
     return { ok: false, status: 2, failedStep: step.id };
   }
   const env = { ...process.env, ...params };
@@ -801,7 +906,7 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
       // timeout.
       ? spawnSync(scriptPath, [], { cwd: manifestDir, env, stdio: 'inherit' })
       : boundedSpawnSync(scriptPath, [], 'long', { cwd: manifestDir, env, stdio: ['ignore', 'inherit', 'inherit'] });
-    const ran = commandResult(result.status);
+    const ran = commandResult(result);
     if (!ran.ok) return { ...ran, failedStep: step.id };
     const verifies = Array.isArray(step.verify) ? step.verify : step.verify ? [step.verify] : [];
     for (const verify of verifies) {
@@ -839,8 +944,29 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
     return { ok: false, status: 2, failedStep: step.id };
   }
   if (step.type === 'ask') {
-    console.error(`setup-run: ask step '${step.id}' requires interactive input; use params before execution`);
-    return { ok: false, status: 2, failedStep: step.id };
+    // #3062 review item 10: a top-level selected step with all its declared
+    // params already resolved is already caught as *not* blocking by
+    // `collectPreflightBlockers` and runs headless here; this remains the
+    // gate for a recovery-path `ask` step, which isn't preflighted.
+    const names = askStepParams(step);
+    if (names.length === 0) {
+      console.error(
+        `setup-run: ask step '${step.id}' declares no params to resolve via --param; interactive capture ` +
+        "for ask steps is not implemented — declare 'params' on the step and supply them with --param " +
+        '<name>=<value>.',
+      );
+      return { ok: false, status: 2, failedStep: step.id };
+    }
+    const missing = missingAskParams(step, params);
+    if (missing.length > 0) {
+      console.error(
+        `setup-run: ask step '${step.id}' is missing required param(s): ${missing.join(', ')}; supply with ` +
+        '--param <name>=<value> (interactive capture for ask steps is not implemented).',
+      );
+      return { ok: false, status: 2, failedStep: step.id };
+    }
+    console.log(`  ask: ${step.message ?? step.id} -> answered via --param (${names.join(', ')})`);
+    return { ok: true, status: 0 };
   }
   if (step.type === 'platform-route') {
     const route = step.routes?.find((item) => item.platform === targetOs);
@@ -896,6 +1022,19 @@ export function runSetupManifest(options: RunOptions): HandlerResult {
   if (!options.yes) {
     return { exitCode: 2, message: 'setup-run: mutating execution requires --yes or --confirm after reviewing the plan with --dry-run' };
   }
+  // #3062 review item 13: preflight every selected step (recursively into
+  // `platform-route` nesting) before executing any of them — the previous
+  // behavior checked `interactive`/`ask` conditions inside the per-step
+  // loop below, so an earlier normal step could already perform work
+  // before a later step's refusal fired.
+  const blockers = collectPreflightBlockers(steps, target.os, params.values, isInteractive());
+  if (blockers.length > 0) {
+    for (const blocker of blockers) console.error(`setup-run: ${blocker}.`);
+    return {
+      exitCode: 2,
+      message: `setup-run: refusing before executing any step:\n${blockers.map((b) => `  - ${b}`).join('\n')}`,
+    };
+  }
   for (const step of steps) {
     const result = runStep(step, manifest, validation.manifestDir, params.values, target.os, options.yes);
     if (!result.ok) {
@@ -930,11 +1069,20 @@ export const setupValidateHandler: CommandHandler = {
       return { exitCode: 0 };
     }
     const strict = hasFlag(ctx.args, '--strict');
+    let manifestPath: string | undefined;
+    let schemaPath: string | undefined;
+    try {
+      manifestPath = flagValue(ctx.args, '--manifest') ?? positionalManifest(ctx.args);
+      schemaPath = flagValue(ctx.args, '--schema');
+    } catch (err) {
+      if (err instanceof MissingFlagValueError) return { exitCode: 2, message: `${err.message}.` };
+      throw err;
+    }
     const result = validateSetupManifest({
       cwd: ctx.cwd,
       frameworkRoot: ctx.frameworkRoot,
-      manifestPath: flagValue(ctx.args, '--manifest') ?? positionalManifest(ctx.args),
-      schemaPath: flagValue(ctx.args, '--schema'),
+      manifestPath,
+      schemaPath,
       strict,
     });
     const payload = {
@@ -964,8 +1112,9 @@ export const setupGenerateHandler: CommandHandler = {
       return generateSetupManifest(parseGenerateOptions(ctx));
     } catch (error) {
       return {
-        exitCode: 1,
-        message: error instanceof Error ? error.message : String(error),
+        // #3062 review item 11: a missing flag value is a usage error.
+        exitCode: error instanceof MissingFlagValueError ? 2 : 1,
+        message: error instanceof Error ? `${error.message}.` : String(error),
       };
     }
   },
@@ -982,21 +1131,32 @@ export const setupRunHandler: CommandHandler = {
       process.stdout.write(RUN_HELP);
       return { exitCode: 0 };
     }
-    const options = parseRunOptions(ctx);
-    const manifestPath = options.manifestPath ?? 'setup.manifest.yaml';
+    let options: RunOptions;
+    let policyFlag: string | undefined;
+    let verificationArgs: string[] = [];
+    try {
+      options = parseRunOptions(ctx);
+      policyFlag = flagValue(ctx.args, '--policy');
+      if (policyFlag) {
+        const manifestPathForVerification = options.manifestPath ?? 'setup.manifest.yaml';
+        verificationArgs = [
+          manifestPathForVerification,
+          '--attestation', flagValue(ctx.args, '--attestation') ?? `${manifestPathForVerification}.aiwg-attestation.json`,
+          '--policy', policyFlag,
+          '--asset-type', flagValue(ctx.args, '--asset-type') ?? 'setup-manifest',
+          '--namespace', flagValue(ctx.args, '--namespace') ?? 'aiwg',
+          '--channel', flagValue(ctx.args, '--channel') ?? 'stable',
+          '--json',
+          ...(flagValue(ctx.args, '--state') ? ['--state', flagValue(ctx.args, '--state')!] : []),
+          ...(hasFlag(ctx.args, '--offline') ? ['--offline'] : []),
+        ];
+      }
+    } catch (err) {
+      if (err instanceof MissingFlagValueError) return { exitCode: 2, message: `setup-run: ${err.message}.` };
+      throw err;
+    }
     let artifactVerification: ArtifactVerificationResult | undefined;
-    if (flagValue(ctx.args, '--policy')) {
-      const verificationArgs = [
-        manifestPath,
-        '--attestation', flagValue(ctx.args, '--attestation') ?? `${manifestPath}.aiwg-attestation.json`,
-        '--policy', flagValue(ctx.args, '--policy')!,
-        '--asset-type', flagValue(ctx.args, '--asset-type') ?? 'setup-manifest',
-        '--namespace', flagValue(ctx.args, '--namespace') ?? 'aiwg',
-        '--channel', flagValue(ctx.args, '--channel') ?? 'stable',
-        '--json',
-        ...(flagValue(ctx.args, '--state') ? ['--state', flagValue(ctx.args, '--state')!] : []),
-        ...(hasFlag(ctx.args, '--offline') ? ['--offline'] : []),
-      ];
+    if (policyFlag) {
       const verification = await artifactVerifyHandler.execute({ ...ctx, args: verificationArgs, rawArgs: verificationArgs });
       try {
         artifactVerification = JSON.parse(verification.message ?? '') as ArtifactVerificationResult;

@@ -198,10 +198,25 @@ command/script gets inherited stdio so a person can actually answer a prompt it 
 
 Mark a step `interactive: true` when it is known to prompt directly; `aiwg setup-run`
 then refuses it up front, before running anything, whenever no terminal is attached —
-clearer than waiting for the bounded timeout. `type: ask` steps already always refuse
-`aiwg setup-run` unconditionally (resolve the value via `params` instead); `interactive`
-is for `script`/`verify`/`detect`/`os-config` steps whose underlying command/script may
+clearer than waiting for the bounded timeout, and its questions cannot be enumerated
+or supplied via `--param` at all (it runs an arbitrary script). `interactive` is for
+`script`/`verify`/`detect`/`os-config` steps whose underlying command/script may
 prompt on its own.
+
+`type: ask` steps declare which inputs they need via `params` — the same field a
+`script` step uses to pass param names as env vars. An `ask` step with every declared
+param already resolved (`--param`/`--params-file`/env/`default`) runs headless, logging
+which params answered it; one with a declared param still unresolved, or with no
+`params` declared at all, is refused — there is no interactive-capture mechanism for
+`ask` steps in this CLI, with or without a terminal, so a missing value is always a
+`--param`/`--params-file` gap to fill, never something to wait for at a prompt.
+
+Every selected step (including nested `platform-route` steps) is checked for both the
+`interactive: true` and `type: ask` conditions **before any step runs** — not inside the
+per-step loop — so an earlier step is never partially executed ahead of a later step's
+refusal. A step only reachable through `on_fail` recovery is checked individually,
+right before it would run, since which recovery procedure (if any) applies is only
+known after a step actually fails.
 
 ### Type-specific fields
 
@@ -209,7 +224,7 @@ prompt on its own.
 | ---------------- | -------------------------------------------- | ---------------------------------------- |
 | `script`         | `script` (path relative to manifest)         | `params`, `verify`                       |
 | `verify`         | `commands` (string[])                        | —                                        |
-| `ask`            | `message`                                    | `on_deny` (`abort` or `skip`)            |
+| `ask`            | `message`                                    | `params` (required to run headless; see "Running headless" above), `on_deny` (`abort` or `skip`) |
 | `agentic`        | `instruction`                                | —                                        |
 | `os-config`      | `config_id`                                  | —                                        |
 | `platform-route` | `routes[]` (each `{platform, steps[]}`)      | —                                        |

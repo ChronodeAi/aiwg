@@ -309,3 +309,116 @@ describe('setup manifest CLI handlers', () => {
     expect(fs.readFileSync(recoveryMarker, 'utf8')).toBe('recovered');
   });
 });
+
+/**
+ * `type: ask` headless behavior and the step preflight (#3062 review items
+ * 10 and 13). Each manifest here declares no top-level `params`
+ * requirement of its own, isolating these assertions from the
+ * `INSTALL_DIR`-requires-a-param behavior exercised above.
+ */
+describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
+  let tmpDir: string;
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-setup-manifest-ask-'));
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function runManifest(spec: Record<string, unknown>, paramValues: Record<string, string> = {}) {
+    writeManifest(tmpDir, {
+      apiVersion: 'setup.aiwg.io/v1',
+      kind: 'SetupManifest',
+      metadata: { name: 'ask-step-sample', description: 'no os configuration required', install_type: 'developer' },
+      spec: { platforms: [{ os: 'linux' }], ...spec },
+    });
+    return runSetupManifest({
+      cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues, skip: new Set(), yes: true,
+    });
+  }
+
+  it('an ask step with every declared param already supplied runs headless, logging which params answered it', () => {
+    const result = runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] }],
+    }, { DEPLOY_TARGET: 'staging' });
+
+    expect(result.exitCode).toBe(0);
+    expect(consoleLogSpy.mock.calls.flat().join(' ')).toContain('DEPLOY_TARGET');
+  });
+
+  it('an ask step with a missing declared param refuses, naming the missing param, before the next step runs', () => {
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    const result = runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [
+        { id: 'install', type: 'script', script: 'scripts/install.sh' },
+        { id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] },
+      ],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain('DEPLOY_TARGET');
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('DEPLOY_TARGET');
+    // Preflighted before any step runs — the earlier, unrelated script step
+    // never executed either.
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('an ask step declaring no params at all is always refused — there is no interactive-capture mechanism for it', () => {
+    const result = runManifest({
+      steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?' }],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain("ask step 'confirm-target'");
+    expect(result.message).toContain('declares no params');
+  });
+
+  it('preflights an ask step nested inside a platform-route step before any step runs', () => {
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    const result = runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [
+        { id: 'install', type: 'script', script: 'scripts/install.sh' },
+        {
+          id: 'route',
+          type: 'platform-route',
+          routes: [{ platform: 'linux', steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] }] }],
+        },
+      ],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain('DEPLOY_TARGET');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a step marked interactive: true is preflighted before an earlier normal step runs', () => {
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    writeExecutable(path.join(tmpDir, 'scripts', 'ui.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    const result = runManifest({
+      steps: [
+        { id: 'install', type: 'script', script: 'scripts/install.sh' },
+        { id: 'open-ui', type: 'script', script: 'scripts/ui.sh', interactive: true },
+      ],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain("step 'open-ui'");
+    // Neither step ran — the first (harmless) step is never executed ahead
+    // of the second step's refusal.
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+});
