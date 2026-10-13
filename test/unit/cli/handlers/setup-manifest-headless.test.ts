@@ -28,13 +28,12 @@ vi.mock('node:child_process', async (importOriginal) => {
     ...actual,
     // This capturing wrapper is itself a synchronous child-process call, so
     // tools/testing/check-sync-child-process-timeouts.mjs scans it too: give
-    // it a literal fallback timeout (the gate only recognizes an inline
-    // object literal) that the real `options.timeout` — set by the
-    // bounded-child-process helper or the raw-spawnSync call under test —
-    // overrides via the spread.
+    // it a timeout that cannot be removed by the spread: the caller's own
+    // `options.timeout` (set by the bounded helper or the call under test)
+    // wins when present, otherwise the fallback applies.
     spawnSync: (command: string, args: readonly string[], options: Record<string, unknown>) => {
       spawnSyncCalls.push({ command, args, options });
-      return actual.spawnSync(command, args, { timeout: 60_000, ...options });
+      return actual.spawnSync(command, args, { ...options, timeout: (options.timeout as number | undefined) ?? 60_000 });
     },
   };
 });

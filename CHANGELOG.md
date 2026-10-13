@@ -215,6 +215,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 ### Fixed
 
 - `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
+- Shipped tools now find the bounded child-process helper through the same resolver they use for
+  other built code, instead of a path into the unshipped source tree. Without this an installed
+  `aiwg doctor`, deploy or new-project run would have failed to start. A packaging test now checks
+  that every relative import in a shipped tool resolves to a shipped file (#3062).
+- The bounded helper always kills with SIGKILL, also treats descriptor `0` and `process.stdin` as
+  inherited input, and states plainly that only the direct child is guaranteed gone. The gate
+  resolves renamed and destructured child-process bindings, rejects a `timeout` of `0`,
+  `undefined` or one a later spread could override, and normalises allow-list paths for Windows
+  (#3062).
+- Network and install operations in the contribution and packaging tools that were given the
+  30-second tier now use the network or long tier, and a timed-out remote branch check is reported
+  as unknown instead of absent (#3062).
 - `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
   detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
   capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:
