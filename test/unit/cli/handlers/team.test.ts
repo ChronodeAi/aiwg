@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import { listProviderDefinitions } from '../../../../src/providers/provider-definitions.js';
 
 // ── Mocks ────────────────────────────────────────────────────
 
@@ -184,24 +185,84 @@ describe('team run', () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it('exits 0 for known team (claude native dispatch)', async () => {
-    writeTeam('sdlc-review');
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    // Simulate Claude Code environment
-    const origEnv = process.env.CLAUDE_CODE_VERSION;
-    process.env.CLAUDE_CODE_VERSION = '1.0.0';
-    const result = await teamHandler.execute(makeCtx(['run', 'sdlc-review']));
-    process.env.CLAUDE_CODE_VERSION = origEnv;
-    expect(result.exitCode).toBe(0);
-    consoleSpy.mockRestore();
-  });
-
   it('exits 0 for known team with --provider override (mc emulation)', async () => {
     writeTeam('sdlc-review');
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await teamHandler.execute(makeCtx(['run', 'sdlc-review', '--provider', 'cursor']));
     expect(result.exitCode).toBe(0);
     consoleSpy.mockRestore();
+  });
+
+  // Provider auto-detection now goes through the shared `resolveActiveProvider`
+  // path (#2623, #2627, #3054) instead of an ad-hoc
+  // CLAUDE_CODE_VERSION/ANTHROPIC_API_KEY check, so this must be hermetic
+  // against whatever Claude-Code-shaped env vars the host running this suite
+  // happens to have set (this suite may itself be invoked from inside a live
+  // Claude Code session).
+  describe('provider auto-detection (#3054)', () => {
+    const PROVIDER_ENV_KEYS = Array.from(
+      new Set(['CLAUDE_CODE_VERSION', 'ANTHROPIC_API_KEY', ...listProviderDefinitions().flatMap((d) => d.detection.env)]),
+    );
+    const saved = new Map<string, string | undefined>();
+
+    beforeEach(() => {
+      for (const key of PROVIDER_ENV_KEYS) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+      // Deterministic: don't let process ancestry (which may genuinely be
+      // Claude Code, since that's what's running this test) decide.
+      process.env.AIWG_DISABLE_PROCESS_PROVIDER_DETECTION = '1';
+    });
+
+    afterEach(() => {
+      for (const key of PROVIDER_ENV_KEYS) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      saved.clear();
+      delete process.env.AIWG_DISABLE_PROCESS_PROVIDER_DETECTION;
+    });
+
+    it('dispatches natively when current Claude Code markers are present', async () => {
+      process.env.CLAUDECODE = '1';
+      process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+      writeTeam('sdlc-review');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const result = await teamHandler.execute(makeCtx(['run', 'sdlc-review']));
+        expect(result.exitCode).toBe(0);
+        expect(log.mock.calls.flat().join('\n')).toContain('Native team dispatch (Claude Code)');
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it('does not dispatch natively from ANTHROPIC_API_KEY alone (false-positive fix)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-not-actually-claude-code';
+      writeTeam('sdlc-review');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const result = await teamHandler.execute(makeCtx(['run', 'sdlc-review']));
+        expect(result.exitCode).toBe(0);
+        expect(log.mock.calls.flat().join('\n')).toContain('Team dispatch via Mission Control (aiwg mc)');
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it('falls back to mc emulation when neither stale nor current markers are present', async () => {
+      writeTeam('sdlc-review');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const result = await teamHandler.execute(makeCtx(['run', 'sdlc-review']));
+        expect(result.exitCode).toBe(0);
+        expect(log.mock.calls.flat().join('\n')).toContain('Team dispatch via Mission Control (aiwg mc)');
+      } finally {
+        log.mockRestore();
+      }
+    });
   });
 });
 

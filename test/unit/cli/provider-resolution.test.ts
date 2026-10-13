@@ -11,6 +11,7 @@ import {
   commandLooksLikeProvider,
   capabilityProviderId,
   normalizeProviderId,
+  isSessionProviderResolution,
 } from '../../../src/cli/provider-resolution.js';
 
 describe('normalizeProviderId', () => {
@@ -117,5 +118,20 @@ describe('resolveActiveProvider', () => {
     expect(resolution.provider).toBeNull();
     expect(resolution.source).toBe('ambiguous');
     expect(resolution.candidates).toEqual(['claude', 'codex']);
+  });
+});
+
+describe('isSessionProviderResolution', () => {
+  it('accepts only signals from the running session', () => {
+    for (const source of ['explicit', 'env', 'runtime-env', 'process']) {
+      expect(isSessionProviderResolution({ provider: 'claude', source })).toBe(true);
+    }
+  });
+
+  it('rejects project state: a project configured or deployed for a provider is not a session inside it', () => {
+    for (const source of ['config', 'deployment', 'default', 'ambiguous']) {
+      expect(isSessionProviderResolution({ provider: 'claude', source })).toBe(false);
+    }
+    expect(isSessionProviderResolution({ provider: null, source: 'runtime-env' })).toBe(false);
   });
 });

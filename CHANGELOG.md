@@ -85,6 +85,21 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
+  detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
+  capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:
+  neither variable is set by current Claude Code, and `ANTHROPIC_API_KEY` was a false positive for any
+  non-Claude session with that key set. The `.mjs` script falls back to the current marker variables
+  directly when no build output is available to resolve the shared path through.
+- `npm run clean:providers` no longer removes `.cursor/`, `.agents/`, or `opencode.json` wholesale.
+  Each holds a project file AIWG merges entries into rather than owns outright — the Cursor and
+  Antigravity project MCP configs, and `opencode.json`'s `instructions` entry. AIWG-deployed
+  subdirectories under `.cursor`/`.agents` are still removed, and AIWG-managed MCP servers (identified
+  through the central MCP server registry's `injectedProviders` record) and the `WORKSPACE.md`/
+  `AIWG.md` instructions entries are still removed from those files in place, but a user's own MCP
+  servers or instructions entries, and anything else in those files, survive. A merge-target file is
+  deleted only once nothing but AIWG's own entries remain; invalid JSON, or an unreadable MCP server
+  registry, leaves the file untouched and is reported rather than guessed at.
 - Layered MCP writes reject overlapping realpath targets and symlinked files or directories below the config root,
   use atomic replacement, and refresh server/profile ownership after each successful save.
 - Profile imports validate the complete layered `extends` graph before writing, naming cycles and missing bases.
