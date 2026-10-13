@@ -195,18 +195,30 @@ aiwg decision ask --question "Is this test failure flaky?" --yes-no --json \
 
 aiwg decision history --since 2026-10-01 --provider claude --status fallback --json
 aiwg decision stats --provider claude --group-by caller --json
+aiwg decision history --caller 'address-issues:*' --json
+aiwg decision stats --caller address-issues:worker-pick --group-by caller --json
+aiwg decision history --no-caller --json
 ```
 
 `history` and `stats` read the ledger offline — no network, no Jev call.
 `history` supports `--since`, `--provider`, `--session`, `--kind`,
-`--status` and `--json`; `--since` is strict ISO-8601 — a bare date or an
+`--status`, `--caller`, `--no-caller` and `--json`; `--since` is strict ISO-8601 — a bare date or an
 offsetless timestamp is interpreted as UTC, and an invalid calendar date
 (e.g. `2026-02-30`) is rejected with exit 2, including when an explicit
 offset is present (the local calendar/time components are validated before
 the offset is applied). `stats` supports the *same* filters as `history`,
 plus `--group-by provider|session|kind|caller`: a record with no `--caller`
 tag groups under a distinct `null` key, never conflated with a caller
-literally named `unattributed`. It reports answered/fallback counts, a
+literally named `unattributed`. `--caller <tag>` matches that tag exactly;
+`--caller '<prefix>*'` matches every tag starting with `<prefix>` (a trailing
+`*` is the only wildcard — `--caller ''`, an interior `*`, or a tag outside
+the attribution shape is a usage error, exit 2). `--no-caller` selects only
+records with no tag (`none` stays a valid tag, so it gets its own flag), and
+`--caller` with `--no-caller` is a usage error. Unknown flags and positional
+arguments on either command are usage errors (exit 2) naming the offender.
+`--json` output carries the applied filters under a `filters` key, and
+human-readable output prints one `Caller filter:` header line when a caller
+filter is set. It reports answered/fallback counts, a
 fallback rate (and a per-reason rate) as a fraction of the group's total
 calls, the confidence distribution, Jev tokens spent, the estimated LLM
 tokens avoided, and net savings (the avoided-tokens total minus Jev usage

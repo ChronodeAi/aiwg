@@ -231,7 +231,7 @@ describe('decision ledger', () => {
 
   it('tolerates a missing ledger file entirely (no built-in retention; the file may be deleted at any time)', async () => {
     const projectRoot = await tempRoot();
-    expect(await decisionLedgerHistory(projectRoot)).toEqual({ schema: 'aiwg-decision-ledger-history/v1', count: 0, skipped: 0, records: [] });
+    expect(await decisionLedgerHistory(projectRoot)).toEqual({ schema: 'aiwg-decision-ledger-history/v1', count: 0, skipped: 0, records: [], filters: {} });
     const stats = await decisionLedgerStats(projectRoot);
     expect(stats.groups).toEqual([]);
   });
@@ -666,6 +666,60 @@ describe('decision ledger', () => {
     expect(nullGroup?.totalCalls).toBe(1);
     expect(namedGroup?.totalCalls).toBe(1);
     expect(JSON.stringify(stats)).toContain('"key":null');
+  });
+
+  // ---------------------------------------------------------------------
+  // #3065 — caller filter: exact match, trailing-* prefix, and no-caller,
+  // applied inside the streamed reader so stats aggregates only matches.
+  // ---------------------------------------------------------------------
+
+  async function seedCallerLedger(): Promise<string> {
+    const projectRoot = await tempRoot();
+    await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot, { caller: 'address-issues:worker-pick', now: () => FIXED_NOW }));
+    await recordDecisionAsk({ ...yesNoInput, question: 'two' }, fallbackResult, askOptions(projectRoot, { caller: 'address-issues:failure-triage', now: () => FIXED_NOW + 1 }));
+    await recordDecisionAsk({ ...yesNoInput, question: 'three' }, answeredResult, askOptions(projectRoot, { caller: 'other:worker-pick', now: () => FIXED_NOW + 2 }));
+    await recordDecisionAsk({ ...yesNoInput, question: 'four' }, answeredResult, askOptions(projectRoot, { caller: null, now: () => FIXED_NOW + 3 }));
+    return projectRoot;
+  }
+
+  it('filters history by exact caller match', async () => {
+    const projectRoot = await seedCallerLedger();
+    const history = await decisionLedgerHistory(projectRoot, { caller: 'address-issues:worker-pick' });
+    expect(history.count).toBe(1);
+    expect(history.records.map(record => record.caller)).toEqual(['address-issues:worker-pick']);
+  });
+
+  it('filters history by caller prefix with a trailing *', async () => {
+    const projectRoot = await seedCallerLedger();
+    const history = await decisionLedgerHistory(projectRoot, { callerPrefix: 'address-issues:' });
+    expect(history.count).toBe(2);
+    expect(history.records.map(record => record.caller).sort()).toEqual(['address-issues:failure-triage', 'address-issues:worker-pick']);
+  });
+
+  it('selects only records with no caller when noCaller is set', async () => {
+    const projectRoot = await seedCallerLedger();
+    const history = await decisionLedgerHistory(projectRoot, { noCaller: true });
+    expect(history.count).toBe(1);
+    expect(history.records[0].caller).toBeNull();
+  });
+
+  it('aggregates stats over only the caller-matching records', async () => {
+    const projectRoot = await seedCallerLedger();
+    const stats = await decisionLedgerStats(projectRoot, { callerPrefix: 'address-issues:' });
+    expect(stats.groups).toHaveLength(1);
+    expect(stats.groups[0].totalCalls).toBe(2);
+    expect(stats.groups[0].answered).toBe(1);
+    expect(stats.groups[0].fallback).toBe(1);
+  });
+
+  it('echoes the applied filters under a filters key in history and stats results', async () => {
+    const projectRoot = await seedCallerLedger();
+    const history = await decisionLedgerHistory(projectRoot, { caller: 'other:worker-pick' });
+    expect(history.filters).toMatchObject({ caller: 'other:worker-pick' });
+    const stats = await decisionLedgerStats(projectRoot, { callerPrefix: 'address-issues:', groupBy: 'caller' });
+    expect(stats.filters).toMatchObject({ callerPrefix: 'address-issues:', groupBy: 'caller' });
+    expect(JSON.parse(JSON.stringify(history))).toHaveProperty('filters');
+    expect(JSON.parse(JSON.stringify(stats))).toHaveProperty('filters');
   });
 
   it('resolves session id from --session, then AIWG_SESSION_ID, else the literal "unknown", rejecting a malformed value', () => {

@@ -45,8 +45,8 @@ function usage(): string {
     '  setup synthetic-classification [--output-dir <dir>]',
     '  setup jev [--token-stdin] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
     '  ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--provider <id>] [--session <id>] [--caller <tag>] [--record-text]',
-    '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--json]',
-    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--group-by provider|session|kind|caller] [--json]',
+    '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]',
+    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller] [--json]',
     '',
     'Notes:',
     '  Every COMPLETED `ask` call (CLI and MCP) appends one record to the decision',
@@ -64,6 +64,8 @@ function usage(): string {
     '  interpreted as UTC; invalid calendar dates (e.g. 2026-02-30) are rejected,',
     '  including when an explicit offset is present.',
     `  --session and --caller must match ${ATTRIBUTION_FIELD_PATTERN.source} (<= ${MAX_ATTRIBUTION_FIELD_LENGTH} characters).`,
+    '  `history`/`stats` accept `--caller <tag>` (exact), `--caller \'<prefix>*\'` (prefix; the only wildcard), or `--no-caller` (records with no tag; not combinable with `--caller`).',
+    '  `history`/`stats` reject unknown flags and positional arguments with exit 2.',
     '  The ledger has no built-in retention: it grows without bound and the',
     '  operator may truncate or delete it at any time; readers tolerate a missing',
     '  file. The ledger trusts only the local filesystem under the project',
@@ -221,6 +223,59 @@ function parseGroupBy(value: string | undefined): DecisionLedgerGroupBy | undefi
   return value as DecisionLedgerGroupBy;
 }
 
+const HISTORY_VALUE_FLAGS = ['--since', '--provider', '--session', '--kind', '--status', '--caller'] as const;
+const HISTORY_BOOL_FLAGS = ['--json', '--no-caller'] as const;
+const STATS_VALUE_FLAGS = [...HISTORY_VALUE_FLAGS, '--group-by'] as const;
+const STATS_BOOL_FLAGS = HISTORY_BOOL_FLAGS;
+
+/**
+ * Strict allow-list for `history`/`stats`: unknown `--flags` and positional
+ * arguments are usage errors (exit 2) naming the offending token, instead of
+ * being silently ignored. `ask`/`setup` parsing is intentionally untouched.
+ */
+function assertLedgerArgs(args: string[], valueFlags: readonly string[], boolFlags: readonly string[]): void {
+  let index = 0;
+  while (index < args.length) {
+    const token = args[index];
+    if (valueFlags.includes(token)) {
+      if (args[index + 1] === undefined) throw new DecisionAskUsageError(`missing-${token.slice(2)}`, `${token} requires a value`);
+      index += 2;
+      continue;
+    }
+    if (boolFlags.includes(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('--')) throw new DecisionAskUsageError('unknown-flag', `unknown flag ${token}`);
+    throw new DecisionAskUsageError('unexpected-argument', `unexpected argument ${token}`);
+  }
+}
+
+/**
+ * Parses `--caller <tag>` for `history`/`stats`: an exact match, except a
+ * single trailing `*` means prefix match (`--caller 'address-issues:*'`).
+ * The tag itself must match the attribution shape; `--no-caller` (records
+ * with no caller tag) is parsed separately and cannot be combined with it.
+ */
+function parseCallerFilter(args: string[]): { caller?: string; callerPrefix?: string; noCaller?: boolean } {
+  const raw = takeOption(args, '--caller');
+  const noCaller = args.includes('--no-caller');
+  if (raw !== undefined && noCaller) {
+    throw new DecisionAskUsageError('invalid-caller-filter', '--caller and --no-caller cannot be used together');
+  }
+  if (noCaller) return { noCaller: true };
+  if (raw === undefined) return {};
+  if (raw === '' || raw.startsWith('--')) {
+    throw new DecisionAskUsageError('invalid-caller', '--caller requires a non-empty value');
+  }
+  const prefix = raw.endsWith('*');
+  const tag = prefix ? raw.slice(0, -1) : raw;
+  if (tag === '' || !ATTRIBUTION_FIELD_PATTERN.test(tag)) {
+    throw new DecisionAskUsageError('invalid-caller', `--caller must match ${ATTRIBUTION_FIELD_PATTERN.source} (<= ${MAX_ATTRIBUTION_FIELD_LENGTH} characters), allowing one trailing *`);
+  }
+  return prefix ? { callerPrefix: tag } : { caller: tag };
+}
+
 /** Shared by `history` and `stats` (review r1 finding 9): the same filters, parsed the same way. */
 function parseLedgerFilters(args: string[]) {
   return {
@@ -229,14 +284,27 @@ function parseLedgerFilters(args: string[]) {
     sessionId: takeOption(args, '--session'),
     kind: parseKindFilter(takeOption(args, '--kind')),
     status: parseStatusFilter(takeOption(args, '--status')),
+    ...parseCallerFilter(args),
   };
+}
+
+/** One header line stating the caller filter, shown only when one is set. */
+function callerFilterHeader(filters: { caller?: string; callerPrefix?: string; noCaller?: boolean }): string | null {
+  if (filters.noCaller) return 'Caller filter: no caller (records with no caller tag)';
+  if (filters.caller !== undefined) return `Caller filter: ${filters.caller}`;
+  if (filters.callerPrefix !== undefined) return `Caller filter: ${filters.callerPrefix}*`;
+  return null;
 }
 
 async function decisionHistory(ctx: HandlerContext): Promise<HandlerResult> {
   const args = ctx.args.slice(1);
-  const result = await decisionLedgerHistory(ctx.cwd, parseLedgerFilters(args));
+  assertLedgerArgs(args, HISTORY_VALUE_FLAGS, HISTORY_BOOL_FLAGS);
+  const filters = parseLedgerFilters(args);
+  const result = await decisionLedgerHistory(ctx.cwd, filters);
   if (args.includes('--json')) return jsonResult(result);
   const header = result.skipped > 0 ? [`(${result.skipped} invalid line(s) skipped)`] : [];
+  const callerHeader = callerFilterHeader(filters);
+  if (callerHeader) header.push(callerHeader);
   if (result.count === 0) return { exitCode: 0, message: [...header, 'No decision ledger records match the filters.'].join('\n'), rawOutput: true };
   const lines = result.records.map(record => `${record.timestamp}  ${record.status.padEnd(8)} provider=${record.provider} kind=${record.decisionKind} confidence=${record.confidence ?? '-'} caller=${record.caller ?? '-'} id=${record.id}`);
   return { exitCode: 0, message: [...header, ...lines].join('\n'), rawOutput: true };
@@ -244,9 +312,13 @@ async function decisionHistory(ctx: HandlerContext): Promise<HandlerResult> {
 
 async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
   const args = ctx.args.slice(1);
-  const result = await decisionLedgerStats(ctx.cwd, { ...parseLedgerFilters(args), groupBy: parseGroupBy(takeOption(args, '--group-by')) });
+  assertLedgerArgs(args, STATS_VALUE_FLAGS, STATS_BOOL_FLAGS);
+  const filters = { ...parseLedgerFilters(args), groupBy: parseGroupBy(takeOption(args, '--group-by')) };
+  const result = await decisionLedgerStats(ctx.cwd, filters);
   if (args.includes('--json')) return jsonResult(result);
   const header = result.skipped > 0 ? [`(${result.skipped} invalid line(s) skipped)`] : [];
+  const callerHeader = callerFilterHeader(filters);
+  if (callerHeader) header.push(callerHeader);
   if (result.groups.length === 0) return { exitCode: 0, message: [...header, 'No decision ledger records match the filters.'].join('\n'), rawOutput: true };
   const lines = result.groups.flatMap(group => [
     `${result.groupBy ?? 'all'}=${group.key ?? 'null'}: ${group.totalCalls} calls (${group.answered} answered, ${group.fallback} fallback, rate=${group.fallbackRate.toFixed(2)})`,
