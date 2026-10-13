@@ -35,9 +35,15 @@ vi.mock('readline', () => ({
 // First string prompt is the provider selection; every yes/no prompt declines.
 const askString = vi.fn(async () => 'dsh, codex');
 const askYesNo = vi.fn(async () => false);
+// #3050: the worker-dispatch opt-in offer uses askConsent; this test isn't
+// about that offer, so answer as a plain decline (irrelevant to the
+// provider-alias assertions below) rather than hanging/crashing on a
+// missing mock export.
+const askConsent = vi.fn(async () => ({ kind: 'answered' as const, value: false }));
 vi.mock('../../../../src/cli/prompt-utils.js', () => ({
   askString: (...args: unknown[]) => askString(...args),
   askYesNo: (...args: unknown[]) => askYesNo(...args),
+  askConsent: (...args: unknown[]) => askConsent(...args),
 }));
 
 const { initHandler } = await import('../../../../src/cli/handlers/init.js');

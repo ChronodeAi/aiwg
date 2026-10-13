@@ -25,10 +25,17 @@ import {
   getConfigPath,
 } from '../../config/aiwg-config.js';
 import * as ui from '../ui.js';
-import { askString as sharedAskString, askYesNo as sharedAskYesNo } from '../prompt-utils.js';
+import { askString as sharedAskString, askYesNo as sharedAskYesNo, askConsent } from '../prompt-utils.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 import { writeNormalizedAiwgMd } from '../../smiths/context-pipeline/finalization.js';
 import { ensureWorkspaceContext } from '../../smiths/context-pipeline/workspace-context.js';
+import {
+  detectInstalledWorkerClis,
+  evaluateWorkerDispatchOffer,
+  workerDispatchOfferQuestion,
+  workerDispatchOfferHint,
+} from '../../models/worker-dispatch-offer.js';
+import type { ParallelismConfig, SetupConfig } from '../../config/aiwg-config.js';
 
 const PROVIDER_LABELS: Record<string, string> = {
   antigravity: 'Google Antigravity .agents/',
@@ -98,6 +105,48 @@ async function askProviders(rl: readline.Interface, signal?: AbortSignal): Promi
   return selected.length > 0 ? selected : ['claude'];
 }
 
+/**
+ * Non-interactive / --yes / no-TTY runs never prompt and never touch the
+ * config (#3050 item 2) — they only print one line naming the enable
+ * command, when two or more worker CLIs are detected and dispatch is not
+ * already on or declined.
+ */
+function renderWorkerDispatchHintIfApplicable(parallelism: ParallelismConfig | undefined, setup: SetupConfig | undefined): void {
+  const offer = evaluateWorkerDispatchOffer(parallelism, setup, detectInstalledWorkerClis());
+  if (offer.shouldOffer) ui.dim(`  ${workerDispatchOfferHint(offer.detected)}`);
+}
+
+/** A decision from the worker-dispatch consent prompt, keyed to where it is recorded. */
+type WorkerDispatchDecision = { kind: 'enable' } | { kind: 'decline' };
+
+/**
+ * Interactive-only: asks the one consent question (default/unanswered is
+ * no, strict `y`/`yes` parsing only) when two or more worker CLIs are
+ * detected and dispatch is not already on or declined. Returns the
+ * decision to apply, or `undefined` when there is nothing to offer, or
+ * when the prompt timed out / stdin closed without an answer — only an
+ * actually-answered "no" is recorded as a persistent decline (#3050
+ * review item 4).
+ */
+async function askWorkerDispatchOffer(
+  rl: readline.Interface,
+  parallelism: ParallelismConfig | undefined,
+  setup: SetupConfig | undefined,
+  signal?: AbortSignal,
+): Promise<WorkerDispatchDecision | undefined> {
+  const offer = evaluateWorkerDispatchOffer(parallelism, setup, detectInstalledWorkerClis());
+  if (!offer.shouldOffer) return undefined;
+  console.log('');
+  const outcome = await askConsent(rl, workerDispatchOfferQuestion(offer.detected), undefined, signal);
+  if (outcome.kind !== 'answered') return undefined;
+  if (outcome.value) {
+    ui.success('  Will enable parallelism.worker_dispatch.');
+    return { kind: 'enable' };
+  }
+  ui.dim('  Noted — enable later with `aiwg config set --project parallelism.worker_dispatch true`.');
+  return { kind: 'decline' };
+}
+
 export const initHandler: CommandHandler = {
   id: 'init',
   name: 'Init',
@@ -137,12 +186,32 @@ export const initHandler: CommandHandler = {
       ui.dim('  Ask your AIWG agent to review repo, tracker, delivery, signing, and provider policy.');
       ui.dim('  Agents may use `aiwg setup project --dry-run` as the CLI helper for that review.');
       ui.dim('  Run `aiwg init --force` only when you need to recreate the baseline config.');
+      // #3050: guide users to direct worker dispatch from the setup step they
+      // already run, instead of leaving it undiscoverable. `--dry-run` must
+      // never prompt and never write (review item 1) — it degrades to the
+      // same hint-only behavior as non-interactive runs.
+      if (nonInteractive || ctx.dryRun) {
+        renderWorkerDispatchHintIfApplicable(existing.parallelism, existing.setup);
+      } else {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          const decision = await askWorkerDispatchOffer(rl, existing.parallelism, existing.setup, ctx.signal);
+          if (decision?.kind === 'enable') {
+            await writeAiwgConfig(projectDir, { ...existing, parallelism: { ...existing.parallelism, worker_dispatch: true } });
+          } else if (decision?.kind === 'decline') {
+            await writeAiwgConfig(projectDir, { ...existing, setup: { ...existing.setup, worker_dispatch_offer: 'declined' } });
+          }
+        } finally {
+          rl.close();
+        }
+      }
       ui.blank();
       return { exitCode: 0 };
     }
 
     let providers: string[];
     let scripts: Record<string, string> = {};
+    let workerDispatchDecision: WorkerDispatchDecision | undefined;
 
     if (nonInteractive) {
       // Non-interactive: use defaults
@@ -152,6 +221,7 @@ export const initHandler: CommandHandler = {
         doctor: 'aiwg doctor',
         sync: 'aiwg sync',
       };
+      renderWorkerDispatchHintIfApplicable(undefined, undefined);
     } else {
       // Interactive wizard
       const rl = readline.createInterface({
@@ -182,6 +252,15 @@ export const initHandler: CommandHandler = {
             }
           }
         }
+
+        // #3050: offer direct worker dispatch inside the same wizard — but
+        // `--dry-run` must never prompt or write anything from the offer
+        // (review item 1), so it degrades to the hint instead.
+        if (ctx.dryRun) {
+          renderWorkerDispatchHintIfApplicable(undefined, undefined);
+        } else {
+          workerDispatchDecision = await askWorkerDispatchOffer(rl, undefined, undefined, ctx.signal);
+        }
       } finally {
         rl.close();
       }
@@ -190,6 +269,11 @@ export const initHandler: CommandHandler = {
     // Build config
     let config = emptyConfig(providers);
     config.scripts = scripts;
+    if (workerDispatchDecision?.kind === 'enable') {
+      config.parallelism = { ...config.parallelism, worker_dispatch: true };
+    } else if (workerDispatchDecision?.kind === 'decline') {
+      config.setup = { ...config.setup, worker_dispatch_offer: 'declined' };
+    }
 
     // Populate deployedTo from disk for entries with empty deployedTo (#721)
     config = await populateDeployedTo(config, projectDir);

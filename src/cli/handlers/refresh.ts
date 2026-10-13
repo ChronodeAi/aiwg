@@ -32,6 +32,7 @@ import {
   getProviderParallelismDefaults,
 } from '../../config/aiwg-config.js';
 import { discoverProjectLocalBundles } from '../../extensions/project-local-discovery.js';
+import { detectInstalledWorkerClis, evaluateWorkerDispatchOffer, workerDispatchOfferHint } from '../../models/worker-dispatch-offer.js';
 import { getProviderArtifactPathStrings } from '../../providers/provider-definitions.js';
 import {
   collectPackagedAgentInventory,
@@ -881,6 +882,20 @@ export const refreshHandler: CommandHandler = {
         }
       } catch {
         // Non-fatal — refresh continues even if migration fails
+      }
+    }
+
+    // Step 4.65: Direct worker dispatch opt-in hint (#3050). Refresh never
+    // prompts; this only names the enable command when dispatch is off and
+    // two or more worker CLIs are detected (presence-only PATH scan, no
+    // spawn). Silent otherwise, including after a previous decline.
+    if (!quiet) {
+      try {
+        const config = await readAiwgConfig(process.cwd());
+        const offer = evaluateWorkerDispatchOffer(config?.parallelism, config?.setup, detectInstalledWorkerClis());
+        if (offer.shouldOffer) ui.info(workerDispatchOfferHint(offer.detected));
+      } catch {
+        // Non-fatal — refresh continues even if the hint check fails
       }
     }
 

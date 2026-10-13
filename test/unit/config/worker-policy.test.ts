@@ -245,6 +245,19 @@ describe('T-OG-01/15 S1 config editing, input digests and read failures', () => 
     expect((await readAiwgConfig(fixture.root))?.parallelism?.worker_dispatch).toBe(false);
   });
 
+  // #3050 fix-first: the decline is a setup/onboarding preference, not
+  // worker policy — it lives in `setup`, never in `parallelism` (the
+  // frozen B-OG-29 contract fragment asserted in
+  // test/conformance/mission-v1/worker-policy.test.ts).
+  it('round-trips setup.worker_dispatch_offer (#3050) without touching parallelism at all', async () => {
+    const fixture = await setup();
+    await writeAiwgConfig(fixture.root, { ...emptyConfig(), setup: { worker_dispatch_offer: 'declined' } });
+    const cfg = await readAiwgConfig(fixture.root);
+    expect(cfg?.setup?.worker_dispatch_offer).toBe('declined');
+    expect(cfg?.parallelism?.worker_dispatch).toBeUndefined();
+    expect(validateParallelismConfig(cfg?.parallelism)).toEqual([]);
+  });
+
   it.each(['userFile', 'projectFile'] as const)('S1-C10 treats only ENOENT as optional absence (%s)', async key => {
     const fixture = await setup();
     await fixture.loader.load(policy());

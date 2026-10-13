@@ -20,11 +20,18 @@ import {
   writeAiwgConfig,
 } from '../../config/aiwg-config.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
-import { askChoice, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
+import { askChoice, askConsent, askString, askYesNo, createPromptInterface } from '../prompt-utils.js';
 import * as ui from '../ui.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
+import {
+  detectInstalledWorkerClis,
+  evaluateWorkerDispatchOffer,
+  workerDispatchOfferHint,
+  workerDispatchOfferQuestion,
+  type WorkerDispatchOfferDecision,
+} from '../../models/worker-dispatch-offer.js';
 
 type IssueProvider = IssueProviderConfig;
 type DeliveryMode = 'direct' | 'feature-branch' | 'pr-required';
@@ -70,6 +77,8 @@ export interface SetupProjectOptions {
   customerTrackerActorVia?: TrackerVia;
   providers?: string[];
   confirm?: boolean;
+  /** Set only by the interactive wizard, when the worker-dispatch opt-in question was asked (#3050). */
+  workerDispatchChoice?: 'enable' | 'decline';
 }
 
 export interface SetupProjectPlan {
@@ -81,6 +90,8 @@ export interface SetupProjectPlan {
   issueProvider: IssueProvider;
   warnings: string[];
   diff: string;
+  /** Whether to offer/hint turning `parallelism.worker_dispatch` on (#3050). */
+  workerDispatchOffer: WorkerDispatchOfferDecision;
 }
 
 const DELIVERY_MODES: DeliveryMode[] = ['pr-required', 'feature-branch', 'direct'];
@@ -413,6 +424,19 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
   base.remotes = remotesConfig;
   base.delivery = delivery;
 
+  // #3050: apply an already-made worker-dispatch opt-in choice (from the
+  // interactive wizard), then recompute whether any surface should still
+  // offer/hint it — a choice just applied here always clears the offer.
+  // The decline is a setup/onboarding preference, not worker policy, so it
+  // lives in `setup`, not in the frozen `parallelism` contract fragment
+  // (B-OG-29).
+  if (options.workerDispatchChoice === 'enable') {
+    base.parallelism = { ...base.parallelism, worker_dispatch: true };
+  } else if (options.workerDispatchChoice === 'decline') {
+    base.setup = { ...base.setup, worker_dispatch_offer: 'declined' };
+  }
+  const workerDispatchOffer = evaluateWorkerDispatchOffer(base.parallelism, base.setup, detectInstalledWorkerClis());
+
   if (primaryRemote?.provider === 'unknown' && issueProvider !== 'local') {
     warnings.push(`Remote '${primary}' is self-hosted or unknown; provider '${issueProvider}' was selected explicitly/defaulted.`);
   }
@@ -441,13 +465,15 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
     issueProvider,
     warnings,
     diff: formatPreviewDiff(existing, base),
+    workerDispatchOffer,
   };
 }
 
-async function applyInteractivePrompts(
+export async function applyInteractivePrompts(
   plan: SetupProjectPlan,
   rl: ReadlineInterface,
   signal?: AbortSignal,
+  options: { dryRun?: boolean } = {},
 ): Promise<SetupProjectOptions> {
   const remoteNames = plan.remotes.map(r => r.name);
   const current = plan.next;
@@ -479,6 +505,23 @@ async function applyInteractivePrompts(
   const requireSignedCommits = await askYesNo(rl, 'Require signed delivery commits? [y/N]: ', current.delivery?.require_signed_commits ?? false, signal);
   const providersRaw = await askString(rl, `Providers [${current.providers.join(',')}]: `, current.providers.join(','), signal);
 
+  // #3050: offer direct worker dispatch, only when there is something to
+  // offer (two or more worker CLIs detected, dispatch not already on or
+  // declined), and only in a context where the answer could actually be
+  // acted on: CI and dry-run never prompt (review item 5) — an unattended
+  // CI run could otherwise stall on a prompt timeout, and a dry-run would
+  // ask a question whose answer is never written. Both cases fall back to
+  // the informational hint at the end of `execute()` instead (via
+  // `plan.workerDispatchOffer.shouldOffer` staying true on the rebuilt plan).
+  // Strict/distinguishable consent (review items 2 and 4): only an actually
+  // answered "no" is recorded as a persistent decline.
+  let workerDispatchChoice: 'enable' | 'decline' | undefined;
+  if (plan.workerDispatchOffer.shouldOffer && process.env.CI !== 'true' && !options.dryRun) {
+    console.log('');
+    const outcome = await askConsent(rl, workerDispatchOfferQuestion(plan.workerDispatchOffer.detected), undefined, signal);
+    if (outcome.kind === 'answered') workerDispatchChoice = outcome.value ? 'enable' : 'decline';
+  }
+
   return {
     projectDir: plan.projectDir,
     providers: parseProviders(providersRaw, current.providers),
@@ -492,6 +535,7 @@ async function applyInteractivePrompts(
     autoCloseIssues,
     forcePushPolicy,
     requireSignedCommits,
+    ...(workerDispatchChoice ? { workerDispatchChoice } : {}),
   };
 }
 
@@ -529,7 +573,7 @@ export const setupHandler: CommandHandler = {
     if (!options.yes && canPrompt) {
       const rl = createPromptInterface();
       try {
-        const prompted = await applyInteractivePrompts(plan, rl, ctx.signal);
+        const prompted = await applyInteractivePrompts(plan, rl, ctx.signal, { dryRun: options.dryRun === true });
         plan = await buildSetupProjectPlan({ ...options, ...prompted });
       } finally {
         rl.close();
@@ -552,6 +596,13 @@ export const setupHandler: CommandHandler = {
       });
     }
 
+    // #3050: non-interactive/--yes/CI/dry-run runs never prompt — the
+    // question above already applied a choice when it was asked (which
+    // clears `shouldOffer` on the rebuilt plan), so `shouldOffer` is only
+    // ever still true here when nothing asked. In `--json` mode the offer
+    // is structured data on the JSON object, never a separate
+    // human-readable line — a stray print after the JSON would make
+    // `setup project --json` unparseable (review item 6).
     if (options.json) {
       console.log(JSON.stringify({
         project_dir: plan.projectDir,
@@ -560,9 +611,16 @@ export const setupHandler: CommandHandler = {
         issue_provider: plan.issueProvider,
         warnings: plan.warnings,
         config: previewBlocks(plan.next),
+        worker_dispatch_offer: plan.workerDispatchOffer.shouldOffer
+          ? { should_offer: true, detected: plan.workerDispatchOffer.detected,
+              hint: workerDispatchOfferHint(plan.workerDispatchOffer.detected) }
+          : { should_offer: false },
       }, null, 2));
     } else {
       printPlan(plan);
+      if (plan.workerDispatchOffer.shouldOffer) {
+        ui.info(workerDispatchOfferHint(plan.workerDispatchOffer.detected));
+      }
     }
 
     if (options.dryRun) return { exitCode: 0 };

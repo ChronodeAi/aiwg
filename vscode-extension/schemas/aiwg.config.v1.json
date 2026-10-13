@@ -961,6 +961,18 @@
         }
       }
     },
+    "setup": {
+      "type": "object",
+      "description": "Setup/onboarding preferences (#3050) — answers to opt-in offers presented during `aiwg init` / `aiwg setup project`. Not worker policy; kept separate from the frozen `parallelism` contract fragment (B-OG-29).",
+      "additionalProperties": false,
+      "properties": {
+        "worker_dispatch_offer": {
+          "type": "string",
+          "enum": ["declined"],
+          "description": "Set to 'declined' when a person said no to the parallelism.worker_dispatch opt-in offer. Suppresses the offer and its hints until cleared."
+        }
+      }
+    },
     "gates": {
       "$ref": "#/definitions/GatesConfig"
     }

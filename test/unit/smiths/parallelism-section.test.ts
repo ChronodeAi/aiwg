@@ -196,6 +196,39 @@ describe('buildParallelismSection (#1362)', () => {
     await writeAiwgConfig(tmpDir, emptyConfig([provider]));
     expect(await buildParallelismSection(tmpDir)).toContain(expected);
   });
+
+  // #3050 item 5: generated context must say the dispatch state plainly and
+  // tell the agent to offer the opt-in rather than assume CLIs are unavailable.
+  it('states direct worker dispatch is off and tells the agent to offer the opt-in', async () => {
+    await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('**Direct worker dispatch**: off (`parallelism.worker_dispatch`)');
+    expect(section).toContain('Do not assume other worker CLIs are unavailable');
+    expect(section).toContain('aiwg config set --project parallelism.worker_dispatch true');
+  });
+
+  it('states direct worker dispatch is on when enabled', async () => {
+    const cfg = emptyConfig(['codex']);
+    cfg.parallelism.worker_dispatch = true;
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('**Direct worker dispatch**: on (`parallelism.worker_dispatch`).');
+    expect(section).not.toContain('Do not assume other worker CLIs are unavailable');
+  });
+
+  // #3050 review item 3: a recorded decline must not be rendered as if no
+  // one had decided yet — the agent must not keep re-offering a settled no.
+  it('states the decline plainly and drops the offer instruction once declined', async () => {
+    const cfg = emptyConfig(['claude']);
+    cfg.setup = { worker_dispatch_offer: 'declined' };
+    await writeAiwgConfig(tmpDir, cfg);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('**Direct worker dispatch**: off (`parallelism.worker_dispatch`)');
+    expect(section).toContain('a prior offer was declined');
+    expect(section).toContain('setup.worker_dispatch_offer');
+    expect(section).toContain('Do not re-offer it');
+    expect(section).not.toContain('Do not assume other worker CLIs are unavailable');
+  });
 });
 
 describe('orchestration groups block (#2893 / #2914)', () => {
@@ -264,6 +297,8 @@ Do not delegate trivial work, tightly coupled changes, serial dependencies, or t
 The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.
 
 **Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
+
+**Direct worker dispatch**: off (\`parallelism.worker_dispatch\`). Do not assume other worker CLIs are unavailable — detect them yourself and offer \`aiwg config set --project parallelism.worker_dispatch true\` to the user if it would help.
 
 <!-- AIWG-PARALLELISM-CAP:END -->
 `;

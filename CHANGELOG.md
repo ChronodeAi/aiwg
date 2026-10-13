@@ -42,6 +42,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   transcript-replica files are opened; credential, cookie and other app-state
   files are never read. A truncated cache window is imported as `provisional`,
   and re-imports add only newer entries.
+- `aiwg init` and `aiwg setup project` now detect which supported worker CLIs
+  are installed (presence-only, no network, no spawn) and offer to turn on
+  `parallelism.worker_dispatch` when two or more are found and dispatch is
+  off, defaulting to no (#3050). Non-interactive runs and a declined offer
+  (`setup.worker_dispatch_offer: "declined"` — a setup preference, kept out
+  of the `parallelism` worker-policy block) leave the setting untouched and
+  print a one-line hint instead. `aiwg regenerate`, `aiwg refresh`, and
+  `aiwg doctor --probe-workers` print the same hint when it still applies,
+  and generated project context now states the dispatch state plainly. See
+  [Turn On Direct Worker Dispatch](docs/getting-started/worker-dispatch.md).
 
 ### Changed
 

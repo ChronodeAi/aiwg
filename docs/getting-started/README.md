@@ -22,6 +22,7 @@ README](just-try-it.md). The result is a saved report with three prioritized fix
 | Review security or code quality | [Audit Existing Code](audit-existing-code.md) |
 | Share project instructions across a team | [Team Setup](team-setup.md) |
 | Coordinate background work | [Automation](daemon-and-automation.md) |
+| Dispatch work to other installed AI CLIs | [Turn On Direct Worker Dispatch](worker-dispatch.md) |
 | Review earlier AI sessions | [Session History](session-history.md) |
 | Find a workflow without knowing its name | [Language Map](language-map.md), [Ask the Steward](first-success-ask-steward.md) |
 
