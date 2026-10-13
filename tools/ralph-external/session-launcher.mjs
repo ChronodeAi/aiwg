@@ -348,7 +348,20 @@ async function launchOneWorker(owner, options) {
   // SAME digest both gates the allowance reservation here and is published
   // into invocation.json below — never recomputed from a possibly-stale
   // `invocation` snapshot after the mid-attempt revalidation further down.
-  const taskDigest = await stableTaskChainDigest(saved.request, invocation.briefDigest);
+  //
+  // #2915 review 6 (finding 6, "changed disabled behavior"): when dispatch
+  // is globally disabled, `admitDirectWorker` never consults `taskDigest`
+  // at all (it returns `{ gated: false }` before even looking at it), so
+  // there is no functional reason to compute the NEW role/task/group/
+  // brief-content identity here -- and every reason not to, because this
+  // same value is published into `invocation.json` below regardless of
+  // gating. Preserve the EXACT origin/main algorithm
+  // (`qualificationDigest(saved.request)`) for that published value when
+  // disabled, so a disabled-dispatch launch writes byte-for-byte the same
+  // `taskDigest` origin/main always did.
+  const taskDigest = gate.enabled
+    ? await stableTaskChainDigest(saved.request, invocation.briefDigest)
+    : qualificationDigest(saved.request);
   let admission;
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
@@ -385,7 +398,12 @@ async function launchOneWorker(owner, options) {
     const used = await peekLedgerCorrections({ captureRoot: options?.captureRoot, taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts });
     const gate = startupCorrectionGate({ ...options.correctStartup, correctionsUsed: used });
     if (!gate.ok) {
-      settleDirectWorker(admission, { kind: 'uncertain' });
+      // #2915 review 6 (finding 3b, "blocking markers... zero spawns"): a
+      // reservation that provably never dispatched must release without
+      // leaving a marker, even if this settlement happens to land past its
+      // own canary deadline -- PROVEN here: no worker process has been
+      // started at any point before this refusal.
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
       const error = new Error(`Startup correction refused: ${gate.reason}`);
       error.code = 'STARTUP_CORRECTION_REFUSED';
       throw error;
@@ -406,7 +424,9 @@ async function launchOneWorker(owner, options) {
     const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
     try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
   } catch (error) {
-    settleDirectWorker(admission, { kind: 'uncertain' });
+    // #2915 review 6 (finding 3b): PROVEN zero-spawn pre-spawn failure --
+    // release without leaving a marker even past the canary deadline.
+    settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
     throw error;
   }
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -517,38 +537,80 @@ async function launchOneWorker(owner, options) {
     // reopening it forever (#2915 final review, finding 4).
     settleDirectWorker(admission, classifyAttemptForSettlement(invocation, result,
       { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
+    // #2915 review 6 (finding 6, "changed disabled behavior"): origin/main's
+    // `SessionLauncher` never had `lastAttemptResult`/`lastAttemptInvocationId`
+    // at all -- gated on `admission.gated` (set HERE, inside `launchOneWorker`,
+    // rather than unconditionally in `launchWorker` below) so a disabled-
+    // dispatch launch leaves the launcher instance exactly as untouched as it
+    // always was, matching origin/main byte-for-byte.
+    if (admission.gated) {
+      owner.lastAttemptResult = result ?? null;
+      owner.lastAttemptInvocationId = result?.invocationId ?? owner.lastAttemptInvocationId;
+    }
     return result;
   } catch (error) {
     if (!outcome?.child) {
       // Pre-spawn failure (or a recovery-scope refusal): PROVEN -- this
       // attempt never ran, so it settles outstanding membership with NO
       // failure evidence (#2915 final review: "every pre-spawn exit
-      // releases capacity").
-      settleDirectWorker(admission, { kind: 'uncertain' });
+      // releases capacity"). `confirmedStop: true` (#2915 review 6, finding
+      // 3b): zero spawns occurred, so release without leaving a marker even
+      // if this settlement happens to land past the reservation's own
+      // canary deadline.
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
       await publish('exit.json', { invocationId, exitCode: null, signal: null,
         endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
-    } else {
-      // #2915 review 5 (finding 2a, "leaked capacity"): a child DID attach,
-      // but something thrown here means `captureOneWorker` never reached
-      // its own normal settlement call above (line ~469) -- its own
-      // internal paths are designed to always resolve a `result` rather
-      // than throw, so reaching this branch means an exception escaped
-      // that contract entirely (e.g. a synchronous failure building the
-      // health observer before `finish()` is even wired). Post-spawn
-      // uncertainty: unlike the proven pre-spawn case above, a worker may
-      // genuinely still be running, so this settles as 'uncertain' (no
-      // failure evidence asserted either way) rather than leaking the
-      // reservation forever by silently rethrowing without ever settling.
-      settleDirectWorker(admission, { kind: 'uncertain' });
+    } else if (admission.gated) {
+      // #2915 review 5 (finding 2a, "leaked capacity"), hardened by #2915
+      // review 6 (finding 4, "capture-setup exception after spawn"): a
+      // child DID attach, but something thrown here means
+      // `captureOneWorker` never reached its own normal settlement call
+      // above -- its own internal paths are designed to always resolve a
+      // `result` rather than throw, so reaching this branch means an
+      // exception escaped that contract entirely (e.g. a synchronous
+      // failure building the health observer before `finish()` is even
+      // wired). The process may genuinely still be running: actually stop
+      // it with the SAME bounded SIGTERM-then-SIGKILL escalation every
+      // other "stop before retry" path already uses
+      // (`terminateChildWithGrace`), and settle with the evidence that
+      // produces, rather than abandoning a potentially-live child on a bare
+      // 'uncertain' settlement -- the gap that previously let a second
+      // canary launch over this attempt's still-running process once
+      // backoff elapsed. An UNCONFIRMED stop leaves the finding-3 blocking
+      // marker in place if this settlement also lands past the
+      // reservation's own canary deadline; a CONFIRMED stop clears it.
+      //
+      // Confined to the GATED path (#2915 review 6, finding 6, "changed
+      // disabled behavior"): origin/main never attempted this and never
+      // installed the listener below, so a disabled-dispatch attempt must
+      // behave exactly as it always did -- throw immediately, no stop
+      // attempt, no listener.
+      //
       // The exception escaped before `captureOneWorker` could attach its
-      // own `child.once('error', ...)`/`'exit'` listeners, so a subsequent
-      // async spawn failure (e.g. ENOENT arriving after this synchronous
-      // throw) would otherwise surface as an unhandled 'error' event on an
-      // EventEmitter with zero listeners. We have already decided this
-      // attempt is uncertain and are no longer tracking it further here;
-      // swallow any further event from this child rather than crashing the
-      // process over a child this code path is abandoning anyway.
+      // own `child.once('error', ...)`/`'exit'` listeners, so ANY
+      // subsequent async spawn failure (e.g. ENOENT arriving after this
+      // synchronous throw, including one already in flight for this exact
+      // child) would otherwise surface as an unhandled 'error' event on an
+      // EventEmitter with zero listeners -- installed FIRST, before the
+      // stop escalation below, which itself can race the same event.
       outcome.child.on('error', () => {});
+      let confirmedStop = false;
+      try {
+        const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
+        const stopped = await terminateChildWithGrace(outcome.child, { graceMs });
+        confirmedStop = stopped.terminated === true;
+      } catch { confirmedStop = false; }
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop });
+      // #2915 review 6 (finding 3d): when this bounded stop escalation DOES
+      // confirm termination, also call the explicit reconciliation -- a
+      // harmless no-op if this exact reservation's own settle() above
+      // already resolved its marker, but the one path that still clears a
+      // blocking marker left behind by a DIFFERENT reservation for this
+      // same invocation (e.g. a prior attempt in the same retry chain whose
+      // own token is no longer in scope here).
+      if (confirmedStop) {
+        try { admission.breaker?.reconcileStopEvidence?.({ invocationId, confirmedStop: true }); } catch { /* best-effort */ }
+      }
     }
     throw error;
   } finally {
@@ -1654,6 +1716,24 @@ export function resetDirectRecoveryBreaker() {
 }
 
 /**
+ * Synchronous, process-local digest of a resolved selection (#2915 review 6,
+ * finding 1, "unauthenticated/reused authority"): used ONLY to cross-check a
+ * BORROWED admission's claimed selection against the invocation we are about
+ * to dispatch for -- never persisted, never a stable public identity, never
+ * part of any scope key. Deliberately synchronous (no dynamic import):
+ * `planDirectWorkerLaunch`'s borrowed-admission branch must throw
+ * synchronously (see its own doc comment), so this cannot await the lazy
+ * `qualificationDigest` module load the rest of this file otherwise prefers.
+ */
+export function selectionDigestFor(invocation) {
+  const selected = invocation?.selected ?? null;
+  if (!selected) return null;
+  const payload = JSON.stringify({ cli: selected.cli ?? null, model: selected.model ?? null,
+    apiModelId: selected.apiModelId ?? null, inferenceProvider: selected.inferenceProvider ?? null });
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+/**
  * Derive the recovery scope keys covering a resolved invocation, from
  * trusted resolved configuration only (selected cli/backend, installation
  * accountScope, model). The invocation key uses the launcher-minted
@@ -1764,7 +1844,12 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
         reason: error.message } };
     }
   }
-  return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier, ledger };
+  // `invocationId`/`selectionDigest` (#2915 review 6, finding 1): identity
+  // the BORROWED-admission path cross-checks against the invocation it is
+  // actually about to dispatch for, so a reservation minted for one
+  // invocation/selection cannot authorize a launch for a different one.
+  return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier,
+    ledger, invocationId, selectionDigest: selectionDigestFor(invocation) };
 }
 
 /**
@@ -1895,16 +1980,13 @@ export class SessionLauncher extends EventEmitter {
   async launchWorker(options) {
     if (this.currentProcess || this.workerLaunchPending) throw new Error('A worker is already attached to this launcher');
     this.workerLaunchPending = true;
-    try {
-      const result = await launchOneWorker(this, options);
-      // Informational only: no longer consulted by the retry gate above
-      // (which is now `options.retryOf`-driven and disk-verified every
-      // time), kept for callers/diagnostics that read the launcher's own
-      // last-attempt bookkeeping.
-      this.lastAttemptResult = result ?? null;
-      this.lastAttemptInvocationId = result?.invocationId ?? this.lastAttemptInvocationId;
-      return result;
-    } finally { this.workerLaunchPending = false; }
+    // Informational-only `lastAttemptResult`/`lastAttemptInvocationId`
+    // bookkeeping (no longer consulted by the retry gate, which is now
+    // `options.retryOf`-driven and disk-verified every time) is set inside
+    // `launchOneWorker` itself, gated on whether recovery actually admitted
+    // this attempt (#2915 review 6, finding 6) — never here unconditionally.
+    try { return await launchOneWorker(this, options); }
+    finally { this.workerLaunchPending = false; }
   }
 
   /** Explicit manual observation grants no signal authority, with or without scratch. */
@@ -2648,6 +2730,42 @@ export async function getClaudeVersion() {
 }
 
 /**
+ * Bounded settlement observer for a STANDALONE non-attached systemd-unit
+ * launch (#2915 review 6, finding 5): `launchIsolatedWorker`'s non-attached
+ * systemd-unit path returns `{ mode: 'systemd-unit', unit, pid }` with no
+ * `child` handle in this process at all, so the direct-child backstop below
+ * (`result.child.once('exit', ...)`) can never attach here — leaving an
+ * ordinary (non-canary, `Infinity`-deadline) reservation with no settlement
+ * observer whatsoever if the caller never settles it itself.
+ *
+ * Poll the SAME native unit-status query every other systemd-unit
+ * stop/finish path already uses (`getWorkerIsolationStatus`), bounded by
+ * `boundMs`, and settle once the unit itself reports inactive (or the bound
+ * elapses) — never settle while the unit may still legitimately be running,
+ * and never poll forever. `settleDirectWorker` is idempotent, so an explicit
+ * caller settlement with real evidence still wins if it happens first; this
+ * is purely a backstop against "forgot to settle", exactly like the
+ * direct-child listener it complements.
+ */
+function observeStandaloneUnitSettlement(unit, admission, {
+  pollIntervalMs = 2000, boundMs = 300_000, getStatus = getWorkerIsolationStatus,
+  nowMs = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), unrefTimer = timer => timer?.unref?.(),
+} = {}) {
+  const deadline = nowMs() + boundMs;
+  const poll = () => {
+    let status = null;
+    try { status = getStatus(unit); } catch { status = null; }
+    if (status && status.active === false) {
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: [1, 2, 3].includes(status.execMainCode) });
+      return;
+    }
+    if (nowMs() >= deadline) { settleDirectWorker(admission, { kind: 'uncertain' }); return; }
+    unrefTimer(setTimer(poll, pollIntervalMs));
+  };
+  poll();
+}
+
+/**
  * Tier 0 direct-dispatch gate-then-launch helper (FR-OG-107/108, #2954, #2888).
  *
  * `SessionLauncher` above is the Claude-headless-loop launcher and is
@@ -2780,6 +2898,13 @@ export function planDirectWorkerLaunch({
   // OR ineligible — `admitDirectWorker` simply has nothing to check, same
   // as before.
   drivers,
+  // #2915 review 6 (finding 5): test-only injection for the standalone
+  // non-attached systemd-unit settlement observer below (production omits
+  // these and polls the real `getWorkerIsolationStatus` on a real bounded
+  // timer).
+  isolationStatus,
+  unitSettlementPollMs,
+  unitSettlementBoundMs,
 } = {}) {
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
@@ -2818,26 +2943,65 @@ export function planDirectWorkerLaunch({
     return launch();
   }
   if (borrowedAdmission !== undefined) {
-    // #2915 review 5 (finding 4): the borrowed admission must be a value
-    // `admitDirectWorker` itself returned -- never a caller-fabricated
-    // stand-in -- and may authorize at most ONE launch. A genuine
-    // admission is either exactly `{ gated: false }` (not gated), a
+    // #2915 review 5 (finding 4), hardened by #2915 review 6 (finding 1,
+    // "unauthenticated/reused authority"): the borrowed admission must be a
+    // value `admitDirectWorker` itself returned -- never a caller-
+    // fabricated stand-in -- and may authorize at most ONE launch. A
+    // genuine admission is either exactly `{ gated: false }` (not gated), a
     // refusal (`{ gated: true, refused: {...} }`), or a successful one
-    // carrying both `token` and `breaker` (the exact objects `admit()`
-    // minted) -- never anything else.
+    // carrying both `token` and a REAL `ScopedFailureBreaker` instance (the
+    // exact objects `admit()` minted) -- never anything else. `instanceof
+    // ScopedFailureBreaker` (rather than duck-typing `breaker.settle` as a
+    // function) is what actually closes the fabrication gap: a plain
+    // `{ settle(){} }` stand-in satisfied the old duck-typed shape check and
+    // then dispatched with zero real breaker protection.
     if (borrowedAdmission === null || typeof borrowedAdmission !== 'object' || typeof borrowedAdmission.gated !== 'boolean'
-      || (borrowedAdmission.gated && !borrowedAdmission.refused && (!borrowedAdmission.token || typeof borrowedAdmission.breaker?.settle !== 'function'))) {
+      || (borrowedAdmission.gated && !borrowedAdmission.refused && (!borrowedAdmission.token || !(borrowedAdmission.breaker instanceof ScopedFailureBreaker)))) {
       throw new Error('Borrowed admission is not a value admitDirectWorker returned; refusing to dispatch on unauthenticated authority');
     }
     if (_consumedBorrowedAdmissions.has(borrowedAdmission)) {
       throw new Error('Borrowed admission was already used to authorize a launch; each admission authorizes exactly one dispatch');
     }
     _consumedBorrowedAdmissions.add(borrowedAdmission);
+    // A `gated: false` CLAIM is never trusted on its own: by the time this
+    // branch runs, the planner's OWN dispatch/eligibility checks above
+    // (`gate.enabled`, per-CLI disablement) have already determined gating
+    // IS active for this dispatch -- a borrowed admission claiming
+    // `gated: false` here contradicts that and is refused rather than
+    // honored as a free bypass. Only the launcher's own checks decide
+    // not-gated-ness; a caller cannot assert it after the fact.
+    if (!borrowedAdmission.gated) {
+      throw new Error('Borrowed admission claims not-gated while this dispatch is gated; refusing to dispatch on unauthenticated authority');
+    }
     // Borrowed: never re-admit, never settle — the outer caller's own
     // try/finally owns settlement of this exact admission end-to-end.
     if (borrowedAdmission.refused) {
       return { launched: false, blocked: true, recoveryBlocked: borrowedAdmission.refused.blockedBy,
         diagnostic: `recovery scope open: ${borrowedAdmission.refused.blockedBy.join(', ')}` };
+    }
+    // Identity: the invocation/selection this admission was minted for must
+    // match what we are actually about to dispatch -- a reservation reserved
+    // for one task/CLI combination must never authorize launching a
+    // different one. Only compared when BOTH sides resolve a value; a
+    // caller with no known `invocationId`/`invocation` cannot be checked and
+    // is not refused for an absent comparison.
+    if (invocationId !== undefined && borrowedAdmission.invocationId !== undefined && borrowedAdmission.invocationId !== invocationId) {
+      throw new Error('Borrowed admission was minted for a different invocation; refusing to dispatch on unauthenticated authority');
+    }
+    const expectedSelectionDigest = selectionDigestFor(invocation);
+    if (expectedSelectionDigest !== null && borrowedAdmission.selectionDigest !== undefined
+      && borrowedAdmission.selectionDigest !== expectedSelectionDigest) {
+      throw new Error('Borrowed admission was minted for a different selection; refusing to dispatch on unauthenticated authority');
+    }
+    // Authenticate against the breaker's own STORED reservation (reference
+    // identity, not shape) and consume launch ownership on it atomically --
+    // a copied wrapper around the same real token, an already-launched
+    // reservation, or one past its own deadline all fail here even though
+    // they passed every check above.
+    let claimed = false;
+    try { claimed = borrowedAdmission.breaker.claimLaunch(borrowedAdmission.token); } catch { claimed = false; }
+    if (!claimed) {
+      throw new Error('Borrowed admission is not a live, unclaimed reservation on its breaker; refusing to dispatch on unauthenticated authority');
     }
     return launch();
   }
@@ -2892,12 +3056,17 @@ export function planDirectWorkerLaunch({
     // `settleDirectWorker` is idempotent, so an explicit caller settlement
     // with real evidence still wins if it happens first; this is purely a
     // backstop against "forgot to settle", never a replacement for real
-    // evidence-based settlement, and it does not cover `systemd-unit` mode
-    // (no direct child to observe here) -- a caller using that mode must
-    // still settle explicitly.
+    // evidence-based settlement.
     if (result.child && typeof result.child.once === 'function') {
       result.child.once('exit', () => settleDirectWorker(admission, { kind: 'uncertain' }));
       result.child.once('error', () => settleDirectWorker(admission, { kind: 'uncertain' }));
+    } else if (result.mode === 'systemd-unit' && result.unit) {
+      // #2915 review 6 (finding 5): the non-attached systemd-unit mode has
+      // no direct child to observe here at all -- give it the same kind of
+      // bounded backstop via the native unit-status query instead of
+      // leaving this reservation with no settlement observer whatsoever.
+      observeStandaloneUnitSettlement(result.unit, admission,
+        { getStatus: isolationStatus, pollIntervalMs: unitSettlementPollMs, boundMs: unitSettlementBoundMs });
     }
     return { ...result, admission };
   })();

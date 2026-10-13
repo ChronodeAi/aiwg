@@ -628,6 +628,229 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     }
   });
 
+  // #2915 review 6 (finding 3a, "blocking markers become permanently
+  // unresolvable"): the former code set `markerResolved` on the FIRST
+  // settle() call against an expired reservation regardless of its
+  // outcome, so an earlier UNCONFIRMED report (the common case: a degraded
+  // attempt can never supply confirmed-termination evidence) permanently
+  // rejected every LATER, genuinely confirmed one. A later confirmed
+  // report -- or an explicit `reconcileStopEvidence` reconciliation -- must
+  // still succeed at any time.
+  it('an earlier unconfirmed settlement never forecloses a later confirmed one from clearing the marker', () => {
+    openInstall();
+    vi.advanceTimersByTime(120_000);
+    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    expect(admitted.ok).toBe(true);
+    vi.advanceTimersByTime(300_001);
+    // Sweeps the expiry and installs the marker.
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // An UNCONFIRMED report arrives first (e.g. a degraded attempt that can
+    // never supply confirmed-termination evidence) -- a no-op, leaving the
+    // marker in place, never "resolving" it against a future confirmed one.
+    expect(breaker.settle(admitted.token, { kind: 'uncertain' })).toEqual({ ok: true });
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // A repeated IDENTICAL unconfirmed report is refused (exactly-once,
+    // matching every other settlement outcome) -- but this must never be
+    // confused with the marker itself being permanently unresolvable.
+    expect(breaker.settle(admitted.token, { kind: 'uncertain' })).toEqual({ ok: false, reason: expect.any(String) });
+    // This reproduces the review's exact bug: without the fix, the marker
+    // would ALREADY be irrecoverably stuck here, and the line below would
+    // return `{ ok: false }` instead of clearing it.
+    expect(breaker.settle(admitted.token, { kind: 'uncertain', confirmedStop: true })).toEqual({ ok: true });
+    expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
+    vi.advanceTimersByTime(240_000);
+    expect(probe(breaker, [INSTALL]).ok).toBe(true);
+  });
+
+  // #2915 review 6 (finding 3b, "blocking markers become permanently
+  // unresolvable... zero spawns"): a reservation that provably NEVER
+  // dispatched (pre-spawn refusal, expired while queued) must release
+  // WITHOUT leaving a marker observable from outside, even though the
+  // sweep this very settlement triggers would otherwise install one.
+  // `settleDirectWorker`'s pre-spawn-refusal branches in
+  // `launchOneWorker` (session-launcher.mjs) now report
+  // `confirmedStop: true` for exactly this proven case.
+  it('settleDirectWorker with confirmedStop:true for a provably-never-dispatched reservation releases without leaving a marker, even past the canary deadline', () => {
+    let now = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    try {
+      for (const id of ['a', 'b', 'c']) fail(breaker, [INSTALL], id, installFailure(id));
+      now += 120_000;
+      const admitted = breaker.admit({ invocationId: 'canary-never-dispatched', scopeKeys: [INSTALL] });
+      expect(admitted.ok).toBe(true);
+      expect(admitted.token.canaryKeys).toEqual([INSTALL]);
+      // "Expired while queued": this exact reservation's own canary
+      // deadline elapses before the caller ever attempts to dispatch it.
+      now += 300_001;
+      settleDirectWorker({ gated: true, breaker, token: admitted.token }, { kind: 'uncertain', confirmedStop: true });
+      // Never externally observable: the sweep this settle() call performs
+      // would install a marker, but the SAME call's confirmedStop evidence
+      // clears it before returning.
+      expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
+      // Still correctly reopened with doubled backoff -- confirmedStop
+      // releases the marker/reservation, not the unrelated reopen
+      // transition.
+      expect(breaker.getState(INSTALL).state).toBe('open');
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 3f, "markers must not be able to starve
+  // unrelated work silently"): when `reservation-capacity` is refused
+  // because occupied slots are unresolved blocking markers rather than
+  // live, settleable reservations, the refusal diagnostics must say so and
+  // name the count.
+  it('names the blocking-marker count in a reservation-capacity refusal', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxOutstandingReservations: 1 } });
+    try {
+      fail(smallCapBreaker, [INSTALL], 'a', installFailure('a'));
+      fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
+      fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
+      vi.advanceTimersByTime(120_000);
+      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      expect(admitted.ok).toBe(true);
+      vi.advanceTimersByTime(300_001);
+      const refused = smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] });
+      expect(refused.ok).toBe(false);
+      expect(refused.blockedBy).toContain('reservation-capacity');
+      expect(refused.blockedBy).toContain('blocking-markers:1');
+    } finally {
+      smallCapBreaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 3d, "markers alone exhaust global capacity;
+  // scoped reset does not recover it"): `reset(scopeKey)` must release the
+  // scope's own reservations (including a blocking marker's), not merely
+  // delete the scope record, so the capacity it occupied is recoverable
+  // without a full `reset()`/`resetDirectRecoveryBreaker()`.
+  it('a scoped reset releases that scope\'s own reservations, recovering the capacity a stuck marker occupied', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxOutstandingReservations: 1 } });
+    try {
+      fail(smallCapBreaker, [INSTALL], 'a', installFailure('a'));
+      fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
+      fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
+      vi.advanceTimersByTime(120_000);
+      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      expect(admitted.ok).toBe(true);
+      vi.advanceTimersByTime(300_001);
+      expect(smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] }).ok).toBe(false);
+      // A scoped reset of the STUCK scope -- not a full reset() -- recovers
+      // its own reservation's capacity.
+      smallCapBreaker.reset(INSTALL);
+      expect(smallCapBreaker.getState(INSTALL).tracked).toBe(false);
+      const afterwards = smallCapBreaker.admit({ invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
+      expect(afterwards.ok).toBe(true);
+    } finally {
+      smallCapBreaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 3d): `reconcileStopEvidence` resolves a stuck
+  // marker by INVOCATION ID alone -- the bounded stop-escalation observer
+  // (or an operator) may know only that, not the exact token object
+  // `admit()` minted.
+  it('reconcileStopEvidence releases a marker and its reservation by invocation id, idempotently', () => {
+    openInstall();
+    vi.advanceTimersByTime(120_000);
+    const admitted = breaker.admit({ invocationId: 'canary-recon', scopeKeys: [INSTALL] });
+    expect(admitted.ok).toBe(true);
+    vi.advanceTimersByTime(300_001);
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // Uncertain evidence (the default) never releases anything.
+    expect(breaker.reconcileStopEvidence({ invocationId: 'canary-recon' })).toEqual({ released: 0 });
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // Confirmed stop evidence, reported by invocation id alone, releases
+    // the marker and the reservation.
+    expect(breaker.reconcileStopEvidence({ invocationId: 'canary-recon', confirmedStop: true })).toEqual({ released: 1 });
+    expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
+    // Idempotent: nothing left to release the second time.
+    expect(breaker.reconcileStopEvidence({ invocationId: 'canary-recon', confirmedStop: true })).toEqual({ released: 0 });
+    vi.advanceTimersByTime(240_000);
+    expect(probe(breaker, [INSTALL]).ok).toBe(true);
+  });
+
+  // #2915 review 6 (finding 2, "atomic scope tracking"): with ONE free
+  // scope-tracking slot, four concurrent admissions for four DISTINCT
+  // brand-new shared scopes must admit AT MOST one of them -- never all
+  // four with three failures silently discarded later. "Concurrent" here
+  // means admit() calls racing with no settle() in between, exactly the
+  // production shape (multiple in-flight attempts admitted before any of
+  // them conclude).
+  it('reserves scope-tracking capacity atomically at admission, refusing admissions a single free slot cannot cover', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxTrackedScopes: 2, maxOutstandingReservations: 10 } });
+    try {
+      // Fill one of the two slots with a genuinely OPEN, non-evictable scope.
+      fail(smallCapBreaker, [INSTALL], 'o1', installFailure('o1'));
+      fail(smallCapBreaker, [INSTALL], 'o2', installFailure('o2'));
+      fail(smallCapBreaker, [INSTALL], 'o3', installFailure('o3'));
+      expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
+      // Exactly ONE free slot remains. Four concurrent admissions, each for
+      // its OWN distinct brand-new shared scope, race against it -- none of
+      // them settle before the next admit() runs.
+      const keys = ['p1', 'p2', 'p3', 'p4'].map((name) => scopeKeyFor.provider(name));
+      const admissions = keys.map((key, i) => smallCapBreaker.admit({ invocationId: `c-${i}`, scopeKeys: [key] }));
+      const admittedCount = admissions.filter((a) => a.ok).length;
+      expect(admittedCount).toBe(1);
+      for (const admission of admissions.filter((a) => !a.ok)) {
+        expect(admission.blockedBy).toContain('scope-tracking-capacity');
+      }
+      // The admitted one's own new scope IS tracked; the three refused ones
+      // left no orphaned tracking record behind.
+      for (let i = 0; i < admissions.length; i += 1) {
+        expect(smallCapBreaker.getState(keys[i]).tracked).toBe(admissions[i].ok);
+      }
+      // Settling the one admitted attempt as a failure must not lose its
+      // evidence -- proving the reservation genuinely protected it, rather
+      // than merely refusing the other three without tracking this one
+      // either.
+      const admittedIndex = admissions.findIndex((a) => a.ok);
+      const settleResult = smallCapBreaker.settle(admissions[admittedIndex].token,
+        { kind: 'failed', scope: FailureScope.PROVIDER, scopeKey: keys[admittedIndex], reasonCode: 'NETWORK',
+          evidenceSource: 'launcher', cli: 'codex', inferenceProvider: `p${admittedIndex + 1}` });
+      expect(settleResult).toEqual({ ok: true });
+      expect(smallCapBreaker.getState(keys[admittedIndex]).distinctFailures).toBe(1);
+    } finally {
+      smallCapBreaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 2): the tracking slot THIS admission reserved
+  // is released again once the scope it covers settles inert, so capacity
+  // is recoverable for later, SEQUENTIAL admissions -- not just refused
+  // for concurrent ones.
+  it('releases a reserved scope-tracking slot on settlement once the scope is inert, recovering capacity for later admissions', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxTrackedScopes: 2 } });
+    try {
+      // Permanently occupy ONE of the two slots with a genuinely OPEN,
+      // non-evictable scope, so only one slot is ever actually free.
+      fail(smallCapBreaker, [INSTALL], 'o1', installFailure('o1'));
+      fail(smallCapBreaker, [INSTALL], 'o2', installFailure('o2'));
+      fail(smallCapBreaker, [INSTALL], 'o3', installFailure('o3'));
+      expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
+      const keyA = scopeKeyFor.provider('a');
+      const keyB = scopeKeyFor.provider('b');
+      const admissionA = smallCapBreaker.admit({ invocationId: 'seq-a', scopeKeys: [keyA] });
+      expect(admissionA.ok).toBe(true);
+      expect(smallCapBreaker.getState(keyA).tracked).toBe(true);
+      // Both slots are now occupied (INSTALL open, keyA tracked). Settling
+      // keyA's admission as an unremarkable success (never opening, never
+      // retaining failure evidence) must release its slot back to the
+      // pool -- without the fix, a SECOND, sequential admission for a
+      // DIFFERENT brand-new scope would have nowhere to go.
+      expect(smallCapBreaker.settle(admissionA.token, { kind: 'succeeded' })).toEqual({ ok: true });
+      expect(smallCapBreaker.getState(keyA).tracked).toBe(false);
+      const admissionB = smallCapBreaker.admit({ invocationId: 'seq-b', scopeKeys: [keyB] });
+      expect(admissionB.ok).toBe(true);
+      expect(smallCapBreaker.getState(keyB).tracked).toBe(true);
+    } finally {
+      smallCapBreaker.destroy();
+    }
+  });
+
   // #2915 final review step 2, named tests ------------------------------
 
   it('old-attempt-cannot-settle-canary', () => {
@@ -1392,6 +1615,127 @@ describe('planDirectWorkerLaunch recovery gate', () => {
     }
   });
 
+  // #2915 review 6 (finding 1, "unauthenticated/reused authority"): a
+  // `gated: false` CLAIM must never be trusted as authority to bypass --
+  // the planner's OWN checks above have already determined this dispatch
+  // IS gated (a real breaker is configured and neither the global switch
+  // nor the per-CLI setting is off), so a borrowed admission asserting
+  // `gated: false` here contradicts that and must be refused, never
+  // honored as a free bypass.
+  it('refuses a borrowed admission claiming gated:false while this dispatch is actually gated', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission: { gated: false },
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/claims not-gated while this dispatch is gated/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 1): a FABRICATED breaker satisfying the old
+  // duck-typed shape check (`{ settle(){} }`) dispatched with zero real
+  // breaker protection. `instanceof ScopedFailureBreaker` closes that gap.
+  it('refuses a borrowed admission whose breaker is not a real ScopedFailureBreaker instance', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const forged = { gated: true, token: {}, breaker: { settle() { return { ok: true }; }, claimLaunch() { return true; } } };
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission: forged,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/not a value admitDirectWorker returned/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 1): a COPY of a genuine wrapper around the
+  // SAME real token/breaker -- never seen by the local `_consumedBorrowedAdmissions`
+  // WeakSet, which tracks the wrapper object, not the token -- must still
+  // be refused: `claimLaunch` authenticates and consumes by the token's
+  // OWN reference identity on the breaker, independent of which wrapper
+  // object carries it.
+  it('refuses a copied wrapper reusing the SAME real token, even though the WeakSet never saw this exact wrapper', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig, invocation: { selected: { cli: 'codex' } },
+        invocationId: 'copy-1', scopedBreaker: breaker, drivers: {} });
+      expect(admission.gated).toBe(true);
+      const copy = { ...admission }; // fresh wrapper object, SAME token/breaker references
+      const first = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
+      expect(first.launched).toBe(true);
+      // Same synchronous-throw reasoning as the reuse test above.
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission: copy,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/not a live, unclaimed reservation/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 1): a reservation minted for one invocation id
+  // must not authorize dispatching a DIFFERENT invocation.
+  it('refuses a borrowed admission minted for a different invocation id', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig, invocation: { selected: { cli: 'codex' } },
+        invocationId: 'mismatch-1', scopedBreaker: breaker, drivers: {} });
+      expect(admission.gated).toBe(true);
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: 'mismatch-2',
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/minted for a different invocation/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 1): a reservation minted for one CLI selection
+  // must not authorize dispatching a DIFFERENT selection.
+  it('refuses a borrowed admission minted for a different selection', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig,
+        invocation: { selected: { cli: 'codex', inferenceProvider: 'openai' } },
+        invocationId: 'selection-1', scopedBreaker: breaker, drivers: {} });
+      expect(admission.gated).toBe(true);
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission,
+        invocation: { selected: { cli: 'claude', inferenceProvider: 'anthropic' } },
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/minted for a different selection/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 1): an EXPIRED reservation (its own canary
+  // deadline already passed) must not authorize a launch even though it
+  // is otherwise a perfectly genuine, unconsumed admission.
+  it('refuses an expired borrowed admission', async () => {
+    let now = 5_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    try {
+      for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
+      now += 120_000;
+      const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig,
+        invocation: { selected: { cli: 'codex' } }, invocationId: 'expiring-1', scopedBreaker: breaker, drivers: {} });
+      expect(admission.gated).toBe(true);
+      expect(admission.token.canaryKeys).toEqual([INSTALL]); // this IS the canary, bounded by canaryTimeoutMs
+      now += 300_001; // past the canary's own 300s deadline
+      expect(() => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, admission,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true }))
+        .toThrow(/not a live, unclaimed reservation/);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
   it('is inert when worker_dispatch is off: an open scope never blocks, and the breaker is never constructed or consulted (#2915 P0)', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
@@ -1456,6 +1800,63 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       // what matters here is that it is NOT permanently wedged by a
       // never-settled reservation.)
       expect(breaker.getState(INSTALL).activeCanary).toBeNull();
+    } finally {
+      breaker.destroy();
+    }
+  });
+
+  // #2915 review 6 (finding 5): a standalone NON-ATTACHED systemd-unit
+  // launch has no direct child handle in this process at all (`launch.child`
+  // is undefined), unlike every other isolation mode above -- the
+  // direct-child safety net can never attach here, so without a dedicated
+  // observer this reservation would never settle at all (an `Infinity`
+  // deadline; the breaker's own sweep can never reclaim it either). Fakes
+  // every `systemd-run`/`systemctl` subprocess call (never detects or
+  // requires a real host systemd user manager) and injects the native
+  // unit-status poll so the observer settles once the unit itself reports
+  // inactive.
+  it('settles a standalone non-attached systemd-unit launch via the native unit-status poll, even with no child handle to observe', async () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const invocation = { selected: { cli: 'codex' }, stdin: 'closed' };
+      let statusCalls = 0;
+      const isolationStatus = () => {
+        statusCalls += 1;
+        return statusCalls < 3 ? { active: true } : { active: false, execMainCode: 1 };
+      };
+      const fakeSpawn = (cmd, args) => {
+        if (cmd === 'systemctl' && args[0] === '--user' && args[1] === 'show-environment') {
+          return { error: null, status: 0, stdout: 'PATH=/usr/bin\n', stderr: '' };
+        }
+        if (cmd === 'systemd-run') return { error: null, status: 0, stdout: '', stderr: '' };
+        if (cmd === 'systemctl' && args[0] === '--user' && args[1] === 'show') {
+          return { error: null, status: 0, stdout: '4242\n', stderr: '' };
+        }
+        return { error: new Error(`unexpected spawn: ${cmd}`), status: 1, stdout: '', stderr: '' };
+      };
+      const launch = await planDirectWorkerLaunch({
+        invocation, scopedBreaker: breaker, config: dispatchOnConfig, live: healthyLive,
+        command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(), memoryMaxGb: 1,
+        isolation: { mode: 'systemd-unit' }, spawn: fakeSpawn, proposeUnit: () => 'aiwg-fixture-unit',
+        isolationStatus, unitSettlementPollMs: 5, unitSettlementBoundMs: 500,
+      });
+      expect(launch.launched).toBe(true);
+      expect(launch.mode).toBe('systemd-unit');
+      expect(launch.child).toBeUndefined();
+      expect(launch.admission).toBeDefined();
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1); // nothing settled it yet
+      // No caller ever calls `settleDirectWorker` directly -- only the
+      // observer does, once the unit itself reports inactive.
+      await new Promise((resolve, reject) => {
+        const deadline = Date.now() + 2000;
+        const check = () => {
+          if (breaker.snapshot().reservationsOutstanding === 0) { resolve(); return; }
+          if (Date.now() > deadline) { reject(new Error('standalone unit settlement observer never ran')); return; }
+          setTimeout(check, 10);
+        };
+        check();
+      });
+      expect(statusCalls).toBeGreaterThanOrEqual(3);
     } finally {
       breaker.destroy();
     }
@@ -1873,6 +2274,85 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       await rm(fx.root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  // #2915 review 6 (finding 4, "capture-setup exception after spawn"): the
+  // PRIOR fix only settled the admission (never leaking the reservation),
+  // but abandoned the still-RUNNING child entirely -- it previously stayed
+  // alive, unobserved, while backoff elapsed and a second canary could be
+  // admitted over it. The bounded stop escalation must actually stop it.
+  it('a post-spawn capture-setup exception actually stops the still-running child instead of abandoning it', async () => {
+    const fx = await enoentFixtureRoot();
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    let capturedChild;
+    try {
+      const invocationPath = await fx.freshPlan();
+      // A REAL, genuinely long-running child -- unlike the ENOENT fixture
+      // above, which exits (and so proves nothing about the stop
+      // escalation) on its own within a few milliseconds.
+      const throwingDriver = { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } };
+      await expect(launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'stop-escalation-run'),
+        inputs: { snapshot: fx.f.snapshot, drivers: { codex: throwingDriver } }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => {
+          capturedChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+          return { mode: 'degraded', child: capturedChild };
+        },
+      })).rejects.toThrow('synthetic capture-setup failure');
+      expect(capturedChild).toBeDefined();
+      // Bounded wait for the real stop escalation (terminateChildWithGrace)
+      // to actually take effect -- never abandoned running.
+      await new Promise((resolve) => {
+        if (capturedChild.exitCode !== null || capturedChild.signalCode !== null) { resolve(); return; }
+        capturedChild.once('exit', resolve);
+      });
+      expect(capturedChild.signalCode).toBe('SIGTERM');
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  // #2915 review 6 (finding 6, "changed disabled behavior"): with dispatch
+  // disabled, `invocation.json.taskDigest` must equal the EXACT value
+  // origin/main writes (`qualificationDigest(saved.request)`) -- never the
+  // NEW role/task/group/brief-content identity, which `admitDirectWorker`
+  // (never consulted when disabled) has no use for. The launcher
+  // instance's `lastAttemptResult`/`lastAttemptInvocationId` -- fields
+  // origin/main never had at all -- must also stay untouched.
+  it('a disabled-dispatch launch writes the origin/main taskDigest algorithm and leaves lastAttemptResult/lastAttemptInvocationId untouched', async () => {
+    const fx = await enoentFixtureRoot();
+    const launcher = new SessionLauncher();
+    try {
+      const invocationPath = await fx.freshPlan();
+      const saved = JSON.parse(await readFile(invocationPath, 'utf8'));
+      const expectedTaskDigest = qualificationDigest(saved.request);
+      const gatedTaskDigest = await stableTaskChainDigest(saved.request, saved.invocation.briefDigest);
+      expect(expectedTaskDigest).not.toBe(gatedTaskDigest); // sanity: the two algorithms actually differ
+      const runDir = path.join(fx.root, 'disabled-digest-run');
+      expect(launcher.lastAttemptResult).toBeNull();
+      const result = await launcher.launchWorker({
+        invocationPath, runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      });
+      expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      const writtenInvocation = JSON.parse(await readFile(path.join(runDir, 'invocation.json'), 'utf8'));
+      expect(writtenInvocation.taskDigest).toBe(expectedTaskDigest);
+      expect(writtenInvocation.taskDigest).not.toBe(gatedTaskDigest);
+      // origin/main's `SessionLauncher` never had these fields at all.
+      expect(launcher.lastAttemptResult).toBeNull();
+      expect(launcher.lastAttemptInvocationId).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
 
   // #2915 final review step 5 (production closure): a genuinely successful
   // DEGRADED attempt (no systemd unit; `termination` can never reach
