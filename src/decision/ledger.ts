@@ -760,6 +760,12 @@ export interface DecisionLedgerFilters {
   sessionId?: string;
   kind?: DecisionLedgerKind;
   status?: DecisionAskResult['status'];
+  /** Exact caller-tag match (`--caller <tag>`). Mutually exclusive with `callerPrefix`/`noCaller`. */
+  caller?: string;
+  /** Prefix match: `--caller '<prefix>*'` with the trailing `*` stripped. Mutually exclusive with `caller`/`noCaller`. */
+  callerPrefix?: string;
+  /** Select only records with no caller tag (`--no-caller`). Mutually exclusive with `caller`/`callerPrefix`. */
+  noCaller?: boolean;
 }
 
 function matchesFilters(record: DecisionLedgerRecord, filters: DecisionLedgerFilters): boolean {
@@ -768,6 +774,9 @@ function matchesFilters(record: DecisionLedgerRecord, filters: DecisionLedgerFil
   if (filters.sessionId !== undefined && record.sessionId !== filters.sessionId) return false;
   if (filters.kind !== undefined && record.decisionKind !== filters.kind) return false;
   if (filters.status !== undefined && record.status !== filters.status) return false;
+  if (filters.noCaller) return record.caller === null;
+  if (filters.caller !== undefined && record.caller !== filters.caller) return false;
+  if (filters.callerPrefix !== undefined && (record.caller === null || !record.caller.startsWith(filters.callerPrefix))) return false;
   return true;
 }
 
@@ -782,6 +791,8 @@ export interface DecisionLedgerHistoryResult {
   /** Lines that failed JSON parsing or record validation and were excluded. */
   skipped: number;
   records: DecisionLedgerRecord[];
+  /** The filters applied to produce this result, so a `--json` consumer can see what was selected. */
+  filters: DecisionLedgerFilters;
 }
 
 /** Reads, validates and filters the ledger offline, streaming line-by-line; no network, no Jev call. Tolerates a missing ledger file (empty result). */
@@ -793,7 +804,7 @@ export async function decisionLedgerHistory(projectRoot: string, filters: Decisi
     if (matchesFilters(record, filters)) records.push(record);
   }
   records.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  return { schema: 'aiwg-decision-ledger-history/v1', count: records.length, skipped, records };
+  return { schema: 'aiwg-decision-ledger-history/v1', count: records.length, skipped, records, filters: { ...filters } };
 }
 
 export type DecisionLedgerGroupBy = 'provider' | 'session' | 'kind' | 'caller';
@@ -831,6 +842,8 @@ export interface DecisionLedgerStatsResult {
   groupBy: DecisionLedgerGroupBy | null;
   skipped: number;
   groups: DecisionLedgerStatsGroup[];
+  /** The filters applied to produce this result, so a `--json` consumer can see what was selected. */
+  filters: DecisionLedgerStatsFilters;
 }
 
 function groupKeyFor(record: DecisionLedgerRecord, groupBy: DecisionLedgerGroupBy | undefined): string | null {
@@ -933,6 +946,7 @@ export async function decisionLedgerStats(projectRoot: string, filters: Decision
     groupBy: filters.groupBy ?? null,
     skipped,
     groups: sortedKeys.map(key => finalizeGroup(key, groups.get(key) as StatsAccumulator)),
+    filters: { ...filters },
   };
 }
 

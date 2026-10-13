@@ -345,6 +345,167 @@ describe('decisionHandler', () => {
     expect(JSON.parse(badGroupBy.message ?? '{}')).toMatchObject({ reason: 'invalid-group-by' });
   });
 
+  it('#3065 — history filters by exact --caller, prefix --caller and --no-caller', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-'));
+    cleanup.push(dir);
+    process.env.XDG_CONFIG_HOME = dir;
+
+    for (const [question, callerArgs] of [
+      ['One', ['--caller', 'address-issues:worker-pick']],
+      ['Two', ['--caller', 'address-issues:failure-triage']],
+      ['Three', ['--caller', 'other:worker-pick']],
+      ['Four', []],
+    ] as const) {
+      const execResult = await decisionHandler.execute({
+        args: ['ask', '--question', question, '--yes-no', '--json', ...callerArgs],
+        rawArgs: [],
+        cwd: dir,
+        frameworkRoot: process.cwd(),
+      });
+      expect(execResult.exitCode).toBe(0);
+    }
+
+    const exact = await decisionHandler.execute({
+      args: ['history', '--caller', 'address-issues:worker-pick', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(exact.exitCode).toBe(0);
+    const exactBody = JSON.parse(exact.message ?? '{}');
+    expect(exactBody.count).toBe(1);
+    expect(exactBody.records.map((record: { caller: string }) => record.caller)).toEqual(['address-issues:worker-pick']);
+    expect(exactBody.filters).toMatchObject({ caller: 'address-issues:worker-pick' });
+
+    const prefix = await decisionHandler.execute({
+      args: ['history', '--caller', 'address-issues:*', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(prefix.exitCode).toBe(0);
+    const prefixBody = JSON.parse(prefix.message ?? '{}');
+    expect(prefixBody.count).toBe(2);
+    expect(prefixBody.filters).toMatchObject({ callerPrefix: 'address-issues:' });
+
+    const noCaller = await decisionHandler.execute({
+      args: ['history', '--no-caller', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(noCaller.exitCode).toBe(0);
+    const noCallerBody = JSON.parse(noCaller.message ?? '{}');
+    expect(noCallerBody.count).toBe(1);
+    expect(noCallerBody.records[0].caller).toBeNull();
+    expect(noCallerBody.filters).toMatchObject({ noCaller: true });
+
+    const human = await decisionHandler.execute({
+      args: ['history', '--caller', 'address-issues:*'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(human.exitCode).toBe(0);
+    expect(human.message).toMatch(/Caller filter: address-issues:\*/);
+  });
+
+  it('#3065 — stats aggregates only caller-matching records and echoes filters', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-'));
+    cleanup.push(dir);
+    process.env.XDG_CONFIG_HOME = dir;
+
+    for (const [question, callerArgs] of [
+      ['One', ['--caller', 'address-issues:worker-pick']],
+      ['Two', ['--caller', 'address-issues:failure-triage']],
+      ['Three', ['--caller', 'other:worker-pick']],
+    ] as const) {
+      await decisionHandler.execute({
+        args: ['ask', '--question', question, '--yes-no', '--json', ...callerArgs],
+        rawArgs: [],
+        cwd: dir,
+        frameworkRoot: process.cwd(),
+      });
+    }
+
+    const stats = await decisionHandler.execute({
+      args: ['stats', '--caller', 'address-issues:*', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(stats.exitCode).toBe(0);
+    const body = JSON.parse(stats.message ?? '{}');
+    expect(body.groups).toHaveLength(1);
+    expect(body.groups[0].totalCalls).toBe(2);
+    expect(body.filters).toMatchObject({ callerPrefix: 'address-issues:' });
+
+    const human = await decisionHandler.execute({
+      args: ['stats', '--no-caller'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(human.exitCode).toBe(0);
+    expect(human.message).toMatch(/Caller filter: no caller/);
+  });
+
+  it('#3065 — history and stats reject bad caller filters, unknown flags and positionals with exit 2', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-cli-'));
+    cleanup.push(dir);
+
+    const both = await decisionHandler.execute({
+      args: ['history', '--caller', 'worker-a', '--no-caller', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(both.exitCode).toBe(2);
+    expect(JSON.parse(both.message ?? '{}')).toMatchObject({ reason: 'invalid-caller-filter' });
+    expect(both.message).toMatch(/--caller.*--no-caller|--no-caller.*--caller/);
+
+    for (const bad of ['', 'not allowed!', 'a*b', '*']) {
+      const invalid = await decisionHandler.execute({
+        args: ['history', '--caller', bad, '--json'],
+        rawArgs: [],
+        cwd: dir,
+        frameworkRoot: process.cwd(),
+      });
+      expect(invalid.exitCode).toBe(2);
+      expect(JSON.parse(invalid.message ?? '{}')).toMatchObject({ reason: 'invalid-caller' });
+      expect(invalid.message).toMatch(/--caller/);
+    }
+
+    const unknownHistory = await decisionHandler.execute({
+      args: ['history', '--bogus', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(unknownHistory.exitCode).toBe(2);
+    expect(JSON.parse(unknownHistory.message ?? '{}')).toMatchObject({ reason: 'unknown-flag' });
+    expect(unknownHistory.message).toMatch(/--bogus/);
+
+    const unknownStats = await decisionHandler.execute({
+      args: ['stats', '--bogus', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(unknownStats.exitCode).toBe(2);
+    expect(JSON.parse(unknownStats.message ?? '{}')).toMatchObject({ reason: 'unknown-flag' });
+    expect(unknownStats.message).toMatch(/--bogus/);
+
+    const positional = await decisionHandler.execute({
+      args: ['history', 'extra-positional', '--json'],
+      rawArgs: [],
+      cwd: dir,
+      frameworkRoot: process.cwd(),
+    });
+    expect(positional.exitCode).toBe(2);
+    expect(positional.message).toMatch(/extra-positional/);
+  });
+
   it('returns usage errors with exit 2', async () => {
     const result = await decisionHandler.execute({
       args: ['ask', '--question', 'Proceed?', '--yes-no', '--choices', 'a,b', '--json'],

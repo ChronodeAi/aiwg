@@ -136,6 +136,8 @@ introduced elsewhere — this is the one place the full set is listed:
 | `subagent-scoping:worker-pick` | `subagent-scoping` rule, Rule 9 (Tier 0) | Worker/model/effort pick |
 | `subagent-scoping:failure-triage` | `subagent-scoping` rule, Rule 9 (Tier 0) | Environmental vs real failure |
 
+Check one checkpoint's usage with `aiwg decision history --caller address-issues:worker-pick --json` (or `--caller 'address-issues:*'` for every checkpoint of one skill).
+
 ## Examples
 
 ```bash

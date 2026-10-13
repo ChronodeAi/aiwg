@@ -94,6 +94,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `config/vitest.uat-workers-live.config.js`) covers `doctor
   --probe-workers`' install-readiness matrix (WD-001) against fixture worker
   CLIs — no real worker CLI or network access involved.
+- `aiwg decision history` and `aiwg decision stats` accept `--caller <tag>` (exact match), `--caller '<prefix>*'`
+  (prefix match; a trailing `*` is the only wildcard), and `--no-caller` (records with no caller tag), applied
+  inside the ledger reader so `stats` aggregates only matching records; both commands reject unknown flags and
+  positional arguments with exit 2, echo applied filters under a `filters` key in `--json` output, and print a
+  `Caller filter:` header line in human-readable output (#3065).
 
 ### Changed
 
