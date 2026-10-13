@@ -697,6 +697,56 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     }
   });
 
+  // #2915 review 5 (finding 5, "lost covering protection"): the overflow
+  // attempts in the test above were admitted and their failure evidence
+  // silently discarded -- this names that exact refusal explicitly at the
+  // `admit()` boundary, rather than only observing its downstream effect.
+  it('refuses an admission that would need an untrackable brand-new shared scope, instead of admitting and discarding its failure', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxTrackedScopes: 2 } });
+    try {
+      // Fill the entire shared-scope quota (2 slots) with two genuinely
+      // OPEN, DISTINCT, non-evictable scopes.
+      fail(smallCapBreaker, [INSTALL], 'o1', installFailure('o1'));
+      fail(smallCapBreaker, [INSTALL], 'o2', installFailure('o2'));
+      fail(smallCapBreaker, [INSTALL], 'o3', installFailure('o3'));
+      expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
+      for (const id of ['p1', 'p2', 'p3']) {
+        fail(smallCapBreaker, [PROVIDER], id, { scope: FailureScope.PROVIDER, scopeKey: PROVIDER,
+          reasonCode: 'NETWORK', evidenceSource: 'launcher', cli: 'codex', inferenceProvider: 'openai' });
+      }
+      expect(smallCapBreaker.getState(PROVIDER).state).toBe('open');
+      // A brand-new, never-before-seen shared scope key: the tracking
+      // table has no room (nothing evictable, both existing slots are
+      // OPEN) -- `admit()` itself must refuse, not silently admit this
+      // attempt and lose its eventual failure to `_scopeRecordBounded`
+      // returning null.
+      const overflowKey = scopeKeyFor.installation('overflow-cli-explicit');
+      const admission = smallCapBreaker.admit({ invocationId: 'overflow-explicit', scopeKeys: [overflowKey] });
+      expect(admission.ok).toBe(false);
+      expect(admission.blockedBy).toContain('scope-tracking-capacity');
+      expect(smallCapBreaker.getState(overflowKey).tracked).toBe(false);
+    } finally {
+      smallCapBreaker.destroy();
+    }
+  });
+
+  // #2915 review 5 (finding 5): a covering set larger than `maxCoveringKeys`
+  // is refused outright -- the former behavior silently trimmed it,
+  // dropping some of the caller's own named scopes from tracking entirely.
+  it('refuses an admission whose covering set exceeds maxCoveringKeys, instead of silently trimming it', () => {
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const oversizedKeys = Array.from({ length: 7 }, (_, n) => scopeKeyFor.installation(`cli-${n}`));
+      const admission = breaker.admit({ invocationId: 'oversized-1', scopeKeys: oversizedKeys });
+      expect(admission.ok).toBe(false);
+      expect(admission.blockedBy).toContain('covering-set-too-large');
+      // None of the would-be-trimmed keys were tracked either.
+      for (const key of oversizedKeys) expect(breaker.getState(key).tracked).toBe(false);
+    } finally {
+      breaker.destroy();
+    }
+  });
+
   it('rejects policy overrides above the protective maxima (500/128/5000/6)', () => {
     expect(() => new ScopedFailureBreaker({ policy: { maxTrackedScopes: 501 } })).toThrow(RangeError);
     expect(() => new ScopedFailureBreaker({ policy: { maxOutstandingReservations: 129 } })).toThrow(RangeError);

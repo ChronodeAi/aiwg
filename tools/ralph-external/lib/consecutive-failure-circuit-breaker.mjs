@@ -551,11 +551,31 @@ export class ScopedFailureBreaker extends EventEmitter {
     this._sweepReservations(now);
     this._sweepOutstanding(now);
     const invocationKey = invocationId != null ? scopeKeyFor.invocation(invocationId) : null;
-    let covering = [...new Set([...(scopeKeys ?? []), ...(invocationKey ? [invocationKey] : [])])];
+    const covering = [...new Set([...(scopeKeys ?? []), ...(invocationKey ? [invocationKey] : [])])];
+    // #2915 review 5 (finding 5, "lost covering protection"): an oversized
+    // covering set is REFUSED outright, never silently trimmed. Every
+    // legitimate production caller derives covering keys from
+    // `recoveryScopeKeysForInvocation`, which never produces more than
+    // `maxCoveringKeys` (6) keys in the first place -- a set larger than
+    // that is already outside what this breaker can safely attribute, and
+    // trimming it previously dropped some of the caller's own named scopes
+    // from tracking entirely, discarding whatever protection they were
+    // meant to provide rather than refusing the admission that needed them.
     if (covering.length > this.policy.maxCoveringKeys) {
-      const budget = this.policy.maxCoveringKeys - (invocationKey ? 1 : 0);
-      const rest = covering.filter((key) => key !== invocationKey).slice(0, Math.max(0, budget));
-      covering = invocationKey ? [...rest, invocationKey] : rest;
+      return { ok: false, blockedBy: ['covering-set-too-large'], nextEligibleAt: now };
+    }
+    // #2915 review 5 (finding 5): refuse an admission that would need to
+    // track one or more BRAND-NEW shared scopes the tracking table has no
+    // room for, rather than admitting it and silently discarding that
+    // scope's failure evidence later (`_scopeRecordBounded` returning
+    // `null` at settlement time, with no way to signal the caller it never
+    // happened). Invocation-scoped keys are exempt: `maxChargedAttempts` is
+    // their own separate, much larger budget, never `maxTrackedScopes`.
+    // Counted in aggregate (never per-key) so two new keys in the SAME
+    // admission can never both claim the same single evictable slot.
+    const newSharedKeyCount = covering.filter((key) => key !== invocationKey && !this._scopes.has(key)).length;
+    if (newSharedKeyCount > 0 && !this._canTrackNewSharedScopes(newSharedKeyCount)) {
+      return { ok: false, blockedBy: ['scope-tracking-capacity'], nextEligibleAt: now };
     }
     const openKeys = covering.filter((key) => {
       const rec = this._scopes.get(key);
@@ -1039,6 +1059,35 @@ export class ScopedFailureBreaker extends EventEmitter {
     this._scopes.delete(oldestKey);
     this._outstanding.delete(oldestKey);
     return true;
+  }
+
+  /**
+   * Non-mutating admission-time dry run (#2915 review 5, finding 5): would
+   * `neededCount` BRAND-NEW shared-scope records fit without exceeding
+   * `maxTrackedScopes`, counting both genuinely free slots and scopes that
+   * `_evictInertScopeIfPossible` would actually be willing to evict (same
+   * eligibility: CLOSED, no active canary, no outstanding members, no
+   * in-window failure evidence)? Performs no eviction itself -- `admit()`
+   * only needs to know capacity EXISTS before minting a reservation;
+   * `_scopeRecordBounded` still performs the real eviction lazily, later,
+   * exactly as before, when a scope record is actually created.
+   */
+  _canTrackNewSharedScopes(neededCount) {
+    const cap = this.policy.maxTrackedScopes;
+    const freeSlots = Math.max(0, cap - this._scopeCount(false));
+    if (neededCount <= freeSlots) return true;
+    let stillNeeded = neededCount - freeSlots;
+    const now = this.nowMs();
+    for (const rec of this._scopes.values()) {
+      if (rec.scope === FailureScope.INVOCATION) continue;
+      if (rec.status !== 'closed' || rec.activeCanary) continue;
+      const outstanding = this._outstanding.get(rec.scopeKey);
+      if (outstanding && outstanding.size > 0) continue;
+      if (rec.failures.some((f) => now - f.atMs < this.policy.windowMs)) continue;
+      stillNeeded -= 1;
+      if (stillNeeded <= 0) return true;
+    }
+    return false;
   }
 
   _removeOutstanding(scopeKey, invocationId) {
