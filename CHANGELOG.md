@@ -122,6 +122,77 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `worker_dispatch_offer.applied_choice`. An unrecognized value exits non-zero naming
   `enable`/`decline`. The one-line hint shown without a terminal and without the argument now also
   names `--worker-dispatch`.
+- A second #3062 review round fixed a real credential-exposure bug and several remaining gaps in
+  the work above:
+  - **Security fix:** `loginInProfile()`'s `--api-key-env` path (`src/mcp/adapters/codex-runtime.ts`)
+    placed the API key in `boundedSpawnSync`'s `input` option, which sits inside the options object
+    `child_process` hands to its native binding — printed verbatim by `NODE_DEBUG=child_process` (and
+    any other dump of those options), and the named variable was also still present in the child's
+    inherited environment. It now launches `codex login --with-api-key` with an async `spawn()`
+    (never a sync call with `input` at all) and writes the key directly to the already-created
+    child's own `stdin` stream after spawning; the child's environment excludes the named variable
+    and any other variable holding the identical value. A dedicated end-to-end test
+    (`test/unit/mcp/codex-login-credential-safety.test.ts`) runs this under
+    `NODE_DEBUG=child_process` against a stub `codex` and asserts the fake key appears nowhere in
+    the parent's own stdout/stderr, and that the stub receives it only on stdin, never in its own
+    argv or environment.
+  - `aiwg mcp profile login` resolved its TypeScript-authored adapter through a src/dist-aware
+    resolver that falls back to loading TypeScript *source* when no build exists — but that
+    source module's own internal imports have no compiled sibling under `src/` either, so the
+    fallback failed deep inside the adapter with an unrelated `ERR_MODULE_NOT_FOUND`, on every Node
+    version. It now loads the compiled module directly and, when it is missing, reports one
+    actionable line (run `npm run build:cli`, or use an installed `aiwg`) instead of attempting a
+    source fallback at all.
+  - The shared strict flag parser (`src/cli/flag-parsing.ts`) tokenizes once per call, stops
+    recognizing flags at a bare `--` terminator, accepts both `--flag value` and `--flag=value`,
+    and validates **every** occurrence of a repeated flag — a previously-valid first occurrence no
+    longer hides a malformed later one. A value starting with a single `-` is accepted; a
+    space-separated value starting with `--` is still treated as missing (use `--flag=--literal`
+    when a value must start with `--`). An empty-string value is now rejected for
+    `--prompt`/`--prompt-file`/`--api-key-env`/`--worker-dispatch` specifically. Repeated-flag
+    precedence is configurable per call and now matches each command's own pre-#3062 behavior:
+    `aiwg session`'s flags are last-occurrence-wins (restoring a real regression the first round
+    introduced by always resolving to the first occurrence); every other touched command remains
+    first-occurrence-wins, unchanged. `tools/contrib/sync-upstream.mjs`'s `--on-conflict` and
+    `src/mcp/cli.mjs`'s `--api-key-env` (both plain-JS duplicates of the shared parser, for the same
+    source/dist reasons documented at each site) gained the same validation.
+  - `aiwg init` gains `--custom-scripts true|false`, answering "add a custom script?" directly
+    (`false` declines outright) when `--script` itself was not given — closing the one remaining
+    selective-prompting gap (`aiwg init` with providers/default-scripts/worker-dispatch all supplied
+    still asked this one question).
+  - `aiwg setup-run` steps marked `interactive: true` now run headless when every name in their own
+    `params` field is resolved, instead of always being refused without a terminal — this field was
+    already optional and already used by `type: ask` steps; the bug was that `interactive: true`
+    steps never got the same treatment. Declared `ask`-step inputs still missing **at a terminal**
+    are now prompted for (the answer threads into every later step's env, same as a
+    `--param`-supplied one); an `ask` step declaring no params at all remains always refused, with
+    or without a terminal — one of exactly two permanent exceptions (the other: the contributor
+    sync-upstream strategy choice stays unargumented). The manifest step preflight (which runs
+    before any selected step executes) now also rejects a selected `agentic`/`chain` step up front —
+    both are refused unconditionally once reached — and recurses into the entire recovery sequence
+    any selected step's `on_fail` names, so a blocked recovery step can no longer let an earlier,
+    unrelated step run first.
+  - `aiwg setup project` now checks whether an unattended write can ever be confirmed
+    (`--yes`/terminal/`--dry-run`) *before* building the project plan, which makes four `git` calls
+    on its own — the refusal used to happen only after those calls (and the full plan print)
+    already ran. `aiwg session --prompt` for a provider that is spawnable but has no evidenced
+    headless transport (e.g. `antigravity`) is now checked in the same early spot as the
+    non-spawnable case, before the version-check/doctor/deployment/mcp-inject pre-flight runs.
+  - OpenCode's headless prompt temp file (`src/cli/handlers/session.ts`) now gets an explicit
+    `0600` mode via an exclusive create (`flag: 'wx'`), and cleanup ownership for its private
+    `mkdtemp()` directory starts immediately after that directory is created — before the write —
+    so a failed write cannot leave the directory behind any more than a failed launch would. The
+    directory itself stays under the system temp directory (never a custom location).
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now kills the whole process
+    group on the child's *ordinary* exit too, not only on the hang-guard timeout, and waits for
+    `'close'` (stdio fully drained) rather than `'exit'` before settling — the first round's version
+    settled on `exit` and never cleaned the remaining group at all, so a surviving descendant could
+    leak even when the direct child exited cleanly and quickly. Settles independently via a short
+    grace timer if a group kill ever fails for a reason other than "already gone". A new fixture
+    (`test/uat/fixtures/parent-exits-first.mjs`) proves a surviving grandchild is reaped even when
+    its parent's own exit is fast and ordinary. Every stub executable placed on `PATH` now gets an
+    absolute `#!<process.execPath>` shebang instead of `#!/usr/bin/env node`, so resolving it never
+    depends on `env` or on `PATH` containing a `node` at all.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
