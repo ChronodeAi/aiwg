@@ -193,6 +193,56 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
     its parent's own exit is fast and ordinary. Every stub executable placed on `PATH` now gets an
     absolute `#!<process.execPath>` shebang instead of `#!/usr/bin/env node`, so resolving it never
     depends on `env` or on `PATH` containing a `node` at all.
+- A go/no-go review of #3062 found four blockers, all fixed in a third round:
+  - **Startup order (security):** `bin/aiwg.mjs` used to run a background update-notifier bootstrap
+    before it knew which command was running at all — and that bootstrap child copied the whole
+    parent environment. Under `NODE_DEBUG=child_process`, a credential-bearing variable the *command
+    itself* was about to read (`--api-key-env` for `aiwg mcp profile login`, or `JEV_API_KEY`/
+    `AIWG_DECISION_JEV_API_KEY` for `aiwg decision setup jev`) printed in the bootstrap's own spawn
+    diagnostics before the command's own (already-careful) handling ever ran. Fixed two ways,
+    composing for defense in depth: `bin/aiwg.mjs` now resolves whether the invocation is one of
+    these two credential-handling commands from argv alone, before starting the notifier bootstrap
+    (or any other bootstrap subprocess) at all for either one; and the notifier's own background
+    child (`src/update/notifier.mjs`) now gets an explicit environment allow-list
+    (`PATH`/`HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`AIWG_CONFIG`/`NODE_EXTRA_CA_CERTS`) instead
+    of a full copy of the parent's, so a secret this CLI does not yet know to name is still never
+    copied into it, for *any* command. A second, independently-discovered instance of the same
+    full-environment-copy pattern — installation-identity creation's own `which`/`where.exe` lookup
+    for `git` (`src/installation/manager.mjs`), which runs before dispatch on every first invocation
+    — is now also PATH-only (plus `PATHEXT`/`SystemRoot` on Windows).
+  - **More secure ways to supply a credential:** `aiwg mcp profile login` gains `--api-key-stdin`
+    (piped from a secret manager, never touching an environment variable or argv) and
+    `--api-key-file <path>` (refused unless the file is a regular file, not a symlink, with exactly
+    one hard link, owned by the current user, and not readable/writable by group or other) alongside
+    the existing (now least-preferred) `--api-key-env`. Exactly one of the three may be given; more
+    than one is a usage error naming the flags given; none at all without a terminal errors naming
+    all three. In every case the key reaches `codex` over stdin only. See "Supplying Credentials
+    Safely" in `docs/mcp/codex-profiles.md`.
+  - **Unhandled EPIPE:** `loginInProfile()`'s async `--with-api-key` launch
+    (`src/mcp/adapters/codex-runtime.ts`) wrote to the child's stdin with no error listener and no
+    completion callback — a `codex` that exited (or closed stdin) before reading raised an unhandled
+    `EPIPE`/`ECONNRESET`, an uncaught exception rather than a normal failure result. Stdin error,
+    write completion, child `error`, child `exit`, and the deadline timer now all funnel through one
+    settle function that runs exactly once, always clears the timer and removes its own listeners,
+    and kills the child if it is still running when settling on a failure.
+  - **Setup-run recovery preflight was too eager:** `aiwg setup-run`'s preflight used to recurse into
+    every selected step's `on_fail` recovery procedure up front, before the main sequence even ran —
+    refusing a manifest whose main sequence would succeed outright, solely because its *unused*
+    recovery contained something unsupported, and (with no cycle protection) recursing without bound
+    on a recovery procedure that referenced itself (`RangeError: Maximum call stack size exceeded`).
+    The main sequence's own preflight no longer looks at `on_fail` at all; a recovery procedure is now
+    preflighted completely, but only at the moment a failure actually selects it, before any of its
+    steps run. A manifest-validation-time graph check (`detectRecoveryReferenceCycles`, independent of
+    the step preflight) catches a cycle among recovery procedures themselves as a clean validation
+    error instead of a stack overflow.
+  - **`aiwg session`'s `mcp` detection:** `args.includes('mcp')` (and the equivalent hand-rolled loop
+    this replaced, which already shipped on `main`) matched the literal word `mcp` anywhere in argv —
+    including inside a free-text `--prompt`/`--prompt-file` value (`aiwg session --prompt mcp` set
+    `mcp: true` and reached MCP config injection) or after a bare `--` terminator (`--persist` there
+    was still honored). `--no-repair`/`--persist`/`--non-interactive` had the same gap. The shared
+    flag parser (`src/cli/flag-parsing.ts`) gained `hasPositionalOrSwitch()`: a positional word or
+    boolean switch now excludes anything consumed as a value-taking flag's own value, and stops
+    recognizing anything at or after `--`, same as the value-flag parser already did.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
