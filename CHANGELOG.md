@@ -85,6 +85,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
+  detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
+  capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:
+  neither variable is set by current Claude Code, and `ANTHROPIC_API_KEY` was a false positive for any
+  non-Claude session with that key set. The `.mjs` script falls back to the current marker variables
+  directly when no build output is available to resolve the shared path through.
 - Layered MCP writes reject overlapping realpath targets and symlinked files or directories below the config root,
   use atomic replacement, and refresh server/profile ownership after each successful save.
 - Profile imports validate the complete layered `extends` graph before writing, naming cycles and missing bases.
