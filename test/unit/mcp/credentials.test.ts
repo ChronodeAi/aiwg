@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { spawnSync, spawn } from "child_process";
+import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, lstatSync, readdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from "node:os";
@@ -20,31 +21,64 @@ import { stripMcpServers } from "../../../src/mcp/toml-strip-mcp.mjs";
 import { parseTOML } from "toml-eslint-parser";
 import { ensureRuntimeHome, writeProfileConfig, launchWithProfile, loginInProfile, removeRuntimeHome } from "../../../src/mcp/adapters/codex-runtime.js";
 import { isInteractive } from "../../../src/cli/env.js";
+import { resolveSyncProcessTimeoutMs } from "../../../src/process/bounded-child-process.mjs";
 
 vi.mock("os", async importOriginal => {
   const os = await importOriginal<typeof import("os")>();
   return { ...os, homedir: vi.fn(() => os.tmpdir()) };
 });
 
+// Spies through to the real implementation by default; the "stays alive
+// until the deadline" test below overrides it with `mockReturnValueOnce` so
+// that test does not need to wait out the real 120s network-tier bound.
+vi.mock("../../../src/process/bounded-child-process.mjs", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../../src/process/bounded-child-process.mjs")>();
+  return { ...actual, resolveSyncProcessTimeoutMs: vi.fn(actual.resolveSyncProcessTimeoutMs) };
+});
+
 /**
- * A minimal fake async child: an EventEmitter-shaped object with a
- * `stdin.write`/`stdin.end` pair (used by `loginInProfile`'s credential-safe
- * API-key path, #3062 second review finding 1) and a `kill()`. Defaults to
- * emitting `exit(0, null)` on the next microtask; tests needing a
- * different outcome override `spawn`'s mock implementation per call.
+ * A minimal fake async child: a real `EventEmitter` (so `.on`/`.removeListener`
+ * behave exactly like Node's own `ChildProcess`, which `spawnCodexLoginWithApiKey()`'s
+ * settle()/cleanup path relies on) with a `stdin` that is itself an
+ * `EventEmitter` exposing `write`/`end` (used by `loginInProfile`'s
+ * credential-safe API-key path, #3062 second review finding 1, go/no-go
+ * review blocker 2) and a `kill()`. `end(chunk, callback)` invokes the
+ * callback synchronously with no error by default — tests exercising the
+ * EPIPE/timeout paths override `spawn`'s mock implementation, or call
+ * `child.stdin.emit('error', ...)`/replace `end`, per test. `exitCode`/
+ * `signalCode` are updated by `setExit()` before emitting `'exit'`, exactly
+ * as Node itself does, so the production code's "is the child still alive"
+ * check sees the right answer. Defaults to emitting `exit(0, null)` on the
+ * next microtask; tests needing a different outcome override `spawn`'s mock
+ * implementation per call.
  */
 function makeFakeAsyncChild() {
-  const listeners: Record<string, Array<(...eventArgs: unknown[]) => void>> = {};
-  const child = {
-    stdin: { write: vi.fn(), end: vi.fn() },
-    kill: vi.fn(),
-    on(event: string, cb: (...eventArgs: unknown[]) => void) {
-      (listeners[event] ??= []).push(cb);
-      return child;
-    },
-    emit(event: string, ...eventArgs: unknown[]) {
-      for (const cb of listeners[event] ?? []) cb(...eventArgs);
-    },
+  const stdin = new EventEmitter() as EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  stdin.write = vi.fn();
+  stdin.end = vi.fn((...callArgs: unknown[]) => {
+    const callback = callArgs.find((value): value is (err?: Error | null) => void => typeof value === "function");
+    callback?.();
+    return stdin;
+  });
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: typeof stdin;
+    kill: ReturnType<typeof vi.fn>;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    setExit(code: number | null, signal: NodeJS.Signals | null): void;
+  };
+  child.stdin = stdin;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = vi.fn((signal?: NodeJS.Signals) => {
+    child.setExit(null, signal ?? "SIGTERM");
+  });
+  child.setExit = (code, signal) => {
+    child.exitCode = code;
+    child.signalCode = signal;
   };
   return child;
 }
@@ -56,7 +90,10 @@ vi.mock("child_process", async importOriginal => {
     spawnSync: vi.fn(() => ({ status: 0 })),
     spawn: vi.fn(() => {
       const child = makeFakeAsyncChild();
-      queueMicrotask(() => child.emit("exit", 0, null));
+      queueMicrotask(() => {
+        child.setExit(0, null);
+        child.emit("exit", 0, null);
+      });
       return child;
     }),
   };
@@ -363,8 +400,10 @@ describe("Codex runtime-home config permissions", () => {
       // spawn option (there is no `input` option on async `spawn`).
       expect((options as { input?: unknown } | undefined)?.input).toBeUndefined();
       const child = vi.mocked(spawn).mock.results[0]!.value as ReturnType<typeof makeFakeAsyncChild>;
-      expect(child.stdin.write).toHaveBeenCalledWith("sk-test-secret-value");
-      expect(child.stdin.end).toHaveBeenCalled();
+      // go/no-go review blocker 2: write()+end() collapsed into a single
+      // end(chunk, callback) call — the callback (always provided, for the
+      // EPIPE/write-failure path) is the second argument.
+      expect(child.stdin.end).toHaveBeenCalledWith("sk-test-secret-value", expect.any(Function));
       expect(options?.env?.HOME).toBe(runtimeHome);
       // The named variable is removed from the child's own environment —
       // it must only ever reach the child over stdin.
@@ -389,8 +428,83 @@ describe("Codex runtime-home config permissions", () => {
       await ensureRuntimeHome("isolated");
       vi.mocked(isInteractive).mockReturnValue(false);
       vi.mocked(spawnSync).mockClear();
-      await expect(loginInProfile("isolated")).rejects.toThrow(/requires an interactive terminal, or an API key/);
+      await expect(loginInProfile("isolated")).rejects.toThrow(/requires an interactive terminal, or a key supplied via/);
       expect(spawnSync).not.toHaveBeenCalled();
+    });
+
+    // go/no-go review blocker 2: a child that exits before ever reading
+    // stdin raises EPIPE on the *stdin stream* (never on the child object),
+    // which — without the stdin 'error' listener this test pins — is an
+    // unhandled 'error' event and therefore an uncaught exception, not a
+    // normal rejected promise. Reproduces the exact scenario the review's
+    // live probe hit.
+    it("a child that exits before reading stdin settles with a normal error, not an uncaught exception", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      vi.stubEnv("AIWG_TEST_CODEX_KEY", "sk-test-secret-value");
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        const child = makeFakeAsyncChild();
+        // The child "exits before reading stdin": our write to its stdin
+        // fails (EPIPE) and is reported through the end() callback — the
+        // secondary `onStdinError` listener's own swallowing of EPIPE is
+        // covered separately by the next test, without this one also
+        // racing the exit microtask below over which listener is still
+        // attached when it fires.
+        child.stdin.end = vi.fn((...callArgs: unknown[]) => {
+          const callback = callArgs.find(
+            (value): value is (err?: Error | null) => void => typeof value === "function",
+          );
+          const err = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+          callback?.(err);
+          return child.stdin;
+        });
+        queueMicrotask(() => {
+          child.setExit(1, null);
+          child.emit("exit", 1, null);
+        });
+        return child;
+      });
+      // A normal rejection (asserted below) — not an uncaught exception —
+      // is the property this test exists to pin. If the EPIPE were
+      // unhandled, this `await expect(...).rejects` would never observe a
+      // rejection at all; Vitest would instead report an unhandled error
+      // for the whole run.
+      await expect(loginInProfile("isolated", { apiKeyEnv: "AIWG_TEST_CODEX_KEY" }))
+        .rejects.toThrow(/codex login --with-api-key/);
+    });
+
+    // go/no-go review blocker 2: a child that closes its own stdin (so our
+    // write fails with EPIPE) but never exits must still resolve via the
+    // deadline — the EPIPE must not pre-empt or corrupt that timeout path.
+    // `resolveSyncProcessTimeoutMs` is shrunk for this one call so the test
+    // does not wait out the real 120s network-tier bound.
+    it("a child that closes stdin and stays alive is killed and times out, not left hanging or crashing", async () => {
+      await ensureRuntimeHome("isolated");
+      vi.mocked(isInteractive).mockReturnValue(false);
+      vi.stubEnv("AIWG_TEST_CODEX_KEY", "sk-test-secret-value");
+      vi.mocked(resolveSyncProcessTimeoutMs).mockReturnValueOnce(50);
+      let killedWith: NodeJS.Signals | undefined;
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        const child = makeFakeAsyncChild();
+        child.stdin.end = vi.fn(() => {
+          const err = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+          queueMicrotask(() => child.stdin.emit("error", err));
+          return child.stdin;
+        });
+        child.kill = vi.fn((signal?: NodeJS.Signals) => {
+          killedWith = signal as NodeJS.Signals;
+          child.setExit(null, killedWith);
+          // Real `ChildProcess#kill` does not itself emit 'exit' — the
+          // kernel's SIGKILL delivery does, asynchronously. Not emitting it
+          // here is deliberate: this call must settle from the timeout
+          // path alone, not from a kill-triggered 'exit'.
+          return true;
+        });
+        return child;
+      });
+      await expect(loginInProfile("isolated", { apiKeyEnv: "AIWG_TEST_CODEX_KEY" }))
+        .rejects.toThrow(/exceeded the 'network' tier bound/);
+      expect(killedWith).toBe("SIGKILL");
     });
   });
 

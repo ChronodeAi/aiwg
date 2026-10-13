@@ -50,7 +50,22 @@ function resolveExecutable(name, options = {}) {
   if (existsSync(besideNode)) return canonicalPath(besideNode);
   try {
     const finder = process.platform === 'win32' ? 'where.exe' : 'which';
-    const found = boundedExecFileSync(finder, [name], 'quick', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    // Go/no-go review, blocker 1B: this runs unconditionally on first
+    // launch (creating the installation identity) for *every* command,
+    // including a credential-handling one — before `bin/aiwg.mjs` even
+    // knows which command that is. `which`/`where.exe` only need `PATH`
+    // (and, on Windows, `PATHEXT`/`SystemRoot` for its own resolution), so
+    // this never inherits the whole parent environment the way an absent
+    // `env` option otherwise would.
+    const lookupEnv = {
+      PATH: env.PATH ?? '',
+      ...(process.platform === 'win32' ? { PATHEXT: env.PATHEXT ?? '', SystemRoot: env.SystemRoot ?? '' } : {}),
+    };
+    const found = boundedExecFileSync(finder, [name], 'quick', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: lookupEnv,
+    })
       .split(/\r?\n/, 1)[0]?.trim();
     return found ? canonicalPath(found) : null;
   } catch {

@@ -15,10 +15,10 @@
  * @implements #892
  */
 
-import { readFile, mkdir, symlink, access, readdir, chmod } from 'fs/promises';
+import { readFile, mkdir, symlink, access, readdir, chmod, lstat, open } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import { existsSync } from 'fs';
+import { existsSync, constants } from 'fs';
 import { spawn, spawnSync, type SpawnSyncReturns } from 'child_process';
 import { boundedSpawnSync, resolveSyncProcessTimeoutMs } from '../../process/bounded-child-process.mjs';
 import { isInteractive } from '../../cli/env.js';
@@ -279,25 +279,94 @@ export function launchWithProfile(
 }
 
 /**
- * Build a child environment that excludes `envVarName` and any other
- * variable holding the identical value (#3062 second review, finding 1):
- * the API key must never be visible in the child's own environment, only
- * on its stdin, including as a coincidental duplicate under some other
- * name.
+ * Build a child environment that excludes `envVarName` (when given) and
+ * any other variable holding the identical value (#3062 second review,
+ * finding 1): the API key must never be visible in the child's own
+ * environment, only on its stdin, including as a coincidental duplicate
+ * under some other name. `envVarName` is `undefined` when the key came
+ * from somewhere other than a named environment variable (`--api-key-stdin`
+ * / `--api-key-file`, go/no-go review blocker 1C) — the by-value scrub
+ * still applies in that case.
  */
 function envWithoutSecretValue(
   base: NodeJS.ProcessEnv,
-  envVarName: string,
+  envVarName: string | undefined,
   secretValue: string,
 ): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined) continue;
-    if (key === envVarName) continue;
+    if (envVarName !== undefined && key === envVarName) continue;
     if (value === secretValue) continue;
     result[key] = value;
   }
   return result;
+}
+
+/**
+ * Read an API key from a private file (#3062 go/no-go review, blocker 1C):
+ * `--api-key-file <path>` reads the key from disk instead of an
+ * environment variable, so a file that does not meet the same bar the
+ * decision ledger's own file writer enforces
+ * (`src/decision/ledger.ts`'s `openLedgerFileForAppend`) is refused rather
+ * than silently trusted. This mirrors that check for a read instead of a
+ * write — there is no already-exported helper at this layer to reuse (the
+ * ledger's checks are private to that module and tied to its own
+ * create-if-missing write path), so this re-implements the same checks for
+ * a read: never follow a symlink; the open file descriptor must resolve to
+ * a regular file with exactly one hard link; and, on POSIX, must be owned
+ * by the current user with no group/other permission bits. The file's
+ * contents are returned trimmed; no error message here ever includes them.
+ */
+async function readApiKeyFromFile(filePath: string): Promise<string> {
+  try {
+    const pre = await lstat(filePath);
+    if (pre.isSymbolicLink()) {
+      throw new Error(`--api-key-file: "${filePath}" is a symlink; refusing to follow it.`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`--api-key-file: "${filePath}" does not exist.`);
+    }
+    if (error instanceof Error && error.message.startsWith('--api-key-file:')) throw error;
+    throw new Error(`--api-key-file: cannot stat "${filePath}": ${(error as Error).message}`);
+  }
+
+  const hasNoFollow = typeof constants.O_NOFOLLOW === 'number';
+  const flags = constants.O_RDONLY | (hasNoFollow ? constants.O_NOFOLLOW : 0);
+  let handle;
+  try {
+    handle = await open(filePath, flags);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP') throw new Error(`--api-key-file: "${filePath}" is a symlink; refusing to follow it.`);
+    if (code === 'ENOENT') throw new Error(`--api-key-file: "${filePath}" does not exist.`);
+    throw new Error(`--api-key-file: cannot open "${filePath}": ${(error as Error).message}`);
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`--api-key-file: "${filePath}" is not a regular file.`);
+    }
+    if (stat.nlink !== 1) {
+      throw new Error(`--api-key-file: "${filePath}" has more than one hard link; refusing to read it.`);
+    }
+    if (process.platform !== 'win32') {
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+      if (uid !== null && stat.uid !== uid) {
+        throw new Error(`--api-key-file: "${filePath}" is not owned by the current user.`);
+      }
+      if ((stat.mode & 0o077) !== 0) {
+        throw new Error(
+          `--api-key-file: "${filePath}" must not be readable or writable by group or other ` +
+          '(chmod 600 it).',
+        );
+      }
+    }
+    return (await handle.readFile({ encoding: 'utf-8' })).trim();
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -330,11 +399,31 @@ function spawnCodexLoginWithApiKey(
       stdio: ['pipe', 'inherit', 'inherit'],
     });
     let settled = false;
-    const timer = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // #3062 go/no-go review, blocker 2: stdin error, write completion,
+    // child 'error', child 'exit', and the deadline all funnel through this
+    // one function, which settles exactly once, always clears the timer and
+    // removes every listener this call added, and kills the child if it is
+    // still alive on a failing settlement (a running process on the
+    // timeout path; a process that may still be running on an unexpected
+    // stdin-write error). The 'exit' path never reaches the kill — by the
+    // time that event fires the child has already exited.
+    const settle = (result: { status: number | null; signal: NodeJS.Signals | null; error?: Error }) => {
       if (settled) return;
       settled = true;
-      child.kill('SIGKILL');
-      resolve({
+      if (timer) clearTimeout(timer);
+      child.stdin?.removeListener('error', onStdinError);
+      child.removeListener('error', onChildError);
+      child.removeListener('exit', onExit);
+      if (result.error && child.exitCode === null && child.signalCode === null) {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      }
+      resolve(result);
+    };
+
+    timer = setTimeout(() => {
+      settle({
         status: null,
         signal: 'SIGKILL',
         error: Object.assign(
@@ -343,23 +432,42 @@ function spawnCodexLoginWithApiKey(
         ),
       });
     }, boundMs);
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ status: null, signal: null, error: err });
-    });
-    child.on('exit', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ status: code, signal });
-    });
+
+    const onChildError = (err: Error) => settle({ status: null, signal: null, error: err });
+    child.on('error', onChildError);
+
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => settle({ status: code, signal });
+    child.on('exit', onExit);
+
+    // A child that exits (or closes its read end) before reading stdin
+    // raises EPIPE/ECONNRESET on the *stdin stream*, not on the child
+    // object — `child.on('error', ...)` above never sees it, so without
+    // this listener it is an unhandled 'error' event, which Node turns into
+    // an uncaught exception. Installed before the write/end below, per the
+    // review. EPIPE/ECONNRESET specifically mean "the child already went
+    // away"; the already-firing (or about-to-fire) 'exit' event carries the
+    // real, non-secret result, so this swallows exactly those two codes and
+    // lets settle() happen there instead. Anything else is a genuine,
+    // unexpected stdin failure and is itself the settling error.
+    const onStdinError = (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EPIPE' || err.code === 'ECONNRESET') return;
+      settle({ status: null, signal: null, error: err });
+    };
+    child.stdin!.on('error', onStdinError);
+
     // Written directly to the live stream — never part of the spawn
     // options object above, so NODE_DEBUG=child_process (and any dump of
-    // those options) cannot print it.
-    child.stdin!.write(apiKey);
-    child.stdin!.end();
+    // those options) cannot print it. `end(chunk, callback)` reports a
+    // failed write through its callback; `onStdinError` above is the
+    // primary path (Node always emits 'error' on the stream too), so this
+    // callback only needs to catch the case where, for some Node version or
+    // stream state, the callback fires but the 'error' event does not.
+    child.stdin!.end(apiKey, (err?: Error | null) => {
+      const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
+      if (err && code !== 'EPIPE' && code !== 'ECONNRESET') {
+        settle({ status: null, signal: null, error: err });
+      }
+    });
   });
 }
 
@@ -383,7 +491,7 @@ function spawnCodexLoginWithApiKey(
  */
 export async function loginInProfile(
   profile: string,
-  options: { apiKeyEnv?: string } = {},
+  options: { apiKeyEnv?: string; apiKey?: string } = {},
 ): Promise<void> {
   await ensureRuntimeHome(profile);
   const rtHome = runtimeHomePath(profile);
@@ -393,14 +501,31 @@ export async function loginInProfile(
     CODEX_HOME: rtHome,
   };
 
-  if (options.apiKeyEnv) {
-    const apiKey = process.env[options.apiKeyEnv];
+  // `options.apiKey` (go/no-go review, blocker 1C) is the already-resolved
+  // key from `--api-key-stdin`/`--api-key-file` — the caller (`src/mcp/
+  // cli.mjs`) read and validated it before calling here, so there is no
+  // single named source environment variable to exclude below, only the
+  // by-value scrub `envWithoutSecretValue()` always does. `options.apiKeyEnv`
+  // is unchanged: still read from `process.env` here, so its *name* is the
+  // one thing ever passed around. Exactly one of the two is ever set — the
+  // CLI layer enforces that mutual exclusivity before calling this function.
+  let apiKey: string | undefined;
+  let sourceDescription: string | undefined;
+  if (options.apiKey !== undefined) {
+    apiKey = options.apiKey;
+    sourceDescription = 'the supplied key';
+  } else if (options.apiKeyEnv) {
+    apiKey = process.env[options.apiKeyEnv];
     if (!apiKey) {
       throw new Error(
         `Environment variable "${options.apiKeyEnv}" is not set; cannot log in to profile "${profile}" non-interactively.`,
       );
     }
-    console.log(`\n  Logging in to profile "${profile}" with an API key from $${options.apiKeyEnv}...`);
+    sourceDescription = `an API key from $${options.apiKeyEnv}`;
+  }
+
+  if (apiKey !== undefined) {
+    console.log(`\n  Logging in to profile "${profile}" with ${sourceDescription}...`);
     // Credential-safe async launch (#3062 second review, finding 1): the
     // key never enters a spawn options object, env dump, log line, or
     // thrown value — see spawnCodexLoginWithApiKey()'s own doc comment for
@@ -419,10 +544,9 @@ export async function loginInProfile(
 
   if (!isInteractive()) {
     throw new Error(
-      `Logging in to profile "${profile}" requires an interactive terminal, or an API key.\n` +
-      'Pass { apiKeyEnv: "<ENV_VAR_NAME>" } to read the key from that environment variable ' +
-      '(never pass the key itself on the command line), or run `codex login` yourself with ' +
-      `CODEX_HOME=${rtHome}.`,
+      `Logging in to profile "${profile}" requires an interactive terminal, or a key supplied via ` +
+      '--api-key-env, --api-key-stdin, or --api-key-file (never pass the key itself on the command ' +
+      `line), or run \`codex login\` yourself with CODEX_HOME=${rtHome}.`,
     );
   }
 
@@ -509,4 +633,4 @@ export async function detectOrphanedRuntimes(
 // Re-exports (convenience)
 // ─────────────────────────────────────────────
 
-export { DEFAULT_SHARED_STATE };
+export { DEFAULT_SHARED_STATE, readApiKeyFromFile };

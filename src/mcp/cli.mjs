@@ -1127,7 +1127,7 @@ Usage:
   aiwg mcp profile import <file>
   aiwg mcp profile export <name> [--out <file>]
   aiwg mcp profile init-presets
-  aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]
+  aiwg mcp profile login <name> [--api-key-stdin | --api-key-file <path> | --api-key-env <ENV_VAR_NAME>]
 
 Profiles let you define named subsets of your registered MCP servers:
   aiwg mcp profile add dev --servers git-gitea,memory-fortemi --description "Dev work"
@@ -1153,14 +1153,22 @@ Preset profiles (minimal, dev, ops, research, incident, full):
   aiwg mcp profile init-presets
 
 Logging in to a Codex profile's isolated runtime home (#3062):
-  aiwg mcp profile login ops                           interactive (requires a terminal)
-  aiwg mcp profile login ops --api-key-env OPENAI_KEY   headless — reads the key from
-                                                         $OPENAI_KEY over stdin only; it
-                                                         never appears on argv, in logs,
-                                                         or in error messages. Without a
-                                                         terminal and without
-                                                         --api-key-env, this errors
-                                                         naming the argument.
+  aiwg mcp profile login ops                        interactive (requires a terminal)
+  vault read -field=key secret/openai |
+    aiwg mcp profile login ops --api-key-stdin      headless, most preferred — key never
+                                                     touches an environment variable or argv
+  aiwg mcp profile login ops --api-key-file ~/.openai-key
+                                                     headless — file must be owned by you,
+                                                     mode 600, not a symlink
+  aiwg mcp profile login ops --api-key-env OPENAI_KEY
+                                                     headless, least preferred — reads
+                                                     $OPENAI_KEY; visible to every other
+                                                     child process this shell starts
+  In every case the key reaches codex over stdin only; it never appears on
+  argv, in logs, or in error messages. Exactly one of the three may be
+  given. Without a terminal and without any of the three, this errors
+  naming all three. See "Supplying credentials safely" in the docs:
+  docs/mcp/codex-profiles.md#supplying-credentials-safely
 `);
 }
 
@@ -1410,26 +1418,58 @@ async function handleProfileInitPresets() {
 }
 
 /**
- * Handle `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]`
- * (#3062, #3069).
+ * Read all of stdin and return it as one trimmed string (go/no-go review,
+ * blocker 1C's `--api-key-stdin`). Mirrors `src/cli/handlers/decision.ts`'s
+ * own private `readStdin()` + `.trim()` for `--token-stdin` — duplicated
+ * rather than imported for the same source/dist reason documented on
+ * `requireFlagValue` above (this file runs both compiled and directly from
+ * source). Input is expected to be a single line; a value containing
+ * additional lines is not specially rejected, matching that precedent.
+ */
+async function readStdinAll() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Handle `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> |
+ * --api-key-stdin | --api-key-file <path>]` (#3062, #3069, go/no-go review
+ * blocker 1C).
  *
  * Wires `loginInProfile()` (src/mcp/adapters/codex-runtime.ts), which
  * already implements the full headless-safe behavior this command needs:
- * with a terminal attached and no `--api-key-env`, it runs the interactive
- * `codex login` OAuth flow; with `--api-key-env`, it reads the key from
- * that named environment variable and feeds it to `codex login
- * --with-api-key` over stdin only — the key itself never appears on argv,
- * in logs, or in error messages, only the variable *name* does. Without a
- * terminal and without `--api-key-env`, it refuses, naming the argument.
- * If the named variable is unset, it errors naming the variable (never its
- * value, since it was never set).
+ * with a terminal attached and none of the three given, it runs the
+ * interactive `codex login` OAuth flow. Exactly one credential source may
+ * be given; more than one is a usage error naming the flags given. In
+ * every case the key reaches `loginInProfile()` only as an in-memory value
+ * (or, for `--api-key-env`, a variable *name*) — never on argv, in logs, or
+ * in an error message — and travels to `codex` only on its stdin (see
+ * `spawnCodexLoginWithApiKey()`'s own doc comment). Without a terminal and
+ * without any of the three, `loginInProfile()` itself refuses, naming all
+ * three flags.
+ *
+ * `--api-key-env` reads the key from that named environment variable, as
+ * before. `--api-key-stdin` reads one line from this process's own stdin
+ * (refusing if stdin is a terminal, or if it is empty) — the least
+ * observable source, since the key then never exists in any environment or
+ * on any command line. `--api-key-file <path>` reads the key from a file
+ * that `readApiKeyFromFile()` requires to be a non-symlink, single-hard-
+ * link, regular file owned by the current user with no group/other
+ * permission bits on POSIX — refused otherwise, without ever printing the
+ * path's contents. `--api-key-env` remains the least preferred of the
+ * three (see "Supplying credentials safely" in the docs): the named
+ * variable is visible to every other child process this shell starts.
  */
 async function handleProfileLogin(args) {
   let apiKeyEnv;
+  let apiKeyFilePath;
   try {
-    // rejectEmpty: an explicitly-given-but-empty variable name can never
-    // name a real environment variable (#3062 second review, finding 4).
+    // rejectEmpty: an explicitly-given-but-empty variable name/path can
+    // never name a real environment variable or file (#3062 second review,
+    // finding 4; go/no-go review blocker 1C).
     apiKeyEnv = requireFlagValue(args, { rejectEmpty: true }, '--api-key-env');
+    apiKeyFilePath = requireFlagValue(args, { rejectEmpty: true }, '--api-key-file');
   } catch (err) {
     if (err instanceof MissingFlagValueError) {
       console.error(`${err.message}.`);
@@ -1437,27 +1477,68 @@ async function handleProfileLogin(args) {
     }
     throw err;
   }
+  const useStdin = args.includes('--api-key-stdin');
 
-  // Skip --api-key-env's own value when hunting for the positional profile
-  // name, so `login --api-key-env FOO` (missing name) never misreads FOO as
-  // the name (mirrors this file's own `serverName()` helper). Stops at a
-  // bare `--` the same way requireFlagValue() does.
+  const sourcesGiven = [
+    apiKeyEnv !== undefined ? '--api-key-env' : null,
+    useStdin ? '--api-key-stdin' : null,
+    apiKeyFilePath !== undefined ? '--api-key-file' : null,
+  ].filter(Boolean);
+  if (sourcesGiven.length > 1) {
+    console.error(`Only one credential source may be given; got ${sourcesGiven.join(', ')}.`);
+    process.exit(2);
+  }
+
+  // Skip --api-key-env's/--api-key-file's own value when hunting for the
+  // positional profile name, so e.g. `login --api-key-env FOO` (missing
+  // name) never misreads FOO as the name (mirrors this file's own
+  // `serverName()` helper). Stops at a bare `--` the same way
+  // requireFlagValue() does.
   const positional = [];
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--') break;
-    if (token === '--api-key-env') { i += 1; continue; }
+    if (token === '--api-key-env' || token === '--api-key-file') { i += 1; continue; }
     if (!token.startsWith('--')) positional.push(token);
   }
   const name = positional[0];
   if (!name) {
-    console.error('Usage: aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]');
+    console.error('Usage: aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> | --api-key-stdin | --api-key-file <path>]');
     process.exit(1);
+  }
+
+  let apiKey;
+  if (useStdin) {
+    if (process.stdin.isTTY) {
+      console.error(
+        '--api-key-stdin requires piped input, not a terminal; run ' +
+        `\`aiwg mcp profile login ${name}\` with no credential flag for the interactive login instead.`,
+      );
+      process.exit(2);
+    }
+    apiKey = (await readStdinAll()).trim();
+    if (!apiKey) {
+      console.error('--api-key-stdin received no key (stdin was empty).');
+      process.exit(2);
+    }
+  } else if (apiKeyFilePath !== undefined) {
+    const { readApiKeyFromFile } = await loadCodexRuntimeAdapter();
+    try {
+      apiKey = await readApiKeyFromFile(apiKeyFilePath);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
+    if (!apiKey) {
+      console.error(`--api-key-file "${apiKeyFilePath}" is empty.`);
+      process.exit(2);
+    }
   }
 
   try {
     const { loginInProfile } = await loadCodexRuntimeAdapter();
-    await loginInProfile(name, apiKeyEnv ? { apiKeyEnv } : {});
+    const loginOptions = apiKey !== undefined ? { apiKey } : apiKeyEnv ? { apiKeyEnv } : {};
+    await loginInProfile(name, loginOptions);
     console.log(`\nLogged in to profile "${name}".`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

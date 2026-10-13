@@ -92,21 +92,38 @@ Useful for pre-authenticating profiles before starting a session. With a termina
 attached, this runs the normal interactive OAuth flow — the same one a first
 `aiwg session --provider codex --profile ops` would trigger.
 
-**Running headless (#3062):** without a terminal, pass `--api-key-env` naming an
-environment variable that holds an API key:
+**Running headless (#3062):** without a terminal, pass exactly one of three flags
+naming where the API key comes from — see
+[Supplying credentials safely](#supplying-credentials-safely) for which one to
+prefer and why:
 
 ```bash
+# Most preferred: piped from a secret manager, never in an environment or on argv
+vault read -field=key secret/openai | aiwg mcp profile login ops --api-key-stdin
+
+# Preferred: a private file only you can read
+aiwg mcp profile login ops --api-key-file ~/.config/aiwg/openai-key
+
+# Least preferred: a named environment variable (go/no-go review, blocker 1C)
 aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
 ```
 
-This reads the key from `$OPENAI_API_KEY` and feeds it to `codex login
---with-api-key` over stdin only — the key itself never appears on argv, in logs, in
-any error message, or (second review, finding 1) in the `codex` child process's own
-environment or in native `NODE_DEBUG=child_process` diagnostics; only the variable
-*name* ever travels around. If the named variable is unset, the error names the
-variable (never a value, since there was none). Without a terminal and without
-`--api-key-env`, the command errors naming the argument instead of hanging waiting
-for input nobody can supply.
+In every case the key reaches `codex login --with-api-key` over stdin only — it
+never appears on argv, in logs, or in any error message. `--api-key-stdin` refuses
+if stdin is a terminal (run the plain interactive login instead) or empty.
+`--api-key-file <path>` refuses unless the file is a regular file, not a symlink,
+with exactly one hard link, owned by you, and not readable or writable by group or
+other (`chmod 600`) — never printing the path's contents. `--api-key-env` reads the
+named variable and, as of the go/no-go review's blocker 1, is also kept out of
+*this process's own* child environment and out of `NODE_DEBUG=child_process`
+diagnostics, including a background subprocess this CLI itself might otherwise
+start (see [Supplying credentials safely](#supplying-credentials-safely)); it
+remains the least preferred of the three because the variable is still visible to
+every *other* child process the invoking shell starts. Only one of the three may be
+given — more than one is a usage error naming the flags given. If the named
+variable (or file) is unset/missing, the error names it (never a value, since there
+was none). Without a terminal and without any of the three, the command errors
+naming all three flags instead of hanging waiting for input nobody can supply.
 
 This command requires the built CLI (`npm run build:cli` in a source checkout, or
 an installed `aiwg`) — if the compiled module is missing it reports that directly
@@ -121,6 +138,67 @@ rule as the plain, non-profile launch). Pass `--prompt`/`--prompt-file` to run t
 profile's runtime home headless instead — the prompt travels on stdin via `codex
 exec -` (see [the headless-running reference](../getting-started/worker-dispatch.md)
 and `docs/providers/codex-direct.md` for the evidence), never on argv.
+
+## Supplying Credentials Safely
+
+Go/no-go review, blocker 1. When a headless command needs a secret (an API key, a
+token), prefer these methods in this order — most preferred first — because each
+one is visible to a progressively wider audience on the machine running it:
+
+1. **Interactive login at a terminal.** Nothing is ever supplied on the command
+   line or in the environment at all; `codex` prompts you directly.
+
+   ```bash
+   aiwg mcp profile login ops
+   ```
+
+2. **Piped from a secret manager, over this process's own stdin.** The secret
+   exists only for the lifetime of the pipe; it is never written to an
+   environment variable or a file, and never appears on any command line.
+
+   ```bash
+   vault read -field=key secret/openai | aiwg mcp profile login ops --api-key-stdin
+   ```
+
+3. **A private file.** The secret sits on disk, but only you (and anything
+   running as you) can read it — enforced, not just documented: a mode-600,
+   non-symlink, single-hard-link regular file you own.
+
+   ```bash
+   aiwg mcp profile login ops --api-key-file ~/.config/aiwg/openai-key
+   ```
+
+4. **A named environment variable.** The least preferred of the four: an
+   environment variable is visible to *every other child process the invoking
+   shell starts* for the lifetime of that shell, not just to the one command you
+   meant it for.
+
+   ```bash
+   export OPENAI_API_KEY=sk-...
+   aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
+   ```
+
+Two things make option 4 riskier than it looks, and apply to *any* secret-bearing
+environment variable, not just this command:
+
+- **A command-line argument is visible in a process listing** (`ps`, `/proc`,
+  task managers) to anyone who can see your process list — never pass a secret
+  value itself as an argument; a variable *name* is fine.
+- **Debug logging of child processes prints environments.** Setting
+  `NODE_DEBUG=child_process` (or an equivalent diagnostic in another language's
+  child-process library) makes that process print every child's full spawn
+  options — including its environment — to your own terminal. This is exactly
+  how the go/no-go review found blocker 1: a background subprocess this CLI
+  itself starts on every invocation (the update-notifier bootstrap,
+  `src/update/notifier.mjs`) used to inherit the whole parent environment,
+  which under `NODE_DEBUG=child_process` printed whatever `--api-key-env` named.
+  Fixed two ways, both durable regardless of which command runs: `bin/aiwg.mjs`
+  now never starts that bootstrap subprocess at all for a command it recognizes
+  as credential-handling (today: `aiwg mcp profile login`,
+  `aiwg decision setup jev`), and the bootstrap subprocess's own environment is
+  now an explicit allow-list (`notifierChildEnv()`) instead of a full copy of
+  the parent's, so a secret this CLI does not yet know to name is still never
+  copied into it, for *any* command.
 
 ## Shared State Policy
 

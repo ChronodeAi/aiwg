@@ -520,8 +520,11 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
       });
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr + result.stdout).toMatch(/interactive terminal, or an API key/);
-      expect(result.stderr + result.stdout).toMatch(/apiKeyEnv/);
+      // Go/no-go review blocker 1C: three credential sources now, not one.
+      expect(result.stderr + result.stdout).toMatch(/interactive terminal, or a key supplied via/);
+      expect(result.stderr + result.stdout).toMatch(/--api-key-env/);
+      expect(result.stderr + result.stdout).toMatch(/--api-key-stdin/);
+      expect(result.stderr + result.stdout).toMatch(/--api-key-file/);
       expect(existsSync(sentinelLog)).toBe(false);
     } finally {
       rmSync(binDir, { recursive: true, force: true });

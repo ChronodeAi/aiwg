@@ -91,7 +91,15 @@ given" (review item 11).
 | `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable; implies yes) or `--custom-scripts true\|false` to answer the question directly without supplying one | Skipped — no custom scripts added |
 | `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
 | `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context — checked before any `git` call, not just before the final write; with `--yes`, unsupplied fields fall back to their detected/default value |
-| `aiwg mcp profile login <name>` | `--api-key-env <ENV_VAR_NAME>` (reads the key from that named variable over stdin only — the key itself never appears on argv, the child's own environment, logs, or error messages) | Refuses, naming `--api-key-env`. If the named variable is unset, the error names the variable, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
+| `aiwg mcp profile login <name>` | Exactly one of `--api-key-stdin` (most preferred), `--api-key-file <path>`, or `--api-key-env <ENV_VAR_NAME>` (least preferred) — see [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely). In every case the key reaches `codex` over stdin only — it never appears on argv, the child's own environment, logs, or error messages | Refuses, naming all three flags. More than one given is a usage error naming the flags given. If the named variable/file is unset/missing, the error names it, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
+| `aiwg decision setup jev` | `--token-stdin` (preferred) or the `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY` environment variables (least preferred) | See [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely) — the same environment-variable caveat applies |
+
+No bootstrap subprocess (today: the update-notifier check `bin/aiwg.mjs` fires on
+every invocation) is ever started before `bin/aiwg.mjs` has decided whether the
+invocation is one of these two credential-handling commands, and that check never
+inherits the whole parent environment regardless of command — see
+[Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely)
+for why, and what it protects against.
 
 `aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
 argument because a manifest step's shell command/script is already bounded (stdin

@@ -8,7 +8,11 @@
  *      `bin/aiwg.mjs`. It spawns a **detached, unref()'d** child Node
  *      process that runs this file with `--check` and writes the result
  *      to `~/.aiwg/update-notifier.json`. The child exits immediately
- *      after writing; the parent never waits on it.
+ *      after writing; the parent never waits on it. The child's
+ *      environment is an explicit allow-list (`notifierChildEnv()`), never
+ *      the whole parent environment — see that function's doc comment.
+ *      `bin/aiwg.mjs` also never calls this at all for a command that
+ *      itself handles a credential (`isCredentialHandlingCommand()`).
  *
  *   2. On the *next* invocation, `maybePrintNotice()` reads the cache
  *      and prints a single-line "update available" message to stderr.
@@ -218,6 +222,54 @@ async function runCheck(packageRoot) {
 }
 
 /**
+ * Environment variable names copied from the parent into the background
+ * check child (go/no-go review, blocker 1B) — never the whole environment,
+ * which is what let a secret-bearing variable set for an entirely
+ * unrelated command (or read by one of this CLI's own credential-handling
+ * commands) reach this child too, visible to `NODE_DEBUG=child_process`
+ * and to anything else that can observe a child's own environment while it
+ * runs. Chosen by reading what this file's own `--check` path (module load
+ * + `runCheck()`) actually consults:
+ *
+ *   PATH                                   general process hygiene
+ *   HOME, USERPROFILE, HOMEDRIVE, HOMEPATH  `os.homedir()` (POSIX / Windows),
+ *                                           consulted by `resolveUserConfigDir()`
+ *   AIWG_CONFIG                             `resolveUserConfigDir()`'s own override
+ *   NODE_EXTRA_CA_CERTS                     Node's own TLS trust-store
+ *                                           augmentation — needed for the
+ *                                           registry HTTPS GET to succeed
+ *                                           behind a custom-CA proxy
+ *
+ * `fetchLatestVersion()` is a plain `https.get()` with no proxy-aware
+ * agent, so `HTTP(S)_PROXY`/`NO_PROXY` have no effect on it today and are
+ * deliberately left out — add them here (and give `fetchLatestVersion()` a
+ * proxy-aware agent) in the same change if proxy support is ever added.
+ * `loadInstallationIdentity()` is imported but never called by `--check`
+ * (only by the parent, before deciding whether to spawn at all), so its own
+ * env reads do not apply here either.
+ */
+const NOTIFIER_CHILD_ENV_ALLOWLIST = Object.freeze([
+  'PATH', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'AIWG_CONFIG', 'NODE_EXTRA_CA_CERTS',
+]);
+
+/**
+ * Build the background check child's environment: only the allow-listed
+ * names, copied from `parentEnv` when present, plus the child-identity
+ * marker the child's own entry point does not otherwise need but existing
+ * tooling may key off of. Exported for the unit test that pins "only
+ * allow-listed names cross over, even when the parent env holds an extra
+ * secret-shaped variable" (go/no-go review, blocker 1 tests).
+ */
+export function notifierChildEnv(parentEnv = process.env) {
+  const env = {};
+  for (const name of NOTIFIER_CHILD_ENV_ALLOWLIST) {
+    if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
+  }
+  env.AIWG_UPDATE_NOTIFIER_CHILD = '1';
+  return env;
+}
+
+/**
  * Schedule a background update check if one hasn't run in the last
  * CHECK_INTERVAL_MS. Non-blocking: spawns a detached child process and
  * returns immediately. The parent must not wait on the child.
@@ -248,7 +300,7 @@ export function scheduleBackgroundCheck(packageRoot) {
       {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, AIWG_UPDATE_NOTIFIER_CHILD: '1' },
+        env: notifierChildEnv(),
       },
     );
     // Unref so the parent can exit without waiting for the child. This is
