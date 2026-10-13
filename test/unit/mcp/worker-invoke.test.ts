@@ -1301,7 +1301,26 @@ describe('allowance ledger debits at the actual dispatch boundary (#2915 review 
     await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
       projectRoot: root, workerWorktreesRoot: work,
       loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
-      launchShellWorker: async (invocation: any) => {
+      // #2915 round 8 (D2): this stub stands in for the WHOLE
+      // `defaultLaunchShellWorker` -> `planDirectWorkerLaunch` ->
+      // `launchIsolatedWorker` chain, so it must itself drive the same
+      // `beginDispatch` -> debit -> `commitDispatch` bracket the real D2
+      // dispatch-commit hook performs immediately before a real process
+      // would start — otherwise this test's own replacement silently
+      // bypasses the ledger entirely, proving nothing about debiting at
+      // the real dispatch boundary.
+      launchShellWorker: async (invocation: any, options: any) => {
+        const admission = options?.admission;
+        if (admission?.gated) {
+          const began = admission.breaker.beginDispatch(admission.token,
+            { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+          if (!began.ok) return { launched: false, blocked: true, diagnostic: began.reason };
+          if (admission.ledger) {
+            const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+            await sessionLauncher.debitDirectWorkerAllowance(admission.ledger);
+          }
+          admission.breaker.commitDispatch(admission.token);
+        }
         dispatches += 1;
         await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
         return { launched: true, mode: 'degraded', child: closingChild(0) };
