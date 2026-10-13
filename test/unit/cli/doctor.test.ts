@@ -712,8 +712,42 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
     // The doctor-side provider filter must admit muse, and the firewall
     // PROVIDERS table must know its layout — otherwise `aiwg doctor
     // --provider muse` degrades to `scan failed: Unknown provider 'muse'`.
-    expect(content).toMatch(/'grokbot', 'muse'\]/);
+    expect(content).toMatch(/'grokbot', 'grok-build', 'muse'\]/);
     expect(content).toMatch(/provName === 'muse' && \(providerArg \|\| allProviders\)/);
+  });
+
+  it('scans Grok Build through the firewall without an unknown-provider hole (#2640)', () => {
+    // `aiwg doctor --provider grok-build` silently skipped the
+    // context/memory firewall scan because grok-build was missing from
+    // both the doctor-side allowlist and the firewall's own PROVIDERS
+    // table (tools/security/context-memory-firewall.mjs) — adding it to
+    // only one of the two turns the silent skip into a thrown
+    // `Unknown provider 'grok-build'` instead, so both are required.
+    expect(content).toMatch(/'openhuman', 'grokbot', 'grok-build', 'muse'\]/);
+    const firewallSource = readFileSync(
+      resolve(__dirname, '../../../tools/security/context-memory-firewall.mjs'),
+      'utf-8',
+    );
+    expect(firewallSource).toMatch(/'grok-build':\s*\{/);
+  });
+
+  it('every provider the firewall scanner supports is in the doctor allowlist (#2640)', async () => {
+    // Regression guard for the exact defect class #2640 reported: a
+    // provider the firewall scanner (tools/security/context-memory-firewall.mjs)
+    // already knows how to scan but that doctor's own allowlist forgot
+    // silently skips the context/memory firewall scan for it. Derives the
+    // expected set from the firewall module's own registry so adding a
+    // provider there without updating doctor.mjs fails this test instead
+    // of silently skipping the scan.
+    const { SUPPORTED_PROVIDERS } = await import('../../../tools/security/context-memory-firewall.mjs');
+
+    const allowlistMatch = /providersToCheck\.filter\(\(name\) =>\s*\[([^\]]+)\]\.includes\(name\)/.exec(content);
+    expect(allowlistMatch).not.toBeNull();
+    const allowlist = allowlistMatch[1].split(',').map((entry) => entry.trim().replace(/'/g, ''));
+
+    for (const provider of SUPPORTED_PROVIDERS) {
+      expect(allowlist, `expected '${provider}' (firewall-supported) to also be in doctor's allowlist`).toContain(provider);
+    }
   });
 });
 

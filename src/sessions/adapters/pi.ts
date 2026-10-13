@@ -17,6 +17,7 @@ const Entry = z.object({ type: z.string().min(1), id: z.string().min(1),
 
 export class PiSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'pi' as const;
+  readonly sourceSchemaMajor = 3;
   readonly adapterVersion = PI_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
   readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;

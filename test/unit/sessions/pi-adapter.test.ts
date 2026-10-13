@@ -1,8 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PiSessionAdapter, type SelectedSource } from '../../../src/sessions/index.js';
+import {
+  PiSessionAdapter, type SelectedSource,
+  IncrementalSessionImporter, SessionRepository, SessionSourceSchema, stableSessionId,
+  discoverWorkspaceHistories,
+} from '../../../src/sessions/index.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 const roots: string[] = [];
 const fixtures = resolve('test/fixtures/sessions/pi');
@@ -91,5 +96,79 @@ describe('PiSessionAdapter persisted-session fixtures', () => {
     const orphan = join(root, 'orphan.jsonl');
     await writeFile(orphan, header + '{"type":"message","id":"no-parent-field","timestamp":"2026-09-04T12:00:01Z"}\n');
     await expect(collect(source(orphan))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
+  });
+});
+
+// #2656: PiSessionAdapter declared no sourceSchemaMajor, so the importer's
+// gate (src/sessions/importer.ts) fell back to its `?? 1` default and
+// rejected every v3 Pi source with UNKNOWN_SCHEMA_MAJOR. Fixing only that
+// gate would have started importing *other* workspaces' sessions, because
+// workspace-discovery.ts scanned the entire `.pi/agent/sessions` tree
+// instead of Pi's own per-workspace `--<path>--` subdirectory. Both must be
+// fixed together.
+describe('PiSessionAdapter schema-major gate (#2656)', () => {
+  it('declares sourceSchemaMajor 3, matching its v3 JSONL sources', () => {
+    expect(new PiSessionAdapter().sourceSchemaMajor).toBe(3);
+  });
+
+  itWithSqlite('imports a v3 Pi source through IncrementalSessionImporter instead of rejecting it as an unknown schema major', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-import-')); roots.push(root);
+    const selection = { ...selected('valid.jsonl'), locator: join(root, 'valid.jsonl'), authorizedScope: { workspaceId: '/workspace', allowedRoots: [root] } };
+    await writeFile(selection.locator, await (await import('node:fs/promises')).readFile(join(fixtures, 'valid.jsonl'), 'utf8'));
+    const source = SessionSourceSchema.parse({
+      contractVersion: '1.0.0', sourceId: selection.sourceId, provider: 'pi', providerProfile: 'native-v3',
+      locatorClass: selection.locatorClass, redactedLocator: '<pi>', adapterVersion: '1.0.0',
+      sourceSchemaVersion: '3.0.0', disposition: 'implemented', operationalState: 'available',
+      consistency: 'complete', authorizedAt: '2026-09-04T12:00:00Z',
+    });
+    const db = join(root, 'sessions.db');
+    const repository = new SessionRepository(db);
+    try {
+      const request = { source, selectedSource: selection, adapter: new PiSessionAdapter(), workspaceId: '/workspace', policyVersion: '1.0.0' };
+      await new IncrementalSessionImporter(repository).import(request);
+      const id = stableSessionId('pi', selection.sourceId, 'pi-session');
+      expect(repository.listEvents(id)).toHaveLength(5);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('discovers only the current workspace\'s Pi sessions, scoped to its --<path>-- subdirectory', async () => {
+    const homeRoot = await realpath(await mkdtemp(join(tmpdir(), 'pi-session-home-')));
+    roots.push(homeRoot);
+    const rootA = await realpath(await mkdtemp(join(tmpdir(), 'pi-session-ws-a-')));
+    const rootB = await realpath(await mkdtemp(join(tmpdir(), 'pi-session-ws-b-')));
+    roots.push(rootA, rootB);
+    // Discovery canonicalizes the workspace path (resolves symlinks) before
+    // deriving its key, so the fixture keys off the same canonical path the
+    // code will compute, not an arbitrary literal path.
+    const workspaceA = join(rootA, 'project-a');
+    const workspaceB = join(rootB, 'project-b');
+    await mkdir(workspaceA, { recursive: true });
+    await mkdir(workspaceB, { recursive: true });
+
+    const keyFor = (workspace: string) => workspace.replace(/\\/g, '/').replace(/^\/+/, '').replace(/[/:]+/g, '-');
+    const sessionsRoot = join(homeRoot, '.pi', 'agent', 'sessions');
+    const dirA = join(sessionsRoot, `--${keyFor(workspaceA)}--`);
+    const dirB = join(sessionsRoot, `--${keyFor(workspaceB)}--`);
+    await mkdir(dirA, { recursive: true });
+    await mkdir(dirB, { recursive: true });
+
+    const sessionFor = (id: string, cwd: string) => [
+      JSON.stringify({ type: 'session', version: 3, id, timestamp: '2026-09-04T12:00:00Z', cwd }),
+      JSON.stringify({ type: 'message', id: 'm1', parentId: null, timestamp: '2026-09-04T12:00:01Z', message: { role: 'user', content: 'hi' } }),
+    ].join('\n') + '\n';
+    await writeFile(join(dirA, 'a-session.jsonl'), sessionFor('session-a', workspaceA));
+    await writeFile(join(dirB, 'b-session.jsonl'), sessionFor('session-b', workspaceB));
+
+    const manifest = await discoverWorkspaceHistories({
+      workspace: workspaceA,
+      providerHome: homeRoot,
+      expectedProviders: ['pi'],
+    });
+    const piSources = manifest.sources.filter((source) => source.provider === 'pi');
+    expect(piSources).toHaveLength(1);
+    expect(piSources[0].locator).toContain(`--${keyFor(workspaceA)}--`);
+    expect(piSources[0].locator).not.toContain(`--${keyFor(workspaceB)}--`);
   });
 });

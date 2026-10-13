@@ -88,6 +88,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   missing layer paths use filesystem-aware case comparisons to prevent overlap.
 - Regression coverage verifies inherited tool denies and credential references in Codex runtime configs
   and Claude injection, with TypeScript and runtime registries exercising the same layered behaviour.
+- `npm run clean:providers` removes only the subpaths AIWG deploys under `.claude/` (agents, commands,
+  skills, rules, hooks) instead of the whole directory, preserving Claude Desktop/Code-owned state
+  (`worktrees/`, `settings.local.json`, `settings.json` and its backups, `launch.json`). Every other
+  provider target keeps its previous whole-directory/whole-file removal behavior unchanged.
+- `aiwg doctor --provider grok-build` no longer silently skips the context/memory firewall scan;
+  `grok-build` is now in both the doctor provider label map and the firewall's own provider registry.
+  The `grokbot.mjs` provider header comment now reads stable instead of experimental.
+- `aiwg runtime-info` and `aiwg steward capabilities` now agree on whether the current session is
+  Claude Code: both resolve through the shared `resolveActiveProvider` path, and the `claude` provider's
+  detection markers are the ones current Claude Code actually sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_DESKTOP_APP_VERSION`) instead of the stale `CLAUDE_CODE_VERSION` and the false-positive
+  `ANTHROPIC_API_KEY` (which any non-Claude session with that key set would otherwise match).
+- Pi v3 session history can be imported again: `PiSessionAdapter` declares its schema major so the
+  importer no longer rejects every Pi source as an unsupported schema. Workspace discovery now scopes
+  Pi session discovery to the current workspace's own `--<path>--` subdirectory (matching Pi's own
+  per-working-directory session layout) instead of scanning the whole `~/.pi/agent/sessions` tree, so
+  fixing the schema-major gate does not start importing other workspaces' sessions into the wrong catalog.
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;

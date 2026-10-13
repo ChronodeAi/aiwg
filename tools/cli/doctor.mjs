@@ -124,6 +124,7 @@ const PROVIDER_LABELS = {
   omp: 'Oh My Pi',
   hermes:   'Hermes',
   grokbot:  'Grok Bot',
+  'grok-build': 'Grok Build',
   muse:     'Muse Code',
 };
 
@@ -1118,7 +1119,7 @@ async function runDoctor() {
   if (!noBudgetCheck) {
     try {
       const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'muse'].includes(name),
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'grok-build', 'muse'].includes(name),
       );
       const firewall = await scanContextMemoryFirewall({
         rootDir: process.cwd(),

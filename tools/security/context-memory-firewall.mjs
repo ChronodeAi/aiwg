@@ -81,6 +81,14 @@ const PROVIDERS = Object.freeze({
   grokbot: {
     bridges: ['AGENTS.md'],
   },
+  // Grok Build: project skills/agents under .grok/; rules stay indexed and
+  // are loaded natively (.grok/rules), so there is no AIWG-managed rules
+  // root to scan here.
+  'grok-build': {
+    agents: '.grok/agents',
+    skills: ['.grok/skills'],
+    bridges: ['AGENTS.md'],
+  },
   // Muse Code: discover-first AGENTS.md bridge + project skill root. Never
   // invent ~/.muse or ~/.agents/skills. .muse/ holds hooks that run outside
   // Muse's sandbox, so it is audited via hook ownership, not session context.
@@ -89,6 +97,13 @@ const PROVIDERS = Object.freeze({
     bridges: ['AGENTS.md'],
   },
 });
+
+// Every provider this scanner can resolve a layout for. Callers that filter
+// a `providers` list before invoking `scanContextMemoryFirewall` (doctor.mjs
+// in particular, #2640) should check membership against this instead of
+// hand-maintaining a parallel literal list — a provider added here is
+// otherwise easy to add to one list and forget the other.
+export const SUPPORTED_PROVIDERS = Object.freeze(Object.keys(PROVIDERS));
 
 const SHARED_CONTEXT = Object.freeze([
   { path: 'AIWG.md', category: 'memory' },

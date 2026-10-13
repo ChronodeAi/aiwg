@@ -154,12 +154,21 @@ export async function discoverWorkspaceHistories(
       ]),
     },
     {
+      // Pi stores every working directory's sessions in its own
+      // subdirectory of the sessions root, named `--<path>--` where
+      // `<path>` has its leading separator removed and `/`, `\`, and `:`
+      // replaced with `-` (https://pi.dev/docs/latest/session-format,
+      // "File Location", verified 2026-10-12) — the same transform
+      // `workspaceKey(path, false)` already applies for Cursor below.
+      // Scanning the whole sessions root (as before) would import every
+      // other workspace's history into this one's catalog (#2656).
       provider: 'pi',
-      roots: options.providerHome
-        ? [process.env.PI_CODING_AGENT_SESSION_DIR
-          ? resolve(process.env.PI_CODING_AGENT_SESSION_DIR)
-          : join(resolve(options.providerHome), '.pi', 'agent', 'sessions')]
-        : [],
+      roots: (process.env.PI_CODING_AGENT_SESSION_DIR
+        ? [resolve(process.env.PI_CODING_AGENT_SESSION_DIR)]
+        : providerHomes.map(
+          (providerHome) => join(providerHome, '.pi', 'agent', 'sessions'),
+        )
+      ).map((sessionsRoot) => join(sessionsRoot, `--${keyWithoutLeadingDash}--`)),
     },
   ];
 

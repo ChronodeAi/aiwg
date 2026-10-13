@@ -14,6 +14,7 @@ import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import { getPackageRoot } from '../../channel/manager.mjs';
 import { inspectInstallation } from '../../installation/manager.mjs';
+import { resolveActiveProvider } from '../provider-resolution.js';
 
 function isMissingRuntimeCatalogError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('No catalog found');
@@ -330,9 +331,17 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       // Native CronCreate is only available when running inside a Claude Code agent context.
       // The CLI itself cannot call agent tools, so we report based on platform heuristics.
       // When invoked from within an agent, the schedule skill performs live detection.
-      const isClaudeCodeContext =
-        process.env.CLAUDE_CODE_VERSION !== undefined ||
-        process.env.ANTHROPIC_API_KEY !== undefined;
+      //
+      // Resolved through the same shared provider-resolution path `steward
+      // capabilities` uses (`resolveActiveProvider` -> the `claude` provider's
+      // `detection.env` markers in provider-definitions.ts) so the two never
+      // disagree about which provider the current session is running under
+      // (#2623, #2627). The ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY`
+      // check this replaced was stale (neither is set by current Claude Code)
+      // and `ANTHROPIC_API_KEY` was a false positive for any non-Claude
+      // session with that key set.
+      const activeProviderResolution = await resolveActiveProvider({ cwd });
+      const isClaudeCodeContext = activeProviderResolution.provider === 'claude';
 
       if (isClaudeCodeContext) {
         schedulerBackend = 'native-cron (CronCreate); external trigger outside agent sessions';
