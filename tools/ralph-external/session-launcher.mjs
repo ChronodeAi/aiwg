@@ -254,14 +254,16 @@ export function terminateChildWithGrace(child, { graceMs = 5000 } = {}) {
  *   actually signalled.
  */
 export async function resolveStopEvidence({ isolationMode, unitName = null, child = null,
-  dispatchState = 'dispatched', graceMs = 5000,
+  dispatchState = 'dispatched', graceMs = 5000, stopFirst = true,
   terminateChild = terminateChildWithGrace, stopUnit = stopWorkerUnit, getStatus = getWorkerIsolationStatus } = {}) {
   if (dispatchState === 'never-began') return { stop: 'none-needed', confirmedStop: false };
   if (dispatchState === 'submission-uncertain') return { stop: 'unresolved', confirmedStop: false };
   if (isolationMode === 'systemd-unit' && unitName) {
-    try { stopUnit(unitName); } catch { /* best-effort: still re-check status below */ }
+    if (stopFirst) {
+      try { await stopUnit(unitName); } catch { /* best-effort: still re-check status below */ }
+    }
     try {
-      const status = getStatus(unitName);
+      const status = await getStatus(unitName);
       // #2915 round 8 review 8 (C2): `active === false` alone is NOT a
       // terminal status -- it can also mean the unit never finished
       // starting, or ExecMainCode has not been set yet. Require the SAME
@@ -275,7 +277,7 @@ export async function resolveStopEvidence({ isolationMode, unitName = null, chil
     } catch { /* unit status unavailable -- fall through to unresolved */ }
     return { stop: 'unresolved', confirmedStop: false };
   }
-  if (typeof terminateChild === 'function' && child) {
+  if (stopFirst && typeof terminateChild === 'function' && child) {
     try { await terminateChild(child, { graceMs }); } catch { /* best-effort */ }
   }
   return { stop: 'unresolved', confirmedStop: false };
@@ -473,6 +475,12 @@ async function launchOneWorker(owner, options) {
   // was unsafe — this file no longer has two places that both decide
   // "is this gated" and can disagree.
   const taskDigest = await stableTaskChainDigest(saved.request, invocation.briefDigest);
+  const dispatchClockNow = () => options.scopedBreaker?.nowMs?.() ?? Number(process.hrtime.bigint()) / 1e6;
+  const dispatchGuard = options.dispatchGuard ?? {
+    nowMs: dispatchClockNow,
+    deadlineAtMs: dispatchClockNow() + Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+      invocation.limits.wallSeconds) * 1000,
+  };
   let admission;
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
@@ -666,20 +674,21 @@ async function launchOneWorker(owner, options) {
     // rejected `beginDispatch`/`commitDispatch`, or a ledger debit that
     // throws) leaves nothing started and the reservation in a releasable,
     // never-dispatched state.
-    // `options.dispatchGuard` (#2915 round 8 review 8, C3): optional
+    // `dispatchGuard` (#2915 round 8 review 8, C3): caller-supplied or
+    // constructed from this launch's own monotonic task budget,
     // `{ deadlineAtMs, nowMs, isCancelled }`, checked immediately after
     // `beginDispatch` and again after the ledger debit, immediately before
     // `commitDispatch` -- so a task that already blew its deadline or was
     // cancelled while this hook's own preparation ran never reaches the
-    // real process-start call. Omitted by every existing caller today.
+    // real process-start call.
     const onDispatchCommit = admission.gated ? async () => {
       const began = admission.breaker.beginDispatch(admission.token,
         { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
       if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
       try {
-        checkDispatchGuard(options.dispatchGuard);
+        checkDispatchGuard(dispatchGuard);
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
-        checkDispatchGuard(options.dispatchGuard);
+        checkDispatchGuard(dispatchGuard);
       } catch (error) {
         try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
         throw error;
@@ -2046,17 +2055,6 @@ async function assertExactLedgerChainMode(target) {
   }
 }
 
-/** Whether `target` exists at all (ENOENT -> false), through the SAME
- * plain, unanchored `lstat` `assertPrivateLedgerDirectory`/
- * `assertExactLedgerChainMode` already use for these top-level,
- * caller-trusted paths (never a worker-controlled path component). Any
- * other error (permission, I/O) propagates -- this never silently reports
- * "missing" for a path that is merely unreadable. */
-async function ledgerPathExists(target) {
-  try { await lstat(target); return true; }
-  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-}
-
 /** fsync ONE directory's own entry table (#2915 round 8 review 8, C8):
  * shared by `chargeLedgerSlotFile` (the chain directory's own entries, an
  * existing durability guarantee) and `ensureLedgerChain` (the newly
@@ -2371,17 +2369,22 @@ async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, af
   const ledgerRoot = join(captureRoot, 'ledger');
   const dir = ledgerChainDir(captureRoot, taskChainDigest);
   await assertPrivateLedgerDirectory(captureRoot);
-  const ledgerRootExisted = await ledgerPathExists(ledgerRoot);
   await assertPrivateLedgerDirectory(ledgerRoot);
-  const chainDirExisted = await ledgerPathExists(dir);
   await mkdir(dir, { mode: 0o700, recursive: true });
   await assertExactLedgerChainMode(dir);
-  // Durably publish newly created ancestry (C8) before any slot inside
+  // Durably publish ancestry before any slot inside
   // either directory can be reserved, let alone charged. Order matters
-  // only for clarity here (both must succeed before this function
+  // only for clarity here (all must succeed before this function
   // returns, regardless of order) -- publish the OUTER name first.
-  if (!ledgerRootExisted) await syncLedgerDirectory(captureRoot); // publishes `ledger`'s own entry in captureRoot
-  if (!chainDirExisted) await syncLedgerDirectory(ledgerRoot); // publishes the chain directory's own entry in ledger/
+  // Existence is not proof that a concurrent creator published the name.
+  // Sync every parent through the filesystem root, including captureRoot's
+  // ancestry, on every reservation before permitting a charge.
+  const parents = [];
+  for (let parent = ledgerRoot; ; parent = dirname(parent)) {
+    parents.push(parent);
+    if (dirname(parent) === parent) break;
+  }
+  for (const parent of parents.reverse()) await syncLedgerDirectory(parent);
   const policy = await ensureLedgerPolicy(dir, ledgerRoot, taskChainDigest, maxAttempts, afterPolicyWrite);
   await validateLedgerChainDirectory(dir, policy);
   return { dir, policy };
@@ -2811,7 +2814,6 @@ export async function refundDirectWorkerAllowance(ledger) {
  * (never left stranded, uncharged and parentless) and the refusal reports
  * why.
  */
-const _LEDGER_CORRECTION_INELIGIBLE_STATES = new Set(['refunding', 'refunded', 'refund-failed']);
 export async function reserveLedgerCorrection({ ledger, reasonCode,
   // Test-only: awaited immediately after the correction slot is reserved
   // but BEFORE the re-check/bind below -- production never passes this.
@@ -2821,7 +2823,7 @@ export async function reserveLedgerCorrection({ ledger, reasonCode,
   afterCorrectionReserved } = {}) {
   if (!ledger) return { ok: false, reason: 'No task chain to correct' };
   const state = _requireLedgerHandleState(ledger);
-  if (_LEDGER_CORRECTION_INELIGIBLE_STATES.has(state.state)) {
+  if (state.state !== 'reserved') {
     return { ok: false, reason: `Startup correction refused: attempt reservation is '${state.state}'` };
   }
   if (state.correction) return startupCorrectionGate({ correctionsUsed: MAX_STARTUP_CORRECTIONS, reasonCode });
@@ -2846,7 +2848,7 @@ export async function reserveLedgerCorrection({ ledger, reasonCode,
   // `reserveLedgerSlotFile`, both async) is exactly the window the review
   // probe paused in. `state.correction` is also re-checked -- a second
   // concurrent `reserveLedgerCorrection` call could have bound one first.
-  if (_LEDGER_CORRECTION_INELIGIBLE_STATES.has(state.state) || state.correction) {
+  if (state.state !== 'reserved' || state.correction) {
     const reason = state.correction
       ? 'Startup correction refused: another correction was already bound while this one was being reserved'
       : `Startup correction refused: attempt reservation became '${state.state}' while this correction was being reserved`;
@@ -4381,19 +4383,29 @@ export function observeStandaloneUnitSettlement(unit, admission, {
   nowMs = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), unrefTimer = timer => timer?.unref?.(),
 } = {}) {
   const deadline = nowMs() + boundMs;
-  const confirmedFromStatus = status => !!status && status.active === false && [1, 2, 3].includes(status.execMainCode);
+  const settleObserved = async (status, stopFirst) => {
+    const evidence = await resolveStopEvidence({ isolationMode: 'systemd-unit', unitName: unit,
+      getStatus: stopFirst ? getStatus : () => status, stopUnit, stopFirst });
+    await settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: evidence.confirmedStop });
+    if (!evidence.confirmedStop) {
+      // One bounded follow-up, never an unbounded background poll.
+      unrefTimer(setTimer(() => {
+        resolveStopEvidence({ isolationMode: 'systemd-unit', unitName: unit, getStatus, stopFirst: false })
+          .then(later => {
+            if (later.confirmedStop) admission.breaker?.reconcileStopEvidence?.({ invocationId: admission.token?.invocationId ?? admission.invocationId, confirmedStop: true });
+          }).catch(() => {});
+      }, pollIntervalMs));
+    }
+  };
   const poll = () => {
     let status = null;
     try { status = getStatus(unit); } catch { status = null; }
     if (status && status.active === false) {
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: confirmedFromStatus(status) });
+      settleObserved(status, false).catch(() => {});
       return;
     }
     if (nowMs() >= deadline) {
-      try { stopUnit(unit); } catch { /* best-effort: still re-check status below */ }
-      let after = null;
-      try { after = getStatus(unit); } catch { after = null; }
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: confirmedFromStatus(after) });
+      settleObserved(status, true).catch(() => {});
       return;
     }
     unrefTimer(setTimer(poll, pollIntervalMs));
@@ -4792,8 +4804,26 @@ export function planDirectWorkerLaunch({
     // backstop against "forgot to settle", never a replacement for real
     // evidence-based settlement.
     if (result.child && typeof result.child.once === 'function') {
-      result.child.once('exit', () => settleDirectWorker(admission, { kind: 'uncertain' }));
-      result.child.once('error', () => settleDirectWorker(admission, { kind: 'uncertain' }));
+      let observed = false;
+      const observe = () => {
+        if (observed) return;
+        observed = true;
+        resolveStopEvidence({ isolationMode: result.mode, unitName: result.unit ?? null,
+          child: result.child, getStatus: isolationStatus, stopFirst: false })
+          .then(async evidence => {
+            await settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: evidence.confirmedStop });
+            if (!evidence.confirmedStop && result.mode === 'systemd-unit' && result.unit) {
+              setTimeout(() => {
+                resolveStopEvidence({ isolationMode: result.mode, unitName: result.unit,
+                  getStatus: isolationStatus, stopFirst: false }).then(later => {
+                  if (later.confirmedStop) admission.breaker?.reconcileStopEvidence?.({ invocationId: admission.token?.invocationId ?? admission.invocationId, confirmedStop: true });
+                }).catch(() => {});
+              }, unitSettlementPollMs ?? 2000).unref?.();
+            }
+          }).catch(() => {});
+      };
+      result.child.once('exit', observe);
+      result.child.once('error', observe);
     } else if (result.mode === 'systemd-unit' && result.unit) {
       // #2915 review 6 (finding 5): the non-attached systemd-unit mode has
       // no direct child to observe here at all -- give it the same kind of

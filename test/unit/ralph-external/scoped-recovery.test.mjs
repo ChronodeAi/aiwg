@@ -28,11 +28,12 @@ import { existsSync } from 'node:fs';
 // `node:fs/promises` calls throughout -- observes byte-identical behavior).
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  const state = { trace: null };
+  const state = { trace: null, beforeSync: null };
   const open = async (targetPath, ...rest) => {
     const handle = await actual.open(targetPath, ...rest);
     const originalSync = handle.sync.bind(handle);
     handle.sync = async (...syncArgs) => {
+      await state.beforeSync?.(targetPath);
       if (state.trace) state.trace.push(targetPath);
       return originalSync(...syncArgs);
     };
@@ -3330,6 +3331,36 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     };
   }
 
+  it('review 9 item 2a: attached preparation beyond its own budget refuses before dispatch without an external guard', async () => {
+    const fx = await ledgerFixtureRoot(2);
+    let monotonic = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    let loads = 0;
+    const spawnWorker = vi.fn();
+    try {
+      const { invocationPath } = await fx.freshPlan();
+      await expect(new SessionLauncher().launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'expired-run'), captureRoot: fx.captureRoot,
+        scopedBreaker: breaker, now: fx.f.request.now,
+        loadInputs: async () => {
+          if (++loads === 2) monotonic = 900_001;
+          return { snapshot: fx.f.snapshot, drivers: fx.drivers };
+        },
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded' }, allowDegraded: true,
+        launchIsolated: async options => { await options.onDispatchCommit(); return spawnWorker(); },
+      })).rejects.toThrow(/deadline exceeded before process start/);
+      expect(spawnWorker).not.toHaveBeenCalled();
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+      const chainDir = path.join(fx.captureRoot, 'ledger', (await readdir(path.join(fx.captureRoot, 'ledger')))[0]);
+      expect(await readdir(chainDir)).toEqual(['policy']);
+    } finally {
+      breaker.destroy();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
   it('exhausted allowance refuses the next attempt', async () => {
     const fx = await ledgerFixtureRoot(1);
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
@@ -5719,5 +5750,138 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     } finally {
       await rm(fx.root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('review 9 bounded recovery regressions', () => {
+  it('review 9 item 3: every reserver publishes the complete ancestry before charging, even while its creator is paused', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-r9-ancestry-'));
+    const captureRoot = path.join(root, 'new', 'parent', 'capture');
+    const state = fsPromises.__aiwgSyncTrace;
+    let resume;
+    let reached;
+    const paused = new Promise(resolve => { reached = resolve; });
+    const hold = new Promise(resolve => { resume = resolve; });
+    let first = true;
+    let a;
+    state.beforeSync = async () => {
+      if (first) { first = false; reached(); await hold; }
+    };
+    try {
+      const args = { captureRoot, taskChainDigest: 'ancestry-interleave', maxAttempts: 3 };
+      a = reserveDirectWorkerAllowance({ ...args, invocationId: 'a' });
+      await paused;
+      const trace = [];
+      state.trace = trace;
+      const b = await reserveDirectWorkerAllowance({ ...args, invocationId: 'b' });
+      await debitDirectWorkerAllowance(b);
+      const names = trace.map(target => path.basename(String(target)));
+      const expected = ['.', path.basename(os.tmpdir()), path.basename(root), 'new', 'parent', 'capture', 'ledger'];
+      // A has created every directory but has synced none of their parents.
+      // B must independently publish the entire ancestry, outermost first.
+      expect(names.slice(0, expected.length)).toEqual(expected);
+      expect(names.indexOf('attempt-1.charged')).toBeGreaterThan(expected.length - 1);
+      resume();
+      await refundDirectWorkerAllowance(await a);
+      state.beforeSync = async () => { throw new Error('injected directory fsync failure'); };
+      await expect(reserveDirectWorkerAllowance({ ...args, invocationId: 'sync-failed' }))
+        .rejects.toThrow(/directory fsync failure/);
+      expect((await readdir(b.dir)).filter(name => name.startsWith('attempt-'))).toEqual(['attempt-1', 'attempt-1.charged']);
+    } finally {
+      resume();
+      if (a) await a.catch(() => {});
+      state.trace = null;
+      state.beforeSync = null;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('review 9 item 6: debit-winning correction acquisition refunds its slot and refuses charged, debiting and debit-failed parents', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-r9-correction-'));
+    try {
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest: 'debit-race', invocationId: 'parent', maxAttempts: 2 });
+      const gate = await reserveLedgerCorrection({ ledger, reasonCode: 'STDIN_WAIT',
+        afterCorrectionReserved: () => debitDirectWorkerAllowance(ledger) });
+      expect(gate).toMatchObject({ ok: false, reason: expect.stringMatching(/became 'charged'/) });
+      expect(ledger.state).toBe('charged');
+      expect(ledger.correction).toBeNull();
+      await expect(lstat(path.join(ledger.dir, 'correction-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await reserveLedgerCorrection({ ledger, reasonCode: 'STDIN_WAIT' }))
+        .toMatchObject({ ok: false, reason: expect.stringMatching(/is 'charged'/) });
+      const other = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest: 'debit-race', invocationId: 'other', maxAttempts: 2 });
+      await writeFile(path.join(other.dir, `attempt-${other.n}.charged`), 'conflict', { mode: 0o600 });
+      const debit = debitDirectWorkerAllowance(other);
+      expect(other.state).toBe('debiting');
+      expect(await reserveLedgerCorrection({ ledger: other, reasonCode: 'STDIN_WAIT' }))
+        .toMatchObject({ ok: false, reason: expect.stringMatching(/is 'debiting'/) });
+      await expect(debit).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      expect(await reserveLedgerCorrection({ ledger: other, reasonCode: 'STDIN_WAIT' }))
+        .toMatchObject({ ok: false, reason: expect.stringMatching(/is 'debit-failed'/) });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('review 9 item 7: C8 accepts explicit null selection only for null-bound reservations and always requires invocation identity', () => {
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+    try {
+      const flat = breaker.admit({ invocationId: 'flat', selectionDigest: null, scopeKeys: [] });
+      expect(breaker.beginDispatch(flat.token, { invocationId: 'flat' }).ok).toBe(false);
+      expect(breaker.beginDispatch(flat.token, { invocationId: null, selectionDigest: null }).ok).toBe(false);
+      expect(breaker.beginDispatch(flat.token, { invocationId: 'flat', selectionDigest: null })).toEqual({ ok: true });
+      const selected = breaker.admit({ invocationId: 'selected', selectionDigest: 'resolved-selection', scopeKeys: [] });
+      for (const selectionDigest of [undefined, null, 'different-selection']) {
+        expect(breaker.beginDispatch(selected.token, { invocationId: 'selected', selectionDigest }).ok).toBe(false);
+      }
+      expect(breaker.beginDispatch(selected.token, { invocationId: 'selected', selectionDigest: 'resolved-selection' })).toEqual({ ok: true });
+    } finally { breaker.destroy(); }
+  });
+
+  it('review 9 item 4: the standalone attached observer queries terminal owned-unit status on exit without stopping it', async () => {
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+    const child = new EventEmitter();
+    child.pid = 987654;
+    const getStatus = vi.fn(() => ({ active: false, execMainCode: 1 }));
+    try {
+      const result = await planDirectWorkerLaunch({ name: 'r9-attached', command: process.execPath, args: [], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, scopedBreaker: breaker, invocation: { selected: { cli: 'codex' } },
+        attached: true, memoryMaxGb: 4, isolation: { mode: 'systemd-unit' }, isolationStatus: getStatus,
+        spawn: () => ({ status: 0, stdout: '' }), spawnAsync: () => child,
+      });
+      expect(result.launched).toBe(true);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1);
+      child.emit('exit', 0);
+      child.emit('error', new Error('duplicate observer event'));
+      await new Promise(resolve => setImmediate(resolve));
+      expect(getStatus).toHaveBeenCalledExactlyOnceWith(result.unit);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+    } finally { breaker.destroy(); }
+  });
+
+  it('review 9 item 5: the standalone bound retains one unrefed follow-up and reconciles a later terminal unit', async () => {
+    let now = 0;
+    let terminal = false;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    const token = breaker.admit({ invocationId: 'late-unit', selectionDigest: null, scopeKeys: [] }).token;
+    breaker.beginDispatch(token, { invocationId: 'late-unit', selectionDigest: null });
+    breaker.commitDispatch(token);
+    const timers = [];
+    const unref = vi.fn();
+    const getStatus = vi.fn(() => { now = 10; return { active: !terminal, execMainCode: terminal ? 1 : 0 }; });
+    try {
+      observeStandaloneUnitSettlement('owned-late-unit', { gated: true, breaker, token }, {
+        boundMs: 10, pollIntervalMs: 2, nowMs: () => now, getStatus, stopUnit: () => ({ ok: true }),
+        setTimer: (fn, ms) => { timers.push({ fn, ms }); return { unref }; },
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(breaker.hasUnresolvedStop('late-unit')).toBe(true);
+      expect(timers).toHaveLength(1);
+      expect(timers[0].ms).toBe(2);
+      expect(unref).toHaveBeenCalledOnce();
+      terminal = true;
+      timers[0].fn();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(timers).toHaveLength(1);
+      expect(getStatus).toHaveBeenCalledTimes(3);
+    } finally { breaker.destroy(); }
   });
 });

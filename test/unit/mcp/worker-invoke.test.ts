@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -34,6 +35,7 @@ import { resetInProcessAllowanceLedger } from '../../../tools/ralph-external/ses
 // production logic.
 import * as sessionLauncherModule from '../../../tools/ralph-external/session-launcher.mjs';
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+import * as workerIsolation from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 // Frozen a4085b86a reference -- see that file's own header. Baseline
 // equivalence tests only; never a production import.
 // @ts-expect-error — .mjs untyped
@@ -3801,6 +3803,203 @@ describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => 
     expect(body.diagnostics.join(' ')).toMatch(/blocking-markers:3/);
     expect(body.diagnostics.join(' ')).toMatch(/reconcile_stopped/);
   }, 20000);
+});
+
+describe('review 9 bounded recovery regressions', () => {
+  const claims = { version: 1, status: 'completed', summary: 'synthetic review probe', claims: [], artifacts: [], checks: [], limitations: [] };
+
+  async function probe(transport: 'shell' | 'mcp', extra: Record<string, any> = {}) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const f = buildFixture(root, transport);
+    const input = { operation: 'run', request_id: 'review-9-probe', role: 'coding', task: 'implementation', group: 'workers',
+      brief: path.join(root, 'brief.json'), workdir: work, final_output: path.join(work, 'final.json'), transport };
+    if (transport === 'mcp') await buildStructuredBrief(f, input as any);
+    else await writeFile(input.brief, 'synthetic review probe');
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const breaker = extra.scopedBreaker ?? new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+    const tools = await captureTool(undefined, { projectRoot: root, registry, scopedBreaker: breaker, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now), ...extra });
+    return { call: tools.get('worker-invoke').handler, input, registry, breaker, f };
+  }
+
+  function commit(options: any) {
+    const { admission } = options;
+    const began = admission.breaker.beginDispatch(admission.token, { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+    expect(began).toEqual({ ok: true });
+    return sessionLauncherModule.debitDirectWorkerAllowance(admission.ledger).then(() => {
+      expect(admission.breaker.commitDispatch(admission.token)).toEqual({ ok: true });
+    });
+  }
+
+  // This speaks real JSON-RPC to the real SDK client and strict transport.
+  // The substituted process can ignore both signals while dropping its tool.
+  function stdioChild(advertise: boolean, closeOnEnd: boolean) {
+    const child: any = new EventEmitter();
+    child.pid = 987654; child.exitCode = null; child.signalCode = null;
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.kill = vi.fn(() => true);
+    child.stdin.on('data', (bytes: Buffer) => {
+      const message = JSON.parse(bytes.toString());
+      if (message.id === undefined) return;
+      let result: any;
+      if (message.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'probe', version: '1' } };
+      else if (message.method === 'tools/list') result = { tools: advertise ? [{ name: 'fixture-worker', inputSchema: workerInputSchema, outputSchema: workerOutputSchema }] : [] };
+      else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: JSON.stringify(claims) }], structuredContent: claims, isError: false };
+      else return;
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`));
+    });
+    if (closeOnEnd) child.stdin.on('finish', () => { child.exitCode = 0; child.emit('close', 0); });
+    return child;
+  }
+
+  it('review 9 item 1: real native post-spawn refusal and shell submission uncertainty retain live registry capacity', async () => {
+    const child = stdioChild(false, false);
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'degraded', child };
+    });
+    let native: any;
+    let shell: any;
+    try {
+      native = await probe('mcp', { allowDegraded: true, terminateChildWithGrace: async () => ({ terminated: false }) });
+      const body = JSON.parse((await native.call(native.input)).content[0].text);
+      expect(body).toMatchObject({ status: 'blocked', termination: 'uncertain' });
+      expect(body.diagnostics.join(' ')).toMatch(/no longer advertised/);
+      expect(child.kill.mock.calls.map((args: any[]) => args[0])).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(native.registry.canStart()).toBe(false);
+      expect(native.registry.get(body.invocationId).terminalAt).toBeNull();
+      expect(native.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      shell = await probe('shell', { launchShellWorker: async (_inv: any, options: any) => {
+        await commit(options);
+        return { launched: false, mode: 'systemd-unit', unit: 'submission-unit', dispatchState: 'submission-uncertain' };
+      } });
+      const shellBody = JSON.parse((await shell.call(shell.input)).content[0].text);
+      expect(shellBody).toMatchObject({ status: 'blocked', termination: 'uncertain' });
+      expect(shell.registry.canStart()).toBe(false);
+      expect(shell.registry.get(shellBody.invocationId).terminalAt).toBeNull();
+      expect(shell.breaker.hasUnresolvedStop(shellBody.invocationId)).toBe(true);
+    } finally { launch.mockRestore(); native?.breaker.destroy(); shell?.breaker.destroy(); }
+  });
+
+  it('review 9 item 2b: clean degraded close exactly at the monotonic deadline beats its timer but still fails', async () => {
+    let monotonic = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const child: any = new EventEmitter(); child.exitCode = null;
+    const p = await probe('shell', { scopedBreaker: breaker, launchShellWorker: async (inv: any, options: any) => {
+      await commit(options);
+      await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+      // Listener registration signals that preparation is finished; no timer
+      // has had an opportunity to fire before this queued completion.
+      const once = child.once.bind(child);
+      child.once = (event: string, listener: any) => {
+        once(event, listener);
+        if (event === 'close') queueMicrotask(() => { monotonic = options.dispatchGuard.deadlineAtMs; child.exitCode = 0; child.emit('close', 0); });
+        return child;
+      };
+      return { launched: true, mode: 'degraded', child };
+    } });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('failed');
+      expect(breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+    } finally { breaker.destroy(); }
+  });
+
+  it('review 9 item 2c: real run passes an absolute monotonic systemd deadline despite a backward wall-clock step', async () => {
+    let monotonic = 0;
+    let wall = 100_000;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    let active = true;
+    const stop = vi.fn(() => { active = false; return { ok: true }; });
+    let observedDeadline = 0;
+    const p = await probe('shell', { scopedBreaker: breaker,
+      launchShellWorker: async (_inv: any, options: any) => {
+        await commit(options);
+        return { launched: true, mode: 'systemd-unit', unit: 'clock-unit' };
+      },
+      isolationStatus: () => ({ active, execMainCode: active ? 0 : 1, result: 'success', execMainStatus: 0 }), stopUnit: stop,
+      waitForUnitTermination: async (unit: string, duration: number, options: any) => {
+        observedDeadline = options.deadlineAtMs;
+        expect(options.clock()).toBe(0);
+        return (workerInvoke as any).__testOnlyWaitForUnitTermination(unit, duration, { ...options,
+          pollIntervalMs: 300_000, sleep: async (ms: number) => { monotonic += ms; wall -= ms * 2; } });
+      },
+    });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status).toBe('failed');
+      expect(stop).toHaveBeenCalledOnce();
+      expect(monotonic).toBe(observedDeadline);
+      expect(wall).toBeLessThan(100_000);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+    } finally { wallClock.mockRestore(); breaker.destroy(); }
+  });
+
+  it('review 9 item 4: native systemd success, non-response and error query terminal owned-unit evidence before settlement', async () => {
+    const child = stdioChild(true, true);
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'systemd-unit', unit: 'native-success-unit', child };
+    });
+    const status = vi.fn(() => ({ active: false, execMainCode: 1 }));
+    const stop = vi.fn();
+    const success = await probe('mcp', { isolationStatus: status, stopUnit: stop });
+    try {
+      const body = JSON.parse((await success.call(success.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(status).toHaveBeenCalledWith('native-success-unit');
+      expect(stop).not.toHaveBeenCalled();
+      expect(success.breaker.snapshot().reservationsOutstanding).toBe(0);
+      for (const outcome of ['timeout', 'isError', 'error']) {
+        resetInProcessAllowanceLedger();
+        const p = await probe('mcp', { isolationStatus: status, stopUnit: stop,
+          callMcpWorker: async (_binding: any, _server: any, options: any) => {
+            await commit(options);
+            const evidence = { dispatchState: 'dispatched', isolationMode: 'systemd-unit', unitName: `native-${outcome}-unit` };
+            return outcome !== 'isError' ? { outcome, ...evidence }
+              : { outcome: 'responded', response: { isError: true }, ...evidence };
+          },
+        });
+        try {
+          const result = JSON.parse((await p.call(p.input)).content[0].text);
+          expect(result.status).toBe(outcome === 'isError' ? 'failed' : 'uncertain');
+          expect(status).toHaveBeenCalledWith(`native-${outcome}-unit`);
+          expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+          expect(p.registry.canStart()).toBe(true);
+        } finally { p.breaker.destroy(); }
+      }
+    } finally { launch.mockRestore(); success.breaker.destroy(); }
+  });
+
+  it('review 9 item 5: a retained stop promise reconciles ownership and registry capacity after the outward result', async () => {
+    let terminal = false;
+    let resolveStop: () => void = () => {};
+    const stopping = new Promise<void>(resolve => { resolveStop = resolve; });
+    const p = await probe('mcp', { isolationStatus: () => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }),
+      callMcpWorker: async (_binding: any, _server: any, options: any) => {
+        await commit(options);
+        const evidence = { isolationMode: 'systemd-unit', unitName: 'late-stop-unit', dispatchState: 'dispatched' };
+        options.observeStop(stopping, evidence);
+        return { outcome: 'timeout', ...evidence };
+      },
+    });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body).toMatchObject({ status: 'uncertain', termination: 'uncertain' });
+      expect(p.registry.canStart()).toBe(false);
+      expect(p.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      terminal = true;
+      resolveStop();
+      await waitFor(() => p.registry.canStart());
+      expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(p.registry.get(body.invocationId).terminalAt).not.toBeNull();
+      expect(p.registry.get(body.invocationId).status).toBe('uncertain');
+      const repeated = JSON.parse((await p.call({ operation: 'reconcile_stopped', invocation_id: body.invocationId })).content[0].text);
+      expect(repeated.reconciled).toBe(false);
+    } finally { resolveStop(); p.breaker.destroy(); }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1303,6 +1303,7 @@ async function defaultCallMcpWorkerGated(mcpBinding, server, options = {}) {
     // cancellation during pre-spawn preparation prevents the spawn too.
     isCancelled,
     dispatchGuard,
+    observeStop,
     // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
     // always undefined for production registrations.
     live, readers, thresholdOverlay,
@@ -1553,7 +1554,13 @@ async function defaultCallMcpWorkerGated(mcpBinding, server, options = {}) {
           diagnostic: [transport._failure.code, termination?.diagnostic].filter(Boolean).join('; ') } : {}) };
     } finally {
       try { if (!retainOverflowControl) registerControl?.(null); }
-      finally { try { await client.close(); } catch { /* already closed */ } }
+      finally {
+        try {
+          const stopping = client.close();
+          observeStop?.(stopping, isolationEvidence);
+          await stopping;
+        } catch { /* already closed */ }
+      }
     }
   };
   return sessionIsolation === 'per-call' ? run() : withServerQueue(mcpBinding.serverRef, run);
@@ -2128,6 +2135,38 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     // confirmed to have actually started (past every "never launched"/
     // "blocked" refusal below), never merely attempted.
     let spawnAttempted = false;
+    let isolationEvidence = null;
+    let settlementPromise;
+    let settlementStarted;
+    let followUpTimer;
+    const settlementReady = new Promise(resolve => { settlementStarted = resolve; });
+    const resolveEvidence = evidence => recoveryModule.resolveStopEvidence({
+      ...evidence, getStatus: options.isolationStatus, stopUnit: options.stopUnit,
+      terminateChild: terminateChildImpl,
+    });
+    const reconcileEvidence = async evidence => {
+      await settlementReady;
+      await settlementPromise;
+      if (!admission.breaker?.hasUnresolvedStop?.(entry.invocationId)) return;
+      const resolved = await resolveEvidence({ ...evidence, stopFirst: false });
+      if (resolved.confirmedStop) {
+        if (followUpTimer !== undefined) clearTimeout(followUpTimer);
+        const reconciled = admission.breaker?.reconcileStopEvidence?.({ invocationId: entry.invocationId, confirmedStop: true });
+        if ((reconciled?.released ?? 0) > 0) registry.markTerminal(entry.invocationId, {});
+      }
+    };
+    // The outward result and execution protection have independent lifetimes.
+    // Retain pending escalation, and make one bounded later unit observation.
+    const observeStop = (stopping, evidence) => {
+      Promise.resolve(stopping).then(() => reconcileEvidence(evidence)).catch(() => {});
+    };
+    let followUpScheduled = false;
+    const observeLater = evidence => {
+      if (followUpScheduled || evidence?.isolationMode !== 'systemd-unit' || !evidence.unitName) return;
+      followUpScheduled = true;
+      followUpTimer = setTimeout(() => { reconcileEvidence(evidence).catch(() => {}); }, 2000);
+      followUpTimer.unref?.();
+    };
     const settleRecovery = (outcome) => {
       if (recoverySettled) return;
       recoverySettled = true;
@@ -2137,9 +2176,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // diagnostic string, or `null`) — capture it instead of discarding
         // it, so `run()`'s wrapper above can await it and surface the
         // diagnostic in the result.
-        const promise = recoveryModule.settleDirectWorker(admission, outcome);
-        captureSettlementPromise?.(promise);
+        settlementPromise = recoveryModule.settleDirectWorker(admission, outcome);
+        captureSettlementPromise?.(settlementPromise);
       } catch { /* recovery accounting must never fail a run */ }
+      settlementStarted();
+      if (!outcome.confirmedStop) observeLater(isolationEvidence);
     };
     try {
       // #2915 round 8 review 8 (C3): ONE absolute wall-clock deadline for
@@ -2277,6 +2318,8 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
           driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, admission, invocationId: entry.invocationId, dispatchGuard, ...gateInputs });
+        isolationEvidence = { isolationMode: launch.mode ?? null, unitName: launch.unit ?? null, child: launch.child ?? null,
+          dispatchState: launch.dispatchState === 'submission-uncertain' ? 'submission-uncertain' : (launch.launched || launch.launchAttempted) ? 'dispatched' : 'never-began' };
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched && !launch.launchAttempted && launch.dispatchState !== 'submission-uncertain') {
           mayHaveLaunched = false;
@@ -2294,15 +2337,16 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // never double-counted.
         let deadlineMs = Math.max(0, deadlineAtMs - deadlineClockNow());
         const control = buildShellStopControl(launch, {
-          waitForUnit: waitForUnitTerminationOverride ?? waitForUnitTermination,
-          stopUnit: options.stopWorkerUnit,
+          waitForUnit: (unit, budgetMs, observerOptions) => (waitForUnitTerminationOverride ?? waitForUnitTermination)(unit,
+            Math.min(budgetMs, Math.max(0, deadlineAtMs - deadlineClockNow())),
+            { ...observerOptions, clock: deadlineClockNow, deadlineAtMs }),
+          stopUnit: options.stopWorkerUnit ?? options.stopUnit,
           killUnit: options.killWorkerUnit,
           graceMs: options.shellStopGraceMs ?? (invocation.health?.terminateGraceSeconds ?? 1) * 1000,
           onConfirmed: async () => {
-            const stopEvidence = await recoveryModule.resolveStopEvidence({
-              isolationMode: launch.mode, unitName: launch.unit ?? null, child: launch.child ?? null, dispatchState: 'dispatched',
-            });
+            const stopEvidence = await resolveEvidence({ ...isolationEvidence, stopFirst: false });
             confirmedStop = stopEvidence.confirmedStop;
+            observeStop(Promise.resolve(), isolationEvidence);
             if (!launch.launched) await cleanupReservation();
             await Promise.resolve().then(() => launch.cleanup?.()).catch(() => {});
             const live = registry.get(entry.invocationId);
@@ -2323,13 +2367,8 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         if (outcome.termination === 'confirmed' && !outcome.timedOut && deadlineClockNow() >= deadlineAtMs) {
           outcome = { ...outcome, timedOut: true };
         }
-        if (outcome.termination === 'confirmed') {
-          const { resolveStopEvidence } = await loadRalphExternal('session-launcher.mjs');
-          const stopEvidence = await resolveStopEvidence({
-            isolationMode: launch.mode, unitName: launch.unit ?? null, child: launch.child ?? null, dispatchState: 'dispatched',
-          });
-          confirmedStop = stopEvidence.confirmedStop;
-        }
+        const stopEvidence = await resolveEvidence({ ...isolationEvidence, stopFirst: false });
+        confirmedStop = stopEvidence.confirmedStop;
         // #2915 review 6 (finding 1, "false recovery after timeout"): a
         // forced stop at the attempt's own deadline is never treated as a
         // candidate success, regardless of the exit code the forced stop
@@ -2358,11 +2397,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // scope through this path. Uncertain termination never implicates
         // anything either way.
         if (outcome.termination !== 'confirmed') {
-          settleRecovery({ kind: 'uncertain' });
+          settleRecovery({ kind: 'uncertain', confirmedStop });
           // M2: stays LIVE — capacity is held until a stop is proven or the
           // conductor disposes of it explicitly, never freed on a mere
           // unconfirmed-termination timeout.
-          return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: ['worker termination could not be confirmed before the deadline'] });
+          return (confirmedStop ? registry.markTerminal : registry.update)(entry.invocationId, {
+            status: 'uncertain', termination: confirmedStop ? 'confirmed' : 'uncertain',
+            diagnostics: ['worker termination could not be confirmed before the deadline'],
+          });
         }
         if (outcome.exitCode !== 0) {
           settleRecovery({ kind: 'failed', evidenceSource: 'launcher', confirmedStop });
@@ -2459,9 +2501,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // identity (never derived from the borrowed admission wrapper) and
           // the one dispatch-commit deadline/cancellation guard, threaded
           // all the way to the leaf hook.
-          invocation, invocationId: entry.invocationId, dispatchGuard, isCancelled,
+          invocation, invocationId: entry.invocationId, dispatchGuard, isCancelled, observeStop,
           ...gateInputs,
         });
+        isolationEvidence = { isolationMode: result.isolationMode ?? null, unitName: result.unitName ?? null,
+          child: result.child ?? null, dispatchState: result.dispatchState ?? 'dispatched' };
         if (result.outcome === 'blocked') {
           // Never launched (dispatch gate or queue refusal): settle with no
           // failure evidence.
@@ -2485,18 +2529,18 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // `'never-began'`.
           let blockedConfirmedStop;
           if (result.dispatchState === 'dispatched' || result.dispatchState === 'submission-uncertain') {
-            const { resolveStopEvidence } = await loadRalphExternal('session-launcher.mjs');
-            const evidence = await resolveStopEvidence({
-              isolationMode: result.isolationMode ?? null, unitName: result.unitName ?? null, child: result.child ?? null,
-              dispatchState: result.dispatchState,
-            });
+            const evidence = await resolveEvidence(isolationEvidence);
             blockedConfirmedStop = evidence.confirmedStop;
           } else {
             blockedConfirmedStop = true;
           }
           settleRecovery({ kind: 'uncertain', confirmedStop: blockedConfirmedStop });
-          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
+          return (blockedConfirmedStop ? registry.markTerminal : registry.update)(entry.invocationId, {
+            status: 'blocked', termination: blockedConfirmedStop ? 'confirmed' : 'uncertain',
+            diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'],
+          });
         }
+        confirmedStop = (await resolveEvidence({ ...isolationEvidence, stopFirst: false })).confirmedStop;
         if (result.outcome !== 'responded') {
           // Overflow holds capacity and stop control until termination is proven.
           if (result.diagnostic?.includes('OG_WORKER_MCP_FRAME_TOO_LARGE')) {
@@ -2510,8 +2554,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
               : registry.update(entry.invocationId, patch);
           }
           // M2: stays LIVE for the same reason as the shell timeout path above.
-          settleRecovery({ kind: 'uncertain' });
-          return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [`worker ${result.outcome}; cancellation delivered, not confirmed stopped`] });
+          settleRecovery({ kind: 'uncertain', confirmedStop });
+          return (confirmedStop ? registry.markTerminal : registry.update)(entry.invocationId, {
+            status: 'uncertain', termination: confirmedStop ? 'confirmed' : 'uncertain',
+            diagnostics: [`worker ${result.outcome}; cancellation delivered`],
+          });
         }
         rawOutput = result.response;
         observation = { transport: 'mcp', status: result.response.isError ? 'failed' : 'completed', termination: 'confirmed', exitCode: result.response.isError ? 1 : null, isError: !!result.response.isError };
@@ -2532,7 +2579,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // the cancellation check, so a transport-correlated response alone
         // can never close a scope.
         if (result.response.isError) {
-          settleRecovery({ kind: 'failed', evidenceSource: 'launcher' });
+          settleRecovery({ kind: 'failed', evidenceSource: 'launcher', confirmedStop });
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }
       }
@@ -2599,19 +2646,20 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         result: assembled?.result ?? { claims },
       });
     } catch (error) {
-      // Settle recovery separately from the registry's retained live run slot.
+      // Registry status and an error label do not establish descendant stop.
       if (error.workerNotLaunched) mayHaveLaunched = false;
-      settleRecovery({ kind: 'uncertain', confirmedStop: !spawnAttempted || !mayHaveLaunched
-        || registry.get(entry.invocationId)?.termination === 'confirmed' });
-      if (!spawnAttempted || !mayHaveLaunched) {
+      const neverDispatched = !spawnAttempted || !!error.workerNotLaunched;
+      const confirmedStop = neverDispatched || (await resolveEvidence({ ...isolationEvidence, stopFirst: false })).confirmedStop;
+      settleRecovery({ kind: 'uncertain', confirmedStop });
+      if (neverDispatched) {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
       }
-      if (registry.get(entry.invocationId)?.termination === 'confirmed') {
+      if (confirmedStop) {
         return registry.markTerminal(entry.invocationId, { control: null,
           status: registry.get(entry.invocationId)?.cancelRequested ? 'cancelled' : 'failed',
           termination: 'confirmed', diagnostics: [error.message] });
       }
-      // An exception after launch is not proof that a worker stopped.
+      // Keep capacity and stop control while execution remains unresolved.
       return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [error.message] });
     }
   }
