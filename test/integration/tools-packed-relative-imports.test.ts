@@ -1,10 +1,11 @@
 /**
  * Guards the npm-package install-ability defect found in review of #3062:
- * every shipped `tools/**` or `bin/**` `.mjs` file that imports something
- * under `src/` must resolve it through `tools/_resolve-impl.mjs`'s
- * `importImpl` (which falls back to `dist/src/` when installed), not a
- * literal relative path straight into `src/` — the installed package does
- * not ship `src/` at all (see `files` in package.json).
+ * every shipped executable file under `tools/`, `bin/`, or `dist/src/`
+ * that imports something outside the packed set must resolve it through
+ * `tools/_resolve-impl.mjs`'s `importImpl` (which falls back to
+ * `dist/src/` when installed), not a literal relative path into `src/` —
+ * the installed package does not ship `src/` at all (see `files` in
+ * package.json).
  *
  * Uses the real `npm pack --dry-run --json` manifest (shared, cached once
  * per run via the `basePackageManifest` global-setup fixture — see
@@ -21,148 +22,187 @@ import { checkPackedRelativeImports } from '../helpers/packed-relative-imports.m
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
 /**
- * Relative imports from shipped `tools/**\/*.mjs` files into targets that
- * are not themselves shipped, predating #3062 and unrelated to the
- * bounded sync child-process conversion this issue covers (mostly
- * decision-engine study/heldout scripts under `tools/decision/` and
+ * Relative imports from shipped executable files into targets that are
+ * not themselves shipped, predating #3062 and unrelated to the bounded
+ * sync child-process conversion this issue covers (mostly decision-engine
+ * study/replay/heldout scripts under `tools/decision/` and
  * `tools/experiments/` that import `src/decision/**\/*.ts` sources
- * directly via a `tsx` loader registered in the same file, plus a few
- * narrower cross-references). Fixing these is out of #3062's scope; they
- * are listed explicitly so this guard still catches *new* unresolvable
+ * directly — some via a `tsx` loader registered in the same file, some
+ * compiled sibling `.js` references — plus a few narrower
+ * cross-references). Fixing these is out of #3062's scope; they are
+ * listed explicitly so this guard still catches *new* unresolvable
  * imports — including a regression of the #3062 bug it exists to prevent
  * — without failing on debt it was never meant to fix.
  *
- * Each entry is `file -> [resolvedRel, ...]`: the exact unshipped target
- * path(s) that file's relative imports resolve to. Narrowed to the known
- * targets (not just the file) so a *different*, new unresolved import
- * added to one of these files still fails the check.
+ * Keyed by `(importing file, resolved target, lazy-or-eager)`, not just
+ * target (#3062 B/C finding 2): keying by target alone would let a *new*
+ * import added to an already-exempted file hide inside the exemption, and
+ * `lazy` is part of the key because changing a lazy (deferred, inside a
+ * function) import to eager (resolved unconditionally at module load) is
+ * itself a behavior change this guard should not silently wave through.
  */
-const KNOWN_PREEXISTING_VIOLATIONS: Record<string, string[]> = {
+const KNOWN_PREEXISTING_VIOLATIONS: Record<string, { resolvedRel: string; lazy: boolean }[]> = {
+  // Compiled from src/cli/handlers/subcommands.ts (outside this issue's
+  // file-set boundary — not fixed here, reported separately): a relative
+  // import that correctly reaches tools/ from src/cli/handlers/ resolves
+  // one directory short from dist/src/cli/handlers/, since dist/src/
+  // nests one level deeper than src/ relative to the repo root. Predates
+  // #3062 (introduced in 8e37a4f4e, well before this branch).
+  'dist/src/cli/handlers/subcommands.js': [
+    { resolvedRel: 'dist/tools/agents/providers/omp.mjs', lazy: true },
+  ],
   'tools/agents/providers/omp.mjs': [
-    'src/providers/omp-agent.mjs',
-    'src/providers/omp-paths.mjs',
+    { resolvedRel: 'src/providers/omp-paths.mjs', lazy: false },
+    { resolvedRel: 'src/providers/omp-agent.mjs', lazy: false },
   ],
   'tools/cockpit/qualify-desktop-issuer.mjs': [
-    'apps/cockpit/bridge/src/desktop-identity-keycloak.mjs',
-    'apps/cockpit/bridge/src/desktop-issuer-transport.mjs',
+    { resolvedRel: 'apps/cockpit/bridge/src/desktop-identity-keycloak.mjs', lazy: false },
+    { resolvedRel: 'apps/cockpit/bridge/src/desktop-issuer-transport.mjs', lazy: false },
   ],
   'tools/daemon/index.mjs': [
-    'tools/docker/container-manager.mjs',
+    { resolvedRel: 'tools/docker/container-manager.mjs', lazy: true },
+  ],
+  'tools/decision/comparative-replay-assets.ts': [
+    { resolvedRel: 'src/decision/entry.js', lazy: false },
+    { resolvedRel: 'src/decision/compile-cache/identity.js', lazy: false },
+    { resolvedRel: 'tools/decision/comparative-replay-corpus.js', lazy: false },
+  ],
+  'tools/decision/comparative-replay-corpus.ts': [
+    { resolvedRel: 'src/decision/compile-cache/identity.js', lazy: false },
+    { resolvedRel: 'src/decision/validate.js', lazy: false },
+    { resolvedRel: 'src/decision/types.js', lazy: false },
+    { resolvedRel: 'src/decision/sensitivity/types.js', lazy: false },
+  ],
+  'tools/decision/comparative-replay.ts': [
+    { resolvedRel: 'src/security/artifact-trust.js', lazy: false },
+    { resolvedRel: 'src/decision/validate.js', lazy: false },
+    { resolvedRel: 'src/decision/sensitivity/runtime.js', lazy: false },
+    { resolvedRel: 'src/decision/sensitivity/contract.js', lazy: false },
+    { resolvedRel: 'src/decision/sensitivity/comparative.js', lazy: false },
+    { resolvedRel: 'src/decision/qualification/release.js', lazy: false },
+    { resolvedRel: 'src/decision/sensitivity/types.js', lazy: false },
+    { resolvedRel: 'tools/decision/comparative-replay-assets.js', lazy: false },
+    { resolvedRel: 'tools/decision/comparative-replay-corpus.js', lazy: false },
   ],
   'tools/decision/d17-multifact.mjs': [
-    'src/decision/context-live-qualification.ts',
-    'src/decision/ensemble-study/calibration.ts',
-    'src/decision/ensemble-study/multifact-study.ts',
-    'src/decision/ensemble-study/staged.ts',
-    'src/decision/heldout/calibration.ts',
-    'src/decision/heldout/collector.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/heldout/journal.ts',
+    { resolvedRel: 'src/decision/ensemble-study/multifact-study.ts', lazy: true },
+    { resolvedRel: 'src/decision/context-live-qualification.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/calibration.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/calibration.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/staged.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/collector.ts', lazy: true },
   ],
   'tools/decision/d17-score.mjs': [
-    'src/decision/context-live-qualification.ts',
-    'src/decision/ensemble-study/score.ts',
-    'src/decision/heldout/calibration.ts',
-    'src/decision/heldout/collector.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/heldout/journal.ts',
-    'tools/eval/src/integrity.ts',
+    { resolvedRel: 'src/decision/heldout/calibration.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/collector.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: true },
+    { resolvedRel: 'tools/eval/src/integrity.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/score.ts', lazy: true },
+    { resolvedRel: 'src/decision/context-live-qualification.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/collector.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: false },
   ],
   'tools/decision/d17-study.mjs': [
-    'src/decision/context-live-qualification.ts',
-    'src/decision/ensemble-study/calibration.ts',
-    'src/decision/ensemble-study/corpus.ts',
-    'src/decision/ensemble-study/score.ts',
-    'src/decision/ensemble-study/staged.ts',
-    'src/decision/heldout/calibration.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/heldout/journal.ts',
+    { resolvedRel: 'src/decision/ensemble-study/staged.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/corpus.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/score.ts', lazy: true },
+    { resolvedRel: 'src/decision/context-live-qualification.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/calibration.ts', lazy: true },
+    { resolvedRel: 'src/decision/ensemble-study/calibration.ts', lazy: true },
   ],
   'tools/decision/d29-study.mjs': [
-    'src/decision/context-live-qualification.ts',
-    'src/decision/heldout/journal.ts',
+    { resolvedRel: 'src/decision/context-live-qualification.ts', lazy: true },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: true },
   ],
   'tools/decision/heldout-study.mjs': [
-    'src/decision/context-live-qualification.ts',
-    'src/decision/heldout/calibration.ts',
-    'src/decision/heldout/collector.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/heldout/journal.ts',
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/journal.ts', lazy: false },
+    { resolvedRel: 'src/decision/context-live-qualification.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/calibration.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/collector.ts', lazy: false },
   ],
   'tools/decision/studies/d29-calibration.mjs': [
-    'src/decision/calibration/registry.ts',
-    'src/decision/heldout/calibration.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/qualification/quality.ts',
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/calibration.ts', lazy: false },
+    { resolvedRel: 'src/decision/calibration/registry.ts', lazy: false },
+    { resolvedRel: 'src/decision/qualification/quality.ts', lazy: false },
   ],
   'tools/decision/studies/d29-shortcuts-v7.mjs': [
-    'src/decision/heldout/d29-pools.js',
+    { resolvedRel: 'src/decision/heldout/d29-pools.js', lazy: false },
   ],
   'tools/decision/studies/d29-shortcuts-v8.mjs': [
-    'src/decision/heldout/d29-pools-v8.js',
+    { resolvedRel: 'src/decision/heldout/d29-pools-v8.js', lazy: false },
   ],
   'tools/decision/studies/d29-shortcuts.mjs': [
-    'src/decision/heldout/generators.js',
+    { resolvedRel: 'src/decision/heldout/generators.js', lazy: false },
   ],
   'tools/decision/studies/d29.mjs': [
-    'src/config/project-artifacts-runtime.mjs',
-    'src/decision/calibration/registry.ts',
-    'src/decision/heldout/contract.ts',
-    'src/decision/heldout/d29-passage-baseline-v2.ts',
-    'src/decision/heldout/d29-passage-baseline-v3.ts',
-    'src/decision/heldout/d29-passage-baseline.ts',
-    'src/decision/heldout/d29-v6.ts',
-    'src/decision/heldout/d29-v7.ts',
-    'src/decision/heldout/d29-v8.ts',
-    'src/decision/heldout/generator-registry.ts',
-    'src/decision/heldout/generators.ts',
-    'src/decision/qualification/quality.ts',
-    'src/decision/qualification/release.ts',
-    'src/decision/sdlc-screening.ts',
-    'src/decision/validate.ts',
-    'src/gates/discovery.ts',
-    'src/gates/evaluate.ts',
-    'src/gates/floors.ts',
-    'src/gates/providers/index.ts',
-    'src/gates/registry.ts',
+    { resolvedRel: 'src/decision/heldout/contract.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/generators.ts', lazy: false },
+    { resolvedRel: 'src/decision/qualification/quality.ts', lazy: false },
+    { resolvedRel: 'src/decision/qualification/release.ts', lazy: false },
+    { resolvedRel: 'src/decision/calibration/registry.ts', lazy: false },
+    { resolvedRel: 'src/decision/validate.ts', lazy: false },
+    { resolvedRel: 'src/decision/sdlc-screening.ts', lazy: false },
+    { resolvedRel: 'src/gates/evaluate.ts', lazy: false },
+    { resolvedRel: 'src/gates/floors.ts', lazy: false },
+    { resolvedRel: 'src/config/project-artifacts-runtime.mjs', lazy: false },
+    { resolvedRel: 'src/gates/discovery.ts', lazy: false },
+    { resolvedRel: 'src/gates/registry.ts', lazy: false },
+    { resolvedRel: 'src/gates/providers/index.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-v6.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-v7.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-v8.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/generator-registry.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-passage-baseline-v2.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-passage-baseline-v3.ts', lazy: false },
+    { resolvedRel: 'src/decision/heldout/d29-passage-baseline.ts', lazy: false },
   ],
   'tools/experiments/conformal/collect-jev.v2.mjs': [
-    'src/decision/index.ts',
+    { resolvedRel: 'src/decision/index.ts', lazy: false },
   ],
   'tools/experiments/conformal/run.mjs': [
-    'src/decision/acceptance.ts',
-    'src/decision/qualification/quality.ts',
-    'tools/eval/src/integrity.ts',
+    { resolvedRel: 'src/decision/acceptance.ts', lazy: false },
+    { resolvedRel: 'tools/eval/src/integrity.ts', lazy: false },
+    { resolvedRel: 'src/decision/qualification/quality.ts', lazy: false },
   ],
   'tools/experiments/conformal/run.v2.mjs': [
-    'src/decision/acceptance.ts',
-    'tools/eval/src/integrity.ts',
+    { resolvedRel: 'src/decision/acceptance.ts', lazy: false },
+    { resolvedRel: 'tools/eval/src/integrity.ts', lazy: false },
   ],
   'tools/mission-protocol/migrate.mjs': [
-    'src/mission-protocol/index.ts',
+    { resolvedRel: 'src/mission-protocol/index.ts', lazy: true },
   ],
   'tools/providers/omp-conformance.mjs': [
-    'src/providers/omp-agent.mjs',
+    { resolvedRel: 'src/providers/omp-agent.mjs', lazy: false },
   ],
   'tools/providers/omp-mcp-conformance.mjs': [
-    'src/mcp/omp-config.mjs',
+    { resolvedRel: 'src/mcp/omp-config.mjs', lazy: false },
   ],
   'tools/testing/audit-conformance-inventory.mjs': [
-    'src/config/project-artifacts-runtime.mjs',
+    { resolvedRel: 'src/config/project-artifacts-runtime.mjs', lazy: false },
   ],
   'tools/testing/run-conformance-example.mjs': [
-    'src/config/project-artifacts-runtime.mjs',
+    { resolvedRel: 'src/config/project-artifacts-runtime.mjs', lazy: false },
   ],
   'tools/testing/verify-coverage-enforcement.mjs': [
-    'config/vitest.testing-quality-coverage.config.js',
+    { resolvedRel: 'config/vitest.testing-quality-coverage.config.js', lazy: false },
   ],
 };
 
-function isKnownPreexisting(violation: { file: string; resolvedRel: string }): boolean {
-  return (KNOWN_PREEXISTING_VIOLATIONS[violation.file] ?? []).includes(violation.resolvedRel);
+function isKnownPreexisting(violation: { file: string; resolvedRel: string; lazy: boolean }): boolean {
+  return (KNOWN_PREEXISTING_VIOLATIONS[violation.file] ?? []).some(
+    (entry) => entry.resolvedRel === violation.resolvedRel && entry.lazy === violation.lazy,
+  );
 }
 
-describe('shipped tools/**/*.mjs and bin/** relative imports resolve (#3062 finding 1)', () => {
+describe('shipped tools/**, bin/**, and dist/src/** relative imports resolve (#3062 finding 1)', () => {
   it('every relative import not already known-pre-existing resolves to a packed file', () => {
     const packed = inject('basePackageManifest');
     const packedFiles = packed.files.map((file) => file.path);
@@ -172,14 +212,16 @@ describe('shipped tools/**/*.mjs and bin/** relative imports resolve (#3062 find
 
     expect(
       unexpected,
-      `New unresolvable relative import(s) in shipped tools/**/*.mjs or bin/** — these will throw ` +
-        `ERR_MODULE_NOT_FOUND once installed from npm (src/ is not shipped; use ` +
+      `New unresolvable relative import(s) in a shipped tools/**, bin/**, or dist/src/** file — these ` +
+        `will throw ERR_MODULE_NOT_FOUND once installed from npm (src/ is not shipped; use ` +
         `importImpl(import.meta.url, '<path>') from tools/_resolve-impl.mjs instead of a literal ` +
-        `relative path into src/):\n${JSON.stringify(unexpected, null, 2)}`,
+        `relative path into src/). This also fails on a known-pre-existing edge that changed from ` +
+        `lazy to eager (or vice versa) — update KNOWN_PREEXISTING_VIOLATIONS deliberately if that was ` +
+        `intended:\n${JSON.stringify(unexpected, null, 2)}`,
     ).toEqual([]);
   });
 
-  it('no shipped tools/**/*.mjs file has an unresolved import into src/process/bounded-child-process.mjs (#3062)', () => {
+  it('no shipped file has an unresolved import into src/process/bounded-child-process.mjs (#3062)', () => {
     const packed = inject('basePackageManifest');
     const packedFiles = packed.files.map((file) => file.path);
 
@@ -206,6 +248,7 @@ describe('checkPackedRelativeImports — proves the guard actually catches a vio
         file: 'tools/example/broken.mjs',
         spec: '../../src/process/bounded-child-process.mjs',
         resolvedRel: 'src/process/bounded-child-process.mjs',
+        lazy: false,
       },
     ]);
   });
@@ -235,7 +278,7 @@ describe('checkPackedRelativeImports — proves the guard actually catches a vio
     expect(violations).toEqual([]);
   });
 
-  it('flags an unresolved dynamic import() the same way as a static import', () => {
+  it('flags an unresolved top-level (eager) dynamic import() the same way as a static import', () => {
     const packedFiles = ['tools/example/broken-dynamic.mjs'];
     const violations = checkPackedRelativeImports({
       root: ROOT,
@@ -248,6 +291,77 @@ describe('checkPackedRelativeImports — proves the guard actually catches a vio
         file: 'tools/example/broken-dynamic.mjs',
         spec: '../../src/process/bounded-child-process.mjs',
         resolvedRel: 'src/process/bounded-child-process.mjs',
+        lazy: false,
+      },
+    ]);
+  });
+
+  it('flags an unresolved import() nested in a function as lazy, distinct from the same import at top level', () => {
+    const packedFiles = ['tools/example/broken-lazy.mjs'];
+    const violations = checkPackedRelativeImports({
+      root: ROOT,
+      packedFiles,
+      readFile: () => [
+        'export async function getHelper() {',
+        "  const { boundedExecSync } = await import('../../src/process/bounded-child-process.mjs');",
+        '  return boundedExecSync;',
+        '}',
+      ].join('\n'),
+    });
+
+    expect(violations).toEqual([
+      {
+        file: 'tools/example/broken-lazy.mjs',
+        spec: '../../src/process/bounded-child-process.mjs',
+        resolvedRel: 'src/process/bounded-child-process.mjs',
+        lazy: true,
+      },
+    ]);
+  });
+
+  it('flags an unresolved import in a shipped .ts tool file, not just .mjs (#3062 B/C finding 2)', () => {
+    const packedFiles = ['tools/example/broken.ts'];
+    const violations = checkPackedRelativeImports({
+      root: ROOT,
+      packedFiles,
+      readFile: () => "import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';\nboundedExecSync('x', 'quick');\n",
+    });
+
+    expect(violations).toEqual([
+      {
+        file: 'tools/example/broken.ts',
+        spec: '../../src/process/bounded-child-process.mjs',
+        resolvedRel: 'src/process/bounded-child-process.mjs',
+        lazy: false,
+      },
+    ]);
+  });
+
+  it('does not flag an unexecutable .d.ts declaration file', () => {
+    const packedFiles = ['tools/example/types.d.ts'];
+    const violations = checkPackedRelativeImports({
+      root: ROOT,
+      packedFiles,
+      readFile: () => "import type { Thing } from '../../src/process/not-shipped.js';\n",
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('flags an unresolved import in a built dist/src/**/*.js file (#3062 B/C finding 2)', () => {
+    const packedFiles = ['dist/src/cli/handlers/example.js'];
+    const violations = checkPackedRelativeImports({
+      root: ROOT,
+      packedFiles,
+      readFile: () => "import { thing } from '../../../../tools/not-shipped.mjs';\nthing();\n",
+    });
+
+    expect(violations).toEqual([
+      {
+        file: 'dist/src/cli/handlers/example.js',
+        spec: '../../../../tools/not-shipped.mjs',
+        resolvedRel: 'tools/not-shipped.mjs',
+        lazy: false,
       },
     ]);
   });

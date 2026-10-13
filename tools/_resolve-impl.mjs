@@ -62,21 +62,29 @@ function resolveCandidate(root, relativeFromSrc, base) {
  * guards this for every relative import already known to resolve.
  *
  * Directories `package.json`'s `files` excludes from the npm package
- * (`tools/ci/`, `tools/contrib/`, `tools/docker/`, `tools/eval/`,
- * `tools/lint/` other than its listed exceptions, `tools/manifest/` other
- * than its listed exception, and `tools/release/`) are maintainer/CI-only:
- * they never run from an installed package, so a literal
- * `../../src/<module>` import there is fine and does not need
- * `importImpl`. Keep that distinction explicit at each such import site
- * rather than silently mixing styles within one shipped-vs-not-shipped
- * directory.
+ * (`tools/benchmarks/`, `tools/ci/`, `tools/contrib/`, `tools/docker/`,
+ * `tools/eval/`, `tools/lint/` other than its listed exceptions,
+ * `tools/manifest/` other than its listed exception, `tools/qualification/`,
+ * and `tools/release/`) are maintainer/CI-only: they never run from an
+ * installed package, so a literal `../../src/<module>` import there is
+ * fine and does not need `importImpl`. Keep that distinction explicit at
+ * each such import site rather than silently mixing styles within one
+ * shipped-vs-not-shipped directory. `tools/benchmarks/` and
+ * `tools/qualification/` were excluded specifically because nothing
+ * shipped ever referenced them (#3062 B/C finding 2) — removing them
+ * also trims install size (#3075).
  *
- * `.ts` files directly under `tools/**` (e.g. `tools/qualification/*.ts`,
- * `tools/benchmarks/*.ts`) are a separate case: they are only ever run via
- * `tsx` through an `npm run` script in a checkout (there is no compile step
- * that makes them directly `node`-executable), so they also keep literal
- * `src/**` imports — there is no installed-package code path that reaches
- * them to break.
+ * `.ts` files directly under `tools/**` that remain shipped (e.g. under
+ * `tools/decision/`, `tools/experiments/`) are a separate, still-open
+ * case: they are only ever run via `tsx` through an `npm run` script in a
+ * checkout (there is no compile step that makes them directly
+ * `node`-executable), so they also keep literal `src/**` imports — there
+ * is no installed-package code path that reaches them to break. This is
+ * pre-existing, documented debt (see the baseline in
+ * `test/integration/tools-packed-relative-imports.test.ts`), not a
+ * recommendation to add more of it: a new shipped `.ts` tool should
+ * resolve through `importImpl` like everything else unless it has the
+ * same checkout-only justification.
  */
 export function resolveImpl(callerUrl, relativeFromSrc) {
   const root = findPackageRoot(callerUrl);
