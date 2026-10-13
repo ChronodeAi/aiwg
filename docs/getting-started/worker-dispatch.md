@@ -52,7 +52,11 @@ aiwg setup project --yes --worker-dispatch decline
   explicit choice always overrides the presence-only detection gate above.
 - `--dry-run` never writes, even with the argument — it reports what would be
   written instead (`aiwg setup project --json --dry-run` reports it under
-  `worker_dispatch_offer.applied_choice`).
+  `worker_dispatch_offer.applied_choice`). This holds for the whole command, not
+  just the worker-dispatch increment: `aiwg init --dry-run` on a brand-new project
+  writes nothing at all — not `.aiwg/aiwg.config`, not `AIWG.md`, not
+  `WORKSPACE.md` (#3062 review item 18; previously it wrote the baseline config
+  unconditionally even under `--dry-run`).
 - An unrecognized value (anything other than `enable`/`decline`) exits non-zero
   naming the accepted values.
 - Without a terminal and without the argument, behavior is unchanged (the

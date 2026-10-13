@@ -63,28 +63,57 @@ contains access or refresh tokens.
 ## Running Headless
 
 A few commands hand the terminal to an interactive process by design (an editor, a
-provider binary the user is meant to talk to, an OAuth login flow). The rule
+provider binary the user is meant to talk to, an OAuth login flow), or run a
+multi-step wizard that would otherwise prompt for several inputs in a row. The rule
 (#3062): **every input those steps would otherwise ask for interactively has a
 command-line argument.** Without an interactive terminal attached (no TTY, or a CI
 environment), supplying every required argument runs the command fully headless;
-missing one refuses immediately — before spawning anything — naming the missing
-argument. With a terminal attached, behavior is unchanged except where an argument
-is supplied, in which case the headless form is used even then.
+missing one refuses immediately — before spawning anything, reading anything, or
+writing anything — naming the missing argument. With a terminal attached, any of
+these arguments given directly skips that one question; only genuinely missing
+inputs are still asked (review item 10's "skip steps for any params provided, only
+interact when missing a value"). Every value-taking argument below is parsed
+strictly: present with no value, or immediately followed by another flag, is a
+usage error (exit 2) raised before any of the above — never silently treated as "not
+given" (review item 11).
 
-| Command | Headless argument(s) | Without a terminal and without the argument |
+| Command | Every input, and its argument | Without a terminal and a required one missing |
 | --- | --- | --- |
 | `aiwg config edit` | `--print-path` (prints the config file path; or use `aiwg config set <key> <value>`) | Refuses, naming both alternatives |
-| `aiwg session` (any spawnable provider) | `--prompt <text>` / `--prompt-file <path>` | Refuses, naming `--prompt`/`--prompt-file` |
-| `aiwg session --provider codex --profile <p>` | `--prompt <text>` / `--prompt-file <path>` (maps to `codex exec <text>` inside the profile's runtime home) | Refuses, naming `--prompt`/`--prompt-file` |
+| `aiwg session` (any spawnable provider) | `--prompt <text>` / `--prompt-file <path>`; `--non-interactive` forces the refusal even with a terminal attached | Refuses, naming `--prompt`/`--prompt-file`. An unsupported (non-spawnable) provider given `--prompt`/`--prompt-file` refuses outright, naming the provider, instead of discarding the prompt and printing IDE guidance |
+| `aiwg session --provider codex --profile <p>` | `--prompt <text>` / `--prompt-file <path>` (maps to `codex exec -`, prompt on stdin, inside the profile's runtime home) | Refuses, naming `--prompt`/`--prompt-file` |
 | `aiwg setup-run` steps (`script`/`verify`/`detect`/`os-config`) | none needed — runs bounded with stdin ignored instead of hanging | N/A (never required; see below) |
-| `aiwg setup-run` step marked `interactive: true` | none — manifest authors should avoid depending on one in headless pipelines | Refuses up front, naming the step |
+| `aiwg setup-run` step marked `interactive: true` | none — runs an arbitrary script whose questions cannot be enumerated; manifest authors should avoid depending on one in headless pipelines | Refuses up front (preflighted before any step runs), naming the step |
+| `aiwg setup-run` step `type: ask` | `--param <name>=<value>` (repeatable) for every name the step's `params` field declares | Refuses up front (preflighted before any step runs), naming the missing param name(s) — this CLI has no interactive-capture mechanism for `ask` steps at all, with or without a terminal, so this is a `--param` gap to fill, not something to wait for |
+| `aiwg init` provider selection | `--providers <list>` (comma-separated, same form as `aiwg setup project`'s flag) | Defaults to `claude` (a safe headless default; not a refusal) |
+| `aiwg init` add default scripts | `--default-scripts true\|false` | Defaults to `true` |
+| `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable) | Skipped — no custom scripts added |
 | `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
+| `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context; with `--yes`, unsupplied fields fall back to their detected/default value |
+| `aiwg mcp profile login <name>` | `--api-key-env <ENV_VAR_NAME>` (reads the key from that named variable over stdin only — the key itself never appears on argv, in logs, or in error messages) | Refuses, naming `--api-key-env`. If the named variable is unset, the error names the variable, never a value |
 
-`aiwg setup-run` steps don't need a headless argument because a manifest step's shell
-command/script is already bounded (stdin ignored) whenever no terminal is attached —
-see [the SetupManifest reference](../configuration/setup-manifest.md#running-headless-3062)
-for the `interactive: true` per-step marker that refuses a step outright instead of
-waiting out the bound.
+`aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
+argument because a manifest step's shell command/script is already bounded (stdin
+ignored) whenever no terminal is attached — see
+[the SetupManifest reference](../configuration/setup-manifest.md#running-headless-3062)
+for the `interactive: true` and `type: ask` per-step behavior, including the preflight
+that checks every selected step (recursively into `platform-route` nesting) before
+any of them run.
+
+### Which Providers Expose The Prompt In The Process List
+
+`aiwg session --prompt`/`--prompt-file` delivers the prompt text to the provider
+binary off argv wherever the provider's own CLI documents a transport for it (review
+item 8) — never by building a shell string. A provider without an evidenced
+non-interactive form at all refuses `--prompt`/`--prompt-file` instead of guessing.
+
+| Provider | Headless form | Prompt transport | Visible in `ps`/`/proc/<pid>/cmdline`? |
+| --- | --- | --- | --- |
+| `claude` / `claude-code` | `claude --print --input-format text` | stdin | No |
+| `codex` / `openai` | `codex exec -` | stdin | No |
+| `deepseek-harness` | `dsh --profile headless -` | stdin | No |
+| `opencode` | `opencode run --format json -f <temp-file>` | private temp file (path only; content never on argv) | No (the temp file *path* is on argv; the prompt text is not) |
+| any other provider (e.g. `antigravity`) | — | — | N/A — refuses with "no evidenced non-interactive CLI form" rather than guessing |
 
 See each command's own section below for its full headless argument details.
 
@@ -1233,6 +1262,7 @@ aiwg session mcp --provider cursor  # MCP inject for cursor + start instructions
 aiwg session --no-repair            # skip auto-repair (still checks and reports)
 aiwg session --prompt "fix the failing test"   # headless: one-shot, bounded, exits (#3062)
 aiwg session --prompt-file ./task.md           # headless, prompt read from a file
+aiwg session --non-interactive                 # force the non-interactive decision even with a terminal
 ```
 
 **Options:**
@@ -1242,9 +1272,10 @@ aiwg session --prompt-file ./task.md           # headless, prompt read from a fi
 - `--no-repair` - Skip auto-repair; still runs health checks and reports issues
 - `--profile <name>` - Launch with a named MCP profile (ephemeral by default — does not modify your provider's default config). For Claude: passes a temp config via `--mcp-config`. For Codex: sets up a per-profile runtime home via `~/.codex/roles-runtime/<profile>/`
 - `--persist` - When combined with `--profile`, writes servers to the provider's default config instead of using an ephemeral temp file
-- `--prompt <text>` / `--prompt-file <path>` - Run headless: maps to the provider's documented non-interactive CLI form (`claude --print`, `codex exec`, `opencode run --format json`, `dsh --profile headless`) instead of handing over the terminal. Mutually exclusive with each other. The headless run is bounded (10 minutes by default, `AIWG_SYNC_LONG_TIMEOUT_MS` to override) and never inherits stdin.
+- `--prompt <text>` / `--prompt-file <path>` - Run headless: maps to the provider's documented non-interactive CLI form and delivers the prompt off argv wherever the provider documents a transport for it — `claude --print --input-format text` (stdin), `codex exec -` (stdin), `dsh --profile headless -` (stdin), `opencode run --format json -f <temp-file>` (private temp file; see the provider/transport table above). Mutually exclusive with each other. The headless run is bounded (10 minutes by default, `AIWG_SYNC_LONG_TIMEOUT_MS` to override).
+- `--non-interactive` - Force the non-interactive decision (same effect as no TTY/CI) even when a real terminal is attached (#3062 review item 12)
 
-**Running headless (#3062):** without an interactive terminal attached, `aiwg session` refuses with a usage error naming `--prompt`/`--prompt-file` instead of launching a provider binary that would hang waiting for a terminal that doesn't exist. Supplying `--prompt`/`--prompt-file` runs headless even when a terminal *is* attached. A provider with no evidenced non-interactive CLI form (anything not listed above) refuses `--prompt`/`--prompt-file` rather than guessing an invocation.
+**Running headless (#3062):** without an interactive terminal attached, `aiwg session` refuses with a usage error naming `--prompt`/`--prompt-file` instead of launching a provider binary that would hang waiting for a terminal that doesn't exist. Supplying `--prompt`/`--prompt-file` runs headless even when a terminal *is* attached. A provider with no evidenced non-interactive CLI form (anything not listed in the transport table above) refuses `--prompt`/`--prompt-file` rather than guessing an invocation. A provider with no CLI binary to spawn at all (IDE-integrated, e.g. Factory) refuses `--prompt`/`--prompt-file` outright, naming the provider, instead of silently discarding the prompt and printing IDE guidance at exit 0 — this check runs before any pre-flight step.
 
 **Pre-flight sequence:**
 
@@ -1400,6 +1431,17 @@ delivery policy, committer identity, and signing metadata. Agents should use
 `--dry-run` first, discuss the preview with the user, then write only after the
 policy choices are understood. In non-interactive contexts it refuses to write
 unless `--yes` is present.
+
+With a terminal attached (and without `--yes`), the interactive wizard asks one
+question per remaining field — `--primary`, `--issue-provider`, `--issue-tracker`,
+`--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`,
+`--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`,
+`--providers` — but any of these already supplied on the command line is never
+re-asked; only genuinely missing ones prompt (#3062 review item 10). A value-taking
+flag present with no value (or immediately followed by another flag) is a usage
+error naming the flag, raised before Git is even inspected (review item 11). The
+interactive decision itself honors `--non-interactive`/`--yes` together with TTY,
+`TERM=dumb`, and CI-environment detection — not TTY alone (review item 12).
 
 Common overrides:
 
@@ -1964,6 +2006,7 @@ aiwg mcp profile <subcommand>
 | `import <file>`                | Import profiles from a JSON file          |
 | `export [<name>] --out <file>` | Export one or all profiles                |
 | `init-presets`                 | Install built-in preset profiles          |
+| `login <name> [--api-key-env <ENV_VAR_NAME>]` | Log in to a Codex profile's isolated runtime home (#3062, #3069) — interactive OAuth with a terminal, or headless via `--api-key-env`; see [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login) |
 
 **Preset Profiles** (installed via `aiwg mcp profile init-presets`):
 

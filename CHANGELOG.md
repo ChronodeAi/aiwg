@@ -43,20 +43,67 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   - `aiwg config edit --print-path` prints the resolved config file path and exits — the headless
     equivalent of opening `$EDITOR`/`$VISUAL`. Without a terminal and without `--print-path`,
     `aiwg config edit` now refuses, naming it and `aiwg config set <key> <value>`.
-  - `aiwg session --prompt <text>` / `--prompt-file <path>` runs a provider headless: `claude
-    --print`, `codex exec`, `opencode run --format json`, or `dsh --profile headless`, bounded
-    (`long` tier) with stdin ignored, regardless of whether a terminal is attached. Without a
-    terminal and without a prompt, a spawnable provider now refuses instead of hanging waiting for
-    one; a provider with no evidenced non-interactive form refuses `--prompt`/`--prompt-file`
-    rather than guessing an invocation. `aiwg session --provider codex --profile <p> --prompt
-    <text>` maps to `codex exec <text>` inside that profile's runtime home
-    (`launchWithProfile(profile, ['exec', text])`), likewise bounded.
-  - `loginInProfile()` (`src/mcp/adapters/codex-runtime.ts`) accepts an `apiKeyEnv` option that
-    runs `codex login --with-api-key`, reading the key from that environment variable over stdin
-    (never argv) — codex-cli's own documented non-interactive login. No CLI command currently
-    reaches this parameter (`aiwg mcp profile login`, documented in `docs/mcp/codex-profiles.md`,
-    has no implementation); without `apiKeyEnv` and without a terminal, the function refuses
-    instead of launching the interactive OAuth flow.
+  - `aiwg session --prompt <text>` / `--prompt-file <path>` runs a provider headless, bounded
+    (`long` tier), with the prompt delivered off argv wherever the provider documents a transport
+    for it (never on argv, never a shell string): `claude --print --input-format text` (stdin),
+    `codex exec -` (stdin), `dsh --profile headless -` (stdin), or `opencode run --format json -f
+    <temp-file>` (private temp file — binary disassembly found no stdin support in `opencode run`
+    at all). Without a terminal and without a prompt, a spawnable provider now refuses instead of
+    hanging waiting for one; a provider with no evidenced non-interactive form refuses
+    `--prompt`/`--prompt-file` rather than guessing an invocation; a provider with no spawnable
+    binary at all (IDE-integrated, e.g. Factory) refuses outright instead of silently discarding
+    the prompt and printing IDE guidance at exit 0 — checked before any pre-flight step runs.
+    `--non-interactive` forces the non-interactive decision even with a terminal attached.
+    `aiwg session --provider codex --profile <p> --prompt <text>` maps to `codex exec -` (prompt on
+    stdin) inside that profile's runtime home, likewise bounded.
+  - `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]` (#3069) wires
+    `loginInProfile()` (`src/mcp/adapters/codex-runtime.ts`) to the CLI: interactive OAuth with a
+    terminal, or headless via `--api-key-env`, which reads the key from that environment variable
+    over stdin (never argv, never in logs or error messages) and runs `codex login
+    --with-api-key`. Without a terminal and without `--api-key-env`, refuses naming the argument;
+    an unset named variable errors naming the variable (never a value).
+  - Every helper call whose exit code was derived from `result.status ?? 0` now treats a `null`/
+    killed/signaled/failed-to-spawn result as a failure, never success, and surfaces the bounded
+    helper's `error`/`signal` diagnostic (e.g. the enriched timeout message naming the bound and
+    override variable) instead of dropping it — `aiwg session`'s headless and interactive launch
+    paths, doctor/sync/mcp-inject self-invocations, `codex login`, `aiwg config gitignore`,
+    `aiwg diagnose`'s `tar` step, and `aiwg setup-run`'s script/shell-command steps.
+  - `aiwg init` gains arguments for its three remaining wizard inputs: `--providers <list>`
+    (provider selection), `--default-scripts true|false`, and repeatable `--script
+    <name>=<command>` (custom scripts) — each skips its interactive question when supplied, with
+    or without a terminal. `aiwg setup project` now does the same for every one of its existing
+    flags (previously they only changed the *default* a still-asked question used): a value
+    already supplied by flag is never re-asked, only genuinely missing ones prompt. Every
+    value-taking flag across `init`/`setup project`/`setup-run`/`mcp profile login` is parsed
+    strictly — present with no value, or immediately followed by another flag, is now a usage
+    error (exit 2) naming the flag, raised before any preflight, spawn, or write, instead of being
+    silently treated as "not given". The shared interactive decision
+    (`isInteractive(explicitNonInteractive)`, `src/cli/env.ts`) now takes the command's own
+    explicit non-interactive flag as input everywhere it's used (`init`, `session`
+    `--non-interactive`, `setup project`, `tools/contrib/sync-upstream.mjs`'s duplicated
+    equivalent) instead of each site re-deriving a narrower TTY-only or `CI==='true'`-only check.
+  - `aiwg setup-run` steps are now preflighted recursively (including nested `platform-route`
+    steps) *before* any step executes, rather than refusing mid-sequence inside the per-step loop —
+    an earlier normal step can no longer run ahead of a later step's refusal. A `type: ask` step
+    with every param it declares (via the same `params` field a `script` step already uses for env
+    vars) already resolved via `--param`/`--params-file`/env/default now runs headless instead of
+    always refusing; one with a param still missing, or declaring none at all, is refused up front
+    naming the missing names — there is no interactive-capture mechanism for `ask` steps in this
+    CLI, with or without a terminal.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution prompt ("Choice [1-4]") gains
+    `--on-conflict <1-4>`, answering it headlessly (choice `1`, opening `$EDITOR`, still refuses
+    without a terminal even when given, since it is interactive by nature); its interactive
+    detection now matches the shared `isInteractive()` semantics (TTY + TERM + CI vars) instead of
+    checking `stdin.isTTY` alone; and its `git fetch upstream`/`git push` calls now use the
+    `network` tier instead of the default `quick` tier.
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now supervises each spawned
+    CLI process asynchronously with an independent hard deadline that sends `SIGKILL` to the whole
+    process group, instead of a synchronous `spawnSync` with Node's native `timeout` — which sends
+    `SIGTERM` once and then blocks the *calling* thread until the child exits, so a CLI that traps
+    SIGTERM (or has a descendant still blocked in its own synchronous child call) could hang the
+    test process too, past even Vitest's own per-test timeout. A dedicated fixture
+    (`test/uat/fixtures/blocking-descendant.mjs`) that ignores SIGTERM and blocks on a
+    SIGTERM-ignoring grandchild proves the new guard still reaches it.
   - `aiwg setup-run` manifest steps (`script`/`verify`/`detect`/`os-config`) run bounded with
     stdin ignored whenever no terminal is attached, instead of inheriting stdio and potentially
     hanging on a command that tries to prompt; with a terminal, unchanged. A step may now declare
