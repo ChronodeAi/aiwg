@@ -16,12 +16,30 @@
  * Only the import of `./lib/worker-isolation.mjs` has been rewritten to
  * `./worker-isolation.mjs` -- the frozen sibling fixture in this same
  * directory, pinned to the SAME commit, because that file changed on this
- * branch (the D2 dispatch-commit hook). Every other import points at the
- * real, unchanged source tree (`process-monitor.mjs`, `lib/worker-health.mjs`,
- * `_resolve-impl.mjs`), none of which changed between `a4085b86a` and this
- * branch -- confirmed via `git diff --name-only a4085b86a HEAD -- tools/
- * ralph-external src/models src/mission-protocol` when this fixture was
- * written.
+ * branch (the D2 dispatch-commit hook). Every other STATIC/dynamic
+ * (`importImpl`) import this file's own body makes points at the real,
+ * unchanged source tree (`process-monitor.mjs`, `lib/worker-health.mjs`,
+ * `_resolve-impl.mjs`, `serve/worker-invocation.js`,
+ * `models/qualification-digest.mjs`, `cli/handlers/models.js`,
+ * `serve/worker-stdin-frame.mjs`, `models/provider-policy.js`), none of
+ * which changed between `a4085b86a` and this branch -- confirmed via
+ * `git diff --name-only a4085b86a HEAD -- tools/ralph-external src/models
+ * src/mission-protocol` when this fixture was written.
+ *
+ * #2915 round 8 review 8 (D2): this launcher body never imports a driver
+ * object's own class directly -- every `driver.*` method call is reached
+ * through whatever object a caller supplies as `inputs.drivers[cli]`. A
+ * test that supplies a driver built from the CURRENT `lib/provider-adapter.mjs`
+ * (`parseWorkerFinal`/`parseWorkerOutput`) or `src/models/worker-installation.mjs`
+ * (`loadRecordedWorkerInstallations`) would silently exercise THEIR current
+ * behavior through this otherwise-frozen body. Both are now ALSO frozen as
+ * sibling fixtures in this directory (`provider-adapter.mjs`,
+ * `worker-installation.mjs`) for any equivalence scenario that constructs
+ * such a driver; the existing equivalence tests in
+ * `scoped-recovery.test.mjs` build a hand-rolled driver object that defines
+ * neither `parseWorkerFinal` nor an installation-derived `canVerifyAttempt`,
+ * so neither frozen module is reachable from them today -- these siblings
+ * are available, not yet wired into those specific tests.
  *
  * DO NOT:
  *   - import this file from any production source path;
