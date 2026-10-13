@@ -40,11 +40,17 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
   const loader = new ConfigLoader(ctx.cwd);
   const models = await loader.load(config.parallelism);
   const catalog = await effectiveCatalog(ctx, ctx.cwd, false, parseArgs(['resolve']));
-  const { registry, installations, drivers } = await loadRecordedWorkerInstallations({
-    registry: loadProviderModelCapabilities(), cwd: ctx.cwd, policy: models.defaults.workerSelection,
+  const registry = loadProviderModelCapabilities();
+  // Let the resolver explain the dispatch gate before requiring host qualification (#3070).
+  if (!config.parallelism?.worker_dispatch) {
+    return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
+      registry, installations: {} }, drivers: {} };
+  }
+  const { registry: qualifiedRegistry, installations, drivers } = await loadRecordedWorkerInstallations({
+    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection,
   });
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
-    registry, installations }, drivers };
+    registry: qualifiedRegistry, installations }, drivers };
 }
 
 async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {

@@ -35,6 +35,9 @@ import type { ParallelismConfig, SetupConfig } from '../config/aiwg-config.js';
  */
 export const WORKER_DISPATCH_ENABLE_COMMAND = 'aiwg config set --project parallelism.worker_dispatch true';
 
+/** Readiness check shared by setup hints and dispatch refusals. */
+export const WORKER_DISPATCH_READINESS_COMMAND = 'aiwg doctor --probe-workers';
+
 /**
  * Dotted config path a decline is recorded at. A setup/onboarding
  * preference, not worker policy — kept out of `parallelism`, which is a
@@ -147,5 +150,5 @@ export function workerDispatchOfferQuestion(detected: string[]): string {
  */
 export function workerDispatchOfferHint(detected: string[]): string {
   return `Direct worker dispatch is off; detected worker CLIs: ${detected.join(', ')}. `
-    + `Enable with \`${WORKER_DISPATCH_ENABLE_COMMAND}\` (then check readiness with \`aiwg doctor --probe-workers\`).`;
+    + `Enable with \`${WORKER_DISPATCH_ENABLE_COMMAND}\` (then check readiness with \`${WORKER_DISPATCH_READINESS_COMMAND}\`).`;
 }
