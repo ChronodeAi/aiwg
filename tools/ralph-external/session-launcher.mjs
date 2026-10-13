@@ -123,7 +123,15 @@ async function withWorkerPath(filename, operation) {
   } finally { await directory.close(); }
 }
 
-async function boundedPrivateRead(filename, limit, inspect, privateOutput = false) {
+// #2915 review 4 (finding 4): `privateOutput: true` REPAIRS a loose mode
+// (chmod 0600) rather than rejecting it — correct for the worker's own
+// final-output file, which the launcher itself created and is free to
+// re-tighten. `rejectInsecureMode: true` additionally REFUSES a mode other
+// than exactly 0600 instead of repairing it, for evidence this launcher
+// did NOT create moments ago (retry predecessor metadata) — a 0666 file
+// there is itself a signal worth refusing on, not silently normalizing
+// away.
+async function boundedPrivateRead(filename, limit, inspect, privateOutput = false, rejectInsecureMode = false) {
   if (!await inspect(filename, 'file')) throw new Error('Required worker input is missing');
   const handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
   try {
@@ -131,7 +139,11 @@ async function boundedPrivateRead(filename, limit, inspect, privateOutput = fals
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('Worker input must be a bounded unaliased regular file');
     if (privateOutput) {
       if (stat.uid !== process.getuid()) throw new Error('Worker final must be conductor-owned');
-      await handle.chmod(0o600);
+      if (rejectInsecureMode) {
+        if ((stat.mode & 0o777) !== 0o600) throw new Error('Worker input mode must already be exactly 0600; insecure modes are refused, not repaired');
+      } else {
+        await handle.chmod(0o600);
+      }
     }
     const buffer = Buffer.alloc(limit + 1);
     let length = 0;
@@ -302,13 +314,23 @@ async function launchOneWorker(owner, options) {
     error.blockedBy = admission.refused.blockedBy;
     throw error;
   }
-  if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
-  const runStat = await lstat(runDir);
-  if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
-  await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try { await handle.chmod(0o700); } finally { await handle.close(); } });
-  const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
-  try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
+  // #2915 review 4 (finding 2): this run-directory preparation is
+  // pre-spawn work happening AFTER a successful admission above — any
+  // failure here (mkdir, ownership, the `.launch-owner` write) must settle
+  // the reservation exactly like every other pre-spawn exit, never leak it
+  // by throwing before the big try/catch below is reached.
+  try {
+    if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
+    const runStat = await lstat(runDir);
+    if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
+    await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+    try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
+  } catch (error) {
+    settleDirectWorker(admission, { kind: 'uncertain' });
+    throw error;
+  }
   const supervisor = sampleWorkerIdentity(process.pid);
   const launchTime = new Date().toISOString();
   const monotonicStart = process.hrtime.bigint().toString();
@@ -334,13 +356,22 @@ async function launchOneWorker(owner, options) {
   try {
     artifacts = await materializeWorkerArtifacts(invocation, runDir);
     const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
+    // #2915 review 4 (finding 4): a STABLE task-chain identity, never the
+    // raw request object — `qualificationDigest(saved.request)` included
+    // `final_output` (a fresh path on every legitimate attempt by design)
+    // and the `brief`/`workdir` PATHS, so a genuinely confirmed predecessor
+    // with a fresh output path was incorrectly refused as a "different
+    // task". Identity is role/task/group plus the BRIEF CONTENT digest
+    // (never its path) — the same instructions, not the same
+    // attempt-specific paths.
+    const taskDigest = await stableTaskChainDigest(saved.request, invocation.briefDigest);
     await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
       // #2915 step 4: set only after `verifyRetryPredecessor` (SessionLauncher.launchWorker)
       // independently confirmed the predecessor's owned, launcher-written,
       // confirmed-terminal evidence for this exact task — never from an
       // unverified caller claim.
       previousAttemptId: options.verifiedPreviousAttemptId ?? null,
-      requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      requestId: invocationId, taskDigest, role: saved.request.role,
       selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
       policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
       expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
@@ -377,8 +408,26 @@ async function launchOneWorker(owner, options) {
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
       env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
+    // #2915 review 4 (finding 3): when THIS attempt is the admitted canary
+    // for one or more covering scopes, execution itself must be clipped to
+    // the canary's own deadline (min(task deadline, admission+300s)) — not
+    // merely the breaker's bookkeeping, which only knows how to settle a
+    // reservation after the fact. `canaryDeadlineMs`/`canaryNowMs` let
+    // `captureOneWorker` enforce a real stop at that wall-clock deadline,
+    // on the SAME clock the breaker used to compute it (so synthetic-clock
+    // tests and production `Date.now()` both stay self-consistent).
+    const canaryDeadlineMs = admission.token?.canaryKeys?.length > 0 ? admission.token.deadlineMs : null;
+    const canaryNowMs = admission.breaker?.nowMs ?? (() => Date.now());
     const result = await captureOneWorker(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
-      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir });
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir,
+      canaryDeadlineMs, canaryNowMs,
+      // #2915 review 4 (finding 7): recovery-specific attempt parsing
+      // (`driver.parseWorkerAttemptFinal`) and `result.attemptOutcome`
+      // publication only run when recovery is actually gated — disabled
+      // dispatch must do no new work at all, matching origin/main exactly
+      // (a disabled-dispatch probe still observed the new parser called
+      // once).
+      recoveryGated: admission.gated });
     // #2915 final (production closure): settle using the evidence-contract
     // `result.attemptOutcome` — never `result.termination` — so a genuinely
     // successful degraded attempt closes its scope instead of silently
@@ -408,7 +457,8 @@ async function launchOneWorker(owner, options) {
 }
 
 async function captureOneWorker(owner, ctx) {
-  const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
+  const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options,
+    canaryDeadlineMs = null, canaryNowMs = () => Date.now(), recoveryGated = false } = ctx;
   const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
   const sampleIdentity = options.sampleIdentity ?? sampleWorkerIdentity;
   // Separate hook from `sampleIdentity` (the worker-side sampler): this one
@@ -657,11 +707,15 @@ async function captureOneWorker(owner, ctx) {
           // Strict validation consumes original bytes. A legacy extracted
           // object may already have lost duplicate keys and cannot authorize
           // completion through reserialization.
-          await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+          const claims = await driver.parseWorkerFinal(extracted ? output : finalBytes, {
             format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
             status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
             termination: result.termination, exitCode: result.exitCode } });
-          healthFinalValid = true;
+          // #2915 review 4 (finding 1): a successful PARSE is not success —
+          // the worker's own strict claims carry their own `status`, and a
+          // schema-valid `status: 'failed'` claim must never authorize
+          // closure through this path either.
+          healthFinalValid = claims?.status === 'completed';
         } catch { /* failed strict claims remain unverified candidate evidence */ }
       }
       // #2915: the attempt-terminal sibling validation, gating
@@ -669,25 +723,19 @@ async function captureOneWorker(owner, ctx) {
       // against `processLevelOutcome` (never confirmed termination) so a
       // degraded or MCP attempt's strict final can validate even though
       // `termination` can never reach 'confirmed' for it.
-      if (driver.parseWorkerAttemptFinal) {
+      if (recoveryGated && driver.parseWorkerAttemptFinal) {
         try {
-          await driver.parseWorkerAttemptFinal(extracted ? output : finalBytes, {
+          const claims = await driver.parseWorkerAttemptFinal(extracted ? output : finalBytes, {
             format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
             status: processLevelOutcome === 'succeeded' ? 'completed' : 'failed',
             attemptOutcome: processLevelOutcome, exitCode: result.exitCode } });
-          healthAttemptFinalValid = true;
+          // #2915 review 4 (finding 1): same fix as above — a schema-valid
+          // parse whose claims report `status !== 'completed'` must never
+          // close a scope through the degraded/MCP attempt-terminal path.
+          healthAttemptFinalValid = claims?.status === 'completed';
         } catch { /* invalid/missing final never recovers (invalid-final-never-recovers) */ }
       }
     } catch { result.errorCode ??= 'FINAL_OUTPUT_INVALID'; }
-    // "Exit zero alone is insufficient": a clean process-level exit without a
-    // strictly-valid final never reaches 'succeeded' — it downgrades to
-    // 'uncertain' (never fabricated as 'failed' either, since the process
-    // evidence alone does not show a failure). A process-level failure stays
-    // 'failed' regardless of final validity (a bad exit is bad regardless of
-    // what the final claims say).
-    result.attemptOutcome = processLevelOutcome === 'succeeded'
-      ? (healthAttemptFinalValid ? 'succeeded' : 'uncertain')
-      : processLevelOutcome;
     // The final exit.json publish must always be attempted, independent of
     // whether the preceding recordProcess() write succeeded: a failing
     // process.json must never suppress the exit.json publication attempt
@@ -703,6 +751,28 @@ async function captureOneWorker(owner, ctx) {
     }
     result.health = observer.finish({ ...result, finalValid: healthFinalValid });
     result.healthEvidence = observer.evidence();
+    // #2915 review 4 (finding 1): finalized HERE — after every
+    // metadata-write attempt that has run so far (recordProcess() and the
+    // first exit.json publish, above), but BEFORE the last exit.json
+    // publish, so the field a write failure must gate is itself part of
+    // the persisted record, not written one write-attempt too late. A
+    // write failure discovered only in THIS LAST publish is a known,
+    // documented residual: `result.attemptOutcome` was already finalized
+    // by the time it could observe that specific failure. "Exit zero alone
+    // is insufficient": a clean process-level exit without a strictly-valid
+    // final, or with an earlier metadata-write failure, never reaches
+    // 'succeeded' — it downgrades to 'uncertain' (never fabricated as
+    // 'failed' either, since neither the process evidence nor a write
+    // failure shows a definite task failure). A process-level failure stays
+    // 'failed' regardless of final validity (a bad exit is bad regardless
+    // of what the final claims say).
+    // #2915 review 4 (finding 7): only published when recovery is gated —
+    // disabled dispatch must add no new field/behaviour versus origin/main.
+    if (recoveryGated) {
+      result.attemptOutcome = processLevelOutcome === 'succeeded'
+        ? (healthAttemptFinalValid && result.errorCode !== 'METADATA_WRITE' ? 'succeeded' : 'uncertain')
+        : processLevelOutcome;
+    }
     try { await publish('exit.json', result); }
     catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
     await reportHealth();
@@ -723,8 +793,17 @@ async function captureOneWorker(owner, ctx) {
   // at their unset defaults (false/null/null) here, which is already correct
   // — there is no real exit to report.
   child.once('close', () => { sawClose = true; finish(); });
-  const hardRemaining = () => Math.max(0, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
-    invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
+  // #2915 review 4 (finding 3): clipped to the admitted canary's own
+  // deadline (min(task deadline, admission+300s)) when this attempt is a
+  // canary — backoff/expiry sweeps on the breaker side must never leave a
+  // live canary's EXECUTION running past the exact deadline that governs
+  // whether a second canary could otherwise be admitted over it.
+  const hardRemaining = () => {
+    const taskRemainingMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+      invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6);
+    const canaryRemainingMs = canaryDeadlineMs === null ? Infinity : canaryDeadlineMs - canaryNowMs();
+    return Math.max(0, Math.min(taskRemainingMs, canaryRemainingMs));
+  };
   // Grace is clipped at stop time; forceful cancellation is never scheduled
   // beyond this fixed ceiling, including tasks shorter than startup/grace.
   later(() => {
@@ -965,6 +1044,23 @@ export function assertStopBeforeRetry(previousResult, options) {
 }
 
 /**
+ * #2915 review 4 (finding 4): the STABLE task-chain identity shared by
+ * `launchOneWorker`'s `invocation.json.taskDigest` and
+ * `verifyRetryPredecessor`'s task-chain binding check. Deliberately
+ * excludes every attempt-specific PATH (`final_output`, `brief`, `workdir`)
+ * — those legitimately differ on every fresh retry attempt by design — and
+ * instead binds on role/task/group plus the brief's CONTENT digest (never
+ * its path), so a worker-authored brief swap is still caught while a
+ * conductor-assigned fresh output directory for the identical instructions
+ * is not mistaken for "a different task".
+ */
+async function stableTaskChainDigest(request, briefDigest) {
+  const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+  return qualificationDigest({ role: request?.role ?? null, task: request?.task ?? null,
+    group: request?.group ?? null, briefDigest: briefDigest ?? null });
+}
+
+/**
  * #2915 step 4 (retry linkage). Replaces the deleted `freshAttempt`
  * (unauthenticated caller bypass), `afterAttempt` (caller-asserted
  * evidence) and the path-pair (`invocationPath`+`runDir` equality)
@@ -992,7 +1088,7 @@ export function assertStopBeforeRetry(previousResult, options) {
  * Returns the predecessor's verified `exit.json` record on success; throws
  * on any refusal.
  */
-export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspect } = {}) {
+export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspect, workerWritableRoots } = {}) {
   const fail = (reason) => {
     const error = new Error(`Retry predecessor evidence refused: ${reason}`);
     error.code = UNBOUND_RETRY_EVIDENCE_CODE;
@@ -1003,15 +1099,37 @@ export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspe
     fail('retryOf requires both a non-empty invocationId and runDir');
   }
   const { invocationId: prevId, runDir: prevRunDir } = retryOf;
+  // #2915 review 4 (finding 4): the minimal directory-authority repair —
+  // reject a predecessor location inside any worker-writable root, exactly
+  // like `launchOneWorker` already refuses for a NEW run directory. This
+  // closes the easiest forgery (planting a complete, well-formed fake
+  // predecessor inside the worktree the worker itself can write to) but is
+  // explicitly NOT a defense against an unconfined malicious same-UID
+  // worker in general: such a worker can still write anywhere this
+  // conductor process can (e.g. directly under a configured capture root,
+  // if that root is not itself outside every worker-writable path, or by
+  // racing a legitimate predecessor's own directory before this check
+  // runs). A real guarantee needs an enforced filesystem/process boundary
+  // protecting conductor-owned metadata, or a different execution
+  // identity — same-UID alone never provides it.
+  if (Array.isArray(workerWritableRoots)) {
+    for (const root of workerWritableRoots) {
+      if (await realBeneath(root, prevRunDir)) fail('predecessor location is inside a worker-writable root');
+    }
+  }
   if (!await inspect(prevRunDir, 'directory')) fail('predecessor run directory is missing');
   const dirStat = await lstat(prevRunDir);
   if (dirStat.uid !== process.getuid() || (dirStat.mode & 0o077)) fail('predecessor run directory is not privately owned');
   let ownerBytes, invocationBytes, exitBytes;
   try {
-    ownerBytes = await boundedPrivateRead(join(prevRunDir, '.launch-owner'), 256, inspect, true);
-    invocationBytes = await boundedPrivateRead(join(prevRunDir, 'invocation.json'), 1048576, inspect, true);
-    exitBytes = await boundedPrivateRead(join(prevRunDir, 'exit.json'), 1048576, inspect, true);
-  } catch (error) { fail(`predecessor metadata is missing or not a bounded, privately-owned, unaliased regular file (${error.message})`); }
+    // #2915 review 4 (finding 4): `rejectInsecureMode: true` — an insecure
+    // mode on predecessor metadata REFUSES the retry instead of silently
+    // chmod-repairing it and proceeding (the former behaviour the review
+    // found: "the probe's 0666 files were accepted and changed to 0600").
+    ownerBytes = await boundedPrivateRead(join(prevRunDir, '.launch-owner'), 256, inspect, true, true);
+    invocationBytes = await boundedPrivateRead(join(prevRunDir, 'invocation.json'), 1048576, inspect, true, true);
+    exitBytes = await boundedPrivateRead(join(prevRunDir, 'exit.json'), 1048576, inspect, true, true);
+  } catch (error) { fail(`predecessor metadata is missing, insecurely-moded, or not a bounded, privately-owned, unaliased regular file (${error.message})`); }
   if (ownerBytes.toString('utf8') !== prevId) fail('.launch-owner does not match retryOf.invocationId');
   let invocationRecord, exitRecord;
   try {
@@ -1023,11 +1141,15 @@ export async function verifyRetryPredecessor(retryOf, { newInvocationPath, inspe
   }
   if (exitRecord?.invocationId !== prevId) fail('exit.json identity does not match retryOf');
   if (newInvocationPath !== undefined) {
-    const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
+    // #2915 review 4 (finding 4): the SAME stable task-chain identity
+    // `launchOneWorker` publishes — role/task/group plus the brief CONTENT
+    // digest, never `final_output`/`brief`/`workdir` PATHS, which legitimately
+    // differ between a confirmed predecessor and this fresh attempt.
     let newTaskDigest;
     try {
       const newPlanBytes = await boundedPrivateRead(newInvocationPath, 1048576, inspect);
-      newTaskDigest = qualificationDigest(JSON.parse(newPlanBytes.toString('utf8')).request);
+      const newPlan = JSON.parse(newPlanBytes.toString('utf8'));
+      newTaskDigest = await stableTaskChainDigest(newPlan.request, newPlan.invocation?.briefDigest ?? null);
     } catch { fail('new attempt plan is missing or invalid; cannot bind the retry to a task'); }
     if (invocationRecord.taskDigest !== newTaskDigest) fail('predecessor task does not match the new attempt (task-chain binding)');
   }
@@ -2209,6 +2331,15 @@ export function planDirectWorkerLaunch({
   // breaker again... blocked, zero spawns, reservation still active").
   admission: borrowedAdmission,
   invocationId,
+  // #2915 review 4 (finding 7): forwarded to `admitDirectWorker` for the
+  // STANDALONE admission path below, so a driver's `canVerifyAttempt:
+  // false` (Warp, Copilot — adapters that can never report a verified
+  // success) actually reaches this planner instead of being silently lost
+  // to a hardcoded `drivers: {}`. Omitted (the common case: most standalone
+  // callers have no resolved driver map at all) never defaults to eligible
+  // OR ineligible — `admitDirectWorker` simply has nothing to check, same
+  // as before.
+  drivers,
 } = {}) {
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
@@ -2236,6 +2367,16 @@ export function planDirectWorkerLaunch({
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
     ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}) });
   if (!gate.enabled) return launch(); // not-gated: synchronous, byte-for-byte legacy behaviour
+  // #2915 review 4 (finding 7): per-CLI disablement is ALSO checked
+  // synchronously, before any admission (borrowed or standalone) — a
+  // disabled CLI must stay exactly as inert as the global switch being
+  // off: synchronous, and the returned result carries no `admission`
+  // field at all (the former code only special-cased the global switch,
+  // so a per-CLI-disabled standalone call still went through the async
+  // admission branch and attached `admission` to its result).
+  if (invocation?.selected?.cli && config?.parallelism?.clis?.[invocation.selected.cli]?.enabled === false) {
+    return launch();
+  }
   if (borrowedAdmission !== undefined) {
     // Borrowed: never re-admit, never settle — the outer caller's own
     // try/finally owns settlement of this exact admission end-to-end.
@@ -2263,7 +2404,7 @@ export function planDirectWorkerLaunch({
       // flat-option callers with no resolved invocation (never defaulted to
       // a shared scope).
       admission = await admitDirectWorker({ gateEnabled: gate.enabled, config, invocation,
-        invocationId: mintedInvocationId, scopedBreaker, drivers: {} });
+        invocationId: mintedInvocationId, scopedBreaker, drivers: drivers ?? {} });
     } catch (error) {
       return { launched: false, blocked: true,
         diagnostic: `recovery admission failed closed: ${error?.message ?? String(error)}` };

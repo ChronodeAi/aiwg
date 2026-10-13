@@ -697,6 +697,28 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(true); // no capacity was ever reserved
   });
 
+  // #2915 review 4 (finding 9): the transport byte bound must be enforced
+  // BEFORE parsing -- an unterminated frame past the bound must refuse,
+  // never grow the buffer without limit.
+  it('ChildProcessTransport refuses an unterminated frame past the MCP transport byte bound', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport, __testOnlyMcpTransportMaxBufferBytes: maxBytes } =
+      await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
+    const fakeChild: any = {
+      stdout: new EventEmitter(), stderr: fakeStderr, stdin: new EventEmitter(),
+      once(event: string, _handler: any) { return this; },
+    };
+    const transport = new (ChildProcessTransport as any)(fakeChild);
+    const errors: Error[] = [];
+    transport.onerror = (error: Error) => errors.push(error);
+    await transport.start();
+    // One unterminated chunk already past the bound -- never newline-framed.
+    fakeChild.stdout.emit('data', Buffer.alloc(maxBytes + 1, 0x41));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toMatch(/bound/);
+    expect(transport._buffer).toBeUndefined(); // never retained past the bound
+  });
+
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
   // JSON-RPC request id (captured at the transport layer), never a
   // caller-supplied value with no relationship to the wire protocol

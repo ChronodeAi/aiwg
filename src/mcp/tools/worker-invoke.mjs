@@ -643,6 +643,11 @@ async function defaultLaunchShellWorker(invocation, { memoryMaxGb = DEFAULT_MCP_
  * already resource-confined, already running with exactly its allowlisted
  * environment.
  */
+// #2915 review 4 (finding 9): matches the 10 MiB worker-output stream bound
+// (provider-adapter.mjs `WORKER_MAX_JSON_BYTES`-adjacent `streamLimit`) plus
+// headroom for one unterminated line — enforced BEFORE parsing, not after.
+const MCP_TRANSPORT_MAX_BUFFER_BYTES = 11 * 1024 * 1024;
+
 export class ChildProcessTransport {
   constructor(child, { terminate = () => child.kill('SIGKILL') } = {}) {
     this._child = child;
@@ -704,6 +709,15 @@ export class ChildProcessTransport {
           offset = newline + 1;
         }
         this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
+        // #2915 review 4 (finding 9): enforce the transport byte bound
+        // BEFORE parsing — an unbounded, never-newline-terminated stream
+        // (observed: an 11 MiB unterminated frame retained without error)
+        // must refuse rather than growing `_buffer` without limit.
+        if (this._buffer.length > MCP_TRANSPORT_MAX_BUFFER_BYTES) {
+          this._buffer = undefined;
+          this.onerror?.(new Error(`worker MCP transport exceeded the ${MCP_TRANSPORT_MAX_BUFFER_BYTES}-byte unterminated-frame bound`));
+          return;
+        }
         this._drain();
       } catch (error) { this.onerror?.(error); }
     });
@@ -824,7 +838,7 @@ export class ChildProcessTransport {
  * registry-declared `server.cwd` (none of today's callers set one) still
  * wins when present, matching the pre-existing precedence for the actual
  * spawn directory. */
-async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, memoryMaxGb = DEFAULT_MCP_WORKER_MEMORY_MAX_GB, live, readers, thresholdOverlay }) {
+async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, memoryMaxGb = DEFAULT_MCP_WORKER_MEMORY_MAX_GB, live, readers, thresholdOverlay, admission }) {
   if (server?.type !== 'stdio') {
     return { launched: false, blocked: true, diagnostic: 'Only stdio MCP worker servers are qualified for direct handoff' };
   }
@@ -836,6 +850,11 @@ async function defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, na
     // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
     // always undefined for production registrations.
     live, readers, thresholdOverlay,
+    // #2915 review 4 (finding 2): BORROW the caller's own already-admitted
+    // reservation — never a second, independent planner admission for the
+    // native-MCP launch path (the exact "one reservation-aware admission"
+    // requirement `defaultLaunchShellWorker` already honored).
+    ...(admission !== undefined ? { admission } : {}),
     // #2895's `attached` mode defaults `stdin: 'closed'` (stdio[0] 'ignore') —
     // correct for its own verification-runner callers, which only read a
     // worker's output. An MCP stdio server needs a live, writable stdin to
@@ -854,6 +873,7 @@ const mcpServerQueues = new Map(); // serverRef -> { promise: Promise<void>, dep
 /** Test-only observability into the module-level queue map's size — never
  * consulted by any admission/launch decision. */
 export function __testOnlyMcpServerQueueCount() { return mcpServerQueues.size; }
+export { ChildProcessTransport as __testOnlyChildProcessTransport, MCP_TRANSPORT_MAX_BUFFER_BYTES as __testOnlyMcpTransportMaxBufferBytes };
 
 /** #2892 D2: bounded per-serverRef serialization queue. Refuses outright
  * (never silently queues unboundedly) once `MAX_MCP_SERVER_QUEUE_DEPTH`
@@ -920,7 +940,7 @@ function canonicalSchemaDigest(schema) {
 async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
   const {
     sessionIsolation, mcpRegistry, allowDegraded = false, config, name = 'mcp-worker', registerControl,
-    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd,
+    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd, admission,
     // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
     // always undefined for production registrations.
     live, readers, thresholdOverlay,
@@ -949,7 +969,7 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     const client = new Client({ name: 'aiwg-mcp-worker-invoke', version: '1.0.0' }, { capabilities: {} });
     // B2: gate + launch the MCP worker SERVER process through the same
     // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
-    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
+    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, admission, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
     if (!launch.launched) {
       return { outcome: 'blocked', diagnostic: launch.diagnostic ?? 'worker MCP process launch was refused' };
     }
@@ -1274,15 +1294,26 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // catch-all at the end of this function (#2915 final review, finding
       // 2: a thrown error reaching that catch previously left the
       // reservation live with zero capacity recovered).
-      try {
-        recoveryModule = await loadRalphExternal('session-launcher.mjs');
-        admission = await recoveryModule.admitDirectWorker({
-          gateEnabled: !!snapshot.config?.parallelism?.worker_dispatch, config: snapshot.config,
-          invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
-        });
-      } catch (error) {
-        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-          diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
+      // #2915 review 4 (finding 7): the global switch is checked FIRST,
+      // before any import — disabled dispatch must behave exactly as
+      // origin/main, including when the recovery module itself cannot even
+      // be imported (a probe with dispatch off and a throwing import still
+      // completed on origin/main; the former code imported unconditionally
+      // and refused before launch even though recovery was never in effect).
+      const recoveryGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch;
+      if (!recoveryGateEnabled) {
+        admission = { gated: false };
+      } else {
+        try {
+          recoveryModule = await loadRalphExternal('session-launcher.mjs');
+          admission = await recoveryModule.admitDirectWorker({
+            gateEnabled: recoveryGateEnabled, config: snapshot.config,
+            invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
+          });
+        } catch (error) {
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+            diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
+        }
       }
       if (admission.refused) {
         return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
@@ -1307,6 +1338,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         try {
           briefBytes = await readBoundedFile(request.brief, 262144, root);
         } catch {
+          // #2915 review 4 (finding 2): this pre-spawn refusal happens
+          // AFTER admission (above) but was never settling it — a leaked
+          // reservation on every unreadable MCP brief.
+          settleRecovery({ kind: 'uncertain' });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: ['OG_BRIEF_UNREADABLE'] });
         }
         try {
@@ -1318,11 +1353,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // diagnostic below. A duplicate-key/planted-marker probe showed
           // this exact kind of path can otherwise reflect attacker/worker-
           // controlled input text straight back out to the caller.
+          settleRecovery({ kind: 'uncertain' });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
       }
-      const deadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
+      const taskDeadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
       let observation;
       let rawOutput;
       if (invocation.transport === 'shell') {
@@ -1339,6 +1375,17 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // M2: a live stop handle for the duration of this call, so an
         // explicit `cancel` can actually stop the isolated unit / kill the
         // child, not just record that cancellation was requested.
+        // #2915 review 4 (finding 3): clipped to the admitted canary's own
+        // deadline (min(task deadline, admission+300s)) — the former code
+        // always waited the FULL task deadline (observed 900,000 ms in the
+        // review) regardless of whether this was a canary, so a hung
+        // canary's execution could run arbitrarily long past the 300s
+        // window the breaker itself uses to decide a canary is overdue.
+        let deadlineMs = taskDeadlineMs;
+        if (admission?.gated && admission.token?.canaryKeys?.length > 0) {
+          const canaryRemainingMs = admission.token.deadlineMs - (admission.breaker?.nowMs?.() ?? Date.now());
+          deadlineMs = Math.max(0, Math.min(deadlineMs, canaryRemainingMs));
+        }
         const control = buildShellStopControl(launch, {
           waitForUnit: waitForUnitImpl,
           stopUnit: options.stopWorkerUnit,
@@ -1401,7 +1448,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       } else {
         const { mcpRegistry, qualification } = drivers[invocation.selected.cli];
         const mcpServer = await mcpRegistry.get(invocation.mcp.serverRef);
-        if (!mcpServer) return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: ['worker MCP server is not registered'] });
+        if (!mcpServer) {
+          // #2915 review 4 (finding 2): another pre-spawn refusal after
+          // admission that was never settling it.
+          settleRecovery({ kind: 'uncertain' });
+          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: ['worker MCP server is not registered'] });
+        }
         // F5: pin the qualified server's definition digest NOW, at
         // admission, so a queued launch can detect a registry edit that
         // happened while it was waiting (see `serverDefinitionDigest`).
@@ -1417,6 +1469,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           cwd: invocation.cwd,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: mcpWorkerMemoryMaxGb, mcpSchemas: qualification?.mcpSchemas,
           qualifiedServerDigest, registerControl: control => registry.update(entry.invocationId, { control }),
+          // #2915 review 4 (finding 2): the SAME top-level admission this
+          // run() already holds, borrowed through to the native-MCP launch
+          // path — never a second, independent planner reservation. See
+          // `defaultLaunchMcpWorkerProcess`.
+          admission,
           ...gateInputs,
         });
         if (result.outcome === 'blocked') {

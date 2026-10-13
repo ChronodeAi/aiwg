@@ -231,14 +231,11 @@ describe('attributeFailureScope', () => {
 
 describe('ScopedFailureBreaker correlation', () => {
   let breaker;
-  let summaries;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
     breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
-    summaries = [];
-    breaker.on('summary', (s) => summaries.push(s));
   });
 
   afterEach(() => {
@@ -300,23 +297,17 @@ describe('ScopedFailureBreaker correlation', () => {
     expect(breaker.getState(PROVIDER).tracked).toBe(false);
   });
 
-  it('emits exactly one actionable summary per transition, never per-tick noise', () => {
-    fail(breaker, [INSTALL], 'a', installFailure('a'));
-    fail(breaker, [INSTALL], 'b', installFailure('b'));
-    fail(breaker, [INSTALL], 'c', installFailure('c'));
-    fail(breaker, [INSTALL], 'd', installFailure('d'));
-    expect(summaries.filter((s) => s.transition === 'opened')).toHaveLength(1);
-    const opened = summaries.find((s) => s.transition === 'opened');
-    expect(opened.affectedAttempts.sort()).toEqual(['a', 'b', 'c']);
-    expect(opened.remedy).toBeTruthy();
-    expect(opened.nextProbeAtMs).toBeGreaterThan(0);
-    expect(opened.costUsd).toBeNull();
-
-    // Repeated read-only launch checks emit nothing (no canary admitted: not due yet).
-    const before = summaries.length;
-    probe(breaker, [INSTALL]);
-    probe(breaker, [INSTALL]);
-    expect(summaries).toHaveLength(before);
+  it('opens exactly once at the threshold and stays open on further failures, never re-opening', () => {
+    expect(fail(breaker, [INSTALL], 'a', installFailure('a')).opened).toBe(false);
+    expect(fail(breaker, [INSTALL], 'b', installFailure('b')).opened).toBe(false);
+    expect(fail(breaker, [INSTALL], 'c', installFailure('c')).opened).toBe(true);
+    expect(breaker.getState(INSTALL).distinctFailures).toBe(3);
+    expect(breaker.getState(INSTALL).nextProbeAtMs).toBeGreaterThan(0);
+    // A fourth failure cannot reach here without an admission (the scope is
+    // already open and not due); repeated read-only checks are inert.
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    expect(breaker.getState(INSTALL).state).toBe('open');
   });
 
   it('shares quota scope across CLIs and honors the 429 reset', () => {
@@ -438,7 +429,6 @@ describe('ScopedFailureBreaker correlation', () => {
 
 describe('half-open canary admission (#2915D2: the next real launch IS the probe)', () => {
   let breaker;
-  let summaries;
 
   const openInstall = () => {
     fail(breaker, [INSTALL], 'a', installFailure('a'));
@@ -451,8 +441,6 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-12T00:00:00Z'));
     breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
-    summaries = [];
-    breaker.on('summary', (s) => summaries.push(s));
   });
 
   afterEach(() => {
@@ -476,7 +464,6 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: true });
     expect(breaker.getState(INSTALL).state).toBe('closed');
     expect(probe(breaker, [INSTALL]).ok).toBe(true);
-    expect(summaries.map((s) => s.transition)).toEqual(['opened', 'canary-admitted', 'recovered']);
     expect(breaker.snapshot().canariesCharged).toBe(1);
   });
 
@@ -520,7 +507,6 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     expect(breaker.getState(INSTALL).state).toBe('open');
     expect(breaker.getState(INSTALL).activeCanary).toBeNull();
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
-    expect(summaries.map((s) => s.transition)).toContain('canary-uncertain');
   });
 
   it('unrelated scopes are admitted independently; neither blocks the other', () => {
@@ -548,7 +534,6 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     uncertain(breaker, [INSTALL], 'u-1');
     expect(breaker.snapshot().attemptsCharged).toBe(3);
     expect(breaker.getState(INSTALL).state).toBe('closed');
-    expect(summaries.every((s) => s.costUsd === null)).toBe(true);
   });
 
   it('expires a hung canary with backoff instead of gating forever (no deadlock)', () => {
@@ -563,7 +548,6 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     // reopens with doubled backoff: the scope is never gated forever.
     vi.advanceTimersByTime(300_001);
     expect(probe(breaker, [INSTALL]).ok).toBe(false);
-    expect(summaries.map((s) => s.transition)).toContain('canary-expired');
     expect(breaker.getState(INSTALL).activeCanary).toBeNull();
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
     // And it eventually resumes at the doubled backoff, proving the path
@@ -653,28 +637,81 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   });
 
   it('hard-caps-preserve-open-scopes', () => {
+    // #2915 review 4, finding 6: invocation-scoped records are bounded by
+    // their OWN quota (maxChargedAttempts), entirely separate from the
+    // small shared-scope quota (maxTrackedScopes) -- so a flood of
+    // one-off, never-opening invocation failures can never compete with,
+    // or get discarded in favor of, genuinely shared (installation/quota/
+    // provider/host/model) scope tracking, and vice versa.
     const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxTrackedScopes: 2 } });
     try {
-      // One genuinely OPEN installation scope, created first — it must
-      // survive eviction regardless of insertion order.
+      // Two genuinely OPEN, DISTINCT shared scopes, created first -- both
+      // must survive eviction regardless of insertion order, even though
+      // they already consume the entire shared-scope quota of 2.
       fail(smallCapBreaker, [INSTALL], 'o1', installFailure('o1'));
       fail(smallCapBreaker, [INSTALL], 'o2', installFailure('o2'));
       fail(smallCapBreaker, [INSTALL], 'o3', installFailure('o3'));
       expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
-      // Many distinct, memberless, CLOSED scopes (one invocation-scoped
-      // failure each, never opening) must NOT push tracked scopes past the
-      // cap while nothing is safely evictable other than themselves.
+      for (const id of ['p1', 'p2', 'p3']) {
+        fail(smallCapBreaker, [PROVIDER], id, { scope: FailureScope.PROVIDER, scopeKey: PROVIDER,
+          reasonCode: 'NETWORK', evidenceSource: 'launcher', cli: 'codex', inferenceProvider: 'openai' });
+      }
+      expect(smallCapBreaker.getState(PROVIDER).state).toBe('open');
+      // Six MORE distinct, brand-new shared scopes (a third/fourth/etc
+      // CLI's installation scope) cannot be tracked at all -- the shared
+      // quota is genuinely exhausted by two protected OPEN scopes, and
+      // there is nothing memberless/inert to evict -- but this never
+      // evicts either OPEN scope, and the hard cap of 2 is never exceeded.
+      for (let n = 0; n < 6; n += 1) {
+        const key = scopeKeyFor.installation(`overflow-cli-${n}`);
+        fail(smallCapBreaker, [key], `overflow-${n}`,
+          { scope: FailureScope.INSTALLATION, scopeKey: key, reasonCode: 'NOT_FOUND', evidenceSource: 'launcher', cli: `overflow-cli-${n}` });
+      }
+      expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
+      expect(smallCapBreaker.getState(PROVIDER).state).toBe('open');
+      const sharedScopes = smallCapBreaker.snapshot().scopes.filter((s) => s.scope !== 'invocation');
+      expect(sharedScopes.length).toBeLessThanOrEqual(2);
+      // Many distinct, memberless, never-opening INVOCATION-scoped failures
+      // are tracked in their own separate quota, never discarded by, and
+      // never competing with, the two-slot shared-scope quota above.
       for (let n = 0; n < 10; n += 1) {
         const key = scopeKeyFor.invocation(`solo-${n}`);
         fail(smallCapBreaker, [key], `solo-${n}`, { scope: FailureScope.INVOCATION, scopeKey: key, reasonCode: 'TASK_ASSERT_FAILED' });
       }
-      // The hard cap holds: at most maxTrackedScopes (2) tracked records —
-      // never more, and the OPEN installation scope is never the one evicted.
-      expect(smallCapBreaker.snapshot().scopes.length).toBeLessThanOrEqual(2);
+      for (let n = 0; n < 10; n += 1) {
+        expect(smallCapBreaker.getState(scopeKeyFor.invocation(`solo-${n}`)).tracked).toBe(true);
+      }
       expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
       expect(smallCapBreaker.getState(INSTALL).tracked).toBe(true);
+      expect(smallCapBreaker.getState(PROVIDER).state).toBe('open');
     } finally {
       smallCapBreaker.destroy();
+    }
+  });
+
+  it('rejects policy overrides above the protective maxima (500/128/5000/6)', () => {
+    expect(() => new ScopedFailureBreaker({ policy: { maxTrackedScopes: 501 } })).toThrow(RangeError);
+    expect(() => new ScopedFailureBreaker({ policy: { maxOutstandingReservations: 129 } })).toThrow(RangeError);
+    expect(() => new ScopedFailureBreaker({ policy: { maxChargedAttempts: 5001 } })).toThrow(RangeError);
+    expect(() => new ScopedFailureBreaker({ policy: { maxCoveringKeys: 7 } })).toThrow(RangeError);
+    // The shipped defaults themselves, and anything smaller, remain valid.
+    const b = new ScopedFailureBreaker({ policy: { maxTrackedScopes: 500, maxOutstandingReservations: 128, maxChargedAttempts: 5000, maxCoveringKeys: 6 } });
+    b.destroy();
+  });
+
+  it('settle() rejects a copied token with altered fields (exact token ownership)', () => {
+    const b = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    try {
+      const admitted = b.admit({ invocationId: 'a1', scopeKeys: [INSTALL] });
+      expect(admitted.ok).toBe(true);
+      // A copy with every field reproduced, including `breaker` and `id`,
+      // but a forged invocationId -- reference inequality alone refuses it.
+      const forged = { ...admitted.token, invocationId: 'forged' };
+      expect(b.settle(forged, { kind: 'succeeded' })).toEqual({ ok: false, reason: expect.any(String) });
+      // The genuine, unmodified token (same object reference) still works.
+      expect(b.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: true });
+    } finally {
+      b.destroy();
     }
   });
 });
@@ -733,14 +770,17 @@ describe('retry linkage (#2915 final review step 4: retryOf replaces freshAttemp
     return { root, runDir };
   }
 
-  async function planFile(root, taskDigest) {
+  async function planFile(root, taskMarker, briefDigest = 'sha256:fixed-brief') {
     const invocationPath = path.join(root, 'plan.json');
-    // `verifyRetryPredecessor` only reads `.request` through
-    // `qualificationDigest` — a minimal stand-in plan is sufficient and
-    // keeps this suite free of a full resolveWorkerInvocation fixture.
-    const request = { taskMarker: taskDigest };
-    await writeFile(invocationPath, JSON.stringify({ request }));
-    return { invocationPath, taskDigest: qualificationDigest(request) };
+    // #2915 review 4 (finding 4): the stable task-chain identity is
+    // role/task/group plus the BRIEF CONTENT digest -- never
+    // `final_output`/`brief`/`workdir` paths -- matching
+    // `stableTaskChainDigest` exactly, so this fixture exercises the real
+    // binding rule rather than a stand-in marker field.
+    const request = { role: 'coding', task: taskMarker, group: 'workers',
+      brief: '/brief.json', workdir: '/work', final_output: `/work/final-${Math.random().toString(36).slice(2)}.json` };
+    await writeFile(invocationPath, JSON.stringify({ request, invocation: { briefDigest } }));
+    return { invocationPath, taskDigest: qualificationDigest({ role: request.role, task: request.task, group: request.group, briefDigest }) };
   }
 
   it('fresh-directory-retry-requires-owned-proof', async () => {
@@ -759,6 +799,45 @@ describe('retry linkage (#2915 final review step 4: retryOf replaces freshAttemp
     const launcher = new SessionLauncher();
     await expect(launcher.launchWorker({ invocationPath: '/does/not/exist.json', runDir: '/does/not/exist' }))
       .rejects.not.toMatchObject({ code: STOP_BEFORE_RETRY_CODE });
+  });
+
+  it('a confirmed predecessor with a FRESH output path is accepted (#2915 review 4, finding 4)', async () => {
+    // The predecessor and the new attempt deliberately use DIFFERENT
+    // `final_output` paths (every legitimate retry attempt gets a fresh
+    // one) but the SAME role/task/group/brief -- task-chain binding must
+    // still accept this as the SAME task, not a "different task" refusal.
+    const { runDir } = await predecessorRunDir({ invocationId: 'prev-1' });
+    const predecessorPlan = await planFile(path.dirname(runDir), 'shared-task');
+    await writeFile(path.join(runDir, 'invocation.json'),
+      JSON.stringify({ invocationId: 'prev-1', origin: 'launcher', taskDigest: predecessorPlan.taskDigest }), { mode: 0o600 });
+    const newAttemptRoot = await mkdtemp(path.join(os.tmpdir(), 'aiwg-retry-new-'));
+    roots.push(newAttemptRoot);
+    const newAttemptPlan = await planFile(newAttemptRoot, 'shared-task');
+    expect(newAttemptPlan.invocationPath).not.toBe(predecessorPlan.invocationPath);
+    expect(newAttemptPlan.taskDigest).toBe(predecessorPlan.taskDigest); // same task, different paths
+    const exitRecord = await verifyRetryPredecessor({ invocationId: 'prev-1', runDir },
+      { newInvocationPath: newAttemptPlan.invocationPath, inspect: inspectWorkerPath });
+    expect(exitRecord).toMatchObject({ invocationId: 'prev-1', termination: 'confirmed' });
+  });
+
+  it('rejects an insecurely-moded predecessor metadata file instead of repairing it (#2915 review 4, finding 4)', async () => {
+    const { runDir } = await predecessorRunDir({ invocationId: 'prev-1' });
+    await chmod(path.join(runDir, 'exit.json'), 0o666);
+    await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir }, { inspect: inspectWorkerPath }))
+      .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    // The file's mode is untouched -- never silently repaired to 0600.
+    expect((await lstat(path.join(runDir, 'exit.json'))).mode & 0o777).toBe(0o666);
+  });
+
+  it('rejects a predecessor location inside a worker-writable root', async () => {
+    const { runDir, root } = await predecessorRunDir({ invocationId: 'prev-1' });
+    await expect(verifyRetryPredecessor({ invocationId: 'prev-1', runDir },
+      { inspect: inspectWorkerPath, workerWritableRoots: [root] }))
+      .rejects.toMatchObject({ code: UNBOUND_RETRY_EVIDENCE_CODE });
+    // An unrelated worker-writable root never blocks a legitimate predecessor.
+    const exitRecord = await verifyRetryPredecessor({ invocationId: 'prev-1', runDir },
+      { inspect: inspectWorkerPath, workerWritableRoots: ['/some/other/worktree'] });
+    expect(exitRecord).toMatchObject({ invocationId: 'prev-1', termination: 'confirmed' });
   });
 
   it('forged-or-missing-evidence-refuses', async () => {

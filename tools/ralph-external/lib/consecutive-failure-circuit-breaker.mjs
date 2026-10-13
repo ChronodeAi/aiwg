@@ -256,8 +256,10 @@ export const RecoveryPolicy = Object.freeze({
  */
 export function validateRecoveryPolicy(policy) {
   const fail = (name, why) => { throw new RangeError(`Invalid recovery policy ${name}: ${why}`); };
-  const positiveInt = (name, value, min = 1) => {
-    if (!Number.isInteger(value) || value < min) fail(name, `expected integer >= ${min}, got ${value}`);
+  const positiveInt = (name, value, min = 1, max = Infinity) => {
+    if (!Number.isInteger(value) || value < min || value > max) {
+      fail(name, `expected integer in [${min}, ${max === Infinity ? '∞' : max}], got ${value}`);
+    }
   };
   const positiveMs = (name, value) => {
     if (!Number.isFinite(value) || value <= 0) fail(name, `expected finite ms > 0, got ${value}`);
@@ -276,10 +278,15 @@ export function validateRecoveryPolicy(policy) {
   if (!Number.isFinite(policy.maxRetryAfterSeconds) || policy.maxRetryAfterSeconds < 0) {
     fail('maxRetryAfterSeconds', `expected finite seconds >= 0, got ${policy.maxRetryAfterSeconds}`);
   }
-  positiveInt('maxTrackedScopes', policy.maxTrackedScopes, 2);
-  positiveInt('maxChargedAttempts', policy.maxChargedAttempts, 2);
-  positiveInt('maxOutstandingReservations', policy.maxOutstandingReservations, 1);
-  positiveInt('maxCoveringKeys', policy.maxCoveringKeys, 1);
+  // #2915 review 4 (finding 6): these four are PROTECTIVE maxima, not mere
+  // floors — an override above the shipped default would widen the exact
+  // unbounded-growth loops this policy exists to close. Upper bound equals
+  // the shipped `RecoveryPolicy` default for each (500/128/5000/6); a
+  // caller that genuinely needs a smaller budget may still lower it.
+  positiveInt('maxTrackedScopes', policy.maxTrackedScopes, 2, RecoveryPolicy.maxTrackedScopes);
+  positiveInt('maxChargedAttempts', policy.maxChargedAttempts, 2, RecoveryPolicy.maxChargedAttempts);
+  positiveInt('maxOutstandingReservations', policy.maxOutstandingReservations, 1, RecoveryPolicy.maxOutstandingReservations);
+  positiveInt('maxCoveringKeys', policy.maxCoveringKeys, 1, RecoveryPolicy.maxCoveringKeys);
   return policy;
 }
 
@@ -428,15 +435,6 @@ export function attributeFailureScope({
   }
   return invocation;
 }
-
-const RECOVERY_REMEDIES = Object.freeze({
-  invocation: 'Inspect this attempt only; do not widen the scope. Retry after confirmed stop within task attempts/budget.',
-  model: 'Refresh or re-resolve the model binding without silent pin replacement; retry after confirmed stop.',
-  installation: 'Check the CLI installation, PATH and executable version; other providers are unaffected.',
-  quota: 'Wait for the quota reset; do not retry-storm. Aliases sharing the account share this outage.',
-  provider: 'Wait for provider recovery or fail over to an unaffected provider; host-local work is unaffected.',
-  host: 'Check memory, disk, PATH and sandbox policy on this host. Cross-provider retries stay paused.',
-});
 
 /**
  * ScopedFailureBreaker - correlated-failure scopes over the existing
@@ -602,7 +600,6 @@ export class ScopedFailureBreaker extends EventEmitter {
       rec.canariesCharged += 1;
       this.canariesCharged += 1;
       this._touch(rec);
-      this._emitSummary(rec, 'canary-admitted', { invocationId });
     }
     return { ok: true, token };
   }
@@ -632,12 +629,23 @@ export class ScopedFailureBreaker extends EventEmitter {
     const now = this.nowMs();
     this._sweepReservations(now);
     this._sweepOutstanding(now);
-    if (!token || token.breaker !== this) return { ok: false, reason: 'reservation is not owned by this breaker' };
+    // #2915 review 4 (finding 5, exact token ownership): a passed-in token
+    // is NEVER trusted for its own field values — only as a lookup key.
+    // `entry.token !== token` (reference inequality) refuses ANY copy with
+    // altered fields, including one that also copies `breaker`/`id`
+    // correctly but changes `invocationId`/`coveringKeys`/`canaryKeys`: the
+    // legitimate caller always holds the exact frozen object `admit()`
+    // returned, so only that exact object reference can ever match.
+    if (!token || typeof token.id !== 'string' || token.breaker !== this) {
+      return { ok: false, reason: 'reservation is not owned by this breaker' };
+    }
     const entry = this._reservations.get(token.id);
-    if (!entry || entry.settled) return { ok: false, reason: 'reservation is unknown, already settled, or expired' };
+    if (!entry || entry.settled || entry.token !== token) {
+      return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
+    }
     entry.settled = true;
     this._reservations.delete(token.id);
-    const { invocationId, coveringKeys, canaryKeys } = token;
+    const { invocationId, coveringKeys, canaryKeys } = entry.token;
     const kind = outcome?.kind ?? 'uncertain';
     // Enforce the canary's own deadline even at settlement time: a reported
     // outcome that arrives after the deadline elapsed never recovers or
@@ -650,7 +658,6 @@ export class ScopedFailureBreaker extends EventEmitter {
       if (now > rec.activeCanary.deadlineMs) {
         rec.activeCanary = null;
         this._reopen(rec, now);
-        this._emitSummary(rec, 'canary-expired', { invocationId });
         continue;
       }
       rec.activeCanary = null;
@@ -665,10 +672,8 @@ export class ScopedFailureBreaker extends EventEmitter {
         const reset = this._resolveResetAtMs({ resetAtMs: outcome?.resetAtMs ?? null, retryAfterSeconds: outcome?.retryAfterSeconds ?? null }, now);
         if (reset !== null && (rec.resetAtMs === null || reset > rec.resetAtMs)) rec.resetAtMs = reset;
         this._reopen(rec, now);
-        this._emitSummary(rec, 'canary-failed', { invocationId });
       } else {
         this._reopen(rec, now);
-        this._emitSummary(rec, 'canary-uncertain', { invocationId });
       }
     }
     if (kind === 'succeeded') {
@@ -768,7 +773,6 @@ export class ScopedFailureBreaker extends EventEmitter {
       rec.breaker.cooldownMs = rec.episodeCooldownMs;
       rec.breaker.recordFailure();
       rec.status = 'open';
-      this._emitSummary(rec, 'opened', { affectedAttempts: [...distinct] });
     }
   }
 
@@ -779,7 +783,6 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.nextProbeAtMs = 0;
     rec.status = 'closed';
     rec.breaker.reset();
-    this._emitSummary(rec, 'recovered', { invocationId });
   }
 
   _chargeAttempt(scopeKey, invocationId) {
@@ -820,7 +823,6 @@ export class ScopedFailureBreaker extends EventEmitter {
         if (rec?.activeCanary?.id === id) {
           rec.activeCanary = null;
           this._reopen(rec, now);
-          this._emitSummary(rec, 'canary-expired', { invocationId });
         }
       }
       this.noteSettled({ scopeKeys: coveringKeys, invocationId });
@@ -918,11 +920,25 @@ export class ScopedFailureBreaker extends EventEmitter {
    * evicting an OPEN/outstanding scope. The caller still charges the
    * attempt; it simply cannot attribute it to a persistently-tracked scope
    * record under this adversarial condition.
+   *
+   * Invocation-scoped records are counted and bounded SEPARATELY from every
+   * shared scope (installation/quota/provider/host/model), against
+   * `maxChargedAttempts` rather than `maxTrackedScopes` (#2915 review 4,
+   * finding 6: "invocation-local records outside the shared-scope quota").
+   * An invocation record can never legitimately open (cohort/distinct
+   * counting is always 1 for a single invocation id), so a flood of
+   * single-task failures can never exhaust the small shared-scope budget
+   * that genuinely correlated installation/host/provider/quota outages
+   * depend on, and vice versa — two OPEN shared scopes can never be forced
+   * out to make room for one-off invocation bookkeeping.
    */
   _scopeRecordBounded(scope, scopeKey) {
     let rec = this._scopes.get(scopeKey);
     if (rec) return rec;
-    if (this._scopes.size >= this.policy.maxTrackedScopes && !this._evictInertScopeIfPossible()) {
+    const isInvocation = scope === FailureScope.INVOCATION;
+    const cap = isInvocation ? this.policy.maxChargedAttempts : this.policy.maxTrackedScopes;
+    const count = this._scopeCount(isInvocation);
+    if (count >= cap && !this._evictInertScopeIfPossible(isInvocation)) {
       return null;
     }
     rec = {
@@ -962,25 +978,46 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.lastTouchedMs = this.nowMs();
   }
 
+  /** Count tracked scopes in one category (invocation-scoped vs every
+   * shared scope) — the two independent quotas `_scopeRecordBounded`
+   * enforces. Bounded by `_scopes.size`, itself bounded by the two maxima. */
+  _scopeCount(isInvocation) {
+    let count = 0;
+    for (const rec of this._scopes.values()) {
+      if ((rec.scope === FailureScope.INVOCATION) === isInvocation) count += 1;
+    }
+    return count;
+  }
+
   /**
    * Explicit, bounded eviction (#2915 review: settled outstanding/scope maps
    * never dropped their own keys, so 1,000 successful attempts retained
    * 1,000+ map entries forever). Only CLOSED scopes with no outstanding
-   * members are eligible — an open scope (or one with outstanding attempts)
-   * is never evicted, so real recovery state is never silently dropped. The
-   * scan is bounded by `maxTrackedScopes`, never unbounded. Returns whether
-   * an eviction actually freed a slot, so `_scopeRecordBounded` can refuse
-   * to track a new scope at true capacity instead of growing past the cap
-   * (#2915 final review, finding 6: the former best-effort bound could be
-   * exceeded whenever nothing was evictable).
+   * members AND no failure evidence still inside the rolling window are
+   * eligible — an open scope, one with outstanding attempts, or one with
+   * recent (in-window) failure evidence is never evicted (#2915 review 4,
+   * finding 6: "never evict recent failure evidence or OPEN scopes" — a
+   * two-failure CLOSED scope that has not yet reached the distinct
+   * threshold must survive long enough for a third, still-in-window
+   * failure to correlate against it). Only scopes matching `isInvocation`
+   * are considered, so eviction never crosses between the two independent
+   * quotas `_scopeRecordBounded` enforces. The scan is bounded by
+   * `maxTrackedScopes`/`maxChargedAttempts`, never unbounded. Returns
+   * whether an eviction actually freed a slot, so `_scopeRecordBounded` can
+   * refuse to track a new scope at true capacity instead of growing past
+   * the cap (#2915 final review, finding 6: the former best-effort bound
+   * could be exceeded whenever nothing was evictable).
    */
-  _evictInertScopeIfPossible() {
+  _evictInertScopeIfPossible(isInvocation) {
+    const now = this.nowMs();
     let oldestKey = null;
     let oldestAt = Infinity;
     for (const [key, rec] of this._scopes) {
+      if ((rec.scope === FailureScope.INVOCATION) !== isInvocation) continue;
       if (rec.status !== 'closed' || rec.activeCanary) continue;
       const outstanding = this._outstanding.get(key);
       if (outstanding && outstanding.size > 0) continue;
+      if (rec.failures.some((f) => now - f.atMs < this.policy.windowMs)) continue;
       if (rec.lastTouchedMs < oldestAt) { oldestAt = rec.lastTouchedMs; oldestKey = key; }
     }
     if (oldestKey === null) return false;
@@ -1023,24 +1060,5 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.breaker.cooldownMs = rec.episodeCooldownMs;
     rec.breaker.recordFailure();
     this._touch(rec);
-  }
-
-  _emitSummary(rec, transition, extra) {
-    // One actionable summary per transition — never per-tick noise. Unknown
-    // cost stays unknown: costUsd is null, never zero.
-    this.emit('summary', {
-      transition,
-      scope: rec.scope,
-      scopeKey: rec.scopeKey,
-      affectedAttempts: rec.failures.map((f) => f.invocationId),
-      evidence: Object.fromEntries(rec.evidence),
-      nextProbeAtMs: rec.nextProbeAtMs,
-      resetAtMs: rec.resetAtMs,
-      cooldownMs: rec.episodeCooldownMs,
-      remedy: RECOVERY_REMEDIES[rec.scope] ?? RECOVERY_REMEDIES.invocation,
-      costUsd: null,
-      attemptsCharged: rec.attemptsCharged,
-      ...(extra ?? {}),
-    });
   }
 }

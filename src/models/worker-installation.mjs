@@ -861,8 +861,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         // === false`) as never eligible for recovery-breaker gating.
         ...(typeof instance.parseWorkerAttemptFinal === 'function'
           ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
+        // #2915 review 4 (finding 7): an adapter with NEITHER an explicit
+        // capability method NOR any `parseWorkerAttemptFinal` at all
+        // (OpenHuman: a standalone class, not a `ProviderAdapter` subclass,
+        // with no attempt parser) must default to INELIGIBLE, never `true`
+        // — a canary admitted for such a CLI could never report a
+        // verified success regardless of what actually happened.
         canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
-          ? !!instance.supportsAttemptVerification() : true,
+          ? !!instance.supportsAttemptVerification()
+          : typeof instance.parseWorkerAttemptFinal === 'function',
         ...(typeof instance.createHealthObserver === 'function'
           ? { createHealthObserver: options => instance.createHealthObserver(options) } : {}),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,
