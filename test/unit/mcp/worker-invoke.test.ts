@@ -957,6 +957,81 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #2915 round 8 review 8 (C3): cancellation requested while admission/
+// preparation is still in flight must prevent the spawn, enforced at TWO
+// independent layers -- `defaultCallMcpWorkerGated`'s own pre-launch
+// `isCancelled()` check, AND the `dispatchGuard` (`{ deadlineAtMs, nowMs,
+// isCancelled }`) threaded all the way into the REAL `planDirectWorkerLaunch`
+// -> `launchIsolatedWorker` dispatch-commit hook. Verified directly (by
+// temporarily disabling each independently) that EITHER layer alone
+// catches this probe; the test below exercises the real pipeline end to
+// end, never a unit test of `checkDispatchGuard` in isolation.
+// ---------------------------------------------------------------------------
+describe('dispatch-commit hook enforces cancellation via dispatchGuard through the real launch pipeline (#2915 round 8 review 8, C3)', () => {
+  // MCP transport (attached, degraded-or-systemd-unit both fine -- the
+  // native MCP launch path always resolves a `memoryMaxGb` default, unlike
+  // the shell path, so this is host-isolation-mode-independent): proves the
+  // real pipeline refused the spawn, not merely that the outward result
+  // happens to read 'cancelled' -- the fixture worker's own record file is
+  // asserted to never exist at all, meaning the worker process was never
+  // started, not merely that its response was discarded.
+  it('cancellation requested while admission/preparation is still in flight prevents the real worker process from ever being spawned', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    const configPath = path.join(root, 'fixture-config.json');
+    await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
+    const f = buildFixture(root, 'mcp');
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+      // No `callMcpWorker` override -- this exercises the REAL
+      // `defaultCallMcpWorkerGated` -> `defaultLaunchMcpWorkerProcess` ->
+      // `planDirectWorkerLaunch` -> `launchIsolatedWorker` pipeline,
+      // including its dispatch-commit hook.
+    });
+    const call = tools.get('worker-invoke').handler;
+    const runPromise = call({
+      operation: 'run', request_id: 'dispatchguard-cancel-1', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const [pendingEntry] = registry.values().filter((e: any) => e.requestId === 'dispatchguard-cancel-1');
+    // Races the real admission/brief-preparation chain (several real awaits:
+    // validatedRequest, loadWorkerInputs, resolveWorkerInvocation, the
+    // ledger reserve inside admitDirectWorker, the MCP structured-brief
+    // read/validate) with this single, nearly synchronous `cancel()` call --
+    // by the time the leaf dispatch-commit hook actually runs, deep inside
+    // the real `launchIsolatedWorker`, `cancelRequested` is already true.
+    await call({ operation: 'cancel', invocation_id: pendingEntry.invocationId });
+    const runBody = JSON.parse((await runPromise).content[0].text);
+    // 'blocked' with this exact diagnostic is the dispatch-commit hook's
+    // own refusal shape (`checkDispatchGuard` -> `_runDispatchCommit`'s
+    // `{ launched: false, blocked: true, failures: [{ signal:
+    // 'dispatch-commit', ... }] }` -> `describeGateFailures`) -- proving
+    // this was caught AT the leaf dispatch boundary, not merely that the
+    // outward result happened to read non-'completed' for some unrelated
+    // reason.
+    expect(runBody.status, JSON.stringify(runBody)).toBe('blocked');
+    expect(runBody.diagnostics.join(' ')).toMatch(/cancelled before process start/);
+    expect(runBody.cancelRequested).toBe(true);
+    // The real fixture worker process was never spawned at all -- it would
+    // have recorded at least a 'call' event into this file otherwise.
+    await expect(readFile(recordPath, 'utf8')).rejects.toThrow();
+  }, 20000);
+});
+
+// ---------------------------------------------------------------------------
 // #2892 M4: seenRequestIds (replay protection) is bounded, never evicting a
 // request id whose invocation is still live/uncertain/retained-terminal.
 // ---------------------------------------------------------------------------
