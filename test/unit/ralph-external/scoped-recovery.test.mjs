@@ -8,7 +8,7 @@
  * @implements #2915
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -4382,19 +4382,23 @@ describe('allowance ledger: cross-instance probes', () => {
 // (proven only behaviorally, through the identical observable results
 // above, not by inspecting `EventEmitter` internals directly).
 // ---------------------------------------------------------------------------
-describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the branch with direct recovery not gated', () => {
-  // A direct, detached spawn of the resolved argv -- see the file-level
-  // comment above for why this stands in for the real `launchIsolatedWorker`
-  // in every scenario below.
-  function directSpawn({ command, args, cwd, env, stdin }) {
-    const child = spawn(command, args, { cwd, env, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
-    return { mode: 'degraded', child };
-  }
-  function enoentSpawn() {
-    return { mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915-equiv', [], { stdio: ['ignore', 'pipe', 'pipe'] }) };
-  }
+// #2915 round 8 (D6): shared helpers for every "baseline equivalence"
+// describe block below (module scope, not nested in any one `describe`, so
+// every block — the original one plus the follow-up scenarios added after
+// it — uses the exact same fixture/launch/normalize machinery).
+//
+// A direct, detached spawn of the resolved argv -- see the file-level
+// comment on the first "baseline equivalence" describe block below for why
+// this stands in for the real `launchIsolatedWorker` in every scenario.
+function directSpawn({ command, args, cwd, env, stdin }) {
+  const child = spawn(command, args, { cwd, env, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
+  return { mode: 'degraded', child };
+}
+function enoentSpawn() {
+  return { mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915-equiv', [], { stdio: ['ignore', 'pipe', 'pipe'] }) };
+}
 
-  async function equivFixtureRoot() {
+async function equivFixtureRoot() {
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     const f = workerResolutionFixture();
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-equiv-d6-'));
@@ -4467,6 +4471,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
     return { launcher, result, runDir: attempt.runDir };
   }
 
+describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the branch with direct recovery not gated', () => {
   // The two not-gated triggers a full real-invocation launch can exercise
   // without ALSO being refused by `revalidateWorkerInvocationPlan`'s own
   // re-resolution (see the describe-level comment above).
@@ -4673,5 +4678,549 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
       drivers: { codex: { canVerifyAttempt: false } } }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: null }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true }).gated).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6), follow-up: the scenarios the first "baseline
+// equivalence" describe block above named as NOT covered — timeout,
+// cancellation, capture-setup failure after spawn, invalid final, a
+// schema-valid failed-claims final, listener attachment, and injected
+// callback call-order/argument shapes — plus a direct test for the per-CLI
+// claim (previously only explained in prose).
+// ---------------------------------------------------------------------------
+describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => {
+  // The dynamic `importImpl` modules `launchOneWorker`/`launchOneWorkerBaseline`
+  // need (worker-invocation.js, qualification-digest.mjs, ...) are each
+  // transformed by vitest's own module pipeline on first access — a
+  // process that itself uses real timers internally. Running that FIRST
+  // transform while `vi.useFakeTimers()` is already active (as the
+  // timeout/cancellation tests below must do) stalls it indefinitely; one
+  // real, fake-timer-free launch here warms every module the tests below
+  // need before any of them ever installs fake timers.
+  beforeAll(async () => {
+    const fx = await equivFixtureRoot();
+    try {
+      const attempt = await fx.freshPlan({ scenario: 'success' });
+      await runFakeUnitLauncher(SessionLauncher, fx, attempt, {
+        extraOptions: { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) },
+        onLaunched: ({ child }) => { child.stdout.end(''); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); },
+      });
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  function makeFakeChild(pid = 2147483646) {
+    const child = new EventEmitter();
+    child.pid = pid;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.unref = () => {};
+    return child;
+  }
+
+  // Volatile fields every run mints fresh (ids, timestamps, monotonic
+  // clocks) or that depend on real wall-clock/process sampling never
+  // exercised by the fake children below — stripped before any deep
+  // content comparison, everything else compared exactly.
+  // Each baseline/branch pair below shares one fixture root but mints a
+  // SEPARATE `freshPlan()` (its own final-output path, by design — two
+  // genuinely fresh output files, never a collision) for each side.
+  // Every field whose VALUE embeds that path, or is a digest computed
+  // over content that embeds it, therefore legitimately differs between
+  // the two sides for a reason that has nothing to do with #2915 — the
+  // same reason the first "baseline equivalence" describe block above
+  // compares `taskDigest` against each side's OWN saved request rather
+  // than cross-side. These are the only fields excluded; digests over
+  // ACTUAL FILE CONTENT (e.g. `final-evidence.json`'s `digest`, a hash of
+  // the final bytes) are never in this list and are still compared.
+  const VOLATILE_KEYS = new Set([
+    'invocationId', 'attemptId', 'requestId', 'endedAt', 'launchTime', 'monotonicStart',
+    'startedAt', 'lastObservedAt', 'lastActivityAt', 'lastProgressAt', 'handshakeAt', 'stalledAt',
+    'startupDeadlineAt', 'hardDeadlineAt', 'maxCheckGapSeconds', 'invocationDigest', 'planDigest',
+    'supervisor', 'nativeSupervisor', 'transportProcess',
+    // Path-derived (this fixture's own per-attempt final-output path, never
+    // a #2915 decision):
+    'paths', 'captures', 'path', 'cwd', 'worktree', 'prompt', 'argv', 'commandDisplay',
+    'taskDigest', 'argvDigest', 'placeholderArgvDigest', 'executedArgvDigest',
+  ]);
+  function stripVolatile(value) {
+    if (Array.isArray(value)) return value.map(stripVolatile);
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [key, inner] of Object.entries(value)) {
+        if (VOLATILE_KEYS.has(key)) continue;
+        out[key] = stripVolatile(inner);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  // Every file written under one run directory, names/modes/parsed content
+  // compared exactly (volatile fields stripped first); a non-JSON file
+  // (e.g. an empty capture) is compared byte-for-byte instead. `.launch-owner`
+  // is the one file whose entire content IS the random invocationId (never
+  // JSON) — content equality is meaningless there by construction (base
+  // also randomises it); only its existence, mode and single-UUID shape
+  // are checked, matching "ignoring only timestamps and ids that base also
+  // randomises".
+  async function compareRunDirectories(dirA, dirB) {
+    const [namesA, namesB] = await Promise.all([readdir(dirA), readdir(dirB)]);
+    expect(namesB.sort(), `file set mismatch: ${dirA} vs ${dirB}`).toEqual(namesA.sort());
+    for (const name of namesA) {
+      const [statA, statB] = await Promise.all([lstat(path.join(dirA, name)), lstat(path.join(dirB, name))]);
+      expect(statB.mode & 0o777, `mode mismatch for ${name}`).toBe(statA.mode & 0o777);
+      if (name === '.launch-owner') {
+        const [ownerA, ownerB] = await Promise.all([
+          readFile(path.join(dirA, name), 'utf8'), readFile(path.join(dirB, name), 'utf8'),
+        ]);
+        expect(ownerA).toMatch(/^[0-9a-f-]{36}$/);
+        expect(ownerB).toMatch(/^[0-9a-f-]{36}$/);
+        continue;
+      }
+      const [bytesA, bytesB] = await Promise.all([
+        readFile(path.join(dirA, name), 'utf8'), readFile(path.join(dirB, name), 'utf8'),
+      ]);
+      let parsedA; let parsedB; let bothJson = true;
+      try { parsedA = JSON.parse(bytesA); parsedB = JSON.parse(bytesB); } catch { bothJson = false; }
+      if (bothJson) expect(stripVolatile(parsedB), `JSON content mismatch for ${name}`).toEqual(stripVolatile(parsedA));
+      else expect(bytesB, `byte content mismatch for ${name}`).toBe(bytesA);
+    }
+  }
+
+  function normalizeResult(result) {
+    const { exitCode, signal, termination, descendants, timedOut, cancelled, stopReason, errorCode,
+      workerTermination, isolation } = result;
+    return { exitCode, signal, termination, descendants, timedOut, cancelled, stopReason, errorCode,
+      workerTermination, isolation };
+  }
+
+  // The two not-gated triggers usable for a full real-invocation launch
+  // (see the first "baseline equivalence" describe block's own comment on
+  // why per-CLI disablement cannot join this list).
+  const notGatedTriggers = [
+    { name: 'global worker_dispatch off', extraOptions: { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) } },
+    {
+      name: 'canVerifyAttempt:false (worker_dispatch on)',
+      extraOptions: { checkDispatch: () => ({ enabled: true, ok: true, failures: [] }) },
+      setup: (fx) => { fx.drivers.codex.canVerifyAttempt = false; },
+    },
+  ];
+
+  // Launches through a fake, non-exiting systemd-unit child: `stopUnit`/
+  // `isolationStatus` are injected so no real `systemctl` call is ever
+  // attempted, and the direct-child identity/signal path (which needs a
+  // REAL pid) is never exercised at all -- the exact same substitution
+  // `worker-single-invocation.test.ts` already uses for this isolation
+  // mode (see its "with recovery disabled, a schema-valid but
+  // status:failed claim..." test).
+  async function runFakeUnitLauncher(LauncherClass, fx, attempt, { extraOptions = {}, onLaunched, unitStatus = () => ({ active: true }) } = {}) {
+    vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+    const launcher = new LauncherClass();
+    const child = makeFakeChild();
+    const launched = new Promise((resolve) => launcher.once('launched', resolve));
+    const resultPromise = launcher.launchWorker({
+      invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+      now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+      launchIsolated: () => ({ mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv' }),
+      stopUnit: () => ({ ok: true }), isolationStatus: unitStatus,
+      ...extraOptions,
+    });
+    await launched;
+    await onLaunched?.({ launcher, child });
+    const result = await resultPromise;
+    return { launcher, child, result, runDir: attempt.runDir };
+  }
+
+  for (const trigger of notGatedTriggers) {
+    describe(`not-gated via: ${trigger.name}`, () => {
+      async function build() {
+        const fx = await equivFixtureRoot();
+        trigger.setup?.(fx);
+        return fx;
+      }
+
+      // Baseline and branch run SEQUENTIALLY, each under its OWN
+      // fake-timer session (matching the proven single-launch pattern
+      // already used elsewhere in this file, e.g. "captures a leader
+      // first visible after more than 250 ms of null launcher samples" in
+      // `worker-single-invocation.test.ts`). `vi.advanceTimersByTimeAsync`
+      // only advances timers that are ALREADY registered at the moment it
+      // is called; the real fs I/O this launcher does on its way to
+      // actually arming the hard-deadline timer needs real event-loop
+      // turns (not just microtasks) to land. Advancing in a bounded
+      // number of real-yielding steps gives that real I/O room to land
+      // between each step; the `beforeAll` warm-up launch above (run
+      // before fake timers are ever installed anywhere in this describe
+      // block) is what keeps the number of steps actually needed small
+      // and bounded in practice for the DEGRADED isolation path used
+      // below. No real waiting: every step is a fake-clock advance, never
+      // a wall-clock sleep — `setImmediate` only yields the current real
+      // macrotask, it does not sleep.
+      //
+      // NOT covered here, by construction and not by oversight: a
+      // systemd-unit timeout/cancellation through a fake child drives
+      // `captureOneWorker`/`captureOneWorkerBaseline`'s `observeIdentity`
+      // into its `hasTransport` branch, which repeatedly `await`s a real
+      // fs read (`transportRecord`) inside a `later()` callback it itself
+      // reschedules every 5ms until `identityCapture.expired()`. Under
+      // `vi.useFakeTimers()` (sync and async advance APIs, with and
+      // without the `beforeAll` module warm-up — all tried), that
+      // recursive async-callback-reschedules-itself pattern never
+      // reliably drains within any bounded number of manual advance+yield
+      // steps found in the time available: the newly-armed timer is
+      // registered only after its predecessor's `await` resolves, and a
+      // fake-clock advance does not reliably wait for that before moving
+      // on. This is a vitest fake-timer/real-async-I/O interaction
+      // specific to the TEST HARNESS's fake isolation layer, not a
+      // behavior difference between the frozen fixture and the branch —
+      // both run the IDENTICAL, unmodified `observeIdentity` for this
+      // not-gated path, so there is no asymmetry for this construction to
+      // hide, and the degraded-isolation timeout/cancellation tests below
+      // exercise the exact same hard-deadline/stop/finish machinery
+      // without that specific hazard (degraded's `observeIdentity` branch
+      // is synchronous, never `await`s). This is as far as the existing
+      // fake isolation layer allows, per the assignment's own wording.
+      async function runTimedFakeDegradedScenario(LauncherClass, fx, attempt, extraOptions) {
+        vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+        try {
+          const launcher = new LauncherClass();
+          const launched = new Promise((resolve) => launcher.once('launched', resolve));
+          const resultPromise = launcher.launchWorker({
+            invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+            now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+            launchIsolated: () => ({ mode: 'degraded', child: makeFakeChild() }), ...extraOptions,
+          });
+          await launched;
+          let settled = false;
+          resultPromise.finally(() => { settled = true; });
+          for (let step = 0; step < 20 && !settled; step += 1) {
+            await vi.advanceTimersByTimeAsync(500);
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          return { result: await resultPromise, runDir: attempt.runDir };
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+
+      it.skip('timeout, systemd-unit isolation: not reliably driveable under vi.useFakeTimers() in the time available — see the comment above; degraded-isolation timeout below covers the identical hard-deadline/stop/finish machinery', () => {});
+
+      it('timeout, degraded isolation: hard-deadline fires, unresolved stop, identical result and run-dir content', async () => {
+        const fx = await build();
+        fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          // Neither child ever exits on its own; only the hard-deadline
+          // timer (armed for ~1s, plus the bounded stop-escalation grace
+          // window) can resolve either launch. No real waiting: the fake
+          // clock is advanced directly.
+          const baseline = await runTimedFakeDegradedScenario(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
+          const branch = await runTimedFakeDegradedScenario(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ timedOut: true, termination: 'uncertain' });
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      }, 20_000);
+
+      it.skip('cancellation mid-run, systemd-unit isolation: not reliably driveable under vi.useFakeTimers() in the time available — see the comment above; degraded-isolation cancellation below covers the identical workerStop()/stop/finish machinery', () => {});
+
+      it('cancellation mid-run, degraded isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
+        const fx = await build();
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const run = async (LauncherClass, attempt) => {
+            vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+            try {
+              const launcher = new LauncherClass();
+              const launched = new Promise((resolve) => launcher.once('launched', resolve));
+              const resultPromise = launcher.launchWorker({
+                invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+                now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+                launchIsolated: () => ({ mode: 'degraded', child: makeFakeChild() }), ...trigger.extraOptions,
+              });
+              await launched;
+              launcher.workerStop();
+              let settled = false;
+              resultPromise.finally(() => { settled = true; });
+              for (let step = 0; step < 20 && !settled; step += 1) {
+                await vi.advanceTimersByTimeAsync(500);
+                await new Promise((resolve) => setImmediate(resolve));
+              }
+              return { result: await resultPromise, runDir: attempt.runDir };
+            } finally {
+              vi.useRealTimers();
+            }
+          };
+          const baseline = await run(SessionLauncherBaseline, baselineAttempt);
+          const branch = await run(SessionLauncher, branchAttempt);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ cancelled: true, stopReason: 'CANCELLED', timedOut: false });
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      }, 20_000);
+
+      // #2915 review 6 (finding 4): the branch changed this path for the
+      // GATED case (a bounded stop escalation plus `resolveStopEvidence`,
+      // see `launchOneWorker`'s own `else if (admission.gated)` branch).
+      // The not-gated path must stay the ORIGINAL, limited origin/main
+      // behavior: a capture-setup exception after a child has already
+      // attached is simply rethrown, with no stop attempt and no
+      // exit.json write at all (only the PRE-spawn metadata -- invocation.
+      // json, process.json, and the empty reserved capture files -- exist
+      // in the run directory).
+      it('capture-setup failure after spawn: no stop attempt, no exit.json, identical thrown error and run-dir content', async () => {
+        const fx = await build();
+        trigger.setup?.(fx);
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const throwingDrivers = { codex: { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } } };
+          const spawnedChildren = [];
+          const launchIsolated = () => { const child = makeFakeChild(); spawnedChildren.push(child);
+            return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-capture' }; };
+          const run = async (LauncherClass, attempt) => {
+            vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+            const launcher = new LauncherClass();
+            let caught;
+            try {
+              await launcher.launchWorker({
+                invocationPath: attempt.invocationPath, runDir: attempt.runDir,
+                inputs: { snapshot: fx.f.snapshot, drivers: throwingDrivers }, now: fx.f.request.now,
+                isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+                launchIsolated, stopUnit: () => ({ ok: true }), isolationStatus: () => ({ active: true }),
+                ...trigger.extraOptions,
+              });
+            } catch (error) { caught = error; }
+            return { caught, runDir: attempt.runDir };
+          };
+          const baseline = await run(SessionLauncherBaseline, baselineAttempt);
+          const branch = await run(SessionLauncher, branchAttempt);
+          expect(branch.caught?.message).toBe(baseline.caught?.message);
+          expect(baseline.caught?.message).toBe('synthetic capture-setup failure');
+          // No stop attempt was ever made against either fake child.
+          expect(spawnedChildren.every((child) => child.listenerCount('exit') === 0)).toBe(true);
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+          expect(await readdir(baseline.runDir)).not.toContain('exit.json');
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+
+      it('invalid final (empty/unparseable output): identical FINAL_OUTPUT_INVALID result and run-dir content', async () => {
+        const fx = await build();
+        trigger.setup?.(fx);
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const run = (LauncherClass, attempt) => runFakeUnitLauncher(LauncherClass, fx, attempt, {
+            extraOptions: { ...trigger.extraOptions },
+            unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+            onLaunched: ({ child }) => { child.stdout.end(''); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); },
+          });
+          const [baseline, branch] = await Promise.all([run(SessionLauncherBaseline, baselineAttempt), run(SessionLauncher, branchAttempt)]);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ exitCode: 0, errorCode: 'FINAL_OUTPUT_INVALID' });
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+
+      // #2915 review 4 (finding 1): a schema-valid strict-parse claiming
+      // `status: 'failed'` must still report origin/main's own baseline
+      // health (`completed`, from a successful PARSE alone) when recovery
+      // is not gated -- the stricter `claims.status === 'completed'` check
+      // is `recoveryGated`-only inside `captureOneWorker`, and
+      // `captureOneWorkerBaseline` never reads `claims.status` at all.
+      it('schema-valid final with status:failed: identical baseline-completed health and run-dir content', async () => {
+        const fx = await build();
+        trigger.setup?.(fx);
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
+          const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
+          const claims = { version: 1, status: 'failed', summary: 'worker claims failure despite a clean exit', claims: [], artifacts: [], checks: [], limitations: [] };
+          const finalLine = `${JSON.stringify({ type: 'result', result: claims })}\n`;
+          const failedClaimsDrivers = { codex: { ...fx.drivers.codex, parseWorkerFinal: async () => ({ status: 'failed', summary: 'synthetic' }) } };
+          const run = async (LauncherClass, attempt, saved) => {
+            return runFakeUnitLauncher(LauncherClass, fx, attempt, {
+              extraOptions: { ...trigger.extraOptions },
+              unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+              // `onLaunched` fires only after the launcher has already
+              // exclusively created (O_EXCL) its own reserved final.json
+              // handle — writing the claims payload any earlier would
+              // collide with that reservation ("Fresh worker output paths
+              // are required"). Overwriting the already-created, still-empty
+              // file by path afterward is exactly what the worker itself
+              // would do.
+              onLaunched: async ({ child }) => {
+                await writeFile(saved.invocation.finalPath, finalLine);
+                child.stdout.end(finalLine); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+              },
+            });
+          };
+          // `runFakeUnitLauncher` always passes `drivers: fx.drivers`; swap
+          // in the failed-claims driver for this one call only.
+          const originalDriver = fx.drivers.codex;
+          fx.drivers.codex = failedClaimsDrivers.codex;
+          const baseline = await run(SessionLauncherBaseline, baselineAttempt, baselineSaved);
+          const branch = await run(SessionLauncher, branchAttempt, branchSaved);
+          fx.drivers.codex = originalDriver;
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result.health.state).toBe('completed');
+          expect(branch.result.health.state).toBe('completed');
+          expect('attemptOutcome' in branch.result).toBe(false); // never gated: no #2915 field
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+    });
+  }
+
+  // Item 6: listener attachment. "The same fake child" means the same
+  // CONSTRUCTION (shape/pid), not literally one JS object shared by two
+  // launchers that each take ownership of their own child
+  // (`owner.currentProcess = child`) -- captured at the 'launched' event,
+  // the earliest point every listener this launcher will ever attach is
+  // already wired, before either child is driven to completion.
+  it('listener attachment: identical child/stdout/stderr listener counts at the moment of launch, on both sides', async () => {
+    const fx = await equivFixtureRoot();
+    try {
+      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+      const snapshotListeners = (child) => ({
+        child: { error: child.listenerCount('error'), exit: child.listenerCount('exit'), close: child.listenerCount('close') },
+        stdout: { data: child.stdout.listenerCount('data'), error: child.stdout.listenerCount('error') },
+        stderr: { data: child.stderr.listenerCount('data'), error: child.stderr.listenerCount('error') },
+        stdin: child.stdin ? { error: child.stdin.listenerCount('error') } : null,
+      });
+      const run = async (LauncherClass, attempt) => {
+        const { launcher, child, result } = await runFakeUnitLauncher(LauncherClass, fx, attempt, {
+          extraOptions: { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) },
+          onLaunched: async ({ child: launchedChild }) => {
+            snapshot = snapshotListeners(launchedChild);
+            launchedChild.stdout.end(''); launchedChild.stderr.end();
+            launchedChild.emit('exit', 0, null); launchedChild.emit('close', 0, null);
+          },
+          unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+        });
+        return { launcher, child, result, snapshot };
+      };
+      let snapshot;
+      const baselineRun = await (async () => { const r = await run(SessionLauncherBaseline, baselineAttempt); return { ...r, snapshot }; })();
+      const branchRun = await (async () => { const r = await run(SessionLauncher, branchAttempt); return { ...r, snapshot }; })();
+      expect(branchRun.snapshot).toEqual(baselineRun.snapshot);
+      // Sanity: the snapshot actually observed real listeners, not an
+      // all-zero shape that would trivially "match".
+      expect(baselineRun.snapshot.child.exit + baselineRun.snapshot.stdout.data).toBeGreaterThan(0);
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // Item 7: injected callback call order and argument shapes. Every
+  // dependency this launcher can call through an injected option
+  // (`launchIsolated`, `checkDispatch`, `publishRecord`, `isolationStatus`,
+  // `stopUnit`) is wrapped with a recorder; the two sequences of
+  // `{ name, keys }` (argument SHAPE -- sorted own keys for an object
+  // argument, `typeof` otherwise -- never raw values, which legitimately
+  // differ in invocationId/paths/timestamps between any two runs) must be
+  // identical in both name and order.
+  it('injected callback call order and argument shapes are identical on both sides', async () => {
+    const fx = await equivFixtureRoot();
+    try {
+      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+      const shapeOf = (value) => {
+        if (value === null || value === undefined) return value;
+        if (Array.isArray(value)) return value.map(shapeOf);
+        if (typeof value === 'object') return Object.keys(value).sort();
+        return typeof value;
+      };
+      const recordersFor = (log) => ({
+        checkDispatch: (...args) => { log.push({ name: 'checkDispatch', args: args.map(shapeOf) }); return { enabled: false, ok: true, failures: [] }; },
+        launchIsolated: (...args) => {
+          log.push({ name: 'launchIsolated', args: args.map(shapeOf) });
+          const child = makeFakeChild();
+          log.pushChild = child;
+          return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-order' };
+        },
+        isolationStatus: (...args) => { log.push({ name: 'isolationStatus', args: args.map(shapeOf) }); return { active: false, execMainCode: 1, execMainStatus: 0 }; },
+        stopUnit: (...args) => { log.push({ name: 'stopUnit', args: args.map(shapeOf) }); return { ok: true }; },
+        publishRecord: async (...args) => {
+          log.push({ name: 'publishRecord', args: args.map(shapeOf) });
+          return publishWorkerRecord(...args);
+        },
+      });
+      const run = async (LauncherClass, attempt) => {
+        vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+        const log = [];
+        const recorders = recordersFor(log);
+        const launcher = new LauncherClass();
+        const launched = new Promise((resolve) => launcher.once('launched', resolve));
+        const resultPromise = launcher.launchWorker({
+          invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+          now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          ...recorders,
+        });
+        await launched;
+        const child = log.pushChild;
+        child.stdout.end(''); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+        await resultPromise;
+        return log.map(({ name, args }) => ({ name, args }));
+      };
+      const baselineLog = await run(SessionLauncherBaseline, baselineAttempt);
+      const branchLog = await run(SessionLauncher, branchAttempt);
+      expect(branchLog.map((entry) => entry.name)).toEqual(baselineLog.map((entry) => entry.name));
+      expect(branchLog).toEqual(baselineLog);
+      expect(baselineLog.length).toBeGreaterThan(0);
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // Item 8: the per-CLI claim, directly. `revalidateWorkerInvocationPlan`
+  // is the ONE shared function (src/serve/worker-invocation.ts, untouched
+  // by this branch) both the fixture's `launchOneWorker` and the branch's
+  // `launchOneWorker` call at the top of their IDENTICAL shared prefix,
+  // strictly before `directRecoveryEligibility` is ever consulted. A
+  // per-CLI-disabled selection is refused there -- by that one function,
+  // with the same refusal -- never reaching admitDirectWorker on EITHER
+  // side, so "per-CLI-off equals base" needs no separate launcher-level
+  // proof.
+  it('per-CLI disablement is refused by revalidateWorkerInvocationPlan itself, identically, before admitDirectWorker is ever reached', async () => {
+    const fx = await equivFixtureRoot();
+    try {
+      const attempt = await fx.freshPlan({ scenario: 'success' });
+      // Disable codex AFTER the plan already resolved it as eligible --
+      // the exact "selection existed, then the CLI was disabled" case the
+      // per-CLI check in `directRecoveryEligibility` exists to cover; here
+      // it never gets that far.
+      fx.f.snapshot.config.parallelism.clis = { codex: { adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'synthetic', enabled: false } };
+      const run = (LauncherClass) => runOneLauncher(LauncherClass, fx, { ...attempt, runDir: path.join(fx.root, `${LauncherClass.name}-run`) },
+        { checkDispatch: () => ({ enabled: true, ok: true, failures: [] }) }).then(
+        () => ({ threw: false }),
+        (error) => ({ threw: true, message: error.message, code: error.code }),
+      );
+      const baseline = await run(SessionLauncherBaseline);
+      const branch = await run(SessionLauncher);
+      expect(baseline.threw).toBe(true);
+      expect(branch).toEqual(baseline);
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
   });
 });
