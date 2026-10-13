@@ -57,6 +57,46 @@ export function parseWorkerStatusArgs(args) {
 }
 
 /**
+ * #2915 round 8 (D1.9/C1): strict grammar for the one explicit operator
+ * recovery command for the per-task-chain allowance ledger --
+ * `--ledger-release <taskChainDigest> <n> --capture-root DIR`. There is no
+ * age/pid/liveness inference anywhere in the ledger itself; this is the
+ * only way an uncharged, stranded reservation is ever freed, and it is
+ * documented (see `printHelp`) as being only for a task chain with no
+ * running conductor.
+ */
+export function parseLedgerReleaseArgs(args) {
+  const idx = args.indexOf('--ledger-release');
+  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n> --capture-root DIR';
+  if (idx === -1) throw new Error(usage);
+  const taskChainDigest = args[idx + 1];
+  const attemptRaw = args[idx + 2];
+  if (!taskChainDigest || taskChainDigest.startsWith('--') || !attemptRaw || attemptRaw.startsWith('--')) {
+    throw new Error(usage);
+  }
+  if (!/^[1-9][0-9]*$/.test(attemptRaw)) throw new Error('--ledger-release attempt number must be a positive integer');
+  const attempt = Number(attemptRaw);
+  if (!Number.isSafeInteger(attempt)) throw new Error('--ledger-release attempt number must be a positive integer');
+  const result = { taskChainDigest, attempt, captureRoot: null };
+  const rest = [...args.slice(0, idx), ...args.slice(idx + 3)];
+  const seen = new Set();
+  for (let i = 0; i < rest.length; i++) {
+    const flag = rest[i];
+    if (seen.has(flag)) throw new Error(`Duplicate ledger-release option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--capture-root') {
+      const value = rest[++i];
+      if (!value || value.startsWith('--')) throw new Error('--capture-root requires a value');
+      result.captureRoot = value;
+      continue;
+    }
+    throw new Error(`Unsupported ledger-release option: ${flag}`);
+  }
+  if (!result.captureRoot) throw new Error('--ledger-release requires --capture-root DIR (the persistent ledger root for this task chain)');
+  return result;
+}
+
+/**
  * Parse command line arguments
  * @param {string[]} args
  * @returns {Object}
@@ -311,6 +351,15 @@ USAGE:
                           termination — degraded (--allow-degraded-worker)
                           runs cannot confirm descendant stop and never
                           report exit 0, even when the run looked clean.
+  ralph-external --ledger-release <taskChainDigest> <n> --capture-root DIR
+                          Operator recovery for the per-task-chain allowance
+                          ledger. Refuses if attempt-<n> is already charged;
+                          otherwise frees it and prints its recorded
+                          invocation id. There is no automatic (age/pid/
+                          liveness) reclaim anywhere in the ledger — this is
+                          the only way a stranded, uncharged reservation is
+                          ever released. Only for a task chain with no
+                          running conductor.
 
 ARGUMENTS:
   <objective>             Task objective (required for new loop)
@@ -613,6 +662,24 @@ async function main() {
     const result = await new SessionLauncher().launchWorker(worker);
     console.log(JSON.stringify(result));
     process.exitCode = workerExitCode(result);
+    return;
+  }
+  // #2915 round 8 (D1.9): operator recovery for the allowance ledger --
+  // read-only with respect to everything except the one uncharged slot
+  // named, and performs no provider probing, loop state or Mission work.
+  if (args.includes('--ledger-release')) {
+    let parsed;
+    try { parsed = parseLedgerReleaseArgs(args); }
+    catch (error) { console.error(error.message); process.exitCode = 1; return; }
+    try {
+      const { releaseLedgerSlot } = await import('./session-launcher.mjs');
+      const result = await releaseLedgerSlot(parsed);
+      console.log(JSON.stringify(result));
+      process.exitCode = 0;
+    } catch (error) {
+      console.error(`Ledger release failed: ${error.message}`);
+      process.exitCode = 1;
+    }
     return;
   }
   const options = parseArgs(args);
