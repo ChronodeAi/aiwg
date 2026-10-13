@@ -52,10 +52,19 @@ function exec(command, options = {}) {
     });
     return { success: true, stdout: stdout.trim(), stderr: '' };
   } catch (err) {
+    const capturedStderr = err.stderr?.toString() || '';
+    // #3062 finding 14: on a timeout, err.message carries the enriched
+    // bound explanation (tier/bound/override) — put it first, captured
+    // stderr (e.g. clone progress) after. The previous order ("stderr,
+    // falling back to err.message only when stderr is empty") could hide
+    // a real `long`-tier cutoff behind ordinary command output.
+    const stderr = err.code === 'ETIMEDOUT'
+      ? `${err.message}${capturedStderr ? `\n${capturedStderr}` : ''}`
+      : capturedStderr || err.message;
     return {
       success: false,
       stdout: err.stdout?.toString() || '',
-      stderr: err.stderr?.toString() || err.message
+      stderr
     };
   }
 }
