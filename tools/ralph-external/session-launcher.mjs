@@ -218,6 +218,60 @@ export function terminateChildWithGrace(child, { graceMs = 5000 } = {}) {
   });
 }
 
+/**
+ * ONE function that resolves stop evidence from the isolation layer (#2915
+ * round 8, D4), used by every settlement path below instead of deriving
+ * `confirmedStop` ad hoc from a child-exit observation or a post-spawn
+ * `blocked` outcome (#2915 round 8 critique, finding 5: "stop confirmation
+ * is manufactured from insufficient evidence").
+ *
+ * Returns `{ stop, confirmedStop }` where `stop` is `'none-needed'`,
+ * `'unresolved'`, or `'confirmed'` (the vocabulary a reservation's own
+ * `stop` field uses — see `ScopedFailureBreaker`), and `confirmedStop` is
+ * the boolean every existing `settleDirectWorker`/`reconcileStopEvidence`
+ * caller already expects.
+ *
+ * - `dispatchState: 'never-began'` (the D2 hook was never reached — a
+ *   proven pre-spawn refusal): `none-needed`, never `unresolved` — there is
+ *   nothing to confirm the stop of.
+ * - `dispatchState: 'submission-uncertain'` (a `systemd-run` submission
+ *   itself failed or timed out): dispatch-uncertain, so `unresolved` — the
+ *   absence of a returned child/unit does not prove nothing dispatched.
+ * - `isolationMode: 'systemd-unit'`: the OWNED UNIT (`unitName`) is the
+ *   actual stop/query authority — NEVER the attached `systemd-run`
+ *   transport child. `confirmed` only when the unit itself is inactive
+ *   after the stop request; an unavailable/ambiguous unit query is
+ *   `unresolved`, never a fabricated confirmation.
+ * - `isolationMode: 'degraded'` (including a degraded ATTACHED transport
+ *   wrapper): no native unit query exists, so a confirmed exit of OUR OWN
+ *   direct child — the wrapper, or the worker itself for a non-attached
+ *   launch — is NEVER sufficient evidence that its descendants stopped;
+ *   this always reports `unresolved`/`confirmedStop: false`, even when the
+ *   bounded stop escalation below genuinely confirms the direct child
+ *   exited (see `ScopedFailureBreaker`'s own doc comment on degraded
+ *   blocking markers — this is a documented, accepted limitation, not an
+ *   oversight). The escalation still runs, best-effort, so a live child is
+ *   actually signalled.
+ */
+export async function resolveStopEvidence({ isolationMode, unitName = null, child = null,
+  dispatchState = 'dispatched', graceMs = 5000,
+  terminateChild = terminateChildWithGrace, stopUnit = stopWorkerUnit, getStatus = getWorkerIsolationStatus } = {}) {
+  if (dispatchState === 'never-began') return { stop: 'none-needed', confirmedStop: false };
+  if (dispatchState === 'submission-uncertain') return { stop: 'unresolved', confirmedStop: false };
+  if (isolationMode === 'systemd-unit' && unitName) {
+    try { stopUnit(unitName); } catch { /* best-effort: still re-check status below */ }
+    try {
+      const status = getStatus(unitName);
+      if (status && status.active === false) return { stop: 'confirmed', confirmedStop: true };
+    } catch { /* unit status unavailable -- fall through to unresolved */ }
+    return { stop: 'unresolved', confirmedStop: false };
+  }
+  if (typeof terminateChild === 'function' && child) {
+    try { await terminateChild(child, { graceMs }); } catch { /* best-effort */ }
+  }
+  return { stop: 'unresolved', confirmedStop: false };
+}
+
 /** Execution-time files in the launcher's private directory. Content producers
  * are pure; preview paths remain ${artifact:name}. Workspace locations are a
  * future declaration kind and are refused here. */
@@ -541,16 +595,58 @@ async function launchOneWorker(owner, options) {
     const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
       .map(name => [name, process.env[name]]));
     const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
-    // #2915 review 4 (finding 8): debited IMMEDIATELY before dispatch —
-    // every preparation step above this line can still refund (via
-    // `settleDirectWorker`'s "never debited" check); nothing past this
-    // line can, including a spawn failure or a canary attempt.
-    await debitDirectWorkerAllowance(admission.ledger);
-    outcome = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
+    // #2915 round 8 (D2, replaces the former "debit immediately before this
+    // call" comment): the ledger debit now happens INSIDE the dispatch-
+    // commit hook, which `launchIsolatedWorker` invokes itself after ALL of
+    // its own preparation checks (isolation detection, argument/path
+    // validation, manager-environment resolution) and immediately before
+    // the actual process-start call — never before them, and never here.
+    // This closes the "debiting before the wrapper is premature" gap: a
+    // preparation failure INSIDE `launchIsolatedWorker` (e.g. an
+    // unreachable systemd user manager) now never reaches the debit at
+    // all, exactly like any other pre-spawn refusal above this line.
+    //
+    // The hook also re-admits this exact dispatch through the breaker's own
+    // `beginDispatch -> commitDispatch` bracket (#2915 round 8, D3) — the
+    // single leaf-level consumption of this reservation's launch authority,
+    // replacing the former separate `claimLaunch` call the borrowed-
+    // admission path used to make. `abortDispatch` on any failure (a
+    // rejected `beginDispatch`/`commitDispatch`, or a ledger debit that
+    // throws) leaves nothing started and the reservation in a releasable,
+    // never-dispatched state.
+    const onDispatchCommit = admission.gated ? async () => {
+      const began = admission.breaker.beginDispatch(admission.token,
+        { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+      if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
+      try {
+        if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
+      } catch (error) {
+        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        throw error;
+      }
+      const committed = admission.breaker.commitDispatch(admission.token);
+      if (!committed.ok) {
+        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        throw new Error(`Worker dispatch refused: ${committed.reason}`);
+      }
+    } : undefined;
+    // #2915 round 8: `launchIsolatedWorker`'s dual-mode contract (see its
+    // own doc comment on `_runDispatchCommit`) returns a plain object
+    // synchronously whenever NO hook is given (the not-gated case) — only
+    // `await` it when it genuinely returned a Promise, so a not-gated
+    // attached launch keeps its real child's listeners attached in the
+    // SAME synchronous tick the child is spawned in, exactly as before
+    // this change. Introducing an unconditional microtask tick here let a
+    // real child's own queued events (exit/close) race ahead of
+    // `captureOneWorker`'s own listener attachment in several tests (and
+    // would in production).
+    const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
       command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
       memoryMaxGb: options.memoryMaxGb ?? 4, gate, config: inputs.snapshot.config, isolation,
       allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
-      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
+      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir,
+      ...(onDispatchCommit ? { onDispatchCommit } : {}) });
+    outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
     if (!outcome.child) throw new Error('Worker launch did not return an attached child');
     // #2915 review 4 (finding 3): when THIS attempt is the admitted canary
     // for one or more covering scopes, execution itself must be clipped to
@@ -639,12 +735,15 @@ async function launchOneWorker(owner, options) {
       // EventEmitter with zero listeners -- installed FIRST, before the
       // stop escalation below, which itself can race the same event.
       outcome.child.on('error', () => {});
-      let confirmedStop = false;
-      try {
-        const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
-        const stopped = await terminateChildWithGrace(outcome.child, { graceMs });
-        confirmedStop = stopped.terminated === true;
-      } catch { confirmedStop = false; }
+      // #2915 round 8 (D4): `resolveStopEvidence` is the ONE evidence
+      // source here — for `systemd-unit` mode it stops and queries the
+      // OWNED UNIT (`outcome.unit`), never the attached `systemd-run`
+      // transport child; for `degraded` mode it never fabricates
+      // `confirmedStop: true` from a direct-child exit (see its own doc
+      // comment).
+      const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
+      const { confirmedStop } = await resolveStopEvidence({ isolationMode: outcome.mode,
+        unitName: outcome.unit ?? null, child: outcome.child, graceMs });
       await settleLedger({ kind: 'uncertain', confirmedStop });
       // #2915 review 6 (finding 3d): when this bounded stop escalation DOES
       // confirm termination, also call the explicit reconciliation -- a
@@ -1592,18 +1691,6 @@ async function writeLedgerRecord(dir, name, record, inspect) {
 // (#2915 review 6, finding 4).
 const _inProcessLedger = new Map(); // taskChainDigest -> record (same shape as the on-disk one, minus owner tagging)
 
-// #2915 review 5 (finding 4, "unauthenticated or reused authority"):
-// `planDirectWorkerLaunch`'s borrowed-admission path (below) previously
-// trusted ANY caller-supplied `admission` object unconditionally -- a
-// fabricated stand-in (e.g. `{}`) dispatched exactly as if a real
-// `admitDirectWorker` call had authorized it, and ONE genuine admission
-// object, if passed to two distinct dispatch attempts, launched twice.
-// Every genuine admission `admitDirectWorker` mints is a freshly
-// allocated object -- this WeakSet enforces "one admission authorizes
-// exactly one launch" without retaining any strong reference (admissions
-// are naturally garbage-collected once their invocation concludes).
-const _consumedBorrowedAdmissions = new WeakSet();
-
 export function resetInProcessAllowanceLedger() { _inProcessLedger.clear(); }
 
 function inProcessLedgerRecord(taskChainDigest, maxAttempts) {
@@ -2142,51 +2229,78 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   const scopeKeys = invocation?.selected
     ? await recoveryScopeKeysForInvocation(invocation, { quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier })
     : [];
-  const admission = breaker.admit({ invocationId, scopeKeys });
+  // #2915 round 8 (D3): the selection digest is bound onto the breaker's own
+  // FROZEN reservation token at admission time — never only a separate
+  // mutable field on this function's returned wrapper — so `beginDispatch`
+  // later has an authoritative, breaker-owned value to compare against.
+  const selectionDigest = selectionDigestFor(invocation);
+  const admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
   if (!admission.ok) {
     return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt } };
   }
   let ledger = null;
   let ledgerDiagnostic = null;
   if (taskChainDigest != null && Number.isInteger(maxAttempts) && maxAttempts >= 1) {
-    // #2915 review 6 (finding 4): the SAME worker-writable-root exclusion
-    // `launchOneWorker` already applies to the run directory, applied here
-    // to the ledger's own persistence root — a caller-supplied `captureRoot`
-    // inside any worker-writable location (including the invocation's own
-    // cwd) is never trusted as cross-process storage: a worker with write
-    // access there could delete/replace the ledger record to regrant
-    // allowance. Rather than refuse the whole admission, fall back to the
-    // in-process ledger (real within this one process) and say so in the
-    // returned diagnostics — never silently trust a worker-writable
-    // directory as the persistent root.
-    let safeCaptureRoot = captureRoot;
-    if (safeCaptureRoot != null) {
-      const candidateRoots = [invocation?.cwd, ...(drivers?.[cli]?.qualification?.installation?.workerWritableRoots ?? [])].filter(Boolean);
-      for (const root of candidateRoots) {
-        if (await realBeneath(root, safeCaptureRoot)) {
-          ledgerDiagnostic = 'ledger capture root is inside a worker-writable location; using the in-process ledger instead';
-          safeCaptureRoot = null;
-          break;
+    // #2915 round 8 (C, "admitDirectWorker rolls back its own partial
+    // acquisition"): the breaker already minted a reservation above — root
+    // resolution (the worker-writable-root exclusion below) AND the ledger
+    // reserve itself are now BOTH covered by one try/catch. Any throw here
+    // releases that reservation before propagating, exactly like every
+    // other refused admission; previously only the ledger reserve call was
+    // protected, leaking the reservation on a root-resolution exception
+    // (#2915 round 8 critique, finding "root-resolution exceptions after
+    // internal breaker admission; caller-side cleanup cannot recover an
+    // unreturned handle").
+    try {
+      // #2915 review 6 (finding 4): the SAME worker-writable-root exclusion
+      // `launchOneWorker` already applies to the run directory, applied here
+      // to the ledger's own persistence root — a caller-supplied `captureRoot`
+      // inside any worker-writable location (including the invocation's own
+      // cwd) is never trusted as cross-process storage: a worker with write
+      // access there could delete/replace the ledger record to regrant
+      // allowance. Rather than refuse the whole admission, fall back to the
+      // in-process ledger (real within this one process) and say so in the
+      // returned diagnostics — never silently trust a worker-writable
+      // directory as the persistent root.
+      let safeCaptureRoot = captureRoot;
+      if (safeCaptureRoot != null) {
+        const candidateRoots = [invocation?.cwd, ...(drivers?.[cli]?.qualification?.installation?.workerWritableRoots ?? [])].filter(Boolean);
+        for (const root of candidateRoots) {
+          if (await realBeneath(root, safeCaptureRoot)) {
+            ledgerDiagnostic = 'ledger capture root is inside a worker-writable location; using the in-process ledger instead';
+            safeCaptureRoot = null;
+            break;
+          }
         }
       }
-    }
-    try {
       ledger = await reserveDirectWorkerAllowance({ captureRoot: safeCaptureRoot, taskChainDigest, invocationId, maxAttempts, lock: ledgerLock });
     } catch (error) {
-      // The breaker already minted a reservation above; an exhausted/busy/
-      // invalid ledger must release it before refusing, exactly like any
-      // other refused admission — never leak the breaker-side reservation.
-      try { breaker.settle(admission.token, { kind: 'uncertain' }); } catch { /* never fail a refusal */ }
-      return { gated: true, refused: { code: error.code ?? ALLOWANCE_EXHAUSTED_CODE, blockedBy: [], nextEligibleAt: null,
-        reason: error.message, ledgerDiagnostic } };
+      // Release the breaker-side reservation before deciding how to report
+      // the failure — never leak it regardless of which branch below runs.
+      try { breaker.settle(admission.token, { kind: 'uncertain', confirmedStop: true }); } catch { /* never fail a refusal */ }
+      // Preserve the EXISTING behavior for a ledger-reserve-specific
+      // failure (exhausted/busy/invalid record): report it as an ordinary
+      // refusal, which every caller (`launchOneWorker`, `planDirectWorkerLaunch`,
+      // `src/mcp/tools/worker-invoke.mjs`'s `run()`) already handles
+      // uniformly. Anything else (e.g. an unexpected root-resolution
+      // failure) rethrows — every one of those same callers already treats
+      // a thrown `admitDirectWorker` as fail-closed.
+      if ([ALLOWANCE_EXHAUSTED_CODE, LEDGER_LOCK_BUSY_CODE, LEDGER_RECORD_INVALID_CODE].includes(error?.code)) {
+        return { gated: true, refused: { code: error.code, blockedBy: [], nextEligibleAt: null,
+          reason: error.message, ledgerDiagnostic } };
+      }
+      throw error;
     }
   }
   // `invocationId`/`selectionDigest` (#2915 review 6, finding 1): identity
   // the BORROWED-admission path cross-checks against the invocation it is
   // actually about to dispatch for, so a reservation minted for one
   // invocation/selection cannot authorize a launch for a different one.
+  // These are convenience/diagnostic copies ONLY — the authoritative
+  // comparison (#2915 round 8, D3) happens inside `beginDispatch` against
+  // the breaker's own frozen token fields, never against this object.
   return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier,
-    ledger, invocationId, selectionDigest: selectionDigestFor(invocation), ledgerDiagnostic };
+    ledger, invocationId, selectionDigest, ledgerDiagnostic };
 }
 
 /**
@@ -2223,6 +2337,14 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
     ? refundDirectWorkerAllowance(admission.ledger).then(() => null, (error) => `allowance refund failed: ${error?.message ?? String(error)}`)
     : Promise.resolve(null);
   if (!admission?.gated || !admission.token) return refund;
+  // #2915 round 8: callers that construct and consume the D2 dispatch-commit
+  // hook (`launchOneWorker`'s attached path, `planDirectWorkerLaunch`'s
+  // borrowed/standalone branches) call `abortDispatch` THEMSELVES on a hook
+  // failure — never here. `settleDirectWorker` always finalizes with the
+  // caller's own reported `outcome` through the ordinary `settle()`, exactly
+  // as before: every existing proven-pre-spawn-refusal call site already
+  // reports `{ kind: 'uncertain', confirmedStop: true }`, which `settle()`
+  // handles identically to `abortDispatch` (itself defined in terms of it).
   try { admission.breaker.settle(admission.token, outcome); } catch { /* recovery accounting must never fail a launch */ }
   return refund;
 }
@@ -3085,26 +3207,47 @@ export async function getClaudeVersion() {
  *
  * Poll the SAME native unit-status query every other systemd-unit
  * stop/finish path already uses (`getWorkerIsolationStatus`), bounded by
- * `boundMs`, and settle once the unit itself reports inactive (or the bound
- * elapses) — never settle while the unit may still legitimately be running,
- * and never poll forever. `settleDirectWorker` is idempotent, so an explicit
- * caller settlement with real evidence still wins if it happens first; this
- * is purely a backstop against "forgot to settle", exactly like the
- * direct-child listener it complements.
+ * `boundMs`, and settle once the unit itself reports inactive. `now >=
+ * deadline` (#2915 round 8, D5) is the one deadline comparison this
+ * function makes, consistently with the rest of this module.
+ *
+ * #2915 round 8 (D4, critique "an operator command does not replace a live
+ * observer"): at the bound, this does NOT simply abandon observation with a
+ * bare `settleDirectWorker({ kind: 'uncertain' })` (the former behavior,
+ * which could release a still-live unit's reservation with no stop evidence
+ * at all) — it initiates the SAME bounded isolation-specific stop every
+ * other stop path already uses (`stopUnit`), re-checks the unit's own
+ * retained state exactly once more, and settles with `confirmedStop` set
+ * EXPLICITLY (never omitted) from that evidence: `true` only when the unit
+ * is now genuinely inactive with a terminal exec status, `false` otherwise
+ * — retaining unresolved ownership (a breaker-side stop-evidence marker, for
+ * a reservation this observer's admission happens to hold as a canary)
+ * rather than fabricating a confirmed stop it never observed.
+ * `settleDirectWorker` is idempotent, so an explicit caller settlement with
+ * real evidence still wins if it happens first; this is purely a backstop
+ * against "forgot to settle", exactly like the direct-child listener it
+ * complements.
  */
-function observeStandaloneUnitSettlement(unit, admission, {
-  pollIntervalMs = 2000, boundMs = 300_000, getStatus = getWorkerIsolationStatus,
+export function observeStandaloneUnitSettlement(unit, admission, {
+  pollIntervalMs = 2000, boundMs = 300_000, getStatus = getWorkerIsolationStatus, stopUnit = stopWorkerUnit,
   nowMs = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), unrefTimer = timer => timer?.unref?.(),
 } = {}) {
   const deadline = nowMs() + boundMs;
+  const confirmedFromStatus = status => !!status && status.active === false && [1, 2, 3].includes(status.execMainCode);
   const poll = () => {
     let status = null;
     try { status = getStatus(unit); } catch { status = null; }
     if (status && status.active === false) {
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: [1, 2, 3].includes(status.execMainCode) });
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: confirmedFromStatus(status) });
       return;
     }
-    if (nowMs() >= deadline) { settleDirectWorker(admission, { kind: 'uncertain' }); return; }
+    if (nowMs() >= deadline) {
+      try { stopUnit(unit); } catch { /* best-effort: still re-check status below */ }
+      let after = null;
+      try { after = getStatus(unit); } catch { after = null; }
+      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: confirmedFromStatus(after) });
+      return;
+    }
     unrefTimer(setTimer(poll, pollIntervalMs));
   };
   poll();
@@ -3278,12 +3421,17 @@ export function planDirectWorkerLaunch({
     paths: paths ?? (typeof cwd === 'string' && cwd ? [cwd] : undefined),
   });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
-  const launch = () => launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
+  // `onDispatchCommit` (#2915 round 8, D2) is OPTIONAL and omitted entirely
+  // for the not-gated/disabled-CLI paths below, which must stay
+  // synchronous and byte-for-byte legacy — passing `undefined` through to
+  // `launchIsolatedWorker` is the dual-mode contract that keeps it so.
+  const launch = (onDispatchCommit) => launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
     gate, config, allowDegraded, attached, ownedGroup, onSpawnAttempt,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
     ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
-    ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}) });
+    ...(kind !== undefined ? { kind } : {}), ...(stdin !== undefined ? { stdin } : {}),
+    ...(onDispatchCommit ? { onDispatchCommit } : {}) });
   if (!gate.enabled) return launch(); // not-gated: synchronous, byte-for-byte legacy behaviour
   // #2915 review 4 (finding 7): per-CLI disablement is ALSO checked
   // synchronously, before any admission (borrowed or standalone) — a
@@ -3312,10 +3460,6 @@ export function planDirectWorkerLaunch({
       || (borrowedAdmission.gated && !borrowedAdmission.refused && (!borrowedAdmission.token || !(borrowedAdmission.breaker instanceof ScopedFailureBreaker)))) {
       throw new Error('Borrowed admission is not a value admitDirectWorker returned; refusing to dispatch on unauthenticated authority');
     }
-    if (_consumedBorrowedAdmissions.has(borrowedAdmission)) {
-      throw new Error('Borrowed admission was already used to authorize a launch; each admission authorizes exactly one dispatch');
-    }
-    _consumedBorrowedAdmissions.add(borrowedAdmission);
     // A `gated: false` CLAIM is never trusted on its own: by the time this
     // branch runs, the planner's OWN dispatch/eligibility checks above
     // (`gate.enabled`, per-CLI disablement) have already determined gating
@@ -3332,31 +3476,40 @@ export function planDirectWorkerLaunch({
       return { launched: false, blocked: true, recoveryBlocked: borrowedAdmission.refused.blockedBy,
         diagnostic: `recovery scope open: ${borrowedAdmission.refused.blockedBy.join(', ')}` };
     }
-    // Identity: the invocation/selection this admission was minted for must
-    // match what we are actually about to dispatch -- a reservation reserved
-    // for one task/CLI combination must never authorize launching a
-    // different one. Only compared when BOTH sides resolve a value; a
-    // caller with no known `invocationId`/`invocation` cannot be checked and
-    // is not refused for an absent comparison.
-    if (invocationId !== undefined && borrowedAdmission.invocationId !== undefined && borrowedAdmission.invocationId !== invocationId) {
-      throw new Error('Borrowed admission was minted for a different invocation; refusing to dispatch on unauthenticated authority');
-    }
-    const expectedSelectionDigest = selectionDigestFor(invocation);
-    if (expectedSelectionDigest !== null && borrowedAdmission.selectionDigest !== undefined
-      && borrowedAdmission.selectionDigest !== expectedSelectionDigest) {
-      throw new Error('Borrowed admission was minted for a different selection; refusing to dispatch on unauthenticated authority');
-    }
-    // Authenticate against the breaker's own STORED reservation (reference
-    // identity, not shape) and consume launch ownership on it atomically --
-    // a copied wrapper around the same real token, an already-launched
-    // reservation, or one past its own deadline all fail here even though
-    // they passed every check above.
-    let claimed = false;
-    try { claimed = borrowedAdmission.breaker.claimLaunch(borrowedAdmission.token); } catch { claimed = false; }
-    if (!claimed) {
-      throw new Error('Borrowed admission is not a live, unclaimed reservation on its breaker; refusing to dispatch on unauthenticated authority');
-    }
-    return launch();
+    // #2915 round 8 (D2/D3, replaces the former synchronous `claimLaunch`
+    // call and its paired mutable-wrapper-field pre-checks): identity,
+    // single-use consumption and the deadline are now ALL authenticated by
+    // `beginDispatch` itself, inside the dispatch-commit hook, against the
+    // breaker's own FROZEN token fields — never against this borrowed
+    // wrapper object's own `invocationId`/`selectionDigest` copies (#2915
+    // round 8 critique: "stored identity is only useful if compared against
+    // the actual launch"; a caller that deletes or rewrites those copies on
+    // the wrapper can no longer bypass anything, because they are never
+    // what gets compared). Comparison values are derived HERE from this
+    // exact call's own trusted, resolved `invocation`/`invocationId` —
+    // falling back to the borrowed wrapper's own copies only when this call
+    // was given no fresher identity to derive them from.
+    const resolvedInvocationId = invocationId ?? borrowedAdmission.invocationId ?? null;
+    const resolvedSelectionDigest = selectionDigestFor(invocation) ?? borrowedAdmission.selectionDigest ?? null;
+    const onDispatchCommit = async () => {
+      const began = borrowedAdmission.breaker.beginDispatch(borrowedAdmission.token,
+        { invocationId: resolvedInvocationId, selectionDigest: resolvedSelectionDigest });
+      if (!began.ok) {
+        throw new Error(`Borrowed admission is not a live, unclaimed reservation on its breaker; refusing to dispatch on unauthenticated authority (${began.reason})`);
+      }
+      try {
+        if (borrowedAdmission.ledger) await debitDirectWorkerAllowance(borrowedAdmission.ledger);
+      } catch (error) {
+        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token); } catch { /* best-effort */ }
+        throw error;
+      }
+      const committed = borrowedAdmission.breaker.commitDispatch(borrowedAdmission.token);
+      if (!committed.ok) {
+        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token); } catch { /* best-effort */ }
+        throw new Error(`Worker dispatch refused: ${committed.reason}`);
+      }
+    };
+    return launch(onDispatchCommit);
   }
   // Standalone: the planner performs its own admission. It settles LOCALLY
   // only on a pre-spawn refusal/exception (no observer exists to report a
@@ -3386,14 +3539,33 @@ export function planDirectWorkerLaunch({
       return { launched: false, blocked: true, recoveryBlocked: admission.refused.blockedBy,
         diagnostic: `recovery scope open: ${admission.refused.blockedBy.join(', ')}` };
     }
-    // #2915 review 6 (finding 3, "MCP and standalone planner never
-    // debit"): debited IMMEDIATELY before dispatch, exactly like
-    // `launchOneWorker`'s own debit point — including a spawn failure or a
-    // canary attempt below; nothing past this line can still refund.
-    if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
+    // #2915 round 8 (D2/D3, replaces the former "debit immediately before
+    // this call" comment): the hook below is passed to
+    // `launchIsolatedWorker`, which invokes it AFTER its own preparation
+    // checks and immediately before the real process-start call — never
+    // here, before even the resource/isolation checks `launch()` itself
+    // still has to run. `beginDispatch`/`commitDispatch` consume this
+    // reservation's own launch authority exactly once, at that same leaf
+    // boundary (#2915 round 8, D3).
+    const onDispatchCommit = async () => {
+      const began = admission.breaker.beginDispatch(admission.token,
+        { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+      if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
+      try {
+        if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
+      } catch (error) {
+        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        throw error;
+      }
+      const committed = admission.breaker.commitDispatch(admission.token);
+      if (!committed.ok) {
+        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        throw new Error(`Worker dispatch refused: ${committed.reason}`);
+      }
+    };
     let result;
     try {
-      result = launch();
+      result = await launch(onDispatchCommit);
     } catch (error) {
       settleDirectWorker(admission, { kind: 'uncertain' });
       throw error;
