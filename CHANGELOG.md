@@ -100,6 +100,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   detection markers are the ones current Claude Code actually sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
   `CLAUDE_CODE_DESKTOP_APP_VERSION`) instead of the stale `CLAUDE_CODE_VERSION` and the false-positive
   `ANTHROPIC_API_KEY` (which any non-Claude session with that key set would otherwise match).
+- Pi v3 session history can be imported again: `PiSessionAdapter` declares its schema major so the
+  importer no longer rejects every Pi source as an unsupported schema. Workspace discovery now scopes
+  Pi session discovery to the current workspace's own `--<path>--` subdirectory (matching Pi's own
+  per-working-directory session layout) instead of scanning the whole `~/.pi/agent/sessions` tree, so
+  fixing the schema-major gate does not start importing other workspaces' sessions into the wrong catalog.
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;
