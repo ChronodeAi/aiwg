@@ -2279,6 +2279,42 @@ describe('mcp transport requires a structured WorkerDirectBrief (#2892 F4)', () 
     expect(body.status, JSON.stringify(body)).toBe('failed');
     expect(body.diagnostics).toEqual(['OG_BRIEF_EVIDENCE_CONFLICT']);
   });
+
+  // #2915 round 8 review 8 (A/D2 leftovers): a PRE-DISPATCH exit (here, the
+  // OG_BRIEF_NOT_STRUCTURED refusal above, which settles the admission
+  // before any launch) must still AWAIT `settleDirectWorker`'s returned
+  // promise and fold any diagnostic it carries into the result --
+  // `run()`'s own `captureSettlementPromise`/wrapper mechanism, verified
+  // here by spying on the real `settleDirectWorker` to resolve a
+  // synthetic refund-failure diagnostic string.
+  it('a pre-dispatch exit awaits settlement and surfaces its diagnostic in the result', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    await writeFile(briefPath, 'hello worker'); // plain text -- OG_BRIEF_NOT_STRUCTURED, pre-dispatch
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    const settle = vi.spyOn(sessionLauncherModule, 'settleDirectWorker')
+      .mockResolvedValue('synthetic allowance refund failed: injected for this test');
+    const tools = new Map<string, any>();
+    try {
+      await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+        projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      });
+      const call = tools.get('worker-invoke').handler;
+      const result = await call({
+        operation: 'run', request_id: 'f4-settlement-diagnostic', role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      });
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(body.diagnostics).toEqual(['OG_BRIEF_NOT_STRUCTURED', 'synthetic allowance refund failed: injected for this test']);
+    } finally {
+      settle.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
