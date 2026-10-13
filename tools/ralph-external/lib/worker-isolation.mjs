@@ -302,13 +302,21 @@ export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
  * module already uses, rather than propagating as a rejected promise: a
  * proven pre-spawn refusal is a RESULT here, consistent with the dispatch
  * gate and degraded-without-allowDegraded refusals above it.
+ *
+ * `onAbort` (#2915 round 8 review 8, C3 follow-up), when given, runs ONLY
+ * on that same hook-throws path -- it exists so a caller that had to open
+ * resources (e.g. the non-attached degraded path's stdio file descriptors)
+ * BEFORE this call, so that opening them is itself part of "every
+ * preparation check" the hook boundary assumes already ran, can release
+ * them when the hook aborts the dispatch instead of leaking them.
  */
-function _runDispatchCommit(onDispatchCommit, spawnFn) {
+function _runDispatchCommit(onDispatchCommit, spawnFn, onAbort) {
   if (!onDispatchCommit) return spawnFn();
   return (async () => {
     try {
       await onDispatchCommit();
     } catch (error) {
+      if (onAbort) { try { onAbort(); } catch { /* best-effort cleanup only */ } }
       return { launched: false, blocked: true,
         failures: [{ signal: 'dispatch-commit', reason: error?.message ?? String(error) }] };
     }
@@ -511,6 +519,13 @@ export function launchIsolatedWorker({
         launched: false,
         mode: 'systemd-unit',
         unit,
+        // #2915 round 8 review 8 (C2): a failed or timed-out `systemd-run`
+        // submission does not PROVE the transient unit was never created
+        // (e.g. a 30s wait timeout after the unit itself started) -- carry
+        // this forward as dispatch-UNCERTAIN, never as "never began", so any
+        // caller deriving stop evidence from this result (`resolveStopEvidence`'s
+        // `dispatchState`) resolves to `unresolved`, never a confirmed stop.
+        dispatchState: 'submission-uncertain',
         diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
         gate: resolvedGate,
       };

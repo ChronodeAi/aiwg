@@ -262,7 +262,16 @@ export async function resolveStopEvidence({ isolationMode, unitName = null, chil
     try { stopUnit(unitName); } catch { /* best-effort: still re-check status below */ }
     try {
       const status = getStatus(unitName);
-      if (status && status.active === false) return { stop: 'confirmed', confirmedStop: true };
+      // #2915 round 8 review 8 (C2): `active === false` alone is NOT a
+      // terminal status -- it can also mean the unit never finished
+      // starting, or ExecMainCode has not been set yet. Require the SAME
+      // terminal exec-status codes `captureOneWorker`'s own `finish()`
+      // already uses (`[1, 2, 3]` -- CLD_EXITED/CLD_KILLED/CLD_DUMPED) before
+      // this resolves `confirmed`; `resolveStopEvidence({ active: false,
+      // execMainCode: 0 })` must stay `unresolved`, never a fabricated stop.
+      if (status && status.active === false && [1, 2, 3].includes(status.execMainCode)) {
+        return { stop: 'confirmed', confirmedStop: true };
+      }
     } catch { /* unit status unavailable -- fall through to unresolved */ }
     return { stop: 'unresolved', confirmedStop: false };
   }
@@ -270,6 +279,35 @@ export async function resolveStopEvidence({ isolationMode, unitName = null, chil
     try { await terminateChild(child, { graceMs }); } catch { /* best-effort */ }
   }
   return { stop: 'unresolved', confirmedStop: false };
+}
+
+/**
+ * Optional cancellation/deadline guard for a D2 dispatch-commit hook (#2915
+ * round 8 review 8, C3): `{ deadlineAtMs, nowMs, isCancelled }`. Checked
+ * twice inside the hook — immediately after `beginDispatch` and again
+ * immediately after the ledger debit, right before `commitDispatch` — so a
+ * task whose deadline already passed, or that was cancelled, while the
+ * hook's own (bounded, but non-zero) work ran never reaches the real
+ * process-start call. Throws a plain `Error` on either condition; the
+ * caller's existing `abortDispatch`/refund handling in the hook's own
+ * try/catch applies exactly like any other hook failure.
+ *
+ * Never defaults `nowMs`; a caller that omits `dispatchGuard` entirely (every
+ * existing caller today) gets no guard at all, matching every other
+ * optional D2 hook input — this never changes behavior unless a caller
+ * explicitly opts in.
+ */
+function checkDispatchGuard(dispatchGuard) {
+  if (!dispatchGuard) return;
+  if (typeof dispatchGuard.isCancelled === 'function' && dispatchGuard.isCancelled()) {
+    throw new Error('Worker dispatch refused: cancelled before process start');
+  }
+  if (dispatchGuard.deadlineAtMs != null) {
+    const now = typeof dispatchGuard.nowMs === 'function' ? dispatchGuard.nowMs() : Date.now();
+    if (now >= dispatchGuard.deadlineAtMs) {
+      throw new Error('Worker dispatch refused: deadline exceeded before process start');
+    }
+  }
 }
 
 /** Execution-time files in the launcher's private directory. Content producers
@@ -628,12 +666,20 @@ async function launchOneWorker(owner, options) {
     // rejected `beginDispatch`/`commitDispatch`, or a ledger debit that
     // throws) leaves nothing started and the reservation in a releasable,
     // never-dispatched state.
+    // `options.dispatchGuard` (#2915 round 8 review 8, C3): optional
+    // `{ deadlineAtMs, nowMs, isCancelled }`, checked immediately after
+    // `beginDispatch` and again after the ledger debit, immediately before
+    // `commitDispatch` -- so a task that already blew its deadline or was
+    // cancelled while this hook's own preparation ran never reaches the
+    // real process-start call. Omitted by every existing caller today.
     const onDispatchCommit = admission.gated ? async () => {
       const began = admission.breaker.beginDispatch(admission.token,
         { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
       if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
       try {
+        checkDispatchGuard(options.dispatchGuard);
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
+        checkDispatchGuard(options.dispatchGuard);
       } catch (error) {
         try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
         throw error;
@@ -4220,6 +4266,11 @@ export function planDirectWorkerLaunch({
   isolationStatus,
   unitSettlementPollMs,
   unitSettlementBoundMs,
+  // #2915 round 8 review 8 (C3): optional `{ deadlineAtMs, nowMs,
+  // isCancelled }`, forwarded into both the borrowed and the standalone
+  // dispatch-commit hook below — see `checkDispatchGuard`'s own doc
+  // comment. Omitted by every existing caller today.
+  dispatchGuard,
 } = {}) {
   if (invocation?.stdin === 'brief-json' && stdinPath === undefined) {
     throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
@@ -4308,8 +4359,23 @@ export function planDirectWorkerLaunch({
     // exact call's own trusted, resolved `invocation`/`invocationId` —
     // falling back to the borrowed wrapper's own copies only when this call
     // was given no fresher identity to derive them from.
-    const resolvedInvocationId = invocationId ?? borrowedAdmission.invocationId ?? null;
-    const resolvedSelectionDigest = selectionDigestFor(invocation) ?? borrowedAdmission.selectionDigest ?? null;
+    //
+    // #2915 round 8 review 8 (C6): NEVER falls back to the borrowed
+    // wrapper's own `invocationId`/`selectionDigest` copies. Those are
+    // whatever the wrapper's own caller claims, not an identity THIS call
+    // independently resolved — a borrowed-dispatch caller that omits a
+    // fresher `invocationId` gets refused, not silently authorized to
+    // dispatch under the wrapper's identity. `selectionDigest` is derived
+    // ONLY from this call's own trusted, resolved `invocation` (never from
+    // the wrapper either); `selectionDigestFor(invocation)` legitimately
+    // returns `null` when this call has no resolved selection identity to
+    // bind, which `beginDispatch` accepts as long as it matches the
+    // reservation's own stored binding.
+    if (invocationId == null) {
+      throw new Error('Borrowed admission requires an explicit, independently resolved invocationId; refusing to derive dispatch identity from the borrowed wrapper');
+    }
+    const resolvedInvocationId = invocationId;
+    const resolvedSelectionDigest = selectionDigestFor(invocation);
     const onDispatchCommit = async () => {
       const began = borrowedAdmission.breaker.beginDispatch(borrowedAdmission.token,
         { invocationId: resolvedInvocationId, selectionDigest: resolvedSelectionDigest });
@@ -4317,7 +4383,9 @@ export function planDirectWorkerLaunch({
         throw new Error(`Borrowed admission is not a live, unclaimed reservation on its breaker; refusing to dispatch on unauthenticated authority (${began.reason})`);
       }
       try {
+        checkDispatchGuard(dispatchGuard);
         if (borrowedAdmission.ledger) await debitDirectWorkerAllowance(borrowedAdmission.ledger);
+        checkDispatchGuard(dispatchGuard);
       } catch (error) {
         try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token); } catch { /* best-effort */ }
         throw error;
@@ -4395,7 +4463,9 @@ export function planDirectWorkerLaunch({
         { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
       if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
       try {
+        checkDispatchGuard(dispatchGuard);
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
+        checkDispatchGuard(dispatchGuard);
       } catch (error) {
         try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
         throw error;
@@ -4410,10 +4480,17 @@ export function planDirectWorkerLaunch({
     try {
       result = await launch(onDispatchCommit);
     } catch (error) {
-      settleDirectWorker(admission, { kind: 'uncertain' });
+      // #2915 round 8 review 8 (C10): awaited, never fired-and-forgotten —
+      // a refund failure must reach the caller instead of being silently
+      // discarded (mirroring `launchOneWorker`'s own `settleLedger`).
+      const diagnostic = await settleDirectWorker(admission, { kind: 'uncertain' });
+      if (diagnostic) error.ledgerDiagnostics = [...(error.ledgerDiagnostics ?? []), diagnostic];
       throw error;
     }
-    if (!result?.launched) { settleDirectWorker(admission, { kind: 'uncertain' }); return result; }
+    if (!result?.launched) {
+      const diagnostic = await settleDirectWorker(admission, { kind: 'uncertain' });
+      return diagnostic ? { ...result, ledgerDiagnostics: [...(result.ledgerDiagnostics ?? []), diagnostic] } : result;
+    }
     // #2915 review 5 (finding 2c, "leaked capacity"): a standalone
     // successful launch previously transferred settlement responsibility
     // entirely to the caller via this function's own documented contract

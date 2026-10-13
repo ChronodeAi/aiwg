@@ -1455,7 +1455,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
       expect(first.admission).toBeDefined();
       expect(breaker.reservationPhase(first.admission.token)).toBe('dispatched');
       const second = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission: first.admission,
+        config: dispatchOnConfig, live: healthyLive, admission: first.admission, invocationId: first.admission.invocationId,
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(second.launched).toBe(false);
       expect(second.failures?.[0]?.reason).toMatch(/not a live, unclaimed reservation/);
@@ -2151,7 +2151,8 @@ describe('planDirectWorkerLaunch recovery gate', () => {
         invocationId: 'reuse-1', scopedBreaker: breaker, drivers: {} });
       expect(admission.gated).toBe(true);
       const first = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission,
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: admission.invocationId,
+        invocation: { selected: { cli: 'codex' } },
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(first.launched).toBe(true);
       // #2915 round 8 (D2/D3): single-use consumption is now authenticated
@@ -2159,7 +2160,8 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       // is a RESULT `launchIsolatedWorker` returns (never a thrown error),
       // consistent with every other pre-spawn refusal in this module.
       const second = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission,
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: admission.invocationId,
+        invocation: { selected: { cli: 'codex' } },
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(second.launched).toBe(false);
       expect(second.failures?.[0]?.reason).toMatch(/not a live, unclaimed reservation/);
@@ -2217,14 +2219,16 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       expect(admission.gated).toBe(true);
       const copy = { ...admission }; // fresh wrapper object, SAME token/breaker references
       const first = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission,
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: admission.invocationId,
+        invocation: { selected: { cli: 'codex' } },
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(first.launched).toBe(true);
       // Same result-shaped refusal as the reuse test above -- the copy
       // shares the SAME real token/breaker references, so `beginDispatch`
       // refuses it identically regardless of which wrapper object carries it.
       const second = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission: copy,
+        config: dispatchOnConfig, live: healthyLive, admission: copy, invocationId: copy.invocationId,
+        invocation: { selected: { cli: 'codex' } },
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(second.launched).toBe(false);
       expect(second.failures?.[0]?.reason).toMatch(/not a live, unclaimed reservation/);
@@ -2270,7 +2274,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       // field, derived HERE from the resolved `invocation` this exact call
       // was given.
       const result = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission,
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: admission.invocationId,
         invocation: { selected: { cli: 'claude', inferenceProvider: 'anthropic' } },
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(result.launched).toBe(false);
@@ -2295,7 +2299,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       expect(admission.token.canaryKeys).toEqual([INSTALL]); // this IS the canary, bounded by canaryTimeoutMs
       now += 300_001; // past the canary's own 300s deadline
       const result = await planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
-        config: dispatchOnConfig, live: healthyLive, admission,
+        config: dispatchOnConfig, live: healthyLive, admission, invocationId: admission.invocationId,
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true });
       expect(result.launched).toBe(false);
       expect(result.failures?.[0]?.reason).toMatch(/not a live, unclaimed reservation/);
