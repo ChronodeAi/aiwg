@@ -588,12 +588,37 @@ async function loadAiwgConfigModule() {
   return importImpl('config/aiwg-config.js');
 }
 
+// #2915 round 8 review 8 (D2): every relative specifier this baseline
+// execution actually reaches that has changed since a4085b86a has a
+// FROZEN sibling copy, pinned to that same commit, living flat in this
+// fixture directory (no `lib/` subdirectory here) -- `session-launcher.mjs`,
+// `lib/worker-isolation.mjs` and `lib/provider-adapter.mjs`. Resolving any
+// of these through the current package's `tools/ralph-external/` (as this
+// function used to, unconditionally) would silently run this "baseline"
+// execution against #2915's OWN current, admission-aware code -- the exact
+// gap a token-comparison review found: the fixture BODIES were byte-for-byte
+// a4085b86a, but their own dynamic imports still reached current, changed
+// modules. Any OTHER relative specifier (e.g. `process-monitor.mjs`,
+// `worker-health.mjs`) is unchanged by #2915 (verified by direct token
+// comparison against a4085b86a) and is resolved from the current package
+// tree exactly as before -- freezing an unchanged file would only add
+// maintenance burden for zero behavioral difference.
+const FROZEN_RALPH_EXTERNAL_SIBLINGS = Object.freeze({
+  'session-launcher.mjs': 'session-launcher.mjs',
+  'lib/worker-isolation.mjs': 'worker-isolation.mjs',
+  'lib/provider-adapter.mjs': 'provider-adapter.mjs',
+});
 /** `tools/` ships unchanged at the package root in both dev and the
  * published package (unlike `src/`, which only ships as `dist/src/`), so an
  * AIWG_ROOT-absolute path is the robust way in rather than a relative
  * specifier (whose depth from this file differs between `src/mcp/tools/`
  * and `dist/src/mcp/tools/`). */
 async function loadRalphExternal(relativeFromToolsRoot) {
+  const frozenSibling = FROZEN_RALPH_EXTERNAL_SIBLINGS[relativeFromToolsRoot];
+  if (frozenSibling) {
+    const absolute = path.join(path.dirname(fileURLToPath(import.meta.url)), frozenSibling);
+    return import(pathToFileURL(absolute).href);
+  }
   const absolute = path.join(findOwnPackageRoot(), 'tools/ralph-external', relativeFromToolsRoot);
   return import(pathToFileURL(absolute).href);
 }

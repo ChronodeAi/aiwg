@@ -4219,6 +4219,53 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
   // The literal "per-CLI switch" (`clis.codex.enabled: false`) degenerate
   // case (see describe-block comment): proven ONCE, not per-scenario.
   // -------------------------------------------------------------------------
+  // #2915 round 8 review 8 (D1/D3): a `brief-json` stdin invocation with no
+  // explicit conductor-framed `stdinPath` must refuse BEFORE any spawn on
+  // BOTH sides -- a4085b86a's own `planDirectWorkerLaunch` throws this
+  // precondition before even the dispatch gate runs. The not-gated baseline
+  // shell helper used to bypass the planner entirely and launch instead
+  // (review 8, D section finding 1): "base threw with zero spawns; current
+  // baseline launched once."
+  it('scenario: brief-json stdin with no explicit stdinPath refuses before any spawn on both sides (#2915 round 8 review 8, D1/D3)', async () => {
+    async function runOne(registerFn: any) {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'shell');
+      // Not-gated (same mechanism as `applyGating(f, 'cli-cannot-verify')`
+      // above) -- this exercises the baseline helper this item fixes, not
+      // merely the current (already-guarded) gated planner.
+      f.drivers.codex.canVerifyAttempt = false;
+      const originalBuildInvocation = f.drivers.codex.buildInvocation;
+      f.drivers.codex.buildInvocation = async (input: any) => ({ ...(await originalBuildInvocation(input)), stdin: 'brief-json' });
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-briefjson-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+      return { body: JSON.parse(result.content[0].text), registry };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    // Zero spawns on both sides: `status` is 'uncertain' (the shared
+    // catch-all both baseline implementations land in; see
+    // `continueBaseline`'s own doc comment), never 'blocked' with a launch
+    // diagnostic -- the throw happens BEFORE `launchShellWorkerImpl` ever
+    // returns a `{ launched: ... }` shape for either side to branch on.
+    expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('uncertain');
+    expect(baseline.body.diagnostics.join(' ')).toMatch(/brief-json stdin requires an explicit conductor-framed params file/);
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+  }, 20000);
+
   it('scenario: literal per-CLI switch off (clis.codex.enabled: false) collapses to the same prefix-level resolver refusal on both sides', async () => {
     async function runOne(registerFn: any) {
       const root = await tempRoot();
@@ -4562,6 +4609,60 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
       expect(breaker.admitCalls.length).toBeGreaterThan(0);
       expect(breaker.settleCalls.length).toBeGreaterThan(0);
+    }, 20000);
+
+    // #2915 round 8 review 8 (D3): a GATED run that times out (its own
+    // deadline-stop escalation genuinely fires) must leave no dangling
+    // timer or stop-control handle behind that a FOLLOWING not-gated run
+    // on the SAME registration could observe or be slowed by, and the
+    // registry's own capacity bookkeeping must reflect only genuinely
+    // live work afterward.
+    it('a gated run that times out leaves no leftover timer or control handle, and registry capacity is unaffected for a FOLLOWING not-gated run', async () => {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const f = buildFixture(root, 'shell');
+      const registry = createInvocationRegistry({ maxActive: 2 });
+      const breaker = statefulBreaker();
+      // A short-fused canary deadline so the timeout fires almost
+      // immediately in real wall-clock time (same technique as the C4
+      // latch test above).
+      (breaker as any).admit = (args: any) => ({ ok: true, token: { invocationId: args.invocationId, selectionDigest: args.selectionDigest ?? null,
+        canaryKeys: ['installation:codex'], deadlineMs: Date.now() + 20, seq: 0 } });
+      // A child that never responds to any signal -- the deadline-stop
+      // escalation (SIGTERM, then SIGKILL after its own bounded grace
+      // window) never confirms it, so this settles genuinely `uncertain`
+      // (never terminal; M2 keeps an unconfirmed-termination run LIVE).
+      const neverRespondingChild = () => { const c: any = new EventEmitter(); c.exitCode = null; c.signalCode = null; c.kill = () => {}; return c; };
+      const timeoutLaunch = async () => ({ launched: true, mode: 'degraded', child: neverRespondingChild() });
+
+      const timedOutBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: timeoutLaunch }, registry, f, root, work, briefPath);
+      expect(timedOutBody.status, JSON.stringify(timedOutBody)).toBe('uncertain');
+      const gatedEntry = registry.get(timedOutBody.invocationId);
+      expect(gatedEntry, 'the timed-out run stays LIVE (M2); never silently dropped from the registry').toBeDefined();
+      // No dangling stop-control handle: `continueGated` always clears
+      // `control` once its wait resolves, win or lose the race.
+      expect(gatedEntry?.control).toBeNull();
+      // Capacity reflects exactly one genuinely live run.
+      expect(registry.liveCount()).toBe(1);
+      expect(registry.canStart()).toBe(true); // maxActive: 2, one slot still free
+
+      // A FOLLOWING not-gated run on the SAME registration/registry must
+      // complete normally, unaffected by the first run's own leftover
+      // timeout machinery (no crossed timers, no stolen control handle).
+      f.drivers.codex.canVerifyAttempt = false;
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      const launchSuccess = async (invocation: any) => {
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      };
+      const notGatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
+      // Capacity now reflects the first (still-live/uncertain) run plus the
+      // second, now-terminal one -- exactly as if these two runs had never
+      // interleaved with each other's gating state at all.
+      expect(registry.liveCount()).toBe(1);
+      expect(registry.get(notGatedBody.invocationId)?.terminalAt).not.toBeNull();
     }, 20000);
   });
 });

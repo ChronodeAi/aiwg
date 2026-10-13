@@ -640,6 +640,11 @@ async function defaultLaunchShellWorkerBaseline(invocation, { memoryMaxGb = DEFA
     const { checkWorkerDispatch, launchIsolatedWorker } = await loadRalphExternal('lib/worker-isolation.mjs');
     return {
       planDirectWorkerLaunch: ({ invocation, live, readers, thresholdOverlay, ...launchOptions }) => {
+        // Shared preparation must provide the conductor-framed params file;
+        // never send the raw brief or launch without it for brief-json.
+        if (invocation?.stdin === 'brief-json' && launchOptions.stdinPath === undefined) {
+          throw new Error('brief-json stdin requires an explicit conductor-framed params file (stdinPath)');
+        }
         const cwd = invocation?.cwd;
         const gate = checkWorkerDispatch({ config: launchOptions.config, live, readers, thresholdOverlay,
           paths: typeof cwd === 'string' && cwd ? [cwd] : undefined });
@@ -1977,7 +1982,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       let observation;
       let rawOutput;
       if (invocation.transport === 'shell') {
-        const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config, name: `mcp-${entry.invocationId.slice(0, 8)}`, ...gateInputs });
+        const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
+          name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
+          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched) {
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
