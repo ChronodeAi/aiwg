@@ -1359,18 +1359,6 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       recoverySettled = true;
       try { recoveryModule.settleDirectWorker(admission, outcome); } catch { /* recovery accounting must never fail a run */ }
     };
-    // #2915 review 6 (finding 3, "MCP and standalone planner never
-    // debit"): charges this run's ledger reservation at the SAME point
-    // `spawnAttempted` is set below — the actual dispatch boundary, on
-    // every transport, including a canary or a spawn that itself fails.
-    const debitRecovery = async () => {
-      if (!admission?.gated) return;
-      // A debit that cannot be persisted refuses the attempt, as the shell
-      // launcher does: dispatching uncharged would let the allowance be
-      // exceeded. It runs before `spawnAttempted` is set, so the catch-all
-      // treats the failure as proven pre-spawn and returns the reservation.
-      await recoveryModule.debitDirectWorkerAllowance(admission.ledger);
-    };
     try {
       try {
         outputReservation = await reserveFinalOutput(request.final_output);
@@ -1536,14 +1524,22 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // for native MCP (response completion is not stop proof).
       let confirmedStop = false;
       if (invocation.transport === 'shell') {
-        // #2915 review 5 (finding 2b): set BEFORE calling, not after
-        // inspecting the result -- `launchShellWorkerImpl` itself may
-        // already have side effects (dispatch gate sampling, resource
-        // checks, or a genuine spawn) before it returns or throws, so a
-        // throw from WITHIN it can never be proven to be pre-spawn. From
-        // here on, any exception reaching the outer catch-all is post-spawn
-        // uncertainty.
-        await debitRecovery();
+        // #2915 round 8 (D2, replaces the former `await debitRecovery()`
+        // call here): the ledger debit now happens INSIDE the dispatch-
+        // commit hook `planDirectWorkerLaunch`'s borrowed-admission branch
+        // constructs (session-launcher.mjs), invoked by `launchIsolatedWorker`
+        // itself immediately before the real process-start call — never
+        // here, before the dispatch resource gate inside `launchShellWorkerImpl`
+        // has even run. This closes the "MCP debits before queue/resource
+        // refusals" gap (#2915 round 8 critique, D2): a resource-gate
+        // refusal below now spends nothing.
+        //
+        // `spawnAttempted` is still set BEFORE calling, not after inspecting
+        // the result -- `launchShellWorkerImpl` itself may already have side
+        // effects (dispatch gate sampling, resource checks, or a genuine
+        // spawn) before it returns or throws, so a throw from WITHIN it can
+        // never be proven to be pre-spawn. From here on, any exception
+        // reaching the outer catch-all is post-spawn uncertainty.
         spawnAttempted = true;
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
@@ -1681,13 +1677,19 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           const clippedTimeoutSeconds = Math.min(mcpBinding.timeoutSeconds, canaryRemainingSeconds);
           if (clippedTimeoutSeconds < mcpBinding.timeoutSeconds) mcpBinding = { ...mcpBinding, timeoutSeconds: clippedTimeoutSeconds };
         }
-        // #2915 review 5 (finding 2b): set BEFORE calling, not after
+        // #2915 round 8 (D2, replaces the former `await debitRecovery()`
+        // call here): same reasoning as the shell path above — the ledger
+        // debit now happens inside the dispatch-commit hook, deep inside
+        // `defaultLaunchMcpWorkerProcess` -> `planDirectWorkerLaunch` ->
+        // `launchIsolatedWorker`, immediately before the real MCP worker
+        // SERVER process actually starts.
+        //
+        // `spawnAttempted` is still set BEFORE calling, not after
         // inspecting `result.outcome` -- `callMcpWorkerImpl` itself may
         // already have launched a real MCP server process and sent bytes
         // before it returns or throws (#2892 F2's own "thrown MCP transport
         // error stays LIVE" case is exactly this), so a throw from WITHIN
         // it can never be proven to be pre-spawn.
-        await debitRecovery();
         spawnAttempted = true;
         mayHaveLaunched = true;
         const result = await callMcpWorkerImpl(mcpBinding, mcpServer, {
