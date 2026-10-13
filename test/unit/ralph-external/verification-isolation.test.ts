@@ -208,7 +208,11 @@ describe('HIGH m2 regression: a degraded launch uses the SAME strict env allowli
       if (cmd === 'systemd-run' || cmd === 'systemctl' || cmd === 'readlink') {
         return { status: 1, stdout: '', stderr: 'no systemd', error: null } as ReturnType<typeof realSpawnSync>;
       }
-      return realSpawnSync(cmd, args as string[], opts);
+      // `opts.timeout` is already set by runConfinedCheck() (from
+      // `timeoutMs` above); the explicit fallback is only so the sync
+      // child-process timeout gate (#3062) can prove this call is bounded
+      // without needing to trace that data flow itself.
+      return realSpawnSync(cmd, args as string[], { ...opts, timeout: (opts.timeout as number | undefined) ?? 15_000 });
     }) as typeof realSpawnSync;
 
     const result = runConfinedCheck({
