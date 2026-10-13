@@ -583,4 +583,23 @@ describe('CLI — product-code report vs enforce mode (#3062)', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('ambiguous');
   });
+  it('reports, without failing, an unbounded call in a benchmark source that checked-in evidence pins', async () => {
+    const { loadEvidencePinnedBenchmarkSources, BENCHMARK_CLAIMS_RELATIVE_PATH } = await import('../../../tools/testing/check-sync-child-process-timeouts.mjs');
+    const fsMod = await import('node:fs');
+    const pathMod = await import('node:path');
+    const osMod = await import('node:os');
+    const root = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'aiwg-gate-pinned-'));
+    try {
+      fsMod.mkdirSync(pathMod.dirname(pathMod.join(root, BENCHMARK_CLAIMS_RELATIVE_PATH)), { recursive: true });
+      fsMod.writeFileSync(pathMod.join(root, BENCHMARK_CLAIMS_RELATIVE_PATH), JSON.stringify({
+        claims: [{ id: 'c', sourceFiles: ['tools/benchmarks/pinned.ts', 'src/not-a-benchmark.ts', 'tools/cli/also-not.mjs'] }],
+      }));
+      // Only files under tools/benchmarks/ that a claim lists are exempt.
+      expect([...loadEvidencePinnedBenchmarkSources(root)]).toEqual(['tools/benchmarks/pinned.ts']);
+      fsMod.rmSync(pathMod.join(root, BENCHMARK_CLAIMS_RELATIVE_PATH));
+      expect(loadEvidencePinnedBenchmarkSources(root).size).toBe(0);
+    } finally {
+      fsMod.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

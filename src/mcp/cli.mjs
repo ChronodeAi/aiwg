@@ -140,7 +140,7 @@ async function loadCodexRuntimeAdapter() {
   if (!nodeExistsSync(compiledPath)) {
     throw new Error(
       'aiwg mcp profile login requires the built CLI (missing dist/src/mcp/adapters/codex-runtime.js). ' +
-      'Run `npm run build:cli` in this checkout, or use an installed `aiwg` (`npm install -g aiwg`).',
+      'Use an installed `aiwg` for this command; a source checkout must be built first (see docs/contributing).',
     );
   }
   return import(pathToFileURL(compiledPath).href);

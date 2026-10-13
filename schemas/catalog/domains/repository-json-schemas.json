@@ -2386,7 +2386,7 @@
         {
           "kind": "mirror",
           "path": "agentic/code/plugins/agentic-installer/schemas/v1/setup-manifest.schema.json",
-          "digest": "sha256:dae506f1c4569095392351bc7acefab27c1652f824844673e6ae19c3ae304b66",
+          "digest": "sha256:a0d6c9ee7652e63757f5b69f918943a6bca4147ad51bea01c9bae919ebf6a197",
           "generated": true
         }
       ]

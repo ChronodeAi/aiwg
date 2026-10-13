@@ -825,23 +825,54 @@ export function checkProduct(root) {
 
   const registryProblems = validateAllowList(allowList, attachedMarkerCountByKey);
 
+  const pinnedSources = loadEvidencePinnedBenchmarkSources(root);
   const violations = [];
   const allowListed = [];
+  const evidencePinned = [];
   for (const finding of allFindings) {
     const key = finding.anchor ? allowListKey(finding.file, finding.anchor) : null;
     const entry = key ? allowList.entries.find((e) => allowListKey(e.file, e.anchor) === key) : undefined;
     if (entry && entry.kind === 'interactive') allowListed.push(finding);
+    else if (pinnedSources.has(finding.file)) evidencePinned.push(finding);
     else violations.push(finding);
   }
 
-  return { violations, allowListed, registryProblems };
+  return { violations, allowListed, evidencePinned, registryProblems };
+}
+
+export const BENCHMARK_CLAIMS_RELATIVE_PATH = 'docs/storage/evidence/claims.v1.json';
+
+/**
+ * Benchmark scripts whose bytes are digest-pinned by checked-in benchmark
+ * evidence. Editing one, even to add a bound or a marker comment, makes the
+ * storage-claims gate reject the evidence as stale until the benchmark is
+ * re-measured, so they cannot be converted in an ordinary change. They are
+ * reported, not failed. The exemption is narrow by construction: the file
+ * must be under tools/benchmarks/ AND be listed as a source of a claim in
+ * the evidence registry. Bound the call the next time the benchmark is
+ * re-measured (#3078).
+ */
+export function loadEvidencePinnedBenchmarkSources(root) {
+  const pinned = new Set();
+  let registry;
+  try {
+    registry = JSON.parse(fs.readFileSync(path.join(root, BENCHMARK_CLAIMS_RELATIVE_PATH), 'utf8'));
+  } catch {
+    return pinned;
+  }
+  for (const claim of Array.isArray(registry?.claims) ? registry.claims : []) {
+    for (const file of Array.isArray(claim?.sourceFiles) ? claim.sourceFiles : []) {
+      if (typeof file === 'string' && file.startsWith('tools/benchmarks/')) pinned.add(file);
+    }
+  }
+  return pinned;
 }
 
 function topLevelDir(relFile) {
   return relFile.split('/')[0];
 }
 
-function printProductReport({ violations, allowListed }, { enforced }) {
+function printProductReport({ violations, allowListed, evidencePinned = [] }, { enforced }) {
   const counts = new Map();
   for (const dir of PRODUCT_DIRS) counts.set(dir, { violations: 0, allowListed: 0 });
   for (const finding of violations) {
@@ -862,6 +893,9 @@ function printProductReport({ violations, allowListed }, { enforced }) {
   }
   const total = [...counts.values()].reduce((sum, c) => sum + c.violations, 0);
   console.log(`  total unbounded (non-allow-listed): ${total}`);
+  if (evidencePinned.length > 0) {
+    console.log(`  evidence-pinned benchmark sources (reported, not enforced): ${evidencePinned.map((f) => `${f.file}:${f.line}`).join(', ')}`);
+  }
 }
 
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
