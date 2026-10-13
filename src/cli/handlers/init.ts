@@ -4,9 +4,19 @@
  * Implements `aiwg init` — the first-run wizard that creates
  * `.aiwg/aiwg.config` for the current project.
  *
- * Prompts:
- *   1. Which AI provider toolchains does this project target?
- *   2. Would you like to add any scripts? (optional)
+ * Prompts, and the argument that answers each one directly (#3062):
+ *   1. Which AI provider toolchains does this project target? → `--providers <list>`
+ *   2. Would you like to add default scripts (deploy/doctor/sync)? → `--default-scripts true|false`
+ *   3. Add a custom script (name + command)? → `--script <name>=<command>` (repeatable)
+ *   4. Enable direct worker dispatch? → `--worker-dispatch enable|decline`
+ *
+ * With a terminal attached, any of these given directly skips that
+ * question — only genuinely missing values are still asked. Without one,
+ * omitted inputs fall back to their documented defaults (`claude`, default
+ * scripts on) rather than erroring, since those defaults are always safe to
+ * apply headless. `--non-interactive`/`--yes` force the non-interactive
+ * path even with a terminal attached. `--dry-run` never writes anything,
+ * including the baseline config itself.
  *
  * Runs automatically on first `aiwg use` when no config exists.
  * Can also be run explicitly to reconfigure.
@@ -39,6 +49,15 @@ import {
 } from '../../models/worker-dispatch-offer.js';
 import { EXIT_CODES } from '../errors.js';
 import type { ParallelismConfig, SetupConfig } from '../../config/aiwg-config.js';
+import { isInteractive } from '../env.js';
+import {
+  requireFlagValue,
+  collectFlagValues,
+  parseBooleanFlagValue,
+  parseListFlagValue,
+  parseKeyValueEntry,
+  MissingFlagValueError,
+} from '../flag-parsing.js';
 
 const PROVIDER_LABELS: Record<string, string> = {
   antigravity: 'Google Antigravity .agents/',
@@ -120,10 +139,48 @@ function renderWorkerDispatchHintIfApplicable(parallelism: ParallelismConfig | u
   if (offer.shouldOffer) ui.dim(`  ${workerDispatchOfferHintWithArg(offer.detected)}`);
 }
 
-/** Extract a flag's value, e.g. `--worker-dispatch enable` -> `'enable'`. */
-function flagValue(args: string[], name: string): string | undefined {
-  const idx = args.indexOf(name);
-  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
+/**
+ * Parse the remaining wizard-input arguments (#3062 review item 10):
+ * `--providers`, `--default-scripts`, and repeatable `--script`. Every one
+ * is parsed through {@link requireFlagValue}/{@link collectFlagValues}
+ * (review item 11) — a flag present without a usable value throws
+ * {@link MissingFlagValueError} rather than silently resolving to "not
+ * given".
+ */
+interface InitArgInputs {
+  workerDispatchArg: WorkerDispatchArgValue | undefined;
+  /** `--providers claude,codex` — undefined means "ask or default", matching the `--providers` flag `aiwg setup project` already uses. */
+  providersArg: string[] | undefined;
+  /** `--default-scripts true|false` — undefined means "ask or default". */
+  defaultScriptsArg: boolean | undefined;
+  /** `--script <name>=<command>` (repeatable) — always honored regardless of `defaultScriptsArg`. */
+  scriptPairs: Record<string, string>;
+}
+
+function parseInitArgInputs(args: string[]): InitArgInputs {
+  const workerDispatchArg = parseWorkerDispatchArg(requireFlagValue(args, '--worker-dispatch'));
+
+  const rawProviders = parseListFlagValue(requireFlagValue(args, '--providers'));
+  const providersArg = rawProviders?.map((entry) => {
+    const canonical = normalizeProviderDefinitionId(entry);
+    if (!canonical || canonical === 'generic' || !VALID_PROVIDERS.includes(canonical as typeof VALID_PROVIDERS[number])) {
+      throw new Error(`--providers: unknown provider '${entry}' (valid: ${VALID_PROVIDERS.join(', ')})`);
+    }
+    return canonical;
+  });
+  if (providersArg && providersArg.length === 0) {
+    throw new Error('--providers requires at least one provider name');
+  }
+
+  const defaultScriptsArg = parseBooleanFlagValue(requireFlagValue(args, '--default-scripts'), '--default-scripts');
+
+  const scriptPairs: Record<string, string> = {};
+  for (const entry of collectFlagValues(args, '--script')) {
+    const [name, command] = parseKeyValueEntry(entry, '--script');
+    scriptPairs[name] = command;
+  }
+
+  return { workerDispatchArg, providersArg, defaultScriptsArg, scriptPairs };
 }
 
 /** One-line description of what an explicit `--worker-dispatch` choice would write. */
@@ -190,27 +247,32 @@ export const initHandler: CommandHandler = {
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const force = ctx.args.includes('--force');
-    // Treat a missing stdin TTY as non-interactive so piped/backgrounded
-    // invocations never attempt to create a readline interface. This is a
-    // single authoritative check — downstream code MUST NOT re-derive
+    // `--non-interactive`/`--yes` are this command's own explicit flags for
+    // the one shared interactive decision (#3062 review item 12) — honored
+    // ahead of (and regardless of) the environment-only checks `isInteractive`
+    // otherwise applies (TTY, TERM, CI). Downstream code MUST NOT re-derive
     // interactive-ness from process.stdin.isTTY again.
-    const nonInteractive =
-      ctx.args.includes('--non-interactive') ||
-      ctx.args.includes('--yes') ||
-      !process.stdin.isTTY ||
-      !process.stdout.isTTY ||
-      process.env['CI'] === 'true';
+    const explicitNonInteractive = ctx.args.includes('--non-interactive') || ctx.args.includes('--yes');
+    const nonInteractive = !isInteractive(explicitNonInteractive);
     const projectDir = ctx.cwd;
 
     // `--worker-dispatch enable|decline` answers the worker-dispatch offer
     // directly (#3062), with or without a terminal, and is honored even when
     // fewer than two worker CLIs are detected — an explicit choice overrides
-    // the presence-only detection gate.
+    // the presence-only detection gate. `--providers`/`--default-scripts`/
+    // `--script` answer the remaining wizard inputs the same way (review
+    // item 10). Every flag is parsed strictly (review item 11): present
+    // without a usable value is a usage error, raised here before any
+    // preflight check, read, or write.
     let workerDispatchArg: WorkerDispatchArgValue | undefined;
+    let providersArg: string[] | undefined;
+    let defaultScriptsArg: boolean | undefined;
+    let scriptPairs: Record<string, string>;
     try {
-      workerDispatchArg = parseWorkerDispatchArg(flagValue(ctx.args, '--worker-dispatch'));
+      ({ workerDispatchArg, providersArg, defaultScriptsArg, scriptPairs } = parseInitArgInputs(ctx.args));
     } catch (err) {
-      return { exitCode: EXIT_CODES.USAGE, message: err instanceof Error ? err.message : String(err) };
+      const message = err instanceof MissingFlagValueError ? `${err.message}.` : err instanceof Error ? err.message : String(err);
+      return { exitCode: EXIT_CODES.USAGE, message };
     }
 
     ui.blank();
@@ -221,7 +283,9 @@ export const initHandler: CommandHandler = {
     const existing = await readAiwgConfig(projectDir);
     if (existing && !force) {
       ui.info(`Config already exists: ${getConfigPath(projectDir)}`);
-      await writeNormalizedAiwgMd(projectDir);
+      // #3062 review item 18: `--dry-run` must write nothing at all, not
+      // just skip the worker-dispatch increment below.
+      if (!ctx.dryRun) await writeNormalizedAiwgMd(projectDir);
       console.log(`  Providers: ${existing.providers.join(', ')}`);
       const scriptCount = Object.keys(existing.scripts).length;
       if (scriptCount > 0) {
@@ -271,22 +335,25 @@ export const initHandler: CommandHandler = {
     let providers: string[];
     let scripts: Record<string, string> = {};
     let workerDispatchDecision: WorkerDispatchDecision | undefined;
+    const DEFAULT_SCRIPTS = { deploy: 'aiwg use all', doctor: 'aiwg doctor', sync: 'aiwg sync' };
 
     if (nonInteractive) {
-      // Non-interactive: use defaults
-      providers = ['claude'];
-      scripts = {
-        deploy: 'aiwg use all',
-        doctor: 'aiwg doctor',
-        sync: 'aiwg sync',
-      };
+      // Non-interactive: an explicit `--providers`/`--default-scripts`
+      // answers the corresponding wizard input directly (review item 10);
+      // anything not supplied keeps its prior default.
+      providers = providersArg ?? ['claude'];
+      const includeDefaultScripts = defaultScriptsArg ?? true;
+      scripts = { ...(includeDefaultScripts ? DEFAULT_SCRIPTS : {}), ...scriptPairs };
       if (workerDispatchArg) {
         workerDispatchDecision = resolveWorkerDispatchDecisionForNewConfig(workerDispatchArg, ctx.dryRun);
       } else {
         renderWorkerDispatchHintIfApplicable(undefined, undefined);
       }
     } else {
-      // Interactive wizard
+      // Interactive wizard — skip a prompt whenever its argument already
+      // answered it (review item 10/12: "with a terminal we can skip steps
+      // for any params provided and only provide interaction when we are
+      // missing a value").
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
@@ -295,17 +362,19 @@ export const initHandler: CommandHandler = {
       try {
         // Thread ctx.signal through every prompt so Ctrl-C during the wizard
         // cancels cleanly instead of being absorbed by readline (POC #926).
-        providers = await askProviders(rl, ctx.signal);
+        providers = providersArg ?? await askProviders(rl, ctx.signal);
 
         console.log('');
-        const addScripts = await askYesNo(rl, '  Add default scripts (deploy, doctor, sync)? [Y/n]: ', true, ctx.signal);
-        if (addScripts) {
-          scripts = {
-            deploy: 'aiwg use all',
-            doctor: 'aiwg doctor',
-            sync: 'aiwg sync',
-          };
+        const includeDefaultScripts = defaultScriptsArg !== undefined
+          ? defaultScriptsArg
+          : await askYesNo(rl, '  Add default scripts (deploy, doctor, sync)? [Y/n]: ', true, ctx.signal);
+        scripts = includeDefaultScripts ? { ...DEFAULT_SCRIPTS } : {};
 
+        if (Object.keys(scriptPairs).length > 0) {
+          // `--script` already answered "add a custom script?" and its
+          // name/command sub-prompts — never ask any of the three.
+          scripts = { ...scripts, ...scriptPairs };
+        } else if (includeDefaultScripts) {
           const addCustom = await askYesNo(rl, '  Add a custom script? [y/N]: ', false, ctx.signal);
           if (addCustom) {
             const name = await askString(rl, '  Script name: ', '', ctx.signal);
@@ -341,6 +410,18 @@ export const initHandler: CommandHandler = {
       config.parallelism = { ...config.parallelism, worker_dispatch: true };
     } else if (workerDispatchDecision?.kind === 'decline') {
       config.setup = { ...config.setup, worker_dispatch_offer: 'declined' };
+    }
+
+    // #3062 review item 18: `--dry-run` writes nothing at all — not even
+    // the baseline config — rather than only skipping the worker-dispatch
+    // increment. Report what would be written instead.
+    if (ctx.dryRun) {
+      ui.blank();
+      ui.dim(`  Would create ${getConfigPath(projectDir)} (--dry-run writes nothing).`);
+      ui.dim(`  Providers: ${providers.join(', ')}`);
+      if (Object.keys(scripts).length > 0) ui.dim(`  Scripts: ${Object.keys(scripts).join(', ')}`);
+      ui.blank();
+      return { exitCode: 0 };
     }
 
     // Populate deployedTo from disk for entries with empty deployedTo (#721)

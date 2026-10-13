@@ -319,7 +319,9 @@ describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
       expect(cfg!.parallelism?.worker_dispatch).toBe(true);
     });
 
-    it('--dry-run never applies the argument, on a new config (pre-existing: `aiwg init --dry-run` still writes the rest of the baseline config unconditionally; only the worker-dispatch field is in scope here)', async () => {
+    // Review item 18 (#3062 follow-up): `aiwg init --dry-run` now writes
+    // nothing at all on a new config — not just the worker-dispatch field.
+    it('--dry-run writes nothing at all on a new config, even with --worker-dispatch', async () => {
       detected.clis = ['codex', 'muse'];
       const { initHandler } = await import('../../../../src/cli/handlers/init.js');
       const result = await initHandler.execute(makeCtx(tmpDir, ['--dry-run', '--worker-dispatch', 'enable']));
@@ -327,8 +329,7 @@ describe('aiwg init — worker dispatch opt-in offer (#3050)', () => {
 
       const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
       const cfg = await readAiwgConfig(tmpDir);
-      expect(cfg!.parallelism?.worker_dispatch).not.toBe(true);
-      expect(cfg!.setup?.worker_dispatch_offer).toBeUndefined();
+      expect(cfg).toBeNull();
     });
 
     it('--dry-run writes nothing even with the argument, on an existing config', async () => {
