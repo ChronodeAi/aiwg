@@ -92,6 +92,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   skills, rules, hooks) instead of the whole directory, preserving Claude Desktop/Code-owned state
   (`worktrees/`, `settings.local.json`, `settings.json` and its backups, `launch.json`). Every other
   provider target keeps its previous whole-directory/whole-file removal behavior unchanged.
+- `aiwg doctor --provider grok-build` no longer silently skips the context/memory firewall scan;
+  `grok-build` is now in both the doctor provider label map and the firewall's own provider registry.
+  The `grokbot.mjs` provider header comment now reads stable instead of experimental.
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;
