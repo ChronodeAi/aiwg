@@ -1359,6 +1359,18 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       recoverySettled = true;
       try { recoveryModule.settleDirectWorker(admission, outcome); } catch { /* recovery accounting must never fail a run */ }
     };
+    // #2915 review 6 (finding 3, "MCP and standalone planner never
+    // debit"): charges this run's ledger reservation at the SAME point
+    // `spawnAttempted` is set below — the actual dispatch boundary, on
+    // every transport, including a canary or a spawn that itself fails.
+    const debitRecovery = async () => {
+      if (!admission?.gated) return;
+      // A debit that cannot be persisted refuses the attempt, as the shell
+      // launcher does: dispatching uncharged would let the allowance be
+      // exceeded. It runs before `spawnAttempted` is set, so the catch-all
+      // treats the failure as proven pre-spawn and returns the reservation.
+      await recoveryModule.debitDirectWorkerAllowance(admission.ledger);
+    };
     try {
       try {
         outputReservation = await reserveFinalOutput(request.final_output);
@@ -1531,6 +1543,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // throw from WITHIN it can never be proven to be pre-spawn. From
         // here on, any exception reaching the outer catch-all is post-spawn
         // uncertainty.
+        await debitRecovery();
         spawnAttempted = true;
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
@@ -1674,6 +1687,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // before it returns or throws (#2892 F2's own "thrown MCP transport
         // error stays LIVE" case is exactly this), so a throw from WITHIN
         // it can never be proven to be pre-spawn.
+        await debitRecovery();
         spawnAttempted = true;
         mayHaveLaunched = true;
         const result = await callMcpWorkerImpl(mcpBinding, mcpServer, {

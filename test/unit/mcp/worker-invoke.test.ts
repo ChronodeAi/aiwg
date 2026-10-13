@@ -27,6 +27,7 @@ import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../s
 
 // @ts-expect-error — .mjs untyped
 import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
+import { resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
@@ -64,7 +65,14 @@ const roots: string[] = [];
 // Some sandbox hosts refuse native child stdio pipes (EPERM). Framing unit
 // tests still run there; the supervised-process check needs actual pipes.
 const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8', timeout: 10000 }).stdout === 'ok';
-afterEach(async () => { vi.unstubAllEnvs(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
+// #2915 review 6 (finding 3): `run()` now actually debits the shared
+// in-process allowance ledger (previously it only reserved, never
+// charged), so distinct test cases that resolve to the SAME task-chain
+// digest (same role/task/group/brief content) would otherwise accumulate
+// real charges against each other across this file's many gated runs —
+// reset between tests so each test's own admission/allowance assertions
+// stay independent, exactly like `roots` is cleaned up below.
+afterEach(async () => { vi.unstubAllEnvs(); resetInProcessAllowanceLedger(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
 
 async function tempRoot() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
@@ -1270,6 +1278,104 @@ function closingChild(exitCode: number) {
   setImmediate(() => child.emit('close', exitCode));
   return child;
 }
+
+// #2915 review 6 (finding 3, "MCP and standalone planner never debit"):
+// `run()` previously reserved allowance through `admitDirectWorker` but
+// never called `debitDirectWorkerAllowance` — five fresh requests for the
+// same task chain with `maxAttempts: 1` each dispatched and completed
+// through the real queue/admission/launch pipeline. These regression
+// tests drive the real `run()` handler (via `registerWorkerInvokeToolset`)
+// end to end, proving only the first of five requests for the SAME task
+// chain actually reaches the injected launcher on both transports this
+// bridge supports.
+describe('allowance ledger debits at the actual dispatch boundary (#2915 review 6, finding 3)', () => {
+  it('five fresh shell-transport requests with maxAttempts 1 dispatch exactly one', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const f = buildFixture(root, 'shell');
+    f.snapshot.config.parallelism.retry = { maxAttempts: 1 };
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    let dispatches = 0;
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async (invocation: any) => {
+        dispatches += 1;
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const bodies: any[] = [];
+    for (let n = 0; n < 5; n += 1) {
+      const finalPath = path.join(work, `final-shell-${n}.json`);
+      // Same role/task/group/brief every time -- the same task-chain digest,
+      // exactly the "same task, retried" shape the allowance ledger governs.
+      const result = await call({
+        operation: 'run', request_id: `ledger-shell-${n}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+      });
+      bodies.push(JSON.parse(result.content[0].text));
+    }
+    expect(dispatches).toBe(1);
+    expect(bodies[0].status, JSON.stringify(bodies[0])).toBe('completed');
+    for (const body of bodies.slice(1)) {
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(body.diagnostics.join(' ')).toMatch(/ALLOWANCE_EXHAUSTED/);
+    }
+  });
+
+  it('five fresh native-MCP requests with maxAttempts 1 dispatch exactly one', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.config.parallelism!.retry = { maxAttempts: 1 };
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: config } }),
+    };
+    // `resolveWorkerInvocation` itself refuses (OG_PIN_MISMATCH) unless a
+    // structured brief's own `output.resultPath` equals the REQUEST's
+    // `final_output` exactly -- so, unlike the shell-transport test above,
+    // every one of these 5 calls must reuse the SAME `final_output` (the
+    // SAME brief bytes, hence the SAME task-chain digest). `reserveFinalOutput`
+    // exclusively creates that path on request 1 and is never released on a
+    // 'completed' run (mcp transport never writes through `finalPath`
+    // itself); removing the empty placeholder before each later call
+    // isolates the one thing this test actually probes -- ledger admission
+    // -- from that unrelated path-reservation mechanism.
+    const finalOutput = path.join(work, 'final.json');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+    });
+    const call = tools.get('worker-invoke').handler;
+    const bodies: any[] = [];
+    for (let n = 0; n < 5; n += 1) {
+      if (n > 0) await rm(finalOutput, { force: true });
+      const result = await call({
+        operation: 'run', request_id: `ledger-mcp-${n}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      });
+      bodies.push(JSON.parse(result.content[0].text));
+    }
+    expect(bodies[0].status, JSON.stringify(bodies[0])).toBe('completed');
+    for (const body of bodies.slice(1)) {
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(body.diagnostics.join(' ')).toMatch(/ALLOWANCE_EXHAUSTED/);
+    }
+  }, 20000);
+});
 
 // ---------------------------------------------------------------------------
 // T-OG-17: real fake stdio MCP worker — success, isError, disconnect, and
