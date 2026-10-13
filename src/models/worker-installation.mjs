@@ -8,6 +8,21 @@ import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
 import { satisfies, valid, validRange } from 'semver';
 
+// Recovery metadata belongs to the installed driver identity, never its shape.
+const workerRecoveryCapabilities = new WeakMap();
+
+/** Register capabilities for an installed or caller-supplied driver. Keep the
+ * original driver when passing it to readers; copies must be registered anew. */
+export function registerWorkerRecoveryCapabilities(driver, capabilities) {
+  workerRecoveryCapabilities.set(driver, Object.freeze({ ...capabilities }));
+  return driver;
+}
+
+/** Gated readers use this single lookup; ordinary driver properties are ignored. */
+export function getWorkerRecoveryCapabilities(driver) {
+  return workerRecoveryCapabilities.get(driver) ?? null;
+}
+
 // Shipped negative-suite definition. Evidence producers hash this definition,
 // including case semantics and permission rows; arbitrary fixture labels cannot
 // qualify an installation. Passed observations still come from the trusted host.
@@ -854,22 +869,6 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         extractFinal: output => instance.parseOutput(output),
         ...(typeof instance.parseWorkerFinal === 'function'
           ? { parseWorkerFinal: (output, options) => instance.parseWorkerFinal(output, options) } : {}),
-        // #2915 follow-up: the attempt-terminal sibling of `parseWorkerFinal`
-        // above, forwarded the same way, plus the capability signal
-        // `admitDirectWorker` uses to treat a CLI whose adapter can never
-        // verify a final (Warp, Copilot: `supportsAttemptVerification()
-        // === false`) as never eligible for recovery-breaker gating.
-        ...(typeof instance.parseWorkerAttemptFinal === 'function'
-          ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
-        // #2915 review 4 (finding 7): an adapter with NEITHER an explicit
-        // capability method NOR any `parseWorkerAttemptFinal` at all
-        // (OpenHuman: a standalone class, not a `ProviderAdapter` subclass,
-        // with no attempt parser) must default to INELIGIBLE, never `true`
-        // — a canary admitted for such a CLI could never report a
-        // verified success regardless of what actually happened.
-        canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
-          ? !!instance.supportsAttemptVerification()
-          : typeof instance.parseWorkerAttemptFinal === 'function',
         ...(typeof instance.createHealthObserver === 'function'
           ? { createHealthObserver: options => instance.createHealthObserver(options) } : {}),
         qualification: { adapter, adapterId: adapter.id, cliVersion: binding.cliVersion, boundary: binding.boundary,
@@ -886,6 +885,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };
+      registerWorkerRecoveryCapabilities(drivers[cli], {
+        ...(typeof instance.parseWorkerAttemptFinal === 'function'
+          ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
+        // Adapters with neither an explicit signal nor an attempt parser cannot
+        // verify success (e.g. OpenHuman); never admit an unreachable canary.
+        canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
+          ? !!instance.supportsAttemptVerification()
+          : typeof instance.parseWorkerAttemptFinal === 'function',
+      });
       installations[cli] = structuredClone(binding);
       Object.assign(resolvedRegistry, candidateRegistry);
     } catch { /* One missing/changed installation cannot grant authority or hide qualified peers. */ }

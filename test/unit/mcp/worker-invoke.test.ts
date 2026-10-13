@@ -11,6 +11,7 @@
  */
 import { createHash } from 'node:crypto';
 import { spawnSync, spawn as nodeSpawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
@@ -21,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
+import { registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
@@ -70,6 +72,13 @@ const HEALTHY_GATE_LIVE = Object.freeze({
  * example to prove a failing signal still refuses, overrides the default. */
 function registerWorkerInvokeToolset(server: any, options: Record<string, unknown> = {}) {
   return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
+}
+
+// Tests that reset Vitest's module cache must register with the same current
+// installation-owner instance that the bridge's dynamic imports will read.
+async function registerRecoveryCapabilities(driver: object, capabilities: { canVerifyAttempt?: boolean }) {
+  const { registerWorkerRecoveryCapabilities } = await import('../../../src/models/worker-installation.mjs');
+  return registerWorkerRecoveryCapabilities(driver, capabilities);
 }
 
 const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.stringify(v)).digest('hex')}`;
@@ -732,7 +741,7 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     const admittingBreaker = { admit: () => { throw new Error('must never be reached: this CLI is not-gated'); } };
     const invocation = { selected: { cli: 'warp', inferenceProvider: 'warp' } };
     const result = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
-      invocation, invocationId: 'inv-warp-1', scopedBreaker: admittingBreaker, drivers: { warp: { canVerifyAttempt: false } } });
+      invocation, invocationId: 'inv-warp-1', scopedBreaker: admittingBreaker, drivers: { warp: registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false }) } });
     expect(result).toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
   });
 
@@ -3340,7 +3349,7 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
     // the resolver ALSO treats as "disabled", producing no launchable plan
     // at all) -- so this is the one deterministic way to reach a genuinely
     // not-gated `run()` while still exercising the real launch/wait path.
-    f.drivers.codex.canVerifyAttempt = false;
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
     let capturedOptions: any;
     const tools = new Map<string, any>();
     await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
@@ -3417,7 +3426,7 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
     // "pre-spawn exception before any launch attempt" test (#2915 review 5,
     // finding 2b), which throws before `admission` is ever assigned at all
     // and correctly keeps its own blocked/uncertain split.
-    f.drivers.codex.canVerifyAttempt = false;
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
     // `resolveWorkerInvocation` itself calls `mcpRegistry.get` once (its own
     // mcp-profile check, `src/serve/worker-invocation.ts`), BEFORE `run()`
     // ever reaches admission — that call, and `buildStructuredBrief`'s own
@@ -3458,7 +3467,7 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
     const workShell = path.join(rootShell, 'work'); await mkdir(workShell, { recursive: true });
     await writeFile(path.join(rootShell, 'brief.md'), 'hello');
     const fShell = buildFixture(rootShell, 'shell');
-    fShell.drivers.codex.canVerifyAttempt = false;
+    registerWorkerRecoveryCapabilities(fShell.drivers.codex, { canVerifyAttempt: false });
     let capturedShellOptions: any;
     const shellTools = new Map<string, any>();
     await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { shellTools.set(name, { config, handler }); } }, {
@@ -3480,7 +3489,7 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
     const finalMcp = path.join(workMcp, 'final.json');
     const fMcp = buildFixture(rootMcp, 'mcp');
     fMcp.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
-    fMcp.drivers.codex.canVerifyAttempt = false;
+    registerWorkerRecoveryCapabilities(fMcp.drivers.codex, { canVerifyAttempt: false });
     fMcp.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'fixture-only' }) };
     await buildStructuredBrief(fMcp, { role: 'coding', task: 'implementation', group: 'workers',
       brief: briefMcp, workdir: workMcp, final_output: finalMcp, transport: 'mcp' });
@@ -3519,7 +3528,7 @@ describe('disabled dispatch equals main through the real launch pipeline (#2915 
     const configPath = path.join(root, 'fixture-config.json');
     await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
     const f = buildFixture(root, 'mcp');
-    f.drivers.codex.canVerifyAttempt = false;
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
     f.drivers.codex.mcpRegistry = {
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
@@ -4116,7 +4125,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs current 
     const briefPath = path.join(root, 'brief.md');
     const finalOutput = path.join(work, 'final.json');
     const f = buildFixture(root, 'mcp');
-    f.drivers.codex.canVerifyAttempt = false; // meaningless/ignored by the baseline fixture; disables gating on the branch
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false }); // meaningless/ignored by the baseline fixture; disables gating on the branch
     if (!throwOnLoad) {
       // `buildFixture`'s own default `mcpRegistry.get()` (a valid stdio
       // entry) is what the resolver PROBE below needs to succeed; swap in
@@ -4164,7 +4173,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs current 
       const briefPath = path.join(root, 'brief.md');
       const finalOutput = path.join(work, 'final.json');
       const f = buildFixture(root, 'mcp');
-      f.drivers.codex.canVerifyAttempt = false;
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'unused-never-spawned' }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
         brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
@@ -4256,7 +4265,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
     if (gating === 'global-off') {
       f.snapshot.config.parallelism!.worker_dispatch = false;
     } else {
-      f.drivers.codex.canVerifyAttempt = false;
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
     }
   }
 
@@ -4632,7 +4641,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       // Not-gated (same mechanism as `applyGating(f, 'cli-cannot-verify')`
       // above) -- this exercises the baseline helper this item fixes, not
       // merely the current (already-guarded) gated planner.
-      f.drivers.codex.canVerifyAttempt = false;
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       const originalBuildInvocation = f.drivers.codex.buildInvocation;
       f.drivers.codex.buildInvocation = async (input: any) => ({ ...(await originalBuildInvocation(input)), stdin: 'brief-json' });
       const registry = createInvocationRegistry({ maxActive: 4 });
@@ -4744,7 +4753,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const briefPath = path.join(root, 'brief.md');
       const finalOutput = path.join(work, 'final.json');
       const f = buildFixture(root, 'mcp');
-      f.drivers.codex.canVerifyAttempt = false;
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-recovery-baseline/oversized-whitespace-worker.mjs')] }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
@@ -4788,7 +4797,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const configPath = path.join(root, 'fixture-config.json');
       await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
       const f = buildFixture(root, 'mcp');
-      f.drivers.codex.canVerifyAttempt = false;
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       f.profile.mcp.serverRef = 'fixture-server-equiv-queue';
       f.profile.mcp.sessionIsolation = 'serialized';
       f.drivers.codex.mcpProfile = { servers: ['fixture-server-equiv-queue'] };
@@ -4964,7 +4973,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const saturatedAdmitCalls = admit.mock.calls.length;
 
       // 3. A NOT-GATED run on the SAME registration/registry/breaker.
-      f.drivers.codex.canVerifyAttempt = false;
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       const notGatedBody = await runOneRequest();
       expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
       // The saturated breaker was NEVER consulted by the not-gated run --
@@ -4977,7 +4986,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
       const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
       const f = buildFixture(root, 'shell');
-      f.drivers.codex.canVerifyAttempt = false; // not-gated FIRST
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false }); // not-gated FIRST
       const registry = createInvocationRegistry({ maxActive: 8 });
       const { breaker, admit, settle } = statefulBreaker();
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
@@ -4997,7 +5006,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       // 2. Flip to gated and run again on the SAME registration/registry/
       // breaker -- it must admit/settle normally, exactly as if the prior
       // not-gated run had never happened.
-      f.drivers.codex.canVerifyAttempt = undefined;
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: undefined });
       const gatedBody = await runOneRequest();
       expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
       expect(admit.mock.calls.length).toBeGreaterThan(0);
@@ -5047,7 +5056,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       // A FOLLOWING not-gated run on the SAME registration/registry must
       // complete normally, unaffected by the first run's own leftover
       // timeout machinery (no crossed timers, no stolen control handle).
-      f.drivers.codex.canVerifyAttempt = false;
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
       const launchSuccess = async (invocation: any, options: any) => {
         await commitInterleaved(options);
@@ -5068,6 +5077,9 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
 
 describe('review 10 frozen fixture ownership', () => {
   it('C1: importing the frozen adapter and running its default input loader never loads the current installation owner', async () => {
+    // The unchanged authorization helper imports current config in source mode.
+    // Supply the real helper separately to isolate the frozen loader graph.
+    const repoAccess = await import('../../../src/policy/repo-access.js');
     vi.resetModules();
     const currentOwnerLoaded = vi.fn(() => { throw new Error('current installation owner entered the frozen graph'); });
     vi.doMock('../../../src/models/worker-installation.mjs', currentOwnerLoaded);
@@ -5102,7 +5114,7 @@ describe('review 10 frozen fixture ownership', () => {
       const baseline = await import('../../fixtures/ralph-recovery-baseline/worker-invoke.mjs');
       const tools = new Map<string, any>();
       await baseline.registerWorkerInvokeToolset({ registerTool(name: string, _config: any, handler: any) { tools.set(name, handler); } }, {
-        projectRoot: root, workerWorktreesRoot: work, now: () => new Date(f.now),
+        projectRoot: root, workerWorktreesRoot: work, now: () => new Date(f.now), repoAccess,
         launchShellWorker: async (inv: any) => {
           await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: { version: 1, status: 'completed', summary: 'ok',
             claims: [], artifacts: [], checks: [], limitations: [] } })}\n`);
@@ -5119,5 +5131,98 @@ describe('review 10 frozen fixture ownership', () => {
       vi.doUnmock('../../../src/models/worker-installation.mjs');
       vi.resetModules();
     }
+  });
+});
+
+describe('review 11 populated default driver equivalence', () => {
+  it('P2: real Codex default-loaded drivers have exactly the frozen Reflect.ownKeys and retain gated capabilities', async () => {
+    vi.resetModules();
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const root = await tempRoot();
+    const cwd = path.join(root, 'project');
+    await mkdir(cwd);
+    const loaded: any[] = [];
+    const owners: any[] = [];
+    try {
+      for (const baseline of [true, false]) {
+        const owner = baseline
+          ? await import('../../fixtures/ralph-recovery-baseline/worker-installation.mjs')
+          : await import('../../../src/models/worker-installation.mjs');
+        owners.push(owner);
+        const f = workerResolutionFixture();
+        f.snapshot.config.parallelism!.worker_dispatch = false;
+        const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
+        adapter.id = 'codex';
+        const binding = f.snapshot.installations.codex;
+        const profile = adapter.invocationProfiles![binding.profile];
+        const policy = f.snapshot.models.defaults.workerSelection;
+        const { qualificationDigest } = await import('../../../src/models/qualification-digest.mjs');
+        const { requiredWorkerControls } = await import('../../../src/models/provider-policy.js');
+        const controls = requiredWorkerControls({ policy });
+        // Synthetic host evidence and module binding only. The installed factory
+        // constructs the actual current/frozen Codex adapter, with no driver stub.
+        for (const control of Object.values(profile.controls)) Object.assign(control, { support: 'external', mapping: 'synthetic host boundary' });
+        binding.boundary = { kind: 'os', identity: 'fixture:host', digest: qualificationDigest('fixture:host'), controls };
+        const configDir = path.join(root, baseline ? 'baseline' : 'current');
+        await mkdir(configDir, { mode: 0o700 });
+        vi.stubEnv('AIWG_CONFIG', configDir);
+        const adapterPath = path.resolve(baseline ? 'test/fixtures/ralph-recovery-baseline/codex-adapter.mjs' : 'tools/ralph-external/lib/codex-adapter.mjs');
+        // Preserve the adapter body; only route its relative imports from the
+        // private installed copy back to the current/frozen dependency graph.
+        const source = (await readFile(adapterPath, 'utf8')).replace(
+          /from '(\.[^']+)'/g, (_match, relative) => `from '${pathToFileURL(path.resolve(path.dirname(adapterPath), relative)).href}'`);
+        await writeFile(path.join(configDir, 'driver.mjs'), source, { mode: 0o600 });
+        await writeFile(path.join(configDir, 'package.json'), JSON.stringify({ name: 'fixture-codex', version: adapter.adapterVersion, type: 'module' }), { mode: 0o600 });
+        const installation: any = {
+          adapter, profile: binding.profile, cliVersion: binding.cliVersion, policy,
+          cwd, workerWritableRoots: [cwd], boundary: binding.boundary,
+          effectiveConfigDigest: qualificationDigest(policy), accountScope: binding.accountScope,
+          executable: process.execPath, runtimeFiles: [path.join(configDir, 'driver.mjs')], environment: {},
+          modules: [{ reference: adapter.runtimeDriver, packageRoot: configDir, packageName: 'fixture-codex',
+            packageVersion: adapter.adapterVersion, modulePath: 'driver.mjs', interfaceVersion: 1,
+            sha256: `sha256:${createHash('sha256').update(source).digest('hex')}`, adapterIds: ['codex'], platforms: ['linux'] }],
+        };
+        // Inspection needs only the identity for this external-control fixture;
+        // defer importing the real adapter until the installation loader does so.
+        const scope = await owner.inspectWorkerInstallation({ getName: () => 'codex' }, installation);
+        profile.installationQualification = { scopeDigest: scope.scopeDigest, fixtureDigest: await owner.workerNegativeFixtureDigest(),
+          verifiedAt: new Date().toISOString(), evidenceRef: 'fixture:synthetic-host-only' };
+        installation.evidence = { ...profile.installationQualification,
+          cases: Object.fromEntries(Object.keys(owner.workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
+        await writeFile(path.join(configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
+          registrations: [{ cli: 'codex', binding, adapter, installation }] }), { mode: 0o600 });
+        const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : await import('../../../src/config/aiwg-config.js');
+        const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : await import('../../../src/models/config-loader.js');
+        const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : await import('../../../src/providers/provider-inventory.js');
+        const discovery = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js') : await import('../../../src/models/model-discovery.js');
+        const spies = [
+          vi.spyOn(config, 'readAiwgConfig').mockResolvedValue(f.snapshot.config),
+          vi.spyOn(ConfigLoader.prototype, 'load').mockResolvedValue(f.snapshot.models),
+          vi.spyOn(ConfigLoader.prototype, 'getInputDigests').mockReturnValue(f.snapshot.modelDigests),
+          vi.spyOn(inventory, 'collectProviderInventory').mockResolvedValue({} as any),
+          vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockResolvedValue(f.snapshot.catalog),
+        ];
+        try {
+          const { loadWorkerInputs } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/cli/handlers/models.js') : await import('../../../src/cli/handlers/models.js');
+          loaded.push(await loadWorkerInputs({ cwd, frameworkRoot: process.cwd(), args: [], rawArgs: [] } as any));
+        } finally { for (const spy of spies) spy.mockRestore(); }
+      }
+      expect(Object.keys(loaded[0].drivers)).toEqual(['codex']);
+      expect(Object.keys(loaded[1].drivers)).toEqual(['codex']);
+      const driver = loaded[1].drivers.codex;
+      expect(Reflect.ownKeys(driver)).toEqual(Reflect.ownKeys(loaded[0].drivers.codex));
+      expect(Reflect.ownKeys(driver)).not.toContain('parseWorkerAttemptFinal');
+      expect(Reflect.ownKeys(driver)).not.toContain('canVerifyAttempt');
+      const capabilities = owners[1].getWorkerRecoveryCapabilities(driver);
+      expect(capabilities.canVerifyAttempt).toBe(true);
+      expect(owners[1].getWorkerRecoveryCapabilities({ ...driver })).toBeNull();
+      const launcher = await import('../../../tools/ralph-external/session-launcher.mjs');
+      const eligibility = { invocation: { selected: { cli: 'codex' } }, drivers: loaded[1].drivers, config: loaded[1].snapshot.config };
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: false }).gated).toBe(false);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: true }).gated).toBe(true);
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      await expect(capabilities.parseWorkerAttemptFinal(JSON.stringify(claims), { format: 'json',
+        observation: { transport: 'shell', status: 'completed', attemptOutcome: 'succeeded', exitCode: 0 } })).resolves.toEqual(claims);
+    } finally { vi.resetModules(); }
   });
 });

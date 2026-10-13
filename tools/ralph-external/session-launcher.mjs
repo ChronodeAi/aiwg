@@ -48,6 +48,9 @@ import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerH
 import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
+// Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
+const { getWorkerRecoveryCapabilities } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+
 /**
  * Kernel-verified containment gate for any candidate worker identity,
  * whether it came from a worker-writable disk record (`worker-identity.json`)
@@ -731,7 +734,7 @@ async function launchOneWorker(owner, options) {
       launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options, brief, stdinBytes, runDir,
       canaryDeadlineMs, canaryNowMs,
       // #2915 review 4 (finding 7): recovery-specific attempt parsing
-      // (`driver.parseWorkerAttemptFinal`) and `result.attemptOutcome`
+      // (`getWorkerRecoveryCapabilities(driver).parseWorkerAttemptFinal`) and `result.attemptOutcome`
       // publication only run when recovery is actually gated — disabled
       // dispatch must do no new work at all, matching origin/main exactly
       // (a disabled-dispatch probe still observed the new parser called
@@ -1115,9 +1118,10 @@ async function captureOneWorker(owner, ctx) {
       // against `processLevelOutcome` (never confirmed termination) so a
       // degraded or MCP attempt's strict final can validate even though
       // `termination` can never reach 'confirmed' for it.
-      if (recoveryGated && driver.parseWorkerAttemptFinal) {
+      const recovery = recoveryGated ? getWorkerRecoveryCapabilities(driver) : null;
+      if (recovery?.parseWorkerAttemptFinal) {
         try {
-          const claims = await driver.parseWorkerAttemptFinal(extracted ? output : finalBytes, {
+          const claims = await recovery.parseWorkerAttemptFinal(extracted ? output : finalBytes, {
             format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
             status: processLevelOutcome === 'succeeded' ? 'completed' : 'failed',
             attemptOutcome: processLevelOutcome, exitCode: result.exitCode } });
@@ -3271,7 +3275,7 @@ export function directRecoveryEligibility({ gateEnabled, config, invocation, dri
   // a success that is structurally unreachable, not merely unlikely — so
   // this CLI is never eligible for recovery-breaker gating at all, exactly
   // like the global/per-CLI dispatch switch being off.
-  if (cli && drivers?.[cli]?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
+  if (cli && getWorkerRecoveryCapabilities(drivers?.[cli])?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
   // #2915 round 8 review 8 (A/D6, "directRecoveryEligibility constructs/
   // reads shared breaker state"): this must decide from its OWN inputs
   // only — never call the `getDirectRecoveryBreaker()` accessor, which

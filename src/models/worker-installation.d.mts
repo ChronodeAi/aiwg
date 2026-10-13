@@ -27,3 +27,10 @@ export function boundedVersionProbe(
   maxBytes: number,
   versionPattern: string | undefined,
 ): Promise<{ rawBanner: string; version: string }>;
+
+export interface WorkerRecoveryCapabilities {
+  canVerifyAttempt?: boolean;
+  parseWorkerAttemptFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
+}
+export function registerWorkerRecoveryCapabilities<T extends object>(driver: T, capabilities: WorkerRecoveryCapabilities): T;
+export function getWorkerRecoveryCapabilities(driver: object | undefined | null): Readonly<WorkerRecoveryCapabilities> | null;

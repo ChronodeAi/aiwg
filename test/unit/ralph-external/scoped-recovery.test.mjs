@@ -43,6 +43,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 import os from 'node:os';
 import path from 'node:path';
+import { getWorkerRecoveryCapabilities, registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
@@ -201,6 +202,13 @@ function uncertain(breaker, scopeKeys, invocationId) {
 // before the admit()/settle() redesign.
 function failEvidence(breaker, evidence, scopeKeys = [evidence.scopeKey]) {
   return fail(breaker, scopeKeys, evidence.invocationId, evidence);
+}
+
+function copyRecoveryDriver(driver, overrides) {
+  const copy = { ...driver, ...overrides };
+  const capabilities = getWorkerRecoveryCapabilities(driver);
+  if (capabilities) registerWorkerRecoveryCapabilities(copy, capabilities);
+  return copy;
 }
 
 describe('RecoveryPolicy explicit bounds', () => {
@@ -2856,7 +2864,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // itself throws synchronously BEFORE `captureOneWorker`'s own
       // `finish()` closure is even wired, escaping its normal
       // never-throws-just-resolves contract entirely.
-      const throwingDriver = { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } };
+      const throwingDriver = copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } });
       await expect(launchEnoent({ codex: throwingDriver })).rejects.toThrow('synthetic capture-setup failure');
       // Not leaked: the canary reservation WAS settled (uncertain) -- it is
       // not a stuck, never-settled reservation (the old defect this test
@@ -2902,7 +2910,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // A REAL, genuinely long-running child -- unlike the ENOENT fixture
       // above, which exits (and so proves nothing about the stop
       // escalation) on its own within a few milliseconds.
-      const throwingDriver = { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } };
+      const throwingDriver = copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } });
       await expect(launcher.launchWorker({
         invocationPath, runDir: path.join(fx.root, 'stop-escalation-run'),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: throwingDriver } }, now: fx.f.request.now,
@@ -3020,8 +3028,10 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         stdin: 'closed', envNames: realProfile.envAllowlist }),
       extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
         return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
-      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
     };
+    registerWorkerRecoveryCapabilities(successDriver, {
+      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
+    });
     try {
       for (let n = 0; n < 3; n += 1) {
         const result = await launchEnoent();
@@ -3114,8 +3124,10 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         stdin: 'closed', envNames: realProfile.envAllowlist }),
       extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
         return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
-      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
     };
+    registerWorkerRecoveryCapabilities(successDriver, {
+      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
+    });
     try {
       for (let n = 0; n < 3; n += 1) {
         const result = await launchEnoent();
@@ -3194,11 +3206,13 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         stdin: 'closed', envNames: realProfile.envAllowlist }),
       extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
         return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
+    };
+    registerWorkerRecoveryCapabilities(successDriver, {
       parseWorkerAttemptFinal: async (_output, options) => {
         if (options?.observation?.attemptOutcome !== 'succeeded') throw new Error('attempt not succeeded');
         return { status: 'completed' };
       },
-    };
+    });
     try {
       for (let n = 0; n < 3; n += 1) {
         const result = await launchEnoent();
@@ -4797,7 +4811,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
     {
       name: 'canVerifyAttempt:false (worker_dispatch on)',
       extraOptions: { checkDispatch: () => ({ enabled: true, ok: true, failures: [] }) },
-      setup: (fx) => { fx.drivers.codex.canVerifyAttempt = false; },
+      setup: (fx) => { registerWorkerRecoveryCapabilities(fx.drivers.codex, { canVerifyAttempt: false }); },
     },
   ];
 
@@ -4873,7 +4887,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
     it.each([
       { name: 'global off', config: { parallelism: { worker_dispatch: false } } },
       { name: 'CLI off', config: { parallelism: { worker_dispatch: true, clis: { codex: { enabled: false } } } } },
-      { name: 'unverifiable adapter', drivers: { codex: { canVerifyAttempt: false } } },
+      { name: 'unverifiable adapter', drivers: { codex: registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false }) } },
       { name: 'explicit breaker override', scopedBreaker: null },
     ])('C3: disabled standalone submission failure equals baseline ($name)', ({ name, ...disabled }) => {
       const options = { name: 'r10-disabled', command: process.execPath, args: [], cwd: process.cwd(), memoryMaxGb: 4,
@@ -5089,12 +5103,28 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
     expect(Object.keys(new SessionLauncher()).sort()).toEqual(Object.keys(new SessionLauncherBaseline()).sort());
   });
 
+  it('gated readers use registered capabilities only, and driver copies require registration', () => {
+    const driver = { canVerifyAttempt: true };
+    const keys = Reflect.ownKeys(driver);
+    registerWorkerRecoveryCapabilities(driver, { canVerifyAttempt: false });
+    expect(Reflect.ownKeys(driver)).toEqual(keys);
+    const decide = candidate => directRecoveryEligibility({ gateEnabled: true,
+      invocation: { selected: { cli: 'codex' } }, drivers: { codex: candidate } });
+    expect(decide(driver)).toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+    const copy = { ...driver };
+    expect(getWorkerRecoveryCapabilities(copy)).toBeNull();
+    registerWorkerRecoveryCapabilities(copy, getWorkerRecoveryCapabilities(driver));
+    expect(decide(copy)).toEqual(decide(driver));
+    expect(getWorkerRecoveryCapabilities({ canVerifyAttempt: false })).toBeNull();
+    expect(decide({ canVerifyAttempt: false }).gated).toBe(true);
+  });
+
   it('directRecoveryEligibility is the complete decision: global switch, per-CLI switch, canVerifyAttempt, explicit breaker override', () => {
     expect(directRecoveryEligibility({ gateEnabled: false }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true, config: { parallelism: { clis: { codex: { enabled: false } } } },
       invocation: { selected: { cli: 'codex' } } }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true, invocation: { selected: { cli: 'codex' } },
-      drivers: { codex: { canVerifyAttempt: false } } }).gated).toBe(false);
+      drivers: { codex: registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false }) } }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: null }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true }).gated).toBe(true);
   });
@@ -5255,7 +5285,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     {
       name: 'canVerifyAttempt:false (worker_dispatch on)',
       extraOptions: { checkDispatch: () => ({ enabled: true, ok: true, failures: [] }) },
-      setup: (fx) => { fx.drivers.codex.canVerifyAttempt = false; },
+      setup: (fx) => { registerWorkerRecoveryCapabilities(fx.drivers.codex, { canVerifyAttempt: false }); },
     },
   ];
 
@@ -5533,7 +5563,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         try {
           const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
-          const throwingDrivers = { codex: { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } } };
+          const throwingDrivers = { codex: copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } }) };
           const spawnedChildren = [];
           const launchIsolated = () => { const child = makeFakeChild(); spawnedChildren.push(child);
             return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-capture' }; };
@@ -5601,7 +5631,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
           const claims = { version: 1, status: 'failed', summary: 'worker claims failure despite a clean exit', claims: [], artifacts: [], checks: [], limitations: [] };
           const finalLine = `${JSON.stringify({ type: 'result', result: claims })}\n`;
-          const failedClaimsDrivers = { codex: { ...fx.drivers.codex, parseWorkerFinal: async () => ({ status: 'failed', summary: 'synthetic' }) } };
+          const failedClaimsDrivers = { codex: copyRecoveryDriver(fx.drivers.codex, { parseWorkerFinal: async () => ({ status: 'failed', summary: 'synthetic' }) }) };
           const run = async (LauncherClass, attempt, saved) => {
             return runFakeUnitLauncher(LauncherClass, fx, attempt, {
               extraOptions: { ...trigger.extraOptions },
