@@ -59,16 +59,21 @@ export function parseWorkerStatusArgs(args) {
 /**
  * #2915 round 8 (D1.9/C1): strict grammar for the one explicit operator
  * recovery command for the per-task-chain allowance ledger --
- * `--ledger-release <taskChainDigest> <n>|policy --capture-root DIR`. There
- * is no age/pid/liveness inference anywhere in the ledger itself; this is
- * the only way an uncharged, stranded reservation (or, for `policy`, a
- * chain whose policy publish itself crashed and is now otherwise empty) is
- * ever freed, and it is documented (see `printHelp`) as being only for a
- * task chain with no running conductor.
+ * `--ledger-release <taskChainDigest> <n>|correction <n>|policy --capture-root DIR`.
+ * There is no age/pid/liveness inference anywhere in the ledger itself;
+ * this is the only way an uncharged, stranded reservation (or, for
+ * `policy`, a chain whose policy publish itself crashed and is now
+ * otherwise empty) is ever freed, and it is documented (see `printHelp`)
+ * as being only for a task chain with no running conductor.
+ *
+ * `correction <n>` (#2915 round 8 review 8, C9): the SAME refusal rules as
+ * `<n>` (an attempt), for a stranded, uncharged `correction-<n>` slot --
+ * refuses if `correction-<n>.charged` exists, otherwise unlinks it and
+ * reports its recorded invocation id, exactly like releasing an attempt.
  */
 export function parseLedgerReleaseArgs(args) {
   const idx = args.indexOf('--ledger-release');
-  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n>|policy --capture-root DIR';
+  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n>|correction <n>|policy --capture-root DIR';
   if (idx === -1) throw new Error(usage);
   const taskChainDigest = args[idx + 1];
   const targetRaw = args[idx + 2];
@@ -76,8 +81,16 @@ export function parseLedgerReleaseArgs(args) {
     throw new Error(usage);
   }
   let target;
+  let consumed = 3;
   if (targetRaw === 'policy') {
     target = { kind: 'policy' };
+  } else if (targetRaw === 'correction') {
+    const correctionRaw = args[idx + 3];
+    if (!correctionRaw || !/^[1-9][0-9]*$/.test(correctionRaw)) throw new Error(usage);
+    const attempt = Number(correctionRaw);
+    if (!Number.isSafeInteger(attempt)) throw new Error(usage);
+    target = { kind: 'correction', attempt };
+    consumed = 4;
   } else {
     if (!/^[1-9][0-9]*$/.test(targetRaw)) throw new Error(usage);
     const attempt = Number(targetRaw);
@@ -85,7 +98,7 @@ export function parseLedgerReleaseArgs(args) {
     target = { kind: 'attempt', attempt };
   }
   const result = { taskChainDigest, target, captureRoot: null };
-  const rest = [...args.slice(0, idx), ...args.slice(idx + 3)];
+  const rest = [...args.slice(0, idx), ...args.slice(idx + consumed)];
   const seen = new Set();
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i];
@@ -362,11 +375,17 @@ USAGE:
                           Operator recovery for the per-task-chain allowance
                           ledger. Refuses if attempt-<n> is already charged;
                           otherwise frees it and prints its recorded
-                          invocation id. There is no automatic (age/pid/
-                          liveness) reclaim anywhere in the ledger — this is
-                          the only way a stranded, uncharged reservation is
-                          ever released. Only for a task chain with no
-                          running conductor.
+                          invocation id BEFORE releasing it. There is no
+                          automatic (age/pid/liveness) reclaim anywhere in
+                          the ledger — this is the only way a stranded,
+                          uncharged reservation is ever released. Only for
+                          a task chain with no running conductor.
+  ralph-external --ledger-release <taskChainDigest> correction <n> --capture-root DIR
+                          The same operator recovery, for a stranded,
+                          uncharged correction-<n> slot. Refuses if
+                          correction-<n> is already charged; otherwise
+                          frees it and prints its recorded invocation id
+                          BEFORE releasing it, exactly like an attempt.
   ralph-external --ledger-release <taskChainDigest> policy --capture-root DIR
                           Removes a chain's policy file. Refuses if the
                           chain still has ANY attempt or correction entry
@@ -688,9 +707,16 @@ async function main() {
     catch (error) { console.error(error.message); process.exitCode = 1; return; }
     try {
       const { releaseLedgerSlot, releaseLedgerPolicy } = await import('./session-launcher.mjs');
+      // #2915 round 8 review 8 (C11): print the recorded invocation id the
+      // MOMENT it is known -- BEFORE the unlink -- never only afterward via
+      // the final result line below. If the unlink itself throws (or the
+      // process is killed between the two), the operator has still seen
+      // what was about to be released.
       const result = parsed.target.kind === 'policy'
         ? await releaseLedgerPolicy({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest })
-        : await releaseLedgerSlot({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest, attempt: parsed.target.attempt });
+        : await releaseLedgerSlot({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest,
+          attempt: parsed.target.attempt, kind: parsed.target.kind,
+          report: ({ invocationId }) => console.log(JSON.stringify({ phase: 'identified', kind: parsed.target.kind, invocationId })) });
       console.log(JSON.stringify(result));
       process.exitCode = 0;
     } catch (error) {

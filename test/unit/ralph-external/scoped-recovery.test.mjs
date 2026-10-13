@@ -13,9 +13,11 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod, readdir, truncate, link, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
@@ -4241,6 +4243,76 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     }
   });
 
+  // #2915 round 8 review 8 (C11): the recorded invocation identity is
+  // reported to the caller's `report` hook the MOMENT it is known --
+  // before the slot is actually unlinked -- never only afterward via the
+  // return value. Proven by having the hook itself check the slot file is
+  // still present at the moment it fires.
+  it('releaseLedgerSlot reports the recorded identity BEFORE unlinking, not after', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-report-before-unlink-'));
+    try {
+      const taskChainDigest = 'report-before-unlink-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'report-inv', maxAttempts: 1 });
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir)).find((name) => !name.startsWith('.policy-tmp-')));
+      const slotPath = path.join(chainDir, `attempt-${ledger.n}`);
+      let reportedBeforeUnlink = null;
+      let slotExistedAtReportTime = null;
+      const result = await releaseLedgerSlot({
+        captureRoot: root, taskChainDigest, attempt: ledger.n,
+        report: ({ invocationId }) => {
+          reportedBeforeUnlink = invocationId;
+          slotExistedAtReportTime = existsSync(slotPath);
+        },
+      });
+      expect(reportedBeforeUnlink).toBe('report-inv');
+      expect(slotExistedAtReportTime).toBe(true); // the slot was still there when reported
+      expect(result).toEqual({ released: true, invocationId: 'report-inv' });
+      expect(existsSync(slotPath)).toBe(false); // and gone by the time this returns
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 round 8 review 8 (C9): the SAME operator release, with the SAME
+  // refusal rules, now also covers a stranded, uncharged `correction-<n>`
+  // slot via `kind: 'correction'` -- the `--ledger-release <digest>
+  // correction <n>` CLI form index.mjs's `parseLedgerReleaseArgs` accepts.
+  it('releaseLedgerSlot releases a stranded uncharged correction slot with the same refusal rules as an attempt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-correction-release-'));
+    try {
+      const taskChainDigest = 'correction-release-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'corr-attempt', maxAttempts: 2 });
+      const gate = await reserveLedgerCorrection({ ledger, reasonCode: 'STDIN_WAIT' });
+      expect(gate.ok).toBe(true);
+      // Charged correction: refused, exactly like a charged attempt.
+      await debitDirectWorkerAllowance(ledger.correction);
+      await expect(releaseLedgerSlot({ captureRoot: root, taskChainDigest, attempt: 1, kind: 'correction' }))
+        .rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      // A SECOND, stranded (uncharged) correction on a fresh attempt: freed.
+      const second = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'corr-attempt-2', maxAttempts: 2 });
+      const secondGate = await reserveLedgerCorrection({ ledger: second, reasonCode: 'STDIN_WAIT' });
+      expect(secondGate.ok).toBe(false); // MAX_STARTUP_CORRECTIONS is 1 chain-wide in this fixture digest
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('parseLedgerReleaseArgs accepts the correction <n> form alongside <n> and policy', () => {
+    const base = ['--ledger-release', 'digest-1'];
+    expect(parseLedgerReleaseArgs([...base, '5', '--capture-root', '/root'])).toEqual({
+      taskChainDigest: 'digest-1', target: { kind: 'attempt', attempt: 5 }, captureRoot: '/root',
+    });
+    expect(parseLedgerReleaseArgs([...base, 'correction', '2', '--capture-root', '/root'])).toEqual({
+      taskChainDigest: 'digest-1', target: { kind: 'correction', attempt: 2 }, captureRoot: '/root',
+    });
+    expect(parseLedgerReleaseArgs([...base, 'policy', '--capture-root', '/root'])).toEqual({
+      taskChainDigest: 'digest-1', target: { kind: 'policy' }, captureRoot: '/root',
+    });
+    expect(() => parseLedgerReleaseArgs([...base, 'correction', 'not-a-number', '--capture-root', '/root'])).toThrow(/Usage:/);
+    expect(() => parseLedgerReleaseArgs([...base, 'correction', '--capture-root', '/root'])).toThrow(/Usage:/);
+  });
+
   // #2915 round 8 follow-up (D1.9 extension): `--ledger-release <digest>
   // policy` removes `policy` ONLY once the chain has no attempt or
   // correction entry left at all -- otherwise a fresh reserve for the same
@@ -4270,23 +4342,31 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     }
   });
 
-  it('in-process chains with no charged history are retired after reserve+refund, never accumulating', async () => {
+  // #2915 round 8 review 8 (C11, "an empty in-process chain accepted a
+  // different ceiling after refund"): previously, a chain with no charged
+  // history was DELETED once reserve+refund emptied both its maps --
+  // discarding its pinned `maxAttempts` along with it, so a LATER reserve
+  // for the SAME digest silently accepted a DIFFERENT ceiling as if it
+  // were a fresh chain. The in-process ledger has no explicit, otherwise-
+  // empty-chain-only release operation (unlike the file-mode ledger's
+  // `releaseLedgerPolicy`), so this is now a deliberate "keeps the pinned
+  // policy for the life of the process" decision, never automatic
+  // retirement.
+  it('an in-process chain keeps its pinned policy for the life of the process, even once every slot is refunded', async () => {
     try {
-      for (let n = 0; n < 1000; n += 1) {
-        const taskChainDigest = `retire-chain-${n}`;
-        const ledger = await reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-1', maxAttempts: 1 });
-        await refundDirectWorkerAllowance(ledger);
-      }
-      // No direct size accessor is exported; prove retirement behaviorally
-      // instead -- immediately reserving MANY MORE distinct fresh chains
-      // past the in-process global bound never refuses, which could only
-      // be true if the 1,000 empty chains above were actually removed
-      // rather than retained and counted against that bound.
-      for (let n = 0; n < 1000; n += 1) {
-        const taskChainDigest = `after-retire-chain-${n}`;
-        const ledger = await reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-1', maxAttempts: 1 });
-        expect(ledger.mode).toBe('in-process');
-      }
+      const taskChainDigest = 'retire-then-reserve-chain';
+      const ledger = await reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-1', maxAttempts: 3 });
+      expect(ledger.mode).toBe('in-process');
+      await refundDirectWorkerAllowance(ledger);
+      // A DIFFERENT ceiling for the SAME digest, after the chain's only
+      // slot was refunded, is a policy mismatch -- never silently accepted
+      // as if the chain had never existed.
+      await expect(reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-2', maxAttempts: 5 }))
+        .rejects.toMatchObject({ code: ALLOWANCE_POLICY_MISMATCH_CODE });
+      // The chain is genuinely still alive (not merely refusing
+      // everything): the SAME originally-pinned ceiling still reserves.
+      const again = await reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-3', maxAttempts: 3 });
+      expect(again.mode).toBe('in-process');
     } finally {
       resetInProcessAllowanceLedger();
     }

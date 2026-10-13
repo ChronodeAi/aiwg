@@ -2026,6 +2026,26 @@ async function assertPrivateLedgerDirectory(target) {
   }
 }
 
+/** D1.1 (#2915 round 8 review 8, C11): the per-chain directory itself --
+ * never `captureRoot`/`ledgerRoot`, which are the caller's own pre-existing
+ * directories and may legitimately carry any private (owner-only) mode --
+ * must be EXACTLY `0700`, not merely "no group/other bits" (which
+ * `assertPrivateLedgerDirectory` alone would still accept for, say, `0500`
+ * if an unusual umask stripped the write bit off the `mkdir(..., { mode:
+ * 0o700 })` call that created it). A chain directory at any other private
+ * mode refuses rather than being silently tolerated or repaired. */
+async function assertExactLedgerChainMode(target) {
+  let stat;
+  try { stat = await lstat(target); }
+  catch (error) {
+    if (error.code === 'ENOENT') return;
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger chain directory is not inspectable (${error.message})`);
+  }
+  if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger chain directory must be exactly mode 0700');
+  }
+}
+
 /** C7: the pre-round-8 flat layout stored one record at
  * `<captureRoot>/ledger/<digest>.json`. Creating the new per-chain
  * DIRECTORY alongside an old record of the same name would silently grant
@@ -2075,13 +2095,24 @@ async function createLedgerFileExclusive(dir, name, content) {
   return true;
 }
 
-// Bounded wait for one re-stat of `policy` when it is caught at nlink 2 --
-// see `statLedgerPolicyEntry`'s doc comment for why that is not, by itself,
-// evidence of tampering. Short enough to never meaningfully delay a reserve
-// call; long enough that the SAME process's own `finally` (which unlinks
-// the publish temp file within microseconds of the `link()` that created
-// the second name) has always run by the time it elapses.
+// Bounded wait between re-stats of `policy` when it is caught at nlink 2 --
+// see `statLedgerChainEntry`'s doc comment for why that is not, by itself,
+// evidence of tampering. Short enough that `LEDGER_POLICY_LINK_RECHECK_ATTEMPTS`
+// rechecks total well under a second; long enough that the SAME process's
+// own `finally` (which unlinks the publish temp file within microseconds of
+// the `link()` that created the second name) has normally already run by
+// the time the FIRST recheck elapses -- the remaining attempts are headroom
+// for a paused (not merely racing) publisher, not evidence of tampering on
+// their own either.
 const LEDGER_POLICY_LINK_RECHECK_MS = 25;
+// #2915 round 8 review 8 (C11): a single 25ms recheck classified a healthy
+// publisher that merely paused (scheduler contention, a slow disk) between
+// `link()` and its own `finally` as corruption. A few short, bounded
+// rechecks (4 * 25ms = 100ms, "well under a second") give a paused-but-
+// healthy publisher real headroom while staying bounded; a GENUINE extra
+// hard link never resolves no matter how many rechecks run, and is still
+// refused once the budget is exhausted.
+const LEDGER_POLICY_LINK_RECHECK_ATTEMPTS = 4;
 
 /** Stats one ledger-chain entry through the anchored, no-follow path, with
  * ONE deliberate exception for `policy`: the atomic-publish dance in
@@ -2089,20 +2120,28 @@ const LEDGER_POLICY_LINK_RECHECK_MS = 25;
  * `policy`'s own temp file (between its `link()` succeeding and that same
  * call's `finally` unlinking the temp name), so a concurrent reader can
  * observe `policy` at nlink 2 for a brief, bounded instant that is not
- * evidence of a real hard link -- only of racing that cleanup. Content and
- * ownership are NOT relaxed for this case, only the nlink check, and only
- * for `policy`: one short, bounded wait and a single re-stat distinguishes
- * the transient case (nlink back to 1) from a genuine extra hard link
- * (still 2), which is refused exactly like any other canonical-file
- * violation. Every other entry (attempt/correction slots and their
- * `.charged` markers) keeps the unconditional nlink-1 rule -- nothing ever
- * legitimately double-links them. */
+ * evidence of a real hard link -- only of racing (or, with the bounded
+ * retries below, a brief pause in) that cleanup. Content and ownership are
+ * NOT relaxed for this case, only the nlink check, and only for `policy`: a
+ * few short, bounded rechecks distinguish the transient/paused case (nlink
+ * back to 1) from a genuine extra hard link (still 2 once the budget is
+ * exhausted), which is refused exactly like any other canonical-file
+ * violation -- but see `readLedgerPolicyFile`/`validateLedgerChainDirectory`
+ * for why that refusal names "publication appears incomplete" rather than
+ * asserting corruption outright: this function alone cannot tell a stalled
+ * publisher (that will eventually finish) from a real hard link, only that
+ * nlink stayed at 2 for the whole bounded window. Every other entry
+ * (attempt/correction slots and their `.charged` markers) keeps the
+ * unconditional nlink-1 rule -- nothing ever legitimately double-links
+ * them. */
 async function statLedgerChainEntry(dir, name) {
   const target = join(dir, name);
   let stat = await withWorkerPath(target, t => lstat(t));
-  if (name === 'policy' && stat.nlink === 2) {
-    await new Promise(resolve => setTimeout(resolve, LEDGER_POLICY_LINK_RECHECK_MS));
-    stat = await withWorkerPath(target, t => lstat(t));
+  if (name === 'policy') {
+    for (let attempt = 0; attempt < LEDGER_POLICY_LINK_RECHECK_ATTEMPTS && stat.nlink === 2; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, LEDGER_POLICY_LINK_RECHECK_MS));
+      stat = await withWorkerPath(target, t => lstat(t));
+    }
   }
   return stat;
 }
@@ -2117,8 +2156,18 @@ async function readLedgerPolicyFile(dir) {
   let stat;
   try { stat = await statLedgerChainEntry(dir, 'policy'); }
   catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger policy is missing or not inspectable (${error.message})`); }
-  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600 || stat.size === 0 || stat.size > 4096) {
-    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger policy is missing, insecurely-moded, not owned or hard-linked');
+  if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600 || stat.size === 0 || stat.size > 4096) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger policy is missing, insecurely-moded or not owned');
+  }
+  // #2915 round 8 review 8 (C11): checked SEPARATELY, with its own
+  // diagnostic -- `statLedgerChainEntry`'s bounded rechecks cannot
+  // distinguish a publisher that is still mid-publish (will resolve to
+  // nlink 1 shortly) from a genuine extra hard link once its retry budget
+  // is exhausted, so the refusal says the publication APPEARS incomplete
+  // rather than asserting corruption outright.
+  if (stat.nlink !== 1) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE,
+      'Allowance ledger policy publication appears incomplete (still hard-linked after the bounded recheck window); retry, or refuse this chain if the condition persists');
   }
   const target = join(dir, 'policy');
   const handle = await withWorkerPath(target, t => open(t, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
@@ -2237,8 +2286,17 @@ async function validateLedgerChainDirectory(dir, policy) {
     let stat;
     try { stat = await statLedgerChainEntry(dir, name); }
     catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger entry '${name}' is not inspectable (${error.message})`); }
-    if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) {
+    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) {
       ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger entry '${name}' is not a canonical conductor-owned 0600 regular file`);
+    }
+    // #2915 round 8 review 8 (C11): see `readLedgerPolicyFile` -- `policy`'s
+    // nlink is checked separately, with a diagnostic that names incomplete
+    // publication rather than asserting corruption, because the bounded
+    // rechecks in `statLedgerChainEntry` cannot fully distinguish the two.
+    if (stat.nlink !== 1) {
+      ledgerFail(LEDGER_RECORD_INVALID_CODE, name === 'policy'
+        ? 'Allowance ledger policy publication appears incomplete (still hard-linked after the bounded recheck window); retry, or refuse this chain if the condition persists'
+        : `Allowance ledger entry '${name}' is not a canonical conductor-owned 0600 regular file`);
     }
   }
 }
@@ -2272,7 +2330,7 @@ async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, af
   await assertPrivateLedgerDirectory(captureRoot);
   await assertPrivateLedgerDirectory(ledgerRoot);
   await mkdir(dir, { mode: 0o700, recursive: true });
-  await assertPrivateLedgerDirectory(dir);
+  await assertExactLedgerChainMode(dir);
   const policy = await ensureLedgerPolicy(dir, ledgerRoot, taskChainDigest, maxAttempts, afterPolicyWrite);
   await validateLedgerChainDirectory(dir, policy);
   return { dir, policy };
@@ -2421,9 +2479,25 @@ function reserveLedgerSlotInProcess(map, ceiling, invocationId) {
   return null;
 }
 
-function retireInProcessChainIfEmpty(taskChainDigest) {
-  const chain = _inProcessLedgerChains.get(taskChainDigest);
-  if (chain && chain.attempts.size === 0 && chain.corrections.size === 0) _inProcessLedgerChains.delete(taskChainDigest);
+// #2915 round 8 review 8 (C11, "an empty in-process chain accepted a
+// different ceiling after refund"): this used to DELETE the chain record
+// once both maps were empty (every reserved slot refunded, none charged),
+// which also discarded its pinned `maxAttempts` -- a LATER reserve for the
+// SAME `taskChainDigest` then silently created a fresh chain at a
+// DIFFERENT ceiling, contradicting D1.2's "the policy pin lives for the
+// chain's entire lifetime" rule exactly like the file-mode ledger's own
+// `policy` file does (which persists until the explicit, otherwise-empty-
+// chain-only `releaseLedgerPolicy` operator action, never automatically).
+// The in-process ledger has no equivalent explicit-release operation (it
+// is per-process and already bounded by `IN_PROCESS_LEDGER_MAX_RECORDS`
+// distinct digests, not per-slot memory), so this is now a deliberate
+// no-op: the pinned policy for a chain lives for the remaining lifetime of
+// this process once first reserved, even once every one of its slots is
+// refunded. Retained (rather than deleted outright) so a future explicit
+// in-process release path has a single, obviously-named call site to wire
+// into, should one ever be added.
+function retireInProcessChainIfEmpty(_taskChainDigest) {
+  // Intentionally does nothing -- see doc comment above.
 }
 
 /**
@@ -2454,9 +2528,14 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
   // written and fsynced but before it is published, so a test can inject a
   // failure in exactly that window. Production never passes this.
   afterPolicyWrite } = {}) {
+  // #2915 round 8 review 8 (C11): `Number.isSafeInteger`, not merely
+  // `Number.isInteger` -- `9007199254740992` (2^53, the first integer
+  // `Number.isInteger` accepts but double-precision float arithmetic can no
+  // longer represent exactly) must never be accepted as a ceiling here, at
+  // the FIRST reservation that pins this chain's policy for its lifetime.
   if (typeof taskChainDigest !== 'string' || !taskChainDigest || typeof invocationId !== 'string' || !invocationId
-    || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
-    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'reserveDirectWorkerAllowance requires taskChainDigest, invocationId and a positive integer maxAttempts');
+    || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'reserveDirectWorkerAllowance requires taskChainDigest, invocationId and a positive safe-integer maxAttempts');
   }
   if (!captureRoot) {
     const chain = inProcessChain(taskChainDigest, maxAttempts);
@@ -2620,24 +2699,38 @@ export async function reserveLedgerCorrection({ ledger, reasonCode } = {}) {
  * nothing here attempts to verify that itself; there is deliberately no
  * age/pid/liveness inference anywhere in this file.
  */
-export async function releaseLedgerSlot({ captureRoot, taskChainDigest, attempt } = {}) {
+export async function releaseLedgerSlot({ captureRoot, taskChainDigest, attempt, kind = 'attempt',
+  // #2915 round 8 review 8 (C11, "operator release reports the invocation
+  // identity AFTER unlinking"): optional, synchronous, best-effort callback
+  // invoked with `{ invocationId }` the moment the recorded identity is
+  // KNOWN -- BEFORE the unlink below runs, never after. D1.9 exists so an
+  // operator can see what was consuming the allowance before releasing it;
+  // if that only happens via this function's own return value, a crash or
+  // thrown error between the read and the unlink (or the caller simply
+  // never reaching its own print statement) means the operator never sees
+  // it at all. `index.mjs` passes a callback that prints immediately here;
+  // production callers that omit it keep today's "report via the return
+  // value once released" behavior unchanged.
+  report = () => {} } = {}) {
   if (!captureRoot) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'releaseLedgerSlot requires a persistent captureRoot');
   if (typeof taskChainDigest !== 'string' || !taskChainDigest) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'releaseLedgerSlot requires taskChainDigest');
   if (!Number.isSafeInteger(attempt) || attempt < 1) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'releaseLedgerSlot requires a positive integer attempt number');
+  if (kind !== 'attempt' && kind !== 'correction') ledgerFail(LEDGER_RECORD_INVALID_CODE, "releaseLedgerSlot requires kind to be 'attempt' or 'correction'");
   if (process.platform === 'win32') {
     ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Persistent allowance ledger is unavailable on this platform (win32)');
   }
   const dir = ledgerChainDir(captureRoot, taskChainDigest);
   await assertPrivateLedgerDirectory(captureRoot);
   await assertPrivateLedgerDirectory(join(captureRoot, 'ledger'));
-  await assertPrivateLedgerDirectory(dir);
-  const chargedId = await readLedgerSlotIdentity(dir, `attempt-${attempt}.charged`);
+  await assertExactLedgerChainMode(dir);
+  const chargedId = await readLedgerSlotIdentity(dir, `${kind}-${attempt}.charged`);
   if (chargedId !== undefined) {
-    ledgerFail(LEDGER_RECORD_INVALID_CODE, `attempt-${attempt} is already charged; refusing to release a committed attempt`);
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, `${kind}-${attempt} is already charged; refusing to release a committed ${kind}`);
   }
-  const invocationId = await readLedgerSlotIdentity(dir, `attempt-${attempt}`);
+  const invocationId = await readLedgerSlotIdentity(dir, `${kind}-${attempt}`);
   if (invocationId === undefined) return { released: false, invocationId: null, reason: 'slot was not reserved' };
-  await refundLedgerSlotFile(dir, 'attempt', attempt);
+  try { report({ invocationId: invocationId ?? null }); } catch { /* reporting must never block the actual release */ }
+  await refundLedgerSlotFile(dir, kind, attempt);
   return { released: true, invocationId: invocationId ?? null };
 }
 
@@ -2664,7 +2757,7 @@ export async function releaseLedgerPolicy({ captureRoot, taskChainDigest } = {})
   const dir = ledgerChainDir(captureRoot, taskChainDigest);
   await assertPrivateLedgerDirectory(captureRoot);
   await assertPrivateLedgerDirectory(join(captureRoot, 'ledger'));
-  await assertPrivateLedgerDirectory(dir);
+  await assertExactLedgerChainMode(dir);
   let entries;
   try { entries = await withWorkerPath(dir, target => readdir(target)); }
   catch (error) {
