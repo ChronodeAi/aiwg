@@ -41,7 +41,7 @@
       "file": "tools/contrib/sync-upstream.mjs",
       "anchor": "conflict-editor-launch",
       "kind": "interactive",
-      "reason": "Opens $EDITOR on a conflicted file from the interactive conflict-resolution menu; the user interacts with it directly. handleConflicts() returns before reaching this call whenever !process.stdin.isTTY (#3062), so it is reached only when attached to a terminal."
+      "reason": "Opens $EDITOR on a conflicted file from the interactive conflict-resolution menu (choice 1), or from the headless --on-conflict 1 answer; the user interacts with it directly. Reached only when isInteractiveTerminal() is true (#3062) — handleConflicts() refuses --on-conflict 1 outright without a terminal, and otherwise returns before reaching this call at all whenever !isInteractiveTerminal()."
     }
   ]
 }
