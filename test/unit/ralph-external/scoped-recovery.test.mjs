@@ -63,9 +63,15 @@ import {
   releaseLedgerPolicy,
   resolveStopEvidence,
   observeStandaloneUnitSettlement,
+  directRecoveryEligibility,
 } from '../../../tools/ralph-external/session-launcher.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
 import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
+// #2915 round 8 (D6): the frozen `a4085b86a` reference fixture — see its
+// own header comment. Used ONLY by the "baseline equivalence" describe
+// block below; never by production code.
+import { SessionLauncher as SessionLauncherBaseline, planDirectWorkerLaunch as planDirectWorkerLaunchBaseline }
+  from '../../fixtures/ralph-recovery-baseline/session-launcher.mjs';
 
 const INSTALL = scopeKeyFor.installation('codex');
 const QUOTA = scopeKeyFor.quota('acct-1');
@@ -4325,4 +4331,347 @@ describe('allowance ledger: cross-instance probes', () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): equivalence tests for the attached launcher and the
+// standalone planner. The frozen `a4085b86a` fixture
+// (`test/fixtures/ralph-recovery-baseline/session-launcher.mjs`) has NO
+// admission/breaker/ledger/digest concept at all; the current branch, with
+// direct recovery not gated, must behave the same from an equivalent
+// starting state: same decision-relevant result fields, the same
+// `invocation.json`/`exit.json` metadata shape, the same persisted
+// `taskDigest` ALGORITHM (`qualificationDigest(saved.request)` — verified
+// independently against each run's own saved plan, since two separate runs
+// necessarily use distinct `final_output` paths and therefore distinct
+// digests of their own, never a false negative from that), and the same
+// `Object.keys()` instance shape.
+//
+// A custom `launchIsolated` (a direct, detached `child_process.spawn` of
+// the resolved argv) stands in for the real `launchIsolatedWorker` in every
+// scenario below, on both the frozen fixture and the branch — exactly the
+// same substitution several pre-existing tests in this file and in
+// `worker-single-invocation.test.ts` already use for direct-child identity
+// capture. This is deliberate, not a simplification that weakens the
+// claim: `directRecoveryEligibility`/`admitDirectWorker`/the baseline split
+// all operate strictly ABOVE the isolation layer, and `launchIsolatedWorker`
+// itself independently refuses a caller-supplied `gate.enabled:false` while
+// `config.parallelism.worker_dispatch` is still true (a correct, unrelated
+// consistency guard) -- exercising that guard is not part of this
+// equivalence claim and is already covered by `worker-isolation.mjs`'s own
+// tests.
+//
+// Covers: clean success; non-zero exit; spawn ENOENT; standalone planner
+// launch and refusal; a gated launch followed by a not-gated launch on one
+// instance (instance-shape only). The three attached-launcher scenarios run
+// once per not-gated trigger that a full real-invocation launch can
+// actually exercise without ALSO being refused by `revalidateWorkerInvocationPlan`'s
+// own re-resolution (which independently refuses a per-CLI-disabled
+// selection before `admitDirectWorker` is ever reached) -- global
+// `worker_dispatch` off and `canVerifyAttempt: false`. The per-CLI switch
+// and the explicit `scopedBreaker: null` override are instead covered: (a)
+// directly, at the `directRecoveryEligibility` predicate level, in the
+// dedicated unit test below; (b) for the explicit override specifically,
+// through the standalone-planner regression test below, which does not
+// need a real resolved invocation to reproduce the exact defect it guards.
+//
+// NOT covered here (see the final report): timeout, cancellation,
+// capture-setup failure after spawn, invalid-final/failed-claims variants,
+// per-CLI disablement through a full real-invocation `launchWorker()` run,
+// and explicit per-callback-argument-list/listener-count introspection
+// (proven only behaviorally, through the identical observable results
+// above, not by inspecting `EventEmitter` internals directly).
+// ---------------------------------------------------------------------------
+describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the branch with direct recovery not gated', () => {
+  // A direct, detached spawn of the resolved argv -- see the file-level
+  // comment above for why this stands in for the real `launchIsolatedWorker`
+  // in every scenario below.
+  function directSpawn({ command, args, cwd, env, stdin }) {
+    const child = spawn(command, args, { cwd, env, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
+    return { mode: 'degraded', child };
+  }
+  function enoentSpawn() {
+    return { mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915-equiv', [], { stdio: ['ignore', 'pipe', 'pipe'] }) };
+  }
+
+  async function equivFixtureRoot() {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-equiv-d6-'));
+    const cwd = path.join(root, 'work');
+    await mkdir(cwd);
+    const brief = path.join(root, 'brief.json');
+    await writeFile(brief, 'synthetic equivalence brief');
+    const adapter = f.snapshot.registry.providers.codex.workerAdapter;
+    const profile = adapter.invocationProfiles['fixture-shell'];
+    profile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    profile.health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl', signalParser: 'fixture:jsonl',
+      sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot',
+      qualifiedAt: f.request.now, statusOperation: null, cancelOperation: null };
+    f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+    const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
+      boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
+      buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
+        '--model', input.selected.model, '--final-output', input.finalPath, '--', 'synthetic'],
+        stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
+      extractFinal: (text) => { try { const rows = text.trim().split('\n').map(line => JSON.parse(line));
+        return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
+    };
+    const drivers = { codex: driver };
+    f.snapshot.installations.codex.boundary = driver.qualification.boundary;
+    let planSeq = 0;
+    // Every call resolves a FRESH plan with its own final-output path: two
+    // launches of "the same task" never collide on output files, matching
+    // how every other test in this suite (e.g. `enoentFixtureRoot` above)
+    // runs repeated attempts of one logical task.
+    const freshPlan = async ({ scenario = 'success', forgeRealExitCode } = {}) => {
+      planSeq += 1;
+      const attemptFinal = path.join(root, `final-${planSeq}.json`);
+      const configPath = path.join(root, `fake-${planSeq}.json`);
+      const recordPath = path.join(root, `record-${planSeq}.json`); // unconditionally written by ralph-worker-cli.mjs
+      await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
+      const request = { role: 'coding', task: 'implementation', group: 'workers', brief, workdir: cwd, final_output: attemptFinal };
+      const plan = await resolveWorkerInvocation(f.snapshot, request, drivers, f.request.now);
+      expect(plan.invocation, JSON.stringify({ diagnostics: plan.diagnostics })).toBeDefined();
+      const invocationPath = path.join(root, `plan-${planSeq}.json`);
+      await writeFile(invocationPath, JSON.stringify(plan));
+      return { invocationPath, configPath, runDir: path.join(root, `run-${planSeq}`) };
+    };
+    return { f, root, drivers, freshPlan };
+  }
+
+  // Normalizes a launch result down to its decision-relevant fields —
+  // never invocationId/endedAt/health (both runs mint a fresh invocationId
+  // and timestamp, and `health`'s own internal timing is independently
+  // sampled wall-clock, not a decision this equivalence claim is about), and
+  // never `captureCoverage` (whether the child's own stdout/stderr 'close'
+  // event is observed before `finish()` races identically on both sides for
+  // a real spawn error such as ENOENT — a stream-draining timing detail,
+  // not a decision either launcher's own logic makes differently).
+  function normalizeResult(result) {
+    const { exitCode, signal, termination, descendants, timedOut, cancelled, stopReason, errorCode,
+      workerTermination, isolation } = result;
+    return { exitCode, signal, termination, descendants, timedOut, cancelled, stopReason, errorCode,
+      workerTermination, isolation };
+  }
+
+  async function runOneLauncher(LauncherClass, fx, attempt, extraOptions = {}) {
+    vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+    const launcher = new LauncherClass();
+    const result = await launcher.launchWorker({
+      invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+      now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+      launchIsolated: directSpawn,
+      ...extraOptions,
+    });
+    return { launcher, result, runDir: attempt.runDir };
+  }
+
+  // The two not-gated triggers a full real-invocation launch can exercise
+  // without ALSO being refused by `revalidateWorkerInvocationPlan`'s own
+  // re-resolution (see the describe-level comment above).
+  const notGatedTriggers = [
+    { name: 'global worker_dispatch off', extraOptions: { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) } },
+    {
+      name: 'canVerifyAttempt:false (worker_dispatch on)',
+      extraOptions: { checkDispatch: () => ({ enabled: true, ok: true, failures: [] }) },
+      setup: (fx) => { fx.drivers.codex.canVerifyAttempt = false; },
+    },
+  ];
+
+  for (const trigger of notGatedTriggers) {
+    describe(`not-gated via: ${trigger.name}`, () => {
+      async function build() {
+        const fx = await equivFixtureRoot();
+        trigger.setup?.(fx);
+        return fx;
+      }
+
+      it('clean success: identical result, origin/main taskDigest algorithm on both sides, identical exit.json shape', async () => {
+        const fx = await build();
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
+          const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(branch.result.exitCode).toBe(0);
+          const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
+          const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
+          const baselineInvocation = JSON.parse(await readFile(path.join(baseline.runDir, 'invocation.json'), 'utf8'));
+          const branchInvocation = JSON.parse(await readFile(path.join(branch.runDir, 'invocation.json'), 'utf8'));
+          // Each side independently writes the origin/main algorithm applied
+          // to its OWN saved request (the two differ only in `final_output`,
+          // which the algorithm itself legitimately folds in).
+          expect(baselineInvocation.taskDigest).toBe(qualificationDigest(baselineSaved.request));
+          expect(branchInvocation.taskDigest).toBe(qualificationDigest(branchSaved.request));
+          expect(Object.keys(branchInvocation).sort()).toEqual(Object.keys(baselineInvocation).sort());
+          const baselineExit = JSON.parse(await readFile(path.join(baseline.runDir, 'exit.json'), 'utf8'));
+          const branchExit = JSON.parse(await readFile(path.join(branch.runDir, 'exit.json'), 'utf8'));
+          expect(Object.keys(branchExit).sort()).toEqual(Object.keys(baselineExit).sort());
+          // Never gated: no #2915 field, on either side.
+          expect('attemptOutcome' in branchExit).toBe(false);
+          expect('attemptOutcome' in baselineExit).toBe(false);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+
+      it('non-zero exit: identical result and identical exit.json shape', async () => {
+        const fx = await build();
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
+          const branchAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
+          const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
+          const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(branch.result.exitCode).toBe(9);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+
+      it('spawn ENOENT: identical result, confirmed termination, no child identity', async () => {
+        const fx = await build();
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
+          const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+    });
+  }
+
+  describe('standalone planner (planDirectWorkerLaunch): launch and refusal', () => {
+    it('a not-gated flat-option launch matches the frozen planner, synchronously, with no admission field', () => {
+      const name = `equiv-standalone-${Math.random().toString(36).slice(2)}`;
+      const baselineResult = planDirectWorkerLaunchBaseline({
+        name, command: process.execPath, args: ['-e', 'process.exit(0)'],
+        config: { parallelism: { worker_dispatch: false } },
+        live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true,
+      });
+      const branchResult = planDirectWorkerLaunch({
+        name, command: process.execPath, args: ['-e', 'process.exit(0)'],
+        config: { parallelism: { worker_dispatch: false } },
+        live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true,
+      });
+      expect(typeof branchResult?.then).not.toBe('function'); // synchronous, byte-for-byte legacy behaviour
+      expect(branchResult.launched).toBe(baselineResult.launched);
+      expect('admission' in branchResult).toBe(false);
+      expect('admission' in baselineResult).toBe(false);
+      branchResult.child?.kill?.();
+      baselineResult.child?.kill?.();
+    });
+
+    it('a blocked dispatch gate refuses identically on both, even with an explicit breaker override on the branch', () => {
+      const name = `equiv-standalone-blocked-${Math.random().toString(36).slice(2)}`;
+      const blockedLive = { availMemGb: 0.001, load1: 99, cores: 8, workers: 0, freeDiskGb: 0.001 };
+      const baselineResult = planDirectWorkerLaunchBaseline({
+        name, command: process.execPath, args: ['-e', 'process.exit(0)'],
+        config: { parallelism: { worker_dispatch: true, admission: { hostResources: { minAvailMemGb: 4 } } } },
+        live: blockedLive, isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true,
+      });
+      const branchResult = planDirectWorkerLaunch({
+        name, command: process.execPath, args: ['-e', 'process.exit(0)'],
+        config: { parallelism: { worker_dispatch: true, admission: { hostResources: { minAvailMemGb: 4 } } } },
+        live: blockedLive, isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true,
+        scopedBreaker: null,
+      });
+      expect(baselineResult).toMatchObject({ launched: false, blocked: true });
+      expect(branchResult).toMatchObject({ launched: false, blocked: true });
+      expect('admission' in branchResult).toBe(false);
+    });
+
+    // #2915 round 8 critique ("directRecoveryEligibility" extraction):
+    // without the Standalone branch's own synchronous eligibility check,
+    // this exact call reached the admission IIFE, `admitDirectWorker`
+    // correctly returned `{ gated: false }`, and execution fell through to
+    // the un-guarded `onDispatchCommit` closure that unconditionally
+    // referenced `admission.breaker.beginDispatch` -- `admission.breaker`
+    // is `undefined` on a not-gated admission, so dispatch crashed with a
+    // TypeError instead of launching. This is the regression test for that
+    // defect: a flat-option call (no resolved `invocation` needed to
+    // reproduce it) with an otherwise-passing gate and an explicit
+    // `scopedBreaker: null` override must launch, not throw.
+    it('an explicit scopedBreaker:null standalone launch launches instead of throwing', async () => {
+      const result = planDirectWorkerLaunch({
+        name: 'equiv-standalone-breaker-null', command: process.execPath, args: ['-e', 'process.exit(0)'],
+        config: { parallelism: { worker_dispatch: true } },
+        live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true, scopedBreaker: null,
+      });
+      // Not gated (explicit breaker override): synchronous, byte-for-byte
+      // legacy behaviour — never a Promise, exactly like the baseline
+      // planner and exactly like this planner's own `!gate.enabled`/
+      // per-CLI-disabled branches already behave.
+      expect(typeof result?.then).not.toBe('function');
+      expect(result).toMatchObject({ launched: true });
+      expect('admission' in result).toBe(false);
+      await new Promise((resolve) => { result.child.once('exit', resolve); result.child.once('error', resolve); });
+    });
+  });
+
+  it('a gated launch followed by a not-gated launch on the SAME instance leaves no gated-path residue in Object.keys()', async () => {
+    const fx = await equivFixtureRoot();
+    try {
+      const launcher = new SessionLauncher();
+      const keysBeforeAnyLaunch = Object.keys(launcher).sort();
+
+      const gatedAttempt = await fx.freshPlan({ scenario: 'success' });
+      vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', gatedAttempt.configPath);
+      await launcher.launchWorker({
+        invocationPath: gatedAttempt.invocationPath, runDir: gatedAttempt.runDir,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: directSpawn,
+      });
+      expect(launcher.lastAttemptResult).not.toBeNull(); // gated: bookkeeping updated
+      // Gated execution can only ADD base-shaped instance fields that a
+      // single ungated launch (the independent `SessionLauncher` built
+      // fresh below) would also have added by now (e.g. `currentProcess`
+      // transiently, `workerLaunchPending` once set) — never a #2915-only
+      // key. Verified against a fresh not-gated instance below rather than
+      // against the launcher's own pre-launch snapshot, since origin/main
+      // itself grows `workerLaunchPending` as an own property on its FIRST
+      // `launchWorker()` call too (not a #2915 difference to begin with).
+      const keysAfterGatedLaunch = Object.keys(launcher).sort();
+
+      const notGatedAttempt = await fx.freshPlan({ scenario: 'success' });
+      const { launcher: notGatedLauncher } = await runOneLauncher(SessionLauncher, fx, notGatedAttempt,
+        { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) });
+      // A not-gated-only launcher's bookkeeping is the base default...
+      expect(notGatedLauncher.lastAttemptResult).toBeNull();
+      // ...and a GATED-then-NOT-GATED sequence on one instance is no
+      // different from a single not-gated launch's own key set:
+      // `lastAttemptResult`/`lastAttemptInvocationId` live in the
+      // module-private WeakMap, never as an instance's OWN enumerable key,
+      // so the earlier gated launch left nothing for `Object.keys()` to see.
+      expect(keysAfterGatedLaunch).toEqual(Object.keys(notGatedLauncher).sort());
+      expect(keysAfterGatedLaunch).not.toEqual(keysBeforeAnyLaunch); // sanity: a launch DOES add base keys (workerLaunchPending)
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('Object.keys(new SessionLauncher()) matches origin/main exactly', () => {
+    expect(Object.keys(new SessionLauncher()).sort()).toEqual(Object.keys(new SessionLauncherBaseline()).sort());
+  });
+
+  it('directRecoveryEligibility is the complete decision: global switch, per-CLI switch, canVerifyAttempt, explicit breaker override', () => {
+    expect(directRecoveryEligibility({ gateEnabled: false }).gated).toBe(false);
+    expect(directRecoveryEligibility({ gateEnabled: true, config: { parallelism: { clis: { codex: { enabled: false } } } },
+      invocation: { selected: { cli: 'codex' } } }).gated).toBe(false);
+    expect(directRecoveryEligibility({ gateEnabled: true, invocation: { selected: { cli: 'codex' } },
+      drivers: { codex: { canVerifyAttempt: false } } }).gated).toBe(false);
+    expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: null }).gated).toBe(false);
+    expect(directRecoveryEligibility({ gateEnabled: true }).gated).toBe(true);
+  });
 });
