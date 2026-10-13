@@ -16,18 +16,26 @@
  *   aiwg session --no-repair            # skip auto-repair (still check and report)
  *   aiwg session --prompt "<text>"      # headless: one-shot, bounded, exits (#3062)
  *   aiwg session --prompt-file <path>   # headless from a file instead of argv
+ *   aiwg session --non-interactive      # force the non-interactive decision (#3062)
  *
  * Without a terminal attached, launching a spawnable provider with no
  * `--prompt`/`--prompt-file` would hand over a terminal that does not exist
  * and hang. `--prompt`/`--prompt-file` map to each provider's documented
- * non-interactive CLI form (see `HEADLESS_SESSION_FLAGS` below); providers
- * without an evidenced one refuse instead of guessing.
+ * non-interactive CLI form, delivered off argv (see
+ * `HEADLESS_SESSION_TRANSPORTS` below); providers without an evidenced one
+ * refuse instead of guessing. A provider with no spawnable binary at all
+ * (IDE-integrated) refuses `--prompt`/`--prompt-file` outright rather than
+ * discarding it. `--non-interactive` forces the same refusal even with a
+ * terminal attached, taking priority over the environment-derived check.
  *
  * @issue #884
  */
 
 import { spawnSync } from 'child_process';
 import { readFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { existsSync } from 'node:fs';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -49,6 +57,8 @@ import {
 import { useHandler as useFrameworkHandler } from './use.js';
 import { debug } from '../log.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
+import { requireFlagValue, MissingFlagValueError } from '../flag-parsing.js';
+import { exitCodeForSpawnResult } from '../child-process-result.js';
 
 // ── Provider resolution ──────────────────────────────────────────────────────
 
@@ -93,37 +103,30 @@ interface SessionArgs {
   prompt: string | undefined;
   /** Headless prompt file path (#3062) — mutually exclusive with prompt */
   promptFile: string | undefined;
+  /** Force the non-interactive decision regardless of TTY/CI (#3062 review item 12) */
+  nonInteractive: boolean;
 }
 
+/**
+ * Parse `aiwg session` flags.
+ *
+ * Every value-taking flag below is parsed through {@link requireFlagValue}
+ * (#3062 review item 11): a flag present with no value, or immediately
+ * followed by another flag, throws {@link MissingFlagValueError} rather
+ * than silently resolving to "not given" — callers MUST catch it before
+ * any preflight check, spawn, or write.
+ */
 function parseSessionArgs(args: string[]): SessionArgs {
-  let mcp = false;
-  let provider: string | undefined;
-  let noRepair = false;
-  let profile: string | undefined;
-  let persist = false;
-  let prompt: string | undefined;
-  let promptFile: string | undefined;
+  const mcp = args.includes('mcp');
+  const noRepair = args.includes('--no-repair');
+  const persist = args.includes('--persist');
+  const nonInteractive = args.includes('--non-interactive');
+  const provider = requireFlagValue(args, '--provider');
+  const profile = requireFlagValue(args, '--profile');
+  const prompt = requireFlagValue(args, '--prompt');
+  const promptFile = requireFlagValue(args, '--prompt-file');
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === 'mcp') {
-      mcp = true;
-    } else if (a === '--provider' && args[i + 1]) {
-      provider = args[++i];
-    } else if (a === '--no-repair') {
-      noRepair = true;
-    } else if (a === '--profile' && args[i + 1]) {
-      profile = args[++i];
-    } else if (a === '--persist') {
-      persist = true;
-    } else if (a === '--prompt' && args[i + 1]) {
-      prompt = args[++i];
-    } else if (a === '--prompt-file' && args[i + 1]) {
-      promptFile = args[++i];
-    }
-  }
-
-  return { mcp, provider, noRepair, profile, persist, prompt, promptFile };
+  return { mcp, provider, noRepair, profile, persist, prompt, promptFile, nonInteractive };
 }
 
 // ── Pre-flight steps ─────────────────────────────────────────────────────────
@@ -165,7 +168,13 @@ function runDoctor(_frameworkRoot: string, cwd: string): boolean {
     'long',
     { stdio: 'inherit', cwd },
   );
-  return (result.status ?? 1) === 0;
+  // #3062 review item 7: a `null` status (killed/timed out/failed to spawn)
+  // already falls through to `false` below via `?? 1`; surface the bounded
+  // helper's diagnostic (e.g. the enriched timeout message) instead of
+  // silently dropping it.
+  const { exitCode, message } = exitCodeForSpawnResult(result, 'aiwg doctor');
+  if (message) debug('cli:session:doctor', message);
+  return exitCode === 0;
 }
 
 /**
@@ -189,6 +198,11 @@ function repairInstallation(
     'long',
     { stdio: 'inherit', cwd },
   );
+  // #3062 review item 7: `status === 0` already treats a `null` status
+  // (timeout/signal/spawn failure) as "not repaired", falling through to
+  // the manual-options message below; surface the diagnostic too.
+  const syncDiagnostic = exitCodeForSpawnResult(syncResult, 'aiwg sync').message;
+  if (syncDiagnostic) debug('cli:session:repair', syncDiagnostic);
 
   if (syncResult.status === 0) {
     // Re-check doctor
@@ -267,6 +281,10 @@ function injectMcp(provider: string, cwd: string): boolean {
     { stdio: 'inherit', cwd },
   );
   if (result.status !== 0) {
+    // #3062 review item 7: surface the bounded helper's diagnostic (if any)
+    // alongside the existing warning.
+    const { message } = exitCodeForSpawnResult(result, 'aiwg mcp inject');
+    if (message) debug('cli:session:mcp-inject', message);
     console.warn(
       '  WARN  MCP inject reported issues — continuing. Run `aiwg mcp list` to check registered servers.',
     );
@@ -307,10 +325,12 @@ function injectMcpProfile(
       { stdio: 'inherit', cwd },
     );
     if (result.status !== 0) {
+      // #3062 review item 7: surface the bounded helper's diagnostic.
+      const { message } = exitCodeForSpawnResult(result, 'aiwg mcp inject');
       if (provider === 'codex' || provider === 'openai' || provider === 'claude' || provider === 'claude-code') {
-        throw new Error(`${provider} profile injection failed; refusing to launch.`);
+        throw new Error(`${provider} profile injection failed; refusing to launch.${message ? ` ${message}` : ''}`);
       }
-      console.warn('  WARN  Profile inject failed — continuing without profile.');
+      console.warn(`  WARN  Profile inject failed — continuing without profile.${message ? ` ${message}` : ''}`);
     }
     return null; // persistent mode, no ephemeral path
   }
@@ -341,10 +361,12 @@ function injectMcpProfile(
   if (result.stdout) process.stdout.write(result.stdout);
 
   if (result.status !== 0) {
+    // #3062 review item 7: surface the bounded helper's diagnostic.
+    const { message } = exitCodeForSpawnResult(result, 'aiwg mcp inject');
     if (provider === 'claude' || provider === 'claude-code') {
-      throw new Error('Claude profile injection failed; refusing to launch.');
+      throw new Error(`Claude profile injection failed; refusing to launch.${message ? ` ${message}` : ''}`);
     }
-    console.warn('  WARN  Ephemeral profile inject failed — launching without profile MCP config.');
+    console.warn(`  WARN  Ephemeral profile inject failed — launching without profile MCP config.${message ? ` ${message}` : ''}`);
     return null;
   }
 
@@ -363,34 +385,85 @@ function injectMcpProfile(
 // ── Launch ────────────────────────────────────────────────────────────────────
 
 /**
- * Flags that make a provider's CLI read one prompt and exit, keyed by the
- * provider ids this file compares against elsewhere (canonical ids plus the
+ * How each provider's headless (`--prompt`/`--prompt-file`) invocation
+ * delivers the prompt text to the child process, keyed by the provider ids
+ * this file compares against elsewhere (canonical ids plus the
  * `claude-code`/`openai` aliases a stored, un-normalized project config can
- * still surface — see `resolveProvider`). Sourced from the worker-adapter
- * evidence already qualified for these binaries (#3062):
- *   - claude/claude-code → `--print`            (claude-adapter.mjs buildSessionArgs)
- *   - codex/openai       → `exec` subcommand    (codex-adapter.mjs buildSessionArgs)
- *   - opencode           → `run --format json`  (opencode-adapter.mjs buildSessionArgs)
- *   - deepseek-harness   → `--profile headless` (deepseek-harness-adapter.mjs; matches
- *                           PROVIDER_CONFIGS['deepseek-harness'].promptPrefix already)
+ * still surface — see `resolveProvider`).
+ *
+ * Every transport below keeps the prompt text itself off argv — it never
+ * shows up in `ps`/`/proc/<pid>/cmdline` — sourced from each adapter's own
+ * qualified evidence (#3062 review item 8), not guessed:
+ *
+ *   - claude/claude-code → `--print --input-format text`, prompt on stdin.
+ *     `--input-format <format> (only works with --print)`, confirmed with a
+ *     piped smoke run (docs/providers/claude-direct.md).
+ *   - codex/openai       → `exec` + a trailing `-` positional, prompt on
+ *     stdin. "`-` reads stdin" (docs/providers/codex-direct.md).
+ *   - deepseek-harness   → `--profile headless` + a trailing `-`
+ *     positional, prompt on stdin. Confirmed by a live no-model probe, not
+ *     just `--help` text (docs/providers/deepseek-harness-direct.md).
+ *   - opencode           → `run --format json`, prompt written to a private
+ *     temp file passed via `-f`/`--file`. Binary disassembly found *no*
+ *     stdin/isTTY handling at all in `run` — stdin is confirmed
+ *     unsupported, not merely undocumented — so `-f` is the evidenced
+ *     non-argv transport instead (opencode-adapter.mjs module doc). The
+ *     positional message is fixed and content-free, matching the adapter's
+ *     `OPENCODE_FIXED_MESSAGE`; the real prompt never appears on argv or as
+ *     a positional.
+ *
  * Providers without an evidenced non-interactive CLI form (e.g. antigravity's
- * NDJSON-over-stdin protocol) are deliberately absent — `headlessSessionArgs`
+ * NDJSON-over-stdin protocol) are deliberately absent — `buildHeadlessLaunch`
  * returns `null` for them rather than guessing an invocation.
  */
-const HEADLESS_SESSION_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  claude: ['--print'],
-  'claude-code': ['--print'],
-  codex: ['exec'],
-  openai: ['exec'],
-  opencode: ['run', '--format', 'json'],
-  'deepseek-harness': ['--profile', 'headless'],
+type HeadlessTransport =
+  | { kind: 'stdin'; flags: readonly string[]; trailingArg?: string }
+  | { kind: 'file'; flags: readonly string[]; fileFlag: string; fixedPositional: string };
+
+const HEADLESS_SESSION_TRANSPORTS: Readonly<Record<string, HeadlessTransport>> = {
+  claude: { kind: 'stdin', flags: ['--print', '--input-format', 'text'] },
+  'claude-code': { kind: 'stdin', flags: ['--print', '--input-format', 'text'] },
+  codex: { kind: 'stdin', flags: ['exec'], trailingArg: '-' },
+  openai: { kind: 'stdin', flags: ['exec'], trailingArg: '-' },
+  'deepseek-harness': { kind: 'stdin', flags: ['--profile', 'headless'], trailingArg: '-' },
+  opencode: {
+    kind: 'file',
+    flags: ['run', '--format', 'json'],
+    fileFlag: '-f',
+    fixedPositional: 'Follow the instructions in the attached file exactly.',
+  },
 };
 
-/** Build the final argv for a headless (`--prompt`/`--prompt-file`) launch, or `null` if unsupported. */
-function headlessSessionArgs(provider: string, binaryArgs: string[], prompt: string): string[] | null {
-  const flags = HEADLESS_SESSION_FLAGS[provider];
-  if (!flags) return null;
-  return [...binaryArgs, ...flags, prompt];
+/** One headless launch's resolved argv, stdin payload, and any temp file to clean up afterward. */
+interface HeadlessLaunchPlan {
+  args: string[];
+  /** Stdin content for the child (stdin-transport providers). */
+  input?: string;
+  /** Temp file holding the prompt (file-transport providers) — caller cleans it up. */
+  tempDir?: string;
+}
+
+/**
+ * Build the final argv (and stdin/temp-file payload) for a headless launch,
+ * or `null` if the provider has no evidenced non-interactive form.
+ */
+function buildHeadlessLaunch(provider: string, binaryArgs: string[], prompt: string): HeadlessLaunchPlan | null {
+  const transport = HEADLESS_SESSION_TRANSPORTS[provider];
+  if (!transport) return null;
+
+  if (transport.kind === 'stdin') {
+    const args = [...binaryArgs, ...transport.flags, ...(transport.trailingArg ? [transport.trailingArg] : [])];
+    return { args, input: prompt };
+  }
+
+  // File transport (opencode): the prompt never touches argv or stdin — it
+  // is written to a private temp file only this process can read, passed
+  // by path.
+  const tempDir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
+  const promptPath = join(tempDir, 'prompt.txt');
+  writeFileSync(promptPath, prompt, 'utf-8');
+  const args = [...binaryArgs, ...transport.flags, transport.fileFlag, promptPath, transport.fixedPositional];
+  return { args, tempDir };
 }
 
 /**
@@ -406,15 +479,29 @@ function headlessSessionArgs(provider: string, binaryArgs: string[], prompt: str
 function launchProvider(
   provider: string,
   mcpInjected: boolean,
-  mcpConfigPath?: string | null,
-  profile?: string | null,
-  settingsPath?: string | null,
-  prompt?: string | null,
+  mcpConfigPath: string | null | undefined,
+  profile: string | null | undefined,
+  settingsPath: string | null | undefined,
+  prompt: string | null | undefined,
+  interactive: boolean,
 ): HandlerResult {
   const cfg = getProviderConfig(provider);
 
   if (!isSpawnableProvider(provider)) {
-    // Not spawnable — print context-aware guidance
+    // Not spawnable — a prompt can never be delivered to a binary that does
+    // not exist. Refuse explicitly instead of discarding it and printing
+    // success (#3062 review item 9). `execute()` already checks this before
+    // any pre-flight step runs; this is defense-in-depth for this function
+    // on its own.
+    if (prompt) {
+      return {
+        exitCode: 1,
+        message:
+          `Provider '${cfg.name}' has no CLI binary to spawn; --prompt/--prompt-file requires a ` +
+          'spawnable provider.',
+      };
+    }
+    // Print context-aware guidance
     const mcpNote = mcpInjected
       ? '\n  MCP servers have been injected into your provider config.\n'
       : '';
@@ -436,12 +523,15 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
   // Codex + profile: use runtime-home adapter (#892)
   if ((provider === 'codex' || provider === 'openai') && profile) {
     console.log(`  Using runtime home for profile "${profile}"`);
-    // Headless (#3062): `launchWithProfile` itself bounds/refuses based on
-    // whether extraArgs is a non-interactive form and whether a terminal is
-    // attached — see its own doc comment.
-    const extraArgs = prompt ? ['exec', prompt] : [];
-    const result = launchWithProfile(profile, extraArgs);
-    return { exitCode: result.status ?? 0 };
+    // Headless (#3062): the prompt travels on stdin via a trailing `-`
+    // positional (docs/providers/codex-direct.md: "`-` reads stdin"),
+    // never on argv (review item 8). `launchWithProfile` itself
+    // bounds/refuses based on whether `extraArgs` is a non-interactive form
+    // and whether a terminal is attached — see its own doc comment.
+    const extraArgs = prompt ? ['exec', '-'] : [];
+    const result = launchWithProfile(profile, extraArgs, prompt ? { input: prompt, interactive } : { interactive });
+    const { exitCode, message } = exitCodeForSpawnResult(result, 'codex');
+    return message ? { exitCode, message } : { exitCode };
   }
 
   // Claude: load both the ephemeral MCP config and any permission settings.
@@ -456,8 +546,8 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
   }
 
   if (prompt) {
-    const headlessArgs = headlessSessionArgs(provider, binaryArgs, prompt);
-    if (!headlessArgs) {
+    const plan = buildHeadlessLaunch(provider, binaryArgs, prompt);
+    if (!plan) {
       return {
         exitCode: 1,
         message:
@@ -465,17 +555,31 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
           `is not supported for it. Run \`aiwg session --provider ${provider}\` from a terminal instead.`,
       };
     }
-    // Bounded (#3062): a headless run never hands over the terminal, so it
-    // is safe to bound and to never inherit stdin — it must never block
-    // waiting for input nobody can supply.
-    const result = boundedSpawnSync(cfg.binary!, headlessArgs, 'long', {
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: process.env as Record<string, string>,
-    });
-    return { exitCode: result.status ?? 0 };
+    try {
+      // Bounded (#3062): a headless run never hands over the terminal, so
+      // it is safe to bound. The prompt never rides on argv (review item
+      // 8); stdin-transport providers get it via `input` (never inherited
+      // from the parent), file-transport providers get it via a private
+      // temp file path already baked into `plan.args`.
+      const result = boundedSpawnSync(cfg.binary!, plan.args, 'long', {
+        stdio: plan.input !== undefined ? ['pipe', 'inherit', 'inherit'] : ['ignore', 'inherit', 'inherit'],
+        env: process.env as Record<string, string>,
+        ...(plan.input !== undefined ? { input: plan.input } : {}),
+      });
+      const { exitCode, message } = exitCodeForSpawnResult(result, cfg.binary!);
+      return message ? { exitCode, message } : { exitCode };
+    } finally {
+      if (plan.tempDir) {
+        try {
+          rmSync(plan.tempDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup only; a leftover temp file is not fatal.
+        }
+      }
+    }
   }
 
-  if (!isInteractive()) {
+  if (!interactive) {
     return {
       exitCode: 1,
       message:
@@ -487,7 +591,7 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
   // sync-spawn: interactive harness-launch — hands the terminal to the
   // provider binary the user is meant to talk to, when no --prompt/
   // --prompt-file was supplied (see tools/testing/sync-spawn-allowlist.json).
-  // Reached only when isInteractive() is true (#3062) — the headless and
+  // Reached only when `interactive` is true (#3062) — the headless and
   // no-terminal paths above are handled before this point. Not a candidate
   // for a bounded timeout.
   const result = spawnSync(cfg.binary!, binaryArgs, {
@@ -495,7 +599,8 @@ ${cfg.guidanceMessage ?? `Open ${cfg.name} in your project directory to begin.`}
     env: process.env as Record<string, string>,
   });
 
-  return { exitCode: result.status ?? 0 };
+  const { exitCode, message } = exitCodeForSpawnResult(result, cfg.binary!);
+  return message ? { exitCode, message } : { exitCode };
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -509,11 +614,26 @@ export const sessionHandler: CommandHandler = {
   aliases: [],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    let parsed: ReturnType<typeof parseSessionArgs>;
+    try {
+      parsed = parseSessionArgs(ctx.args);
+    } catch (err) {
+      // #3062 review item 11: a value-taking flag present without a usable
+      // value is a usage error, reported before any preflight/spawn/write.
+      if (err instanceof MissingFlagValueError) {
+        return { exitCode: 2, message: `aiwg session: ${err.message}.` };
+      }
+      throw err;
+    }
     const {
       mcp, provider: explicitProvider, noRepair, profile, persist,
-      prompt: promptArg, promptFile,
-    } = parseSessionArgs(ctx.args);
+      prompt: promptArg, promptFile, nonInteractive,
+    } = parsed;
     const cwd = ctx.cwd || process.cwd();
+    // #3062 review item 12: the one shared interactive decision, taking
+    // this command's own explicit `--non-interactive` flag as input instead
+    // of only ever checking the environment.
+    const interactive = isInteractive(nonInteractive);
 
     // ── Resolve headless prompt (#3062) — before any pre-flight spawn ──────
     if (promptArg && promptFile) {
@@ -540,12 +660,28 @@ export const sessionHandler: CommandHandler = {
     const provider = await resolveProvider(explicitProvider, cwd);
     const providerCfg = PROVIDER_CONFIGS[provider];
 
+    // An unsupported (non-spawnable) provider can never run a supplied
+    // prompt — it has no binary to hand it to. Validate this before any
+    // pre-flight step runs a child process (#3062 review item 9): the old
+    // behavior silently discarded the prompt and printed IDE guidance at
+    // exit 0.
+    if (prompt && !isSpawnableProvider(provider)) {
+      const unsupportedCfg = getProviderConfig(provider);
+      return {
+        exitCode: 1,
+        message:
+          `Provider '${unsupportedCfg.name}' has no CLI binary to spawn; --prompt/--prompt-file ` +
+          'requires a spawnable provider. Run `aiwg session --provider ' + provider +
+          '` from a terminal for IDE-integrated usage instead.',
+      };
+    }
+
     // Without a terminal, a spawnable provider launched with no prompt would
     // hand over a terminal that does not exist and hang. Fail fast, before
     // any pre-flight step runs a child process (#3062). IDE-integrated
     // providers only ever print guidance — never spawn — so they don't need
     // a prompt to stay safe headless.
-    if (!prompt && isSpawnableProvider(provider) && !isInteractive()) {
+    if (!prompt && isSpawnableProvider(provider) && !interactive) {
       return {
         exitCode: 1,
         message:
@@ -668,6 +804,7 @@ export const sessionHandler: CommandHandler = {
 
     // ── Step 5: Launch ────────────────────────────────────────────
     return launchProvider(provider, mcpInjected, mcpConfigPath,
-      persist && (provider === 'codex' || provider === 'openai') ? null : profile, settingsPath, prompt);
+      persist && (provider === 'codex' || provider === 'openai') ? null : profile, settingsPath, prompt,
+      interactive);
   },
 };

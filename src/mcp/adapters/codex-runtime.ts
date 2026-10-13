@@ -22,6 +22,7 @@ import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncReturns } from 'child_process';
 import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
 import { isInteractive } from '../../cli/env.js';
+import { exitCodeForSpawnResult } from '../../cli/child-process-result.js';
 import { buildServerToml, type McpServerDefinition } from '../registry.js';
 import { assertCredentialPolicy, resolveCredentialPolicy, type McpCredentialPolicy } from '../credentials.mjs';
 import { planToolFilters, type ToolFilters } from '../tool-filters.mjs';
@@ -196,6 +197,24 @@ function isNonInteractiveCodexInvocation(extraArgs: string[]): boolean {
   return extraArgs[0] === 'exec';
 }
 
+/** Options for {@link launchWithProfile}. */
+export interface LaunchWithProfileOptions {
+  /**
+   * Stdin payload for a non-interactive invocation (e.g. a prompt, fed to
+   * `codex exec -`). Never placed on argv (#3062 review item 8).
+   */
+  input?: string;
+  /**
+   * Explicit interactive/non-interactive decision, overriding this
+   * function's own `isInteractive()` call (#3062 review item 12) — the one
+   * shared interactive decision a caller (e.g. `aiwg session
+   * --non-interactive`) may have already computed from its own flags.
+   * Defaults to `isInteractive()` when omitted, preserving prior behavior
+   * for callers that do not thread an explicit decision through.
+   */
+  interactive?: boolean;
+}
+
 /**
  * Launch Codex with a profile's runtime home.
  * Sets CODEX_HOME and HOME to the runtime home so Codex reads its profile-scoped config and
@@ -204,13 +223,15 @@ function isNonInteractiveCodexInvocation(extraArgs: string[]): boolean {
  * Headless (#3062): when `extraArgs` is already a non-interactive form (see
  * {@link isNonInteractiveCodexInvocation}), the call never hands over the
  * terminal, so it is bounded like any other child process and never inherits
- * stdin. Otherwise this launches the interactive TUI, which requires a
- * terminal — without one, this refuses instead of spawning something that
- * would hang.
+ * stdin — unless `options.input` is given, in which case it carries the
+ * prompt on stdin instead (review item 8). Otherwise this launches the
+ * interactive TUI, which requires a terminal — without one, this refuses
+ * instead of spawning something that would hang.
  */
 export function launchWithProfile(
   profile: string,
   extraArgs: string[] = [],
+  options: LaunchWithProfileOptions = {},
 ): SpawnSyncReturns<Buffer> {
   const rtHome = runtimeHomePath(profile);
 
@@ -228,27 +249,29 @@ export function launchWithProfile(
   };
 
   if (isNonInteractiveCodexInvocation(extraArgs)) {
-    // Bounded (#3062): `codex exec <prompt>` never hands over the terminal.
+    // Bounded (#3062): `codex exec -` never hands over the terminal; the
+    // prompt (if any) rides on stdin via `options.input`, never on argv.
     return boundedSpawnSync('codex', extraArgs, 'long', {
-      stdio: ['ignore', 'inherit', 'inherit'],
+      stdio: options.input !== undefined ? ['pipe', 'inherit', 'inherit'] : ['ignore', 'inherit', 'inherit'],
       env,
+      ...(options.input !== undefined ? { input: options.input } : {}),
     }) as SpawnSyncReturns<Buffer>;
   }
 
-  if (!isInteractive()) {
+  if (!(options.interactive ?? isInteractive())) {
     throw new Error(
       `Launching codex for profile "${profile}" with no arguments hands over the terminal and requires one to be attached.\n` +
       'Pass a non-interactive form instead — e.g. run `aiwg session --provider codex --profile ' +
-      `${profile} --prompt "<text>"\` (maps to \`codex exec <text>\`).`,
+      `${profile} --prompt "<text>"\` (maps to \`codex exec -\`, with the prompt on stdin).`,
     );
   }
 
   // sync-spawn: interactive codex-exec — replaces the terminal with the codex
   // binary the user is meant to talk to, when extraArgs is not already a
   // non-interactive form (see tools/testing/sync-spawn-allowlist.json).
-  // Reached only when isInteractive() is true (#3062) — the non-interactive
-  // and no-terminal paths above are handled before this point. Not a
-  // candidate for a bounded timeout.
+  // Reached only when `options.interactive ?? isInteractive()` is true
+  // (#3062) — the non-interactive and no-terminal paths above are handled
+  // before this point. Not a candidate for a bounded timeout.
   return spawnSync('codex', extraArgs, {
     stdio: 'inherit',
     env,
@@ -303,7 +326,11 @@ export async function loginInProfile(
       stdio: ['pipe', 'inherit', 'inherit'],
     });
     if (result.status !== 0) {
-      throw new Error(`codex login --with-api-key failed with exit code ${result.status ?? 'unknown'}`);
+      // #3062 review item 7: surface the bounded helper's `error`/`signal`
+      // detail (e.g. the enriched timeout message naming the bound and
+      // override variable) instead of only the exit code.
+      const { message } = exitCodeForSpawnResult(result, 'codex login --with-api-key');
+      throw new Error(message ?? `codex login --with-api-key failed with exit code ${result.status ?? 'unknown'}`);
     }
     return;
   }
@@ -331,7 +358,8 @@ export async function loginInProfile(
   });
 
   if (result.status !== 0) {
-    throw new Error(`codex login failed with exit code ${result.status ?? 'unknown'}`);
+    const { message } = exitCodeForSpawnResult(result, 'codex login');
+    throw new Error(message ?? `codex login failed with exit code ${result.status ?? 'unknown'}`);
   }
 }
 

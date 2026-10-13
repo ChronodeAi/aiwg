@@ -105,7 +105,7 @@ vi.mock('../../../../src/update/service.mjs', () => ({
 vi.mock('../../../../src/config/aiwg-config.js', () => ({
   readAiwgConfig: mockReadAiwgConfig,
   getDeploymentSummary: mockGetDeploymentSummary,
-  VALID_PROVIDERS: ['claude', 'codex', 'openai', 'cursor', 'windsurf', 'copilot', 'opencode', 'factory', 'warp', 'openclaw', 'hermes'],
+  VALID_PROVIDERS: ['claude', 'codex', 'openai', 'cursor', 'windsurf', 'copilot', 'opencode', 'factory', 'antigravity', 'warp', 'openclaw', 'hermes'],
 }));
 
 vi.mock('../../../../src/cli/agent-spawn.js', () => ({
@@ -322,7 +322,9 @@ describe('sessionHandler Codex profile credential policy', () => {
       credentialPolicy: 'references',
       toolFilters: { allow: ['safe__list'], deny: ['safe__delete'] },
     });
-    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', []);
+    // #3062 review item 12: the resolved `interactive` decision threads
+    // through to `launchWithProfile` even with no prompt.
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', [], { interactive: true });
   });
 
   it.each(['codex', 'openai'].flatMap(provider =>
@@ -650,7 +652,7 @@ describe('sessionHandler.execute — launch behavior', () => {
     expect(result.exitCode).toBe(42);
   });
 
-  it('returns exit code 0 when provider launch returns null status', async () => {
+  it('returns a non-zero exit code (never 0) when provider launch returns null status (#3062 review item 7)', async () => {
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockSpawnSync.mockImplementation((cmd: string) => {
@@ -659,7 +661,27 @@ describe('sessionHandler.execute — launch behavior', () => {
     });
 
     const result = await sessionHandler.execute(makeCtx([]));
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it('reports the bounded helper error and exits non-zero on a killed/timed-out headless run (#3062 review item 7)', async () => {
+    mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
+    mockIsSpawnableProvider.mockReturnValue(true);
+    mockIsInteractive.mockReturnValue(false);
+    mockSpawnSync.mockImplementation((cmd: string) => {
+      if (cmd === 'claude') {
+        return {
+          status: null,
+          signal: 'SIGKILL',
+          error: Object.assign(new Error("`claude --print --input-format text` exceeded the 'long' tier bound of 600000ms and was killed (SIGKILL)."), { code: 'ETIMEDOUT' }),
+        };
+      }
+      return { status: 0 };
+    });
+
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hi']));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/exceeded the 'long' tier bound/);
   });
 });
 
@@ -683,14 +705,21 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     expect(mockForceUpdateCheck).not.toHaveBeenCalled();
   });
 
-  it('runs headless (bounded, stdin ignored) when --prompt is given with no terminal', async () => {
+  it('runs headless (bounded, prompt on stdin — never argv) when --prompt is given with no terminal', async () => {
     mockIsInteractive.mockReturnValue(false);
     const result = await sessionHandler.execute(makeCtx(['--prompt', 'hello there']));
     expect(result.exitCode).toBe(0);
     const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
     expect(launch).toBeDefined();
-    expect(launch![1]).toEqual(['--print', 'hello there']);
-    expect(launch![2]).toMatchObject({ timeout: expect.any(Number), stdio: ['ignore', 'inherit', 'inherit'] });
+    // #3062 review item 8: claude's headless form is `--print --input-format
+    // text`, with the prompt fed over stdin — it never appears on argv.
+    expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+    expect(launch![1]).not.toContain('hello there');
+    expect(launch![2]).toMatchObject({
+      timeout: expect.any(Number),
+      stdio: ['pipe', 'inherit', 'inherit'],
+      input: 'hello there',
+    });
   });
 
   it('runs headless when --prompt is given even with a terminal attached (#3062 rule 4)', async () => {
@@ -698,10 +727,11 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     const result = await sessionHandler.execute(makeCtx(['--prompt', 'hi']));
     expect(result.exitCode).toBe(0);
     const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
-    expect(launch![1]).toEqual(['--print', 'hi']);
+    expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+    expect(launch![2]).toMatchObject({ input: 'hi' });
   });
 
-  it('reads the prompt from --prompt-file', async () => {
+  it('reads the prompt from --prompt-file, delivered over stdin', async () => {
     mockIsInteractive.mockReturnValue(false);
     const dir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
     const file = join(dir, 'prompt.txt');
@@ -710,7 +740,8 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
       const result = await sessionHandler.execute(makeCtx(['--prompt-file', file]));
       expect(result.exitCode).toBe(0);
       const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
-      expect(launch![1]).toEqual(['--print', 'file prompt text']);
+      expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+      expect(launch![2]).toMatchObject({ input: 'file prompt text' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -731,11 +762,32 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
   });
 
   it('refuses a spawnable provider with no evidenced headless CLI form', async () => {
-    mockGetProviderConfig.mockReturnValue({ name: 'Factory AI', binary: 'factory-cli', guidanceMessage: null });
-    const result = await sessionHandler.execute(makeCtx(['--provider', 'factory', '--prompt', 'hi']));
+    // antigravity (review item 9): genuinely spawnable (binary: 'agy') but
+    // absent from HEADLESS_SESSION_TRANSPORTS — unlike the fictional
+    // "spawnable Factory" this test used to mock, which masked the real
+    // bug below (Factory's actual config has binary: null).
+    mockGetProviderConfig.mockReturnValue({ name: 'Google Antigravity CLI', binary: 'agy', guidanceMessage: null });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'antigravity', '--prompt', 'hi']));
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/no evidenced non-interactive/);
-    expect(mockSpawnSync.mock.calls.some(([command]) => command === 'factory-cli')).toBe(false);
+    expect(mockSpawnSync.mock.calls.some(([command]) => command === 'agy')).toBe(false);
+  });
+
+  it('refuses an unsupported (non-spawnable) provider given --prompt, naming the provider, before any pre-flight spawn (review item 9)', async () => {
+    mockIsSpawnableProvider.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({
+      name: 'Factory AI',
+      binary: null,
+      guidanceMessage: 'Factory AI is cloud-based and cannot be spawned from the CLI.',
+    });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'factory', '--prompt', 'do the thing']));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/Factory AI/);
+    expect(result.message).toMatch(/no CLI binary to spawn/);
+    // Validated before any pre-flight step — nothing was spawned at all,
+    // not even the version-check/doctor self-invocations.
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
   });
 
   it('never requires a prompt for an IDE-integrated (non-spawnable) provider', async () => {
@@ -758,7 +810,9 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
       makeCtx(['--provider', 'codex', '--profile', 'test', '--prompt', 'do the thing', '--no-repair']),
     );
     expect(result.exitCode).toBe(0);
-    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', ['exec', 'do the thing']);
+    // #3062 review item 8: the prompt travels on stdin via the `-`
+    // positional, never on argv.
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', ['exec', '-'], { input: 'do the thing', interactive: false });
   });
 });
 

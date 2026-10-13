@@ -26,9 +26,23 @@
  *
  * Handlers MUST call this helper instead of re-deriving the check locally.
  * Divergent isTTY checks scattered across handlers have caused bugs in the
- * past (#918 audit findings).
+ * past (#918 audit findings, and #3062 review item 12: `init` only checked
+ * `CI === 'true'`, `setup project` ignored CI/TERM entirely, and `session`
+ * ignored its own `--non-interactive` flag — each reinventing a narrower
+ * version of this same check instead of using it).
+ *
+ * @param explicitNonInteractive When `true`, short-circuits to `false`
+ *   without inspecting the environment at all. Pass the caller's own
+ *   explicit non-interactive flag here (e.g. `--non-interactive`, or
+ *   `--yes` where it means "don't prompt") so the single interactive
+ *   decision takes the command's explicit flags as input, rather than
+ *   every call site re-deriving its own mix of flag-vs-environment
+ *   precedence. Omit it (or pass `false`) to fall through to the
+ *   environment-only checks below, unchanged from before this parameter
+ *   existed.
  */
-export function isInteractive(): boolean {
+export function isInteractive(explicitNonInteractive = false): boolean {
+  if (explicitNonInteractive) return false;
   if (!process.stdin.isTTY) return false;
   if (!process.stdout.isTTY) return false;
   if (process.env['TERM'] === 'dumb') return false;
