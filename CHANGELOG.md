@@ -263,6 +263,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   automatic upgrade or installation switch. The session-explore acquisition
   recipe now requires this preflight before a completion claim.
 
+### Security
+
+- **Runtime MCP dependency floor** - the root package and the `droid-bridge`
+  addon/plugin now require `@modelcontextprotocol/sdk@^1.30.0` resolved to
+  current patch releases, closing `GHSA-6qxp-vccf-f47h` and raising the
+  transitive floor for `proxy-addr` (`GHSA-jqcg-44mw-7w3h`, critical), `hono`
+  (`GHSA-hxh3-vqpv-xpqv`), `fast-uri` (`GHSA-hrr3-gc8f-f4qj`,
+  `GHSA-qw65-cvwx-89v3`, `GHSA-58mr-gqgx-xq4g`), `ip-address`
+  (`GHSA-j6r3-76f7-8jcv`, `GHSA-h3mg-xc3c-68pw`, `GHSA-rpw4-54j3-4h4q`,
+  `GHSA-2vr4-cq9g-pvrc`), and — in `droid-bridge` only — `qs`
+  (`GHSA-x5fp-wj9c-mxmx`, `GHSA-4mjr-xmp4-gh2g`). The root lockfile also picks
+  up a `glob`/`minimatch` floor fixing `brace-expansion`
+  (`GHSA-q2hr-2g5m-vwhr`, `GHSA-qhr7-859c-m2p7`, `GHSA-6j4f-fj2g-mc7p`). No
+  package.json ranges changed; every fix landed within already-declared
+  semver ranges.
+
 ## [2026.10.1] - 2026-10-05 - "Turnkey Jev decision offload"
 
 ### Added
