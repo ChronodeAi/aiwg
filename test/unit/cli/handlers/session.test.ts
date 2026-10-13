@@ -5,6 +5,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -28,6 +31,8 @@ const {
   mockEnsureRuntimeHome,
   mockWriteProfileConfig,
   mockLaunchWithProfile,
+  mockIsInteractive,
+  writeFileSyncCalls,
 } = vi.hoisted(() => ({
   mockSpawnSync: vi.fn(),
   mockExistsSync: vi.fn(),
@@ -51,6 +56,12 @@ const {
   mockEnsureRuntimeHome: vi.fn(),
   mockWriteProfileConfig: vi.fn(),
   mockLaunchWithProfile: vi.fn(),
+  // Defaults to an attached terminal (#3062) so pre-existing tests that
+  // exercise pre-flight/launch logic unrelated to headlessness keep their
+  // original behavior. The dedicated headless/no-terminal describe block
+  // below overrides this per test.
+  mockIsInteractive: vi.fn().mockReturnValue(true),
+  writeFileSyncCalls: [] as Array<{ path: string; options: unknown }>,
 }));
 
 vi.mock('../../../../src/mcp/profiles.js', () => ({
@@ -69,6 +80,10 @@ vi.mock('../../../../src/mcp/adapters/codex-runtime.js', () => ({
   launchWithProfile: mockLaunchWithProfile,
 }));
 
+vi.mock('../../../../src/cli/env.js', () => ({
+  isInteractive: mockIsInteractive,
+}));
+
 vi.mock('child_process', () => ({
   spawnSync: mockSpawnSync,
 }));
@@ -78,6 +93,14 @@ vi.mock('node:fs', async importOriginal => {
   return {
     ...original,
     existsSync: (path: import('node:fs').PathLike) => mockExistsSync(path) ?? original.existsSync(path),
+    // Spy-through (#3062 second review, finding 10): records every call's
+    // path/options so tests can assert the prompt file's mode/flag, then
+    // still performs the real write so the rest of the code (including
+    // its own cleanup) behaves exactly as in production.
+    writeFileSync: (path: import('node:fs').PathOrFileDescriptor, data: unknown, options?: unknown) => {
+      writeFileSyncCalls.push({ path: String(path), options });
+      return original.writeFileSync(path as never, data as never, options as never);
+    },
   };
 });
 
@@ -92,7 +115,7 @@ vi.mock('../../../../src/update/service.mjs', () => ({
 vi.mock('../../../../src/config/aiwg-config.js', () => ({
   readAiwgConfig: mockReadAiwgConfig,
   getDeploymentSummary: mockGetDeploymentSummary,
-  VALID_PROVIDERS: ['claude', 'codex', 'openai', 'cursor', 'windsurf', 'copilot', 'opencode', 'factory', 'warp', 'openclaw', 'hermes'],
+  VALID_PROVIDERS: ['claude', 'codex', 'openai', 'cursor', 'windsurf', 'copilot', 'opencode', 'factory', 'antigravity', 'warp', 'openclaw', 'hermes'],
 }));
 
 vi.mock('../../../../src/cli/agent-spawn.js', () => ({
@@ -144,6 +167,7 @@ function setupHappyPath(): void {
 describe('sessionHandler Claude profile permissions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockReadAiwgConfig.mockResolvedValue(null);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
@@ -257,6 +281,7 @@ describe('sessionHandler Claude profile permissions', () => {
 describe('sessionHandler Codex profile credential policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -307,7 +332,9 @@ describe('sessionHandler Codex profile credential policy', () => {
       credentialPolicy: 'references',
       toolFilters: { allow: ['safe__list'], deny: ['safe__delete'] },
     });
-    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test');
+    // #3062 review item 12: the resolved `interactive` decision threads
+    // through to `launchWithProfile` even with no prompt.
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', [], { interactive: true });
   });
 
   it.each(['codex', 'openai'].flatMap(provider =>
@@ -357,6 +384,7 @@ describe('sessionHandler metadata', () => {
 describe('sessionHandler.execute — provider resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -397,6 +425,7 @@ describe('sessionHandler.execute — provider resolution', () => {
 describe('sessionHandler.execute — arg parsing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -435,6 +464,7 @@ describe('sessionHandler.execute — arg parsing', () => {
 describe('sessionHandler.execute — version check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     setupHappyPath();
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -464,6 +494,7 @@ describe('sessionHandler.execute — version check', () => {
 describe('sessionHandler.execute — doctor and repair', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
@@ -533,6 +564,7 @@ describe('sessionHandler.execute — doctor and repair', () => {
 describe('sessionHandler.execute — deployment check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockForceUpdateCheck.mockResolvedValue(undefined);
@@ -578,10 +610,21 @@ describe('sessionHandler.execute — deployment check', () => {
 describe('sessionHandler.execute — launch behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockForceUpdateCheck.mockResolvedValue(undefined);
     mockReadAiwgConfig.mockResolvedValue(null);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
     mockSpawnSync.mockReturnValue({ status: 0 });
+  });
+
+  // #3062 second review, finding 4: `aiwg session` historically let a
+  // *later* repeated flag win (a hand-rolled loop that kept overwriting
+  // on every match); the first-round shared parser silently flipped that
+  // to first-wins. This restores and locks in the original precedence.
+  it('--provider repeated resolves to the last occurrence (restored pre-#3062 precedence)', async () => {
+    mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
+    await sessionHandler.execute(makeCtx(['--provider', 'claude', '--provider', 'codex']));
+    expect(mockGetProviderConfig).toHaveBeenCalledWith('codex');
   });
 
   it('spawns provider binary for spawnable providers', async () => {
@@ -629,7 +672,7 @@ describe('sessionHandler.execute — launch behavior', () => {
     expect(result.exitCode).toBe(42);
   });
 
-  it('returns exit code 0 when provider launch returns null status', async () => {
+  it('returns a non-zero exit code (never 0) when provider launch returns null status (#3062 review item 7)', async () => {
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockSpawnSync.mockImplementation((cmd: string) => {
@@ -638,13 +681,261 @@ describe('sessionHandler.execute — launch behavior', () => {
     });
 
     const result = await sessionHandler.execute(makeCtx([]));
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it('reports the bounded helper error and exits non-zero on a killed/timed-out headless run (#3062 review item 7)', async () => {
+    mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
+    mockIsSpawnableProvider.mockReturnValue(true);
+    mockIsInteractive.mockReturnValue(false);
+    mockSpawnSync.mockImplementation((cmd: string) => {
+      if (cmd === 'claude') {
+        return {
+          status: null,
+          signal: 'SIGKILL',
+          error: Object.assign(new Error("`claude --print --input-format text` exceeded the 'long' tier bound of 600000ms and was killed (SIGKILL)."), { code: 'ETIMEDOUT' }),
+        };
+      }
+      return { status: 0 };
+    });
+
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hi']));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/exceeded the 'long' tier bound/);
+  });
+});
+
+describe('sessionHandler.execute — headless prompt (#3062)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupHappyPath();
+    mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
+    mockIsSpawnableProvider.mockReturnValue(true);
+    mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
+    mockForceUpdateCheck.mockResolvedValue(undefined);
+    mockReadAiwgConfig.mockResolvedValue(null);
+    writeFileSyncCalls.length = 0;
+  });
+
+  it('refuses a spawnable provider with no terminal and no prompt, spawning nothing', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx([]));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/--prompt/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
+  });
+
+  it('runs headless (bounded, prompt on stdin — never argv) when --prompt is given with no terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hello there']));
     expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch).toBeDefined();
+    // #3062 review item 8: claude's headless form is `--print --input-format
+    // text`, with the prompt fed over stdin — it never appears on argv.
+    expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+    expect(launch![1]).not.toContain('hello there');
+    expect(launch![2]).toMatchObject({
+      timeout: expect.any(Number),
+      stdio: ['pipe', 'inherit', 'inherit'],
+      input: 'hello there',
+    });
+  });
+
+  it('runs headless when --prompt is given even with a terminal attached (#3062 rule 4)', async () => {
+    mockIsInteractive.mockReturnValue(true);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'hi']));
+    expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+    expect(launch![2]).toMatchObject({ input: 'hi' });
+  });
+
+  it('reads the prompt from --prompt-file, delivered over stdin', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const dir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
+    const file = join(dir, 'prompt.txt');
+    writeFileSync(file, '  file prompt text  \n');
+    try {
+      const result = await sessionHandler.execute(makeCtx(['--prompt-file', file]));
+      expect(result.exitCode).toBe(0);
+      const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+      expect(launch![1]).toEqual(['--print', '--input-format', 'text']);
+      expect(launch![2]).toMatchObject({ input: 'file prompt text' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('opencode file-transport: writes the prompt to a private 0600 temp file under mkdtemp, and removes it after launch', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'OpenCode', binary: 'opencode', guidanceMessage: null });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'opencode', '--prompt', 'hello there']));
+    expect(result.exitCode).toBe(0);
+
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'opencode');
+    expect(launch).toBeDefined();
+    expect(launch![1]).toEqual(
+      expect.arrayContaining(['run', '--format', 'json', '-f', expect.stringContaining('prompt.txt'), 'Follow the instructions in the attached file exactly.']),
+    );
+    // The prompt text itself is never on argv — only the temp file path.
+    expect(launch![1].join(' ')).not.toContain('hello there');
+
+    // #3062 second review, finding 10: mkdtemp under the system temp
+    // directory (never a custom location), file written with an explicit
+    // 0600 mode via an exclusive create.
+    const promptWrite = writeFileSyncCalls.find((call) => call.path.includes('prompt.txt'));
+    expect(promptWrite).toBeDefined();
+    expect(promptWrite!.options).toMatchObject({ mode: 0o600, flag: 'wx' });
+    expect(promptWrite!.path.startsWith(tmpdir())).toBe(true);
+
+    // Removed after the launch — every exit path cleans it up.
+    const promptPath = (launch![1] as string[]).find((arg) => arg.includes('prompt.txt'))!;
+    expect(existsSync(dirname(promptPath))).toBe(false);
+  });
+
+  // Go/no-go review blocker 4: `args.includes('mcp')` matched the literal
+  // word `mcp` anywhere in argv, including a free-text `--prompt`/
+  // `--prompt-file` value or anything after a bare `--` terminator — see
+  // `hasPositionalOrSwitch()`'s own doc comment (src/cli/flag-parsing.ts).
+  it('a --prompt whose text is literally "mcp" does not trigger MCP injection', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'mcp']));
+    expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch![2]).toMatchObject({ input: 'mcp' });
+    const mcpInjectCall = mockSpawnSync.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+    );
+    expect(mcpInjectCall).toBeUndefined();
+  });
+
+  // Confirmatory, not itself a regression pin: `mcp`/`persist`/etc. are
+  // decided from argv in `parseSessionArgs()` before the prompt file is
+  // even read, so the file's *content* was never reachable from
+  // `args.includes(...)` in the first place, old code or new. Kept to
+  // pin that this stays true as the implementation evolves.
+  it('a --prompt-file whose entire content is "mcp" does not trigger MCP injection', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const dir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
+    const file = join(dir, 'prompt.txt');
+    writeFileSync(file, 'mcp\n');
+    try {
+      const result = await sessionHandler.execute(makeCtx(['--prompt-file', file]));
+      expect(result.exitCode).toBe(0);
+      const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+      expect(launch![2]).toMatchObject({ input: 'mcp' });
+      const mcpInjectCall = mockSpawnSync.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+      );
+      expect(mcpInjectCall).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--persist after a bare -- terminator is positional data, not honored as a flag', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockResolveServers.mockResolvedValue([{ name: 'git', type: 'stdio', command: 'git-mcp' }]);
+    mockResolveProfile.mockResolvedValue({ providerOverrides: {} });
+    // `persist`'s one observable effect is whether the self-invoked `mcp
+    // inject` call carries `--ephemeral`: present when NOT persisting
+    // (the normal, correct outcome here, since `--persist` is after `--`),
+    // absent when persisting (the bug this pins against).
+    const result = await sessionHandler.execute(makeCtx(['--profile', 'safe', '--prompt', 'hello', '--', '--persist']));
+    expect(result.exitCode).toBe(0);
+    const injection = mockSpawnSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes('inject'));
+    expect(injection).toBeDefined();
+    expect(injection![1]).toContain('--ephemeral');
+  });
+
+  it('the legitimate positional "mcp" subcommand still triggers MCP injection alongside --prompt', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['mcp', '--prompt', 'hello there']));
+    expect(result.exitCode).toBe(0);
+    const mcpInjectCall = mockSpawnSync.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+    );
+    expect(mcpInjectCall).toBeDefined();
+  });
+
+  it('rejects --prompt and --prompt-file together, spawning nothing', async () => {
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'a', '--prompt-file', '/tmp/aiwg-3062-unused']));
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toMatch(/only one of/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('errors for a missing --prompt-file without spawning anything', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt-file', '/does/not/exist-aiwg-3062.txt']));
+    expect(result.exitCode).toBe(1);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('refuses a spawnable provider with no evidenced headless CLI form, before any pre-flight step (review items 9 and 6b)', async () => {
+    // antigravity (review item 9): genuinely spawnable (binary: 'agy') but
+    // absent from HEADLESS_SESSION_TRANSPORTS — unlike the fictional
+    // "spawnable Factory" this test used to mock, which masked the real
+    // bug below (Factory's actual config has binary: null).
+    mockGetProviderConfig.mockReturnValue({ name: 'Google Antigravity CLI', binary: 'agy', guidanceMessage: null });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'antigravity', '--prompt', 'hi']));
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toMatch(/no evidenced non-interactive/);
+    // #3062 second review, finding 6: checked before any pre-flight step
+    // runs — not just before the eventual `agy` launch attempt.
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unsupported (non-spawnable) provider given --prompt, naming the provider, before any pre-flight spawn (review item 9)', async () => {
+    mockIsSpawnableProvider.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({
+      name: 'Factory AI',
+      binary: null,
+      guidanceMessage: 'Factory AI is cloud-based and cannot be spawned from the CLI.',
+    });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'factory', '--prompt', 'do the thing']));
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toMatch(/Factory AI/);
+    expect(result.message).toMatch(/no CLI binary to spawn/);
+    // Validated before any pre-flight step — nothing was spawned at all,
+    // not even the version-check/doctor self-invocations.
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
+  });
+
+  it('never requires a prompt for an IDE-integrated (non-spawnable) provider', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockIsSpawnableProvider.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'Cursor', binary: null, guidanceMessage: 'Open Cursor in your project.' });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'cursor']));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('maps codex exec with a profile through launchWithProfile', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
+    mockLaunchWithProfile.mockReturnValue({ status: 0 });
+    mockResolveServers.mockResolvedValue([]);
+    mockResolveProfile.mockResolvedValue({});
+    mockCredentialPolicy.mockResolvedValue('references');
+    mockWriteProfileConfig.mockResolvedValue([]);
+    const result = await sessionHandler.execute(
+      makeCtx(['--provider', 'codex', '--profile', 'test', '--prompt', 'do the thing', '--no-repair']),
+    );
+    expect(result.exitCode).toBe(0);
+    // #3062 review item 8: the prompt travels on stdin via the `-`
+    // positional, never on argv.
+    expect(mockLaunchWithProfile).toHaveBeenCalledWith('test', ['exec', '-'], { input: 'do the thing', interactive: false });
   });
 });
 
 describe('sessionHandler.execute — MCP injection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsInteractive.mockReturnValue(true);
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process'
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs'
 
 function usage() {
   console.error('Usage: wait-for-github-tag.mjs --repo OWNER/REPO --tag TAG --expected-sha SHA [--attempts N] [--delay-seconds N]')
@@ -40,7 +40,7 @@ async function main() {
 
   const endpoint = `repos/${options.repo}/git/ref/tags/${encodeURIComponent(options.tag)}`
   for (let attempt = 1; attempt <= options.attempts; attempt += 1) {
-    const result = spawnSync(process.env.GH_BIN || 'gh', ['api', endpoint], {
+    const result = boundedSpawnSync(process.env.GH_BIN || 'gh', ['api', endpoint], 'network', {
       encoding: 'utf8',
       env: process.env,
     })

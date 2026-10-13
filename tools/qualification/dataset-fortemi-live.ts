@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { boundedExecFileSync } from "../../src/process/bounded-child-process.mjs";
 import { join } from "node:path";
 import { createDefaultMcpClient } from "../../src/storage/backends/fortemi.js";
 import {
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   const receipt = await qualifyFortemiDatasetLivePreflight({
     client,
     endpointUrl: url,
-    aiwgCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+    aiwgCommit: boundedExecFileSync("git", ["rev-parse", "HEAD"], "quick", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim(),

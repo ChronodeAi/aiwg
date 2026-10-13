@@ -26,9 +26,23 @@
  *
  * Handlers MUST call this helper instead of re-deriving the check locally.
  * Divergent isTTY checks scattered across handlers have caused bugs in the
- * past (#918 audit findings).
+ * past (#918 audit findings, and #3062 review item 12: `init` only checked
+ * `CI === 'true'`, `setup project` ignored CI/TERM entirely, and `session`
+ * ignored its own `--non-interactive` flag — each reinventing a narrower
+ * version of this same check instead of using it).
+ *
+ * @param explicitNonInteractive When `true`, short-circuits to `false`
+ *   without inspecting the environment at all. Pass the caller's own
+ *   explicit non-interactive flag here (e.g. `--non-interactive`, or
+ *   `--yes` where it means "don't prompt") so the single interactive
+ *   decision takes the command's explicit flags as input, rather than
+ *   every call site re-deriving its own mix of flag-vs-environment
+ *   precedence. Omit it (or pass `false`) to fall through to the
+ *   environment-only checks below, unchanged from before this parameter
+ *   existed.
  */
-export function isInteractive(): boolean {
+export function isInteractive(explicitNonInteractive = false): boolean {
+  if (explicitNonInteractive) return false;
   if (!process.stdin.isTTY) return false;
   if (!process.stdout.isTTY) return false;
   if (process.env['TERM'] === 'dumb') return false;
@@ -38,24 +52,33 @@ export function isInteractive(): boolean {
 }
 
 /**
+ * Variables that mark a continuous-integration environment. Exported so tests
+ * that need the interactive path can clear exactly what `isCI()` reads.
+ */
+export const CI_ENV_VARS: readonly string[] = [
+  'CI',
+  'CONTINUOUS_INTEGRATION',
+  'BUILD_NUMBER',
+  'RUN_ID',
+  'GITHUB_ACTIONS',
+  'GITLAB_CI',
+  'CIRCLECI',
+  'TRAVIS',
+  'BUILDKITE',
+  'JENKINS_URL',
+  'TF_BUILD', // Azure DevOps
+  'TEAMCITY_VERSION',
+];
+
+/** Other variables `isInteractive()` reads. */
+export const INTERACTIVE_ENV_VARS: readonly string[] = ['TERM', 'DEBIAN_FRONTEND'];
+
+/**
  * Return true iff we're running in a continuous-integration environment.
  * Checks the common CI env vars set by major CI systems.
  */
 export function isCI(): boolean {
-  const ciVars = [
-    'CI',
-    'CONTINUOUS_INTEGRATION',
-    'BUILD_NUMBER',
-    'RUN_ID',
-    'GITHUB_ACTIONS',
-    'GITLAB_CI',
-    'CIRCLECI',
-    'TRAVIS',
-    'BUILDKITE',
-    'JENKINS_URL',
-    'TF_BUILD', // Azure DevOps
-    'TEAMCITY_VERSION',
-  ];
+  const ciVars = CI_ENV_VARS;
   for (const v of ciVars) {
     const val = process.env[v];
     if (val && val !== '0' && val.toLowerCase() !== 'false') return true;

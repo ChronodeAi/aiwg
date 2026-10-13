@@ -35,7 +35,7 @@ describe('tools/cli/deploy.mjs', () => {
     const content = readFileSync(DEPLOY_SCRIPT, 'utf-8');
     // Should contain the deploy logic
     expect(content).toContain('aiwg use');
-    expect(content).toContain('execSync');
+    expect(content).toContain('boundedExecSync');
   });
 
   it('handles --provider flag', async () => {

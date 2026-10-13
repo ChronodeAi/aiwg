@@ -10,7 +10,7 @@
  *   aiwg -contribute-status cursor-integration  # Show feature details
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import {
   listWorkspaces,
   loadWorkspaceData,
@@ -78,14 +78,14 @@ function formatRelativeTime(isoDate) {
 function getGitStatus(projectRoot = process.cwd()) {
   try {
     // Get current branch
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+    const branch = boundedExecSync('git rev-parse --abbrev-ref HEAD', 'quick', {
       cwd: projectRoot,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
 
     // Get uncommitted changes
-    const statusOutput = execSync('git status --porcelain', {
+    const statusOutput = boundedExecSync('git status --porcelain', 'quick', {
       cwd: projectRoot,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
@@ -96,7 +96,7 @@ function getGitStatus(projectRoot = process.cwd()) {
     let aheadOrigin = 0;
     let behindOrigin = 0;
     try {
-      const aheadBehindOrigin = execSync(`git rev-list --left-right --count origin/${branch}...HEAD 2>/dev/null`, {
+      const aheadBehindOrigin = boundedExecSync(`git rev-list --left-right --count origin/${branch}...HEAD 2>/dev/null`, 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe']
@@ -111,7 +111,7 @@ function getGitStatus(projectRoot = process.cwd()) {
     let aheadUpstream = 0;
     let behindUpstream = 0;
     try {
-      const aheadBehindUpstream = execSync(`git rev-list --left-right --count upstream/main...HEAD 2>/dev/null`, {
+      const aheadBehindUpstream = boundedExecSync(`git rev-list --left-right --count upstream/main...HEAD 2>/dev/null`, 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe']

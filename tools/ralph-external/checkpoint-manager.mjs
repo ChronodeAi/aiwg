@@ -10,7 +10,9 @@
 import { EventEmitter } from 'events';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { execSync } from 'child_process';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * @typedef {Object} CheckpointData
@@ -148,12 +150,12 @@ export class CheckpointManager extends EventEmitter {
    */
   captureGitStatus() {
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      const branch = boundedExecSync('git rev-parse --abbrev-ref HEAD', 'quick', {
         cwd: this.projectRoot,
         encoding: 'utf8',
       }).trim();
 
-      const statusOutput = execSync('git status --porcelain', {
+      const statusOutput = boundedExecSync('git status --porcelain', 'quick', {
         cwd: this.projectRoot,
         encoding: 'utf8',
       });

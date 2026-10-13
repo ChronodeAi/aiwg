@@ -11,6 +11,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { glob } from 'glob';
+import { importImpl } from '../_resolve-impl.mjs';
 
 /**
  * Migration validation error
@@ -137,18 +138,18 @@ export class MigrationTool {
       const requiredSpace = aiwgSize * 2; // Need 2x for backup
 
       // Get available disk space (platform-specific)
-      const { execSync } = await import('child_process');
+      const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
       let availableBytes;
 
       if (process.platform === 'win32') {
         // Windows: use fsutil (returns bytes free)
         const drive = path.parse(process.cwd()).root;
-        const output = execSync(`fsutil volume diskfree ${drive}`).toString();
+        const output = boundedExecSync(`fsutil volume diskfree ${drive}`, 'quick').toString();
         const match = output.match(/Total # of free bytes\s+:\s+(\d+)/);
         availableBytes = match ? parseInt(match[1], 10) : Infinity;
       } else {
         // Unix-like: use df (returns KB available)
-        const output = execSync(`df -k "${process.cwd()}" | tail -1`).toString();
+        const output = boundedExecSync(`df -k "${process.cwd()}" | tail -1`, 'quick').toString();
         const parts = output.split(/\s+/);
         availableBytes = parseInt(parts[3], 10) * 1024; // Convert KB to bytes
       }

@@ -10,7 +10,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import { createHash } from 'crypto';
-import { execSync } from 'child_process';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * @typedef {Object} GitStatus
@@ -278,33 +280,33 @@ export class SnapshotManager {
   captureGitStatus(projectRoot) {
     try {
       // Get current branch
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      const branch = boundedExecSync('git rev-parse --abbrev-ref HEAD', 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
 
       // Get current commit
-      const commit = execSync('git rev-parse HEAD', {
+      const commit = boundedExecSync('git rev-parse HEAD', 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
 
       // Get staged files
-      const stagedOutput = execSync('git diff --cached --name-only', {
+      const stagedOutput = boundedExecSync('git diff --cached --name-only', 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
       const staged = stagedOutput ? stagedOutput.split('\n') : [];
 
       // Get unstaged files
-      const unstagedOutput = execSync('git diff --name-only', {
+      const unstagedOutput = boundedExecSync('git diff --name-only', 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
       const unstaged = unstagedOutput ? unstagedOutput.split('\n') : [];
 
       // Get untracked files
-      const untrackedOutput = execSync('git ls-files --others --exclude-standard', {
+      const untrackedOutput = boundedExecSync('git ls-files --others --exclude-standard', 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
@@ -435,7 +437,7 @@ export class SnapshotManager {
 
     try {
       // Get list of changed files
-      const diffOutput = execSync(`git diff --name-status ${fromCommit}..${toCommit}`, {
+      const diffOutput = boundedExecSync(`git diff --name-status ${fromCommit}..${toCommit}`, 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
@@ -474,7 +476,7 @@ export class SnapshotManager {
         // Get actual diff for modified files
         if (status === 'modified') {
           try {
-            diff.diff = execSync(`git diff ${fromCommit}..${toCommit} -- "${filePath}"`, {
+            diff.diff = boundedExecSync(`git diff ${fromCommit}..${toCommit} -- "${filePath}"`, 'quick', {
               cwd: projectRoot,
               encoding: 'utf8',
             });
@@ -504,7 +506,7 @@ export class SnapshotManager {
     }
 
     try {
-      const output = execSync(`git log ${sinceCommit}..HEAD --pretty=format:"%H %s"`, {
+      const output = boundedExecSync(`git log ${sinceCommit}..HEAD --pretty=format:"%H %s"`, 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();

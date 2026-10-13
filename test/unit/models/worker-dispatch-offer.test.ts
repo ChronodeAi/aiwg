@@ -15,6 +15,8 @@ import {
   evaluateWorkerDispatchOffer,
   workerDispatchOfferQuestion,
   workerDispatchOfferHint,
+  workerDispatchOfferHintWithArg,
+  parseWorkerDispatchArg,
   WORKER_DISPATCH_ENABLE_COMMAND,
 } from '../../../src/models/worker-dispatch-offer.js';
 import type { ProviderModelCapabilityRegistry } from '../../../src/models/provider-policy.js';
@@ -164,5 +166,29 @@ describe('workerDispatchOfferHint', () => {
     expect(hint).toContain(WORKER_DISPATCH_ENABLE_COMMAND);
     expect(hint).toContain('aiwg doctor --probe-workers');
     expect(hint).toContain('codex, muse');
+  });
+});
+
+describe('workerDispatchOfferHintWithArg (#3062)', () => {
+  it('includes everything the base hint does, plus the --worker-dispatch argument', () => {
+    const hint = workerDispatchOfferHintWithArg(['codex', 'muse']);
+    expect(hint).toContain(workerDispatchOfferHint(['codex', 'muse']));
+    expect(hint).toContain('--worker-dispatch enable|decline');
+  });
+});
+
+describe('parseWorkerDispatchArg (#3062)', () => {
+  it('returns undefined when the flag is not given at all', () => {
+    expect(parseWorkerDispatchArg(undefined)).toBeUndefined();
+  });
+
+  it('accepts "enable" and "decline" verbatim', () => {
+    expect(parseWorkerDispatchArg('enable')).toBe('enable');
+    expect(parseWorkerDispatchArg('decline')).toBe('decline');
+  });
+
+  it('throws naming the accepted values for anything else', () => {
+    expect(() => parseWorkerDispatchArg('yes')).toThrow(/--worker-dispatch must be one of: enable, decline/);
+    expect(() => parseWorkerDispatchArg('')).toThrow(/--worker-dispatch must be one of: enable, decline/);
   });
 });

@@ -10,10 +10,11 @@
 
 import os from 'os';
 import { readFileSync } from 'fs';
-import { execSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 // Markers a current Claude Code session actually sets (CLI and Desktop Code
 // tab); mirrors the `claude` provider's `detection.env` in
@@ -86,7 +87,7 @@ function getNodeVersion() {
 
 function getNpmVersion() {
   try {
-    return execSync('npm --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return boundedExecSync('npm --version', 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch {
     return 'unknown';
   }

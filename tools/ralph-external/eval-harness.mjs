@@ -18,9 +18,11 @@
  * @issue #1776 (#1585 Track 3)
  */
 
-import { execSync } from 'child_process';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * Fields that MUST NEVER reach the optimizing agent. The default set matches
@@ -103,10 +105,25 @@ export class EvalHarness {
     // Injectable for tests; defaults to execSync capturing exit code + stdout.
     this._run = opts.runner?.run || ((cmd, o) => {
       try {
-        const stdout = execSync(cmd, { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const stdout = boundedExecSync(cmd, 'long', { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
         return { code: 0, stdout };
       } catch (err) {
-        return { code: err.status ?? 1, stdout: (err.stdout || '').toString() + (err.stderr || '').toString() };
+        const captured = (err.stdout || '').toString() + (err.stderr || '').toString();
+        const timedOut = err.code === 'ETIMEDOUT';
+        // A `long`-tier timeout (#3062 finding 17) would otherwise be lost
+        // here: err.stdout/err.stderr do not carry the enriched bound
+        // explanation (naming the tier, bound, and AIWG_SYNC_LONG_TIMEOUT_MS
+        // override) — only err.message does.
+        const timeoutNote = timedOut ? `\n${err.message}` : '';
+        // #3062 B/C finding 13: a surviving descendant holding the pipe
+        // open can produce ETIMEDOUT with err.status === 0 — the direct
+        // child itself exited successfully (see bounded-child-process.mjs's
+        // own doc comment). `?? 1` only replaces null/undefined, so that
+        // genuine 0 would otherwise sail through as "success" here and lint
+        // would read the timed-out run as clean. Force nonzero whenever the
+        // helper reports a timeout, regardless of what status it carries.
+        const code = timedOut ? (err.status || 1) : (err.status ?? 1);
+        return { code, stdout: captured + timeoutNote };
       }
     });
   }

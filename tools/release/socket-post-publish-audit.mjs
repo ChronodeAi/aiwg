@@ -3,7 +3,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { basename, dirname, relative, resolve } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs'
 import { pathToFileURL } from 'node:url'
 
 const SCORE_KEYS = ['supplyChain', 'quality', 'maintenance', 'vulnerability', 'license']
@@ -375,7 +375,7 @@ async function main() {
     { purl: npmPurl('@aiwg/cli', version), depth: 'direct' }
   ]
   if (args['dependency-lock']) {
-    const commitSha = args.commit ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    const commitSha = args.commit ?? boundedExecFileSync('git', ['rev-parse', 'HEAD'], 'quick', { encoding: 'utf8' }).trim()
     components = []
     for (const [lockIndex, lockArg] of args['dependency-lock'].entries()) {
       const lockPath = resolve(lockArg)

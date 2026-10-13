@@ -3,8 +3,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import Ajv2020 from 'ajv/dist/2020.js';
 
 import {
@@ -47,21 +47,33 @@ function sha256(bytes) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const tier = options.tier ?? 'quick';
+  const result = boundedSpawnSync(command, args, tier, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     encoding: 'utf8',
     stdio: options.capture ? 'pipe' : 'inherit',
   });
-  if (result.status !== 0) {
+  // result.error ||, not just status !== 0 (#3062 B/C finding 13): a
+  // surviving descendant holding the pipe can produce ETIMEDOUT with
+  // status 0 — status alone would then read as success.
+  if (result.error || result.status !== 0) {
+    // #3062 finding 17: result.error carries the enriched timeout
+    // explanation (tier/bound/override) that the exit code alone does
+    // not — matters here since the `cargo test` call below uses `long`.
+    if (result.error) console.error(result.error.message);
     fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
   }
   return result.stdout?.trim() ?? '';
 }
 
 function runBytes(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: options.cwd ?? root, encoding: null });
-  if (result.status !== 0) fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
+  const tier = options.tier ?? 'quick';
+  const result = boundedSpawnSync(command, args, tier, { cwd: options.cwd ?? root, encoding: null });
+  if (result.error || result.status !== 0) {
+    if (result.error) console.error(result.error.message);
+    fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
+  }
   return result.stdout;
 }
 
@@ -342,6 +354,7 @@ if (serverFlag >= 0) {
     ],
     {
       cwd: checkout,
+      tier: 'long',
       env: {
         DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://matric:matric@localhost/matric',
       },

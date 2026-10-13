@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /** D17-MF calibrated multi-fact probe (#2850). Offline by default; collection uses tools/decision/heldout-study.mjs. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, writeFile, realpath } from 'node:fs/promises';
 import { resolve, join, relative, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { register } from 'tsx/esm/api';
+import { importImpl } from '../_resolve-impl.mjs';
+
 register();
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const ownPath = fileURLToPath(import.meta.url);
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -74,7 +76,7 @@ export async function assertD17SealedSource(sourceRoot, sealedCommit) {
     throw new Error('D17 sealed source');
   }
   const directory = await realpath(resolve(sourceRoot));
-  const git = args => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const git = args => boundedExecFileSync('git', ['-C', directory, ...args], 'quick', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   let head, status;
   try {
     head = git(['rev-parse', '--verify', 'HEAD^{commit}']).trim();

@@ -244,10 +244,81 @@ if (process.argv.slice(2).includes('--dry-run')) {
   process.env['AIWG_CLI_DRY_RUN'] = '1';
 }
 
+// Startup tracing — set AIWG_TRACE_STARTUP=1 to print per-phase timings to
+// stderr. Useful for diagnosing cold-start regressions, and for a test to
+// observe whether the credential-handling skip below actually fired,
+// without needing the update notifier to otherwise be eligible to run (it
+// also needs a real terminal — see `isCredentialHandlingCommand()`'s own
+// tests). No-op by default so it doesn't cost anything on the hot path.
+// Defined ahead of its first use below (moved up from just before
+// `resolveRouterPath()`, where it used to sit) so the notifier gate can use
+// it too.
+const traceStartup = process.env['AIWG_TRACE_STARTUP'] === '1' ||
+  process.env['AIWG_TRACE_STARTUP']?.toLowerCase() === 'true';
+const startHr = process.hrtime.bigint();
+function trace(phase) {
+  if (!traceStartup) return;
+  const ms = Number(process.hrtime.bigint() - startHr) / 1_000_000;
+  process.stderr.write(`[trace] +${ms.toFixed(1)}ms ${phase}\n`);
+}
+trace('bin:entry');
+
+/**
+ * True iff this invocation is a command that reads a secret directly from
+ * the environment or from an argument as part of its own documented
+ * contract (go/no-go review, blocker 1A). Checked from argv alone — no
+ * dist/ import, no router resolution — so it costs nothing on the
+ * `--version`/`--help` fast paths and can run before any bootstrap
+ * subprocess starts.
+ *
+ * No bootstrap subprocess may start before dispatch for one of these,
+ * because a bootstrap child that copies the parent's environment (or is
+ * merely spawned while `NODE_DEBUG=child_process` is set) would otherwise
+ * see whatever the command's own secret-bearing variable holds, before the
+ * command itself ever ran. Scrubbing a specific variable out of every
+ * possible bootstrap child is not attempted here — not starting the
+ * bootstrap at all for these commands is the smaller, certain fix. (The
+ * background update-check child also gets its own environment allow-list,
+ * independent of this list — see `notifierChildEnv()` in
+ * `src/update/notifier.mjs` — so a secret in the parent's environment that
+ * this list does not yet name is still not copied into that one child.)
+ *
+ * Qualifying commands, and why:
+ *   - `mcp profile login` — reads an API key via `--api-key-env`,
+ *     `--api-key-stdin`, or `--api-key-file`.
+ *   - `decision setup jev` — without `--token-stdin`, reads the token
+ *     directly from `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY`.
+ *
+ * Checked and left out, with reasons (see the go/no-go review response):
+ *   - `auth login` — an OAuth device/browser flow; it does not read a
+ *     pre-existing secret from the environment or argv at invocation, it
+ *     obtains one over the network after the user authorizes it.
+ *   - `mcp inject` / `mcp add` / `mcp update` (including `--header-env`) —
+ *     `headerEnv`/`envFrom` references only ever carry a variable *name*
+ *     into a provider's config (resolved by that provider later, not by
+ *     this process); a literal `--env NAME=value` on `mcp add` is stored
+ *     to the registry file and never touches `process.env` here.
+ */
+function isCredentialHandlingCommand(args) {
+  const positionals = [];
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (!arg.startsWith('-')) {
+      positionals.push(arg);
+      if (positionals.length >= 3) break;
+    }
+  }
+  if (positionals[0] === 'mcp' && positionals[1] === 'profile' && positionals[2] === 'login') return true;
+  if (positionals[0] === 'decision' && positionals[1] === 'setup' && positionals[2] === 'jev') return true;
+  return false;
+}
+
 // Display a cached notice and schedule its refresh before every eligible CLI
 // path, including fast help/version, channel recovery, and later preflight
-// failures. This local-only bootstrap never waits on the registry and failures
-// are deliberately ignored so update advice cannot change command behavior.
+// failures — except a credential-handling command (above), which never gets
+// this or any other bootstrap subprocess before dispatch. This local-only
+// bootstrap never waits on the registry and failures are deliberately
+// ignored so update advice cannot change command behavior.
 async function runUpdateNotifierBootstrap() {
   try {
     const notifierPath = path.join(packageRoot, 'dist', 'src', 'update', 'notifier.mjs');
@@ -260,12 +331,18 @@ async function runUpdateNotifierBootstrap() {
   }
 }
 
-await runUpdateNotifierBootstrap();
+const cliArgs = process.argv.slice(2);
+if (isCredentialHandlingCommand(cliArgs)) {
+  trace('notifier:skip (credential-handling command)');
+} else {
+  await runUpdateNotifierBootstrap();
+  trace('notifier:bootstrap-complete');
+}
 
-if (maybeHandleFastVersion(process.argv.slice(2))) {
+if (maybeHandleFastVersion(cliArgs)) {
   process.exit(0);
 }
-if (maybeHandleFastHelp(process.argv.slice(2))) {
+if (maybeHandleFastHelp(cliArgs)) {
   process.exit(0);
 }
 
@@ -285,19 +362,6 @@ function ensureInvocationId() {
   return fresh;
 }
 const invocationId = ensureInvocationId();
-
-// Startup tracing — set AIWG_TRACE_STARTUP=1 to print per-phase timings to
-// stderr. Useful for diagnosing cold-start regressions. No-op by default so
-// it doesn't cost anything on the hot path.
-const traceStartup = process.env['AIWG_TRACE_STARTUP'] === '1' ||
-  process.env['AIWG_TRACE_STARTUP']?.toLowerCase() === 'true';
-const startHr = process.hrtime.bigint();
-function trace(phase) {
-  if (!traceStartup) return;
-  const ms = Number(process.hrtime.bigint() - startHr) / 1_000_000;
-  process.stderr.write(`[trace] +${ms.toFixed(1)}ms ${phase}\n`);
-}
-trace('bin:entry');
 
 /**
  * Resolve the path to the compiled router.

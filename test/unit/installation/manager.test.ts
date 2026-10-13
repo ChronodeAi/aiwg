@@ -1,7 +1,26 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// Go/no-go review blocker 1B: `resolveExecutable()`'s `which`/`where.exe`
+// lookup (reached via `createInstallationIdentity()` for a `method:
+// 'source'` identity with no `managerExecutable` override) must pass only
+// an allow-listed environment, never the whole parent one — this spies on
+// the real `boundedExecFileSync` to capture what it was actually called
+// with, without changing its behavior.
+const boundedExecFileSyncSpy = vi.fn();
+vi.mock('../../../src/process/bounded-child-process.mjs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/process/bounded-child-process.mjs')>();
+  return {
+    ...actual,
+    boundedExecFileSync: (...callArgs: Parameters<typeof actual.boundedExecFileSync>) => {
+      boundedExecFileSyncSpy(...callArgs);
+      return actual.boundedExecFileSync(...callArgs);
+    },
+  };
+});
+
 import {
   adoptInstallation,
   assertCanonicalInstallation,
@@ -215,5 +234,32 @@ describe('canonical installation identity', () => {
     expect(status.state).toBe('mismatch');
     expect(status.managerProbe).toEqual({ state: 'failed', error: 'spawn failed' });
     expect(status.drift).toContain('recorded manager executable cannot be invoked: spawn failed');
+  });
+
+  // Go/no-go review blocker 1B.
+  it("resolving a method: 'source' identity's manager executable looks up `git` with only PATH, never the whole parent environment", () => {
+    const previousSecret = process.env.AIWG_TEST_INSTALLATION_SECRET;
+    process.env.AIWG_TEST_INSTALLATION_SECRET = 'sk-test-installation-secret';
+    try {
+      const root = packageRoot('aiwg', true);
+      boundedExecFileSyncSpy.mockClear();
+      createInstallationIdentity({ actualRoot: root, method: 'source' });
+
+      expect(boundedExecFileSyncSpy).toHaveBeenCalledTimes(1);
+      const [finder, args, , options] = boundedExecFileSyncSpy.mock.calls[0] as [
+        string, string[], string, { env?: Record<string, string> },
+      ];
+      expect(finder).toBe(process.platform === 'win32' ? 'where.exe' : 'which');
+      expect(args).toEqual(['git']);
+      expect(options?.env).toBeDefined();
+      expect(options!.env!.AIWG_TEST_INSTALLATION_SECRET).toBeUndefined();
+      const allowed = process.platform === 'win32'
+        ? new Set(['PATH', 'PATHEXT', 'SystemRoot'])
+        : new Set(['PATH']);
+      expect(new Set(Object.keys(options!.env!))).toEqual(allowed);
+    } finally {
+      if (previousSecret === undefined) delete process.env.AIWG_TEST_INSTALLATION_SECRET;
+      else process.env.AIWG_TEST_INSTALLATION_SECRET = previousSecret;
+    }
   });
 });

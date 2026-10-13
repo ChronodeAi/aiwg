@@ -7,10 +7,12 @@
  * @implements @.aiwg/requirements/design-ralph-external.md
  */
 
-import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const GITEA_TOKEN_PATH = join(homedir(), '.config', 'gitea', 'token');
 const GITEA_API_BASE = 'https://git.integrolabs.net/api/v1';
@@ -66,7 +68,7 @@ curl -s -X ${method} \\
 EOF`;
 
     try {
-      const result = execSync(script, { encoding: 'utf8' });
+      const result = boundedExecSync(script, 'network', { encoding: 'utf8' });
       return JSON.parse(result);
     } catch (error) {
       throw new Error(`Gitea API call failed: ${error.message}`);
@@ -186,7 +188,7 @@ Loop completed at ${new Date().toISOString()}
  */
 export function detectGiteaRepo(cwd) {
   try {
-    const remote = execSync('git remote get-url origin', {
+    const remote = boundedExecSync('git remote get-url origin', 'quick', {
       cwd,
       encoding: 'utf8',
     }).trim();

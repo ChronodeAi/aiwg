@@ -16,7 +16,7 @@
  * - Missing tests: -10
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 
@@ -28,7 +28,8 @@ import path from 'path';
  */
 function exec(command, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -49,7 +50,9 @@ function exec(command, options = {}) {
  * @returns {Object} { passed: boolean, errors: number, warnings: number, details: Array }
  */
 export function runMarkdownLint(projectRoot = process.cwd()) {
-  const result = exec(`npm exec markdownlint-cli2 "**/*.md"`, { cwd: projectRoot });
+  // `network`, not the default `quick` (#3062 finding 6): `npm exec` can
+  // resolve/install the binary from the registry on demand.
+  const result = exec(`npm exec markdownlint-cli2 "**/*.md"`, { cwd: projectRoot, tier: 'network' });
 
   if (result.success) {
     return {

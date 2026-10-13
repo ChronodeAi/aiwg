@@ -1,5 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { execFileSync } from 'node:child_process'
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs'
 import { dirname, resolve } from 'node:path'
 import {
   DATASET_CONFORMANCE_CONTRACT,
@@ -86,11 +86,11 @@ async function pending(cell: DatasetConformanceCell): Promise<DatasetConformance
 
 async function runFortemiParity(cell: DatasetConformanceCell, checkout: string, commit: string): Promise<DatasetConformanceCellResult> {
   const fixture = await fixtureEvidence(cell)
-  execFileSync('pnpm', ['--dir', checkout, '--filter', '@fortemi/core', 'exec', 'vitest', 'run',
+  boundedExecFileSync('pnpm', ['--dir', checkout, '--filter', '@fortemi/core', 'exec', 'vitest', 'run',
     'src/__tests__/dataset-execution-capabilities.test.ts',
     'src/__tests__/dataset-ingest.test.ts',
     'src/__tests__/dataset-lineage.test.ts',
-    'src/__tests__/dataset-materialization-profiles.test.ts'], { stdio: 'inherit' })
+    'src/__tests__/dataset-materialization-profiles.test.ts'], 'long', { stdio: 'inherit' })
   const lockDigest = await digestFile(resolve(checkout, 'pnpm-lock.yaml'))
   return { cellId: cell.id, status: 'passed', evidence: [fixture, { kind: 'cross-repo', reference: `${checkout}@${commit}`, digest: lockDigest }], observed: { records: 0, bytes: (await stat(cell.fixture.path)).size, durationMs: 0, networkAttempts: 0 } }
 }
@@ -124,7 +124,7 @@ async function main() {
     process.exitCode = diagnostics.length === 0 ? 0 : 1
     return
   }
-  const aiwgDirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim()
+  const aiwgDirty = boundedExecFileSync('git', ['status', '--porcelain', '--untracked-files=no'], 'quick', { encoding: 'utf8' }).trim()
   if (aiwgDirty) throw new Error('CONFORMANCE_AIWG_CHECKOUT_DIRTY')
   if (args.mode === 'live') {
     if (!args.liveQualification || !args.liveRunReceipt || !args.fortemiServerCommit || !/^[0-9a-f]{40}$/u.test(args.fortemiServerCommit)) {
@@ -133,9 +133,9 @@ async function main() {
   }
   if (args.mode === 'cross-repo' || (args.mode === 'live' && args.fortemiCheckout)) {
     if (!args.fortemiCheckout || !args.fortemiCommit || !/^[0-9a-f]{40}$/u.test(args.fortemiCommit)) throw new Error('CONFORMANCE_PINNED_FORTEMI_REQUIRED')
-    const actual = execFileSync('git', ['-C', args.fortemiCheckout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    const actual = boundedExecFileSync('git', ['-C', args.fortemiCheckout, 'rev-parse', 'HEAD'], 'quick', { encoding: 'utf8' }).trim()
     if (actual !== args.fortemiCommit) throw new Error(`CONFORMANCE_FORTEMI_COMMIT_MISMATCH: expected ${args.fortemiCommit}, received ${actual}`)
-    const dirty = execFileSync('git', ['-C', args.fortemiCheckout, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim()
+    const dirty = boundedExecFileSync('git', ['-C', args.fortemiCheckout, 'status', '--porcelain', '--untracked-files=no'], 'quick', { encoding: 'utf8' }).trim()
     if (dirty) throw new Error('CONFORMANCE_FORTEMI_CHECKOUT_DIRTY')
   }
   const startedAt = new Date().toISOString()
@@ -163,7 +163,7 @@ async function main() {
     contract: DATASET_CONFORMANCE_CONTRACT, schemaVersion: DATASET_CONFORMANCE_SCHEMA_VERSION, corpusVersion: manifest.corpusVersion,
     manifestDigest: conformanceDigest(manifest), resultDigest: resultDigest(results),
     bindings: {
-      aiwgCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      aiwgCommit: boundedExecFileSync('git', ['rev-parse', 'HEAD'], 'quick', { encoding: 'utf8' }).trim(),
       ...(args.fortemiCheckout ? { fortemiCommit: args.fortemiCommit } : {}),
       ...(args.mode === 'live' ? { fortemiServerCommit: args.fortemiServerCommit } : {}),
       packageDigests: { aiwg: await digestFile('package-lock.json'), ...(args.fortemiCheckout ? { fortemi: await digestFile(resolve(args.fortemiCheckout, 'pnpm-lock.yaml')) } : {}) },

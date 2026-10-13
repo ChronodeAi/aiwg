@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { link, mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { boundedExecFileSync } from "../process/bounded-child-process.mjs";
 import type { FortemiQualificationReport } from "./fortemi-qualification.js";
 
 export const FORTEMI_QUALIFICATION_RECEIPT =
@@ -83,7 +83,7 @@ export function resolveFortemiQualificationSource(
   cwd = process.cwd(),
 ): { aiwgCommit: string; aiwgRef: string } {
   const git = (...args: string[]) =>
-    execFileSync("git", args, {
+    boundedExecFileSync("git", args, 'quick', {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

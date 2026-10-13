@@ -354,6 +354,21 @@ describe('Ralph CLI Multi-Loop Support', () => {
       assert.strictEqual(state.active, false);
     });
 
+    it('should scan for ralph commits with --revert (#3062 bounded git log)', () => {
+      const stateManager = new MultiLoopStateManager(TEST_DIR);
+      const { loopId } = stateManager.createLoop({
+        task: 'Fix tests',
+        completion: 'npm test',
+        maxIterations: 10,
+      });
+
+      const result = runAbort('--revert');
+
+      assert.strictEqual(result.success, true);
+      assert.match(result.output, new RegExp(`Ralph Loop Aborted: ${loopId}`));
+      assert.match(result.output, /Reverting changes\.\.\./);
+    });
+
     it('should require --loop-id when multiple loops exist', () => {
       const stateManager = new MultiLoopStateManager(TEST_DIR);
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../../src/process/bounded-child-process.mjs';
 import { generate, digest, rowHash, verifySplits, validate, quantile, predictionSet, fit, predict, metrics, extendIntegrity } from './prototype.mjs';
 const plan=JSON.parse(readFileSync(new URL('./preregister.json',import.meta.url),'utf8'));
 const frozen=JSON.parse(readFileSync(new URL('./frozen.json',import.meta.url),'utf8'));
@@ -66,7 +66,7 @@ test('CONF-08 offline replay and shuffled completion order produce identical ser
  const temporary=mkdtempSync(join(tmpdir(),'conformal-test-'));
  try{
   for(const [name,args]of [['first',[]],['reverse',['--reverse']]]){
-   const result=spawnSync(process.execPath,['--import','tsx',new URL('./run.mjs',import.meta.url).pathname,join(temporary,name),...args],{encoding:'utf8',env:{PATH:process.env.PATH}});
+   const result=boundedSpawnSync(process.execPath,['--import','tsx',new URL('./run.mjs',import.meta.url).pathname,join(temporary,name),...args],'long',{encoding:'utf8',env:{PATH:process.env.PATH}});
    assert.equal(result.status,0,result.stderr);
   }
   for(const file of ['report.json','per-example.jsonl','plots.svg']) assert.equal(readFileSync(join(temporary,'first',file),'utf8'),readFileSync(join(temporary,'reverse',file),'utf8'));

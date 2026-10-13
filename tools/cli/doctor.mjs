@@ -9,9 +9,10 @@ import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync, boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
@@ -596,7 +597,12 @@ function hasTrackerRemote(remotes) {
 }
 
 function childProcessSucceeded(err) {
-  return Boolean(err && err.status === 0);
+  // err.code !== 'ETIMEDOUT' guards the same pattern as #3062 B/C finding
+  // 13: a surviving descendant holding the pipe can produce ETIMEDOUT
+  // with status 0 (the direct child itself exited fine) — status alone
+  // would then read a real timeout as the sandbox-EPERM-but-really-fine
+  // case this function exists to recognize.
+  return Boolean(err && err.code !== 'ETIMEDOUT' && err.status === 0);
 }
 
 async function fileExists(filePath) {
@@ -775,7 +781,7 @@ async function runDoctor() {
     check('AIWG Version', 'ok', `${versionInfo.version}${channelLabel}`);
   } catch {
     try {
-      const version = execSync('aiwg -version 2>/dev/null', { encoding: 'utf-8' }).trim();
+      const version = boundedExecSync('aiwg -version 2>/dev/null', 'quick', { encoding: 'utf-8' }).trim();
       check('AIWG Version', 'ok', version.split('\n')[0]);
     } catch {
       check('AIWG Version', 'warn', 'Could not determine version');
@@ -786,14 +792,14 @@ async function runDoctor() {
   if (versionInfo?.devMode && versionInfo?.edgePath) {
     try {
       // Check if upstream remote exists (fork mode)
-      const remotes = execSync('git remote', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
+      const remotes = boundedExecSync('git remote', 'quick', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
       if (remotes.includes('upstream')) {
         // Count commits upstream has that we don't
         let aheadCount = 0;
         try {
-          execSync('git fetch upstream --dry-run', { cwd: versionInfo.edgePath, stdio: 'pipe' });
+          boundedExecSync('git fetch upstream --dry-run', 'network', { cwd: versionInfo.edgePath, stdio: 'pipe' });
           aheadCount = parseInt(
-            execSync('git rev-list HEAD..upstream/main --count', {
+            boundedExecSync('git rev-list HEAD..upstream/main --count', 'quick', {
               cwd: versionInfo.edgePath, encoding: 'utf-8'
             }).trim(), 10
           ) || 0;
@@ -1355,7 +1361,7 @@ async function runDoctor() {
   // failure it prints shell-specific guidance and the `npx aiwg` fallback.
   // Doctor's exit code is not affected (PATH guidance is informational).
   try {
-    execSync('aiwg --version', { stdio: 'ignore' });
+    boundedExecSync('aiwg --version', 'quick', { stdio: 'ignore' });
     // aiwg is callable — no PATH issue to report.
   } catch {
     const isTTY = Boolean(process.stdout.isTTY);
@@ -1717,7 +1723,7 @@ async function runDoctor() {
         // Collect actual git remote names; tolerate non-git directories.
         let gitRemotes = [];
         try {
-          gitRemotes = execSync('git remote', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
+          gitRemotes = boundedExecSync('git remote', 'quick', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
             .trim()
             .split('\n')
             .filter(Boolean);
@@ -1832,7 +1838,7 @@ async function runDoctor() {
         // default_branch existence — best effort, only when in a git repo
         const defaultBranch = d.default_branch || 'main';
         try {
-          execFileSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', defaultBranch], {
+          boundedExecFileSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', defaultBranch], 'quick', {
             stdio: 'pipe',
           });
         } catch (err) {

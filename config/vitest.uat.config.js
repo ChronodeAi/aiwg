@@ -16,6 +16,7 @@ export default defineConfig({
       'test/uat/mw-provider-matrix.uat.ts', 'test/uat/regenerate-flags.uat.ts',
       'test/uat/worker-dispatch-gate.uat.ts', 'test/uat/context-dispatch-state.uat.ts',
       'test/uat/dispatch-hints.uat.ts', 'test/uat/clean-providers.uat.ts',
+      'test/uat/sync-headless-interactive.uat.ts',
     ],
     exclude: ['test/uat/ralph-live-*.uat.ts'],
     environment: 'node',

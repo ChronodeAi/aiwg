@@ -11,6 +11,7 @@ import { providerSourceDigest } from './types.js';
 import type { BundleMetricProvider } from './types.js';
 import type { GateMetricsDocument, ProviderAllowlistEntry, Sha256Digest } from '../types.js';
 import { ISOLATED_CHILD_SOURCE } from './isolated-child-source.js';
+import { positiveTimeoutMs } from '../../process/bounded-child-process.mjs';
 
 export type { BundleMetricProvider } from './types.js';
 
@@ -772,7 +773,8 @@ function runIsolatedRecordSync(
   const completed = spawnSync(plan.command, plan.args, {
     env: plan.env,
     input,
-    timeout: limits.timeoutMs,
+    // Validated upstream; clamped here so the bound holds at the call site.
+    timeout: positiveTimeoutMs(limits.timeoutMs, GATE_PROVIDER_DEFAULT_TIMEOUT_MS),
     killSignal: 'SIGKILL',
     maxBuffer: limits.maxOutputBytes,
     encoding: 'utf8',

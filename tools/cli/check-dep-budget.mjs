@@ -23,9 +23,11 @@
  */
 
 import { readFileSync } from 'fs';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,7 +78,7 @@ if (directCount > DIRECT_BUDGET) {
 let transitiveCount;
 if (includeTransitive) {
   try {
-    const raw = execSync('npm ls --prod --all --json', {
+    const raw = boundedExecSync('npm ls --prod --all --json', 'quick', {
       cwd: REPO_ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf-8',

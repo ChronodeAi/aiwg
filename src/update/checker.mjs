@@ -13,6 +13,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import https from 'https';
 import { execSync } from 'child_process';
+import { boundedExecSync } from '../process/bounded-child-process.mjs';
 import { createInterface } from 'readline';
 import { loadConfig, saveConfig, getChannel, getPackageRoot } from '../channel/manager.mjs';
 import { updateInstallation } from './service.mjs';
@@ -71,12 +72,12 @@ async function checkGitUpdates(edgePath) {
     execSync('git fetch --quiet', { cwd: edgePath, timeout: 10000 });
 
     // Check if local is behind remote
-    const localHash = execSync('git rev-parse HEAD', {
+    const localHash = boundedExecSync('git rev-parse HEAD', 'quick', {
       cwd: edgePath,
       encoding: 'utf8',
     }).trim();
 
-    const remoteHash = execSync('git rev-parse origin/main', {
+    const remoteHash = boundedExecSync('git rev-parse origin/main', 'quick', {
       cwd: edgePath,
       encoding: 'utf8',
     }).trim();
@@ -322,7 +323,7 @@ async function checkEdgeUpdates(config) {
       console.log('');
       console.log('Updating edge installation...');
       try {
-        execSync('git pull --ff-only', { cwd: config.edgePath, stdio: 'inherit' });
+        boundedExecSync('git pull --ff-only', 'network', { cwd: config.edgePath, stdio: 'inherit' });
         console.log('Update complete!');
       } catch (error) {
         console.error('Update failed. Run manually:');

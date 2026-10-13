@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createClient } from './ipc-client.mjs';
 import { TmuxManager, formatStatusDashboard } from './tmux-manager.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -810,7 +811,8 @@ Options:
         // --tmux path: spawn inside a named tmux session for reconnect support
         if (useTmux) {
           try {
-            const { execSync, execFileSync } = await import('child_process');
+            const { execFileSync } = await import('child_process');
+            const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
             const { createHash, randomBytes } = await import('crypto');
             const { PTYAdapter } = await import('./pty-adapter.mjs');
 
@@ -826,13 +828,13 @@ Options:
             const fullCmd = [bin, ...extraArgs].join(' ');
 
             // Start named tmux session detached
-            execSync(`tmux new-session -d -s "${tmuxName}" -x ${cols} -y ${rows} "${fullCmd}"`);
+            boundedExecSync(`tmux new-session -d -s "${tmuxName}" -x ${cols} -y ${rows} "${fullCmd}"`, 'quick');
 
             // Get the PID of the shell/process running inside the tmux pane
             let pid = null;
             try {
               pid = parseInt(
-                execSync(`tmux list-panes -t "${tmuxName}" -F '#{pane_pid}'`).toString().trim(),
+                boundedExecSync(`tmux list-panes -t "${tmuxName}" -F '#{pane_pid}'`, 'quick').toString().trim(),
                 10,
               );
             } catch { /* leave null if tmux version doesn't support format strings */ }
@@ -942,8 +944,8 @@ Options:
           // Also stop tmux session if one was created
           if (session.tmuxSession) {
             try {
-              const { execSync } = await import('child_process');
-              execSync(`tmux kill-session -t ${session.tmuxSession} 2>/dev/null`, { stdio: 'ignore' });
+              const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+              boundedExecSync(`tmux kill-session -t ${session.tmuxSession} 2>/dev/null`, 'quick', { stdio: 'ignore' });
             } catch { /* tmux session may already be gone */ }
           }
           PTYAdapter._removeSession(sessionId);

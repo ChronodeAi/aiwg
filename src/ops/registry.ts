@@ -11,7 +11,7 @@ import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { resolve, dirname, basename, sep } from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../process/bounded-child-process.mjs';
 import { resolveConfigDir } from '../config/user-config.js';
 import { resolveWorkspace, type ResolvedWorkspace } from '../config/workspace.js';
 import type {
@@ -670,7 +670,7 @@ export class OpsRegistry {
       if (remote) {
         console.log(`  Pushing ${repoName} to ${remote}/${branch}...`);
         try {
-          execSync(`git push ${shellEscape(remote)} ${shellEscape(branch)}`, {
+          boundedExecSync(`git push ${shellEscape(remote)} ${shellEscape(branch)}`, 'network', {
             cwd: repo.path,
             stdio: 'pipe',
           });
@@ -721,8 +721,10 @@ async function provisionRepo(
       }
     }
     await mkdir(dirname(repoPath), { recursive: true });
-    execSync(
+    // Cloning a full repository; long tier (#3062).
+    boundedExecSync(
       `git clone ${shellEscape(fromUrl)} ${shellEscape(repoPath)}`,
+      'long',
       { stdio: silent ? 'pipe' : 'inherit' }
     );
     return { action: 'Cloned', remote: readGitRemote(repoPath) };
@@ -730,7 +732,7 @@ async function provisionRepo(
 
   // Case 3: fresh init.
   await mkdir(repoPath, { recursive: true });
-  execSync('git init', { cwd: repoPath, stdio: 'pipe' });
+  boundedExecSync('git init', 'quick', { cwd: repoPath, stdio: 'pipe' });
   return { action: 'Created', remote: undefined };
 }
 
@@ -750,7 +752,7 @@ function shellEscape(s: string): string {
 function readGitRemote(dirPath: string): string | undefined {
   if (!existsSync(resolve(dirPath, '.git'))) return undefined;
   try {
-    const out = execSync('git config --get remote.origin.url', {
+    const out = boundedExecSync('git config --get remote.origin.url', 'quick', {
       cwd: dirPath,
       stdio: ['ignore', 'pipe', 'ignore'],
     })

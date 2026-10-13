@@ -152,3 +152,43 @@ export function workerDispatchOfferHint(detected: string[]): string {
   return `Direct worker dispatch is off; detected worker CLIs: ${detected.join(', ')}. `
     + `Enable with \`${WORKER_DISPATCH_ENABLE_COMMAND}\` (then check readiness with \`${WORKER_DISPATCH_READINESS_COMMAND}\`).`;
 }
+
+/**
+ * Accepted values for the `--worker-dispatch` argument (#3062). Only
+ * `aiwg init` and `aiwg setup project` accept this argument directly — it
+ * answers the same question `askWorkerDispatchOffer`/`applyInteractivePrompts`
+ * would otherwise ask interactively, so those two commands can be run
+ * headless without leaving the offer unanswerable.
+ */
+export const WORKER_DISPATCH_ARG_VALUES = ['enable', 'decline'] as const;
+export type WorkerDispatchArgValue = typeof WORKER_DISPATCH_ARG_VALUES[number];
+
+/**
+ * Parse a raw `--worker-dispatch` flag value. `undefined` in means the flag
+ * was not given at all (not an error — the question is still asked/hinted
+ * as before). Any other value that isn't exactly `enable`/`decline` throws,
+ * naming the accepted values; callers should map that to a non-zero exit.
+ *
+ * This is accepted even when fewer than two worker CLIs are detected — an
+ * explicit `--worker-dispatch` choice is honored regardless of the
+ * presence-only CLI detection `evaluateWorkerDispatchOffer` otherwise gates
+ * the interactive question/hint on.
+ */
+export function parseWorkerDispatchArg(raw: string | undefined): WorkerDispatchArgValue | undefined {
+  if (raw === undefined) return undefined;
+  if (!(WORKER_DISPATCH_ARG_VALUES as readonly string[]).includes(raw)) {
+    throw new Error(`--worker-dispatch must be one of: ${WORKER_DISPATCH_ARG_VALUES.join(', ')} (got ${JSON.stringify(raw)})`);
+  }
+  return raw as WorkerDispatchArgValue;
+}
+
+/**
+ * Hint variant for the two surfaces (`aiwg init`, `aiwg setup project`) that
+ * accept `--worker-dispatch` directly (#3062): same base hint, plus the
+ * argument itself, so a headless run without a terminal and without the
+ * argument names both the config command and the argument that would have
+ * answered the question directly.
+ */
+export function workerDispatchOfferHintWithArg(detected: string[]): string {
+  return `${workerDispatchOfferHint(detected)} Or pass --worker-dispatch enable|decline to this command directly.`;
+}

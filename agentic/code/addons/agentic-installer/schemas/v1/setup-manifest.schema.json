@@ -282,6 +282,10 @@
           "type": "string",
           "description": "Condition expression. Step skipped if evaluates to false. References params by name."
         },
+        "interactive": {
+          "type": "boolean",
+          "description": "If true, this step itself prompts directly and requires an interactive terminal. setup-run refuses the step up front instead of running it when no terminal is attached."
+        },
         "routes": {
           "type": "array",
           "description": "Platform-conditional step sequences for type=platform-route.",

@@ -11,6 +11,9 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * Escalation levels
@@ -129,12 +132,12 @@ export class EscalationHandler {
     }[level] || 'normal';
 
     try {
-      spawnSync('notify-send', [
+      boundedSpawnSync('notify-send', [
         '--urgency', urgency,
         '--app-name', 'Ralph Overseer',
         title,
         message,
-      ]);
+      ], 'quick');
     } catch (error) {
       // Silently fail - notifications are optional
     }

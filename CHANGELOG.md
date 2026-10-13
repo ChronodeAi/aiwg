@@ -16,6 +16,233 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   checkpoint. Every checkpoint still degrades to the prior LLM-decides-it-yourself behavior on `fallback`
   or when the decision engine isn't configured — the `--caller` tag is additive, never a hard dependency.
   The full caller-tag table is documented in the `decision-offload` skill.
+- `src/process/bounded-child-process.mjs` (#3062) provides `boundedExecSync`/`boundedExecFileSync`/
+  `boundedSpawnSync` wrappers over Node's synchronous child-process APIs, each taking a required
+  `tier` (`quick` 30s / `network` 2m / `long` 10m, the `long` bound overridable via
+  `AIWG_SYNC_LONG_TIMEOUT_MS`, `0` disables it) right before the normal options argument. A bounded
+  call never inherits stdin, kills with SIGKILL at the bound (Node's own `timeout`+`killSignal` sends
+  one signal and then keeps blocking forever if the child ignores it — confirmed with a real
+  SIGTERM-ignoring child), and enriches the resulting `ETIMEDOUT` error/result with the command, tier
+  and bound while leaving `code`/`signal`/`status` exactly as Node set them. `tools/testing/
+  check-sync-child-process-timeouts.mjs` now scans `src/`, `tools/` and `bin/` in addition to the
+  pre-existing `test/` scan and fails on any unbounded call there (`npm run
+  lint:test-process-timeouts`; `npm run lint:test-process-timeouts:report` prints counts by directory
+  without failing).
+  Interactive-by-design calls (an editor, a login flow, handing the terminal to a harness binary) are
+  exempted via a `// sync-spawn: interactive <anchor>` comment at the call site paired with an entry
+  in `tools/testing/sync-spawn-allowlist.json`; the gate fails (even in report mode) on a stale
+  allow-list entry or one with an unsupported `kind`.
+- Every non-interactive synchronous child-process call under `src/` now goes through the bounded
+  helper above, each with a tier chosen by what the command does (local query, network call, or
+  install/clone/build-shaped work) rather than where the call site lives (#3062). The remaining
+  interactive sites (an editor, codex exec/login, the configured provider binary, and arbitrary
+  manifest-defined shell commands/scripts) are unchanged and documented in the allow-list.
+- Every remaining interactive call site is now headless-safe (#3062): any input a person would
+  supply interactively has a command-line argument, and without a terminal attached a missing
+  argument refuses immediately (naming it) instead of spawning anything.
+  - `aiwg config edit --print-path` prints the resolved config file path and exits — the headless
+    equivalent of opening `$EDITOR`/`$VISUAL`. Without a terminal and without `--print-path`,
+    `aiwg config edit` now refuses, naming it and `aiwg config set <key> <value>`.
+  - `aiwg session --prompt <text>` / `--prompt-file <path>` runs a provider headless, bounded
+    (`long` tier), with the prompt delivered off argv wherever the provider documents a transport
+    for it (never on argv, never a shell string): `claude --print --input-format text` (stdin),
+    `codex exec -` (stdin), `dsh --profile headless -` (stdin), or `opencode run --format json -f
+    <temp-file>` (private temp file — binary disassembly found no stdin support in `opencode run`
+    at all). Without a terminal and without a prompt, a spawnable provider now refuses instead of
+    hanging waiting for one; a provider with no evidenced non-interactive form refuses
+    `--prompt`/`--prompt-file` rather than guessing an invocation; a provider with no spawnable
+    binary at all (IDE-integrated, e.g. Factory) refuses outright instead of silently discarding
+    the prompt and printing IDE guidance at exit 0 — checked before any pre-flight step runs.
+    `--non-interactive` forces the non-interactive decision even with a terminal attached.
+    `aiwg session --provider codex --profile <p> --prompt <text>` maps to `codex exec -` (prompt on
+    stdin) inside that profile's runtime home, likewise bounded.
+  - `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]` (#3069) wires
+    `loginInProfile()` (`src/mcp/adapters/codex-runtime.ts`) to the CLI: interactive OAuth with a
+    terminal, or headless via `--api-key-env`, which reads the key from that environment variable
+    over stdin (never argv, never in logs or error messages) and runs `codex login
+    --with-api-key`. Without a terminal and without `--api-key-env`, refuses naming the argument;
+    an unset named variable errors naming the variable (never a value).
+  - Every helper call whose exit code was derived from `result.status ?? 0` now treats a `null`/
+    killed/signaled/failed-to-spawn result as a failure, never success, and surfaces the bounded
+    helper's `error`/`signal` diagnostic (e.g. the enriched timeout message naming the bound and
+    override variable) instead of dropping it — `aiwg session`'s headless and interactive launch
+    paths, doctor/sync/mcp-inject self-invocations, `codex login`, `aiwg config gitignore`,
+    `aiwg diagnose`'s `tar` step, and `aiwg setup-run`'s script/shell-command steps.
+  - `aiwg init` gains arguments for its three remaining wizard inputs: `--providers <list>`
+    (provider selection), `--default-scripts true|false`, and repeatable `--script
+    <name>=<command>` (custom scripts) — each skips its interactive question when supplied, with
+    or without a terminal. `aiwg setup project` now does the same for every one of its existing
+    flags (previously they only changed the *default* a still-asked question used): a value
+    already supplied by flag is never re-asked, only genuinely missing ones prompt. Every
+    value-taking flag across `init`/`setup project`/`setup-run`/`mcp profile login` is parsed
+    strictly — present with no value, or immediately followed by another flag, is now a usage
+    error (exit 2) naming the flag, raised before any preflight, spawn, or write, instead of being
+    silently treated as "not given". The shared interactive decision
+    (`isInteractive(explicitNonInteractive)`, `src/cli/env.ts`) now takes the command's own
+    explicit non-interactive flag as input everywhere it's used (`init`, `session`
+    `--non-interactive`, `setup project`, `tools/contrib/sync-upstream.mjs`'s duplicated
+    equivalent) instead of each site re-deriving a narrower TTY-only or `CI==='true'`-only check.
+  - `aiwg setup-run` steps are now preflighted recursively (including nested `platform-route`
+    steps) *before* any step executes, rather than refusing mid-sequence inside the per-step loop —
+    an earlier normal step can no longer run ahead of a later step's refusal. A `type: ask` step
+    with every param it declares (via the same `params` field a `script` step already uses for env
+    vars) already resolved via `--param`/`--params-file`/env/default now runs headless instead of
+    always refusing; one with a param still missing, or declaring none at all, is refused up front
+    naming the missing names — there is no interactive-capture mechanism for `ask` steps in this
+    CLI, with or without a terminal.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution prompt ("Choice [1-4]") gains
+    `--on-conflict <1-4>`, answering it headlessly (choice `1`, opening `$EDITOR`, still refuses
+    without a terminal even when given, since it is interactive by nature); its interactive
+    detection now matches the shared `isInteractive()` semantics (TTY + TERM + CI vars) instead of
+    checking `stdin.isTTY` alone; and its `git fetch upstream`/`git push` calls now use the
+    `network` tier instead of the default `quick` tier.
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now supervises each spawned
+    CLI process asynchronously with an independent hard deadline that sends `SIGKILL` to the whole
+    process group, instead of a synchronous `spawnSync` with Node's native `timeout` — which sends
+    `SIGTERM` once and then blocks the *calling* thread until the child exits, so a CLI that traps
+    SIGTERM (or has a descendant still blocked in its own synchronous child call) could hang the
+    test process too, past even Vitest's own per-test timeout. A dedicated fixture
+    (`test/uat/fixtures/blocking-descendant.mjs`) that ignores SIGTERM and blocks on a
+    SIGTERM-ignoring grandchild proves the new guard still reaches it.
+  - `aiwg setup-run` manifest steps (`script`/`verify`/`detect`/`os-config`) run bounded with
+    stdin ignored whenever no terminal is attached, instead of inheriting stdio and potentially
+    hanging on a command that tries to prompt; with a terminal, unchanged. A step may now declare
+    `interactive: true` in its manifest to be refused up front (naming the step) instead of run at
+    all when no terminal is attached.
+  - `tools/contrib/sync-upstream.mjs`'s conflict-resolution editor launch is marked on the
+    sync-spawn allow-list; it already refuses to reach the editor without a terminal (prints the
+    file to edit instead), unchanged by this work.
+- `aiwg init` and `aiwg setup project` accept `--worker-dispatch enable|decline` (#3062), answering
+  the direct-worker-dispatch opt-in question directly instead of leaving it unanswerable headless:
+  `enable` writes `parallelism.worker_dispatch: true` and nothing else; `decline` writes
+  `setup.worker_dispatch_offer: "declined"` and nothing else. Honored with or without a terminal
+  (suppressing the interactive question either way) and even when fewer than two worker CLIs are
+  detected — an explicit choice overrides the presence-only detection gate. `--dry-run` never
+  writes it; `aiwg setup project --json` reports the would-be choice under
+  `worker_dispatch_offer.applied_choice`. An unrecognized value exits non-zero naming
+  `enable`/`decline`. The one-line hint shown without a terminal and without the argument now also
+  names `--worker-dispatch`.
+- A second #3062 review round fixed a real credential-exposure bug and several remaining gaps in
+  the work above:
+  - **Security fix:** `loginInProfile()`'s `--api-key-env` path (`src/mcp/adapters/codex-runtime.ts`)
+    placed the API key in `boundedSpawnSync`'s `input` option, which sits inside the options object
+    `child_process` hands to its native binding — printed verbatim by `NODE_DEBUG=child_process` (and
+    any other dump of those options), and the named variable was also still present in the child's
+    inherited environment. It now launches `codex login --with-api-key` with an async `spawn()`
+    (never a sync call with `input` at all) and writes the key directly to the already-created
+    child's own `stdin` stream after spawning; the child's environment excludes the named variable
+    and any other variable holding the identical value. A dedicated end-to-end test
+    (`test/unit/mcp/codex-login-credential-safety.test.ts`) runs this under
+    `NODE_DEBUG=child_process` against a stub `codex` and asserts the fake key appears nowhere in
+    the parent's own stdout/stderr, and that the stub receives it only on stdin, never in its own
+    argv or environment.
+  - `aiwg mcp profile login` resolved its TypeScript-authored adapter through a src/dist-aware
+    resolver that falls back to loading TypeScript *source* when no build exists — but that
+    source module's own internal imports have no compiled sibling under `src/` either, so the
+    fallback failed deep inside the adapter with an unrelated `ERR_MODULE_NOT_FOUND`, on every Node
+    version. It now loads the compiled module directly and, when it is missing, reports one
+    actionable line (run `npm run build:cli`, or use an installed `aiwg`) instead of attempting a
+    source fallback at all.
+  - The shared strict flag parser (`src/cli/flag-parsing.ts`) tokenizes once per call, stops
+    recognizing flags at a bare `--` terminator, accepts both `--flag value` and `--flag=value`,
+    and validates **every** occurrence of a repeated flag — a previously-valid first occurrence no
+    longer hides a malformed later one. A value starting with a single `-` is accepted; a
+    space-separated value starting with `--` is still treated as missing (use `--flag=--literal`
+    when a value must start with `--`). An empty-string value is now rejected for
+    `--prompt`/`--prompt-file`/`--api-key-env`/`--worker-dispatch` specifically. Repeated-flag
+    precedence is configurable per call and now matches each command's own pre-#3062 behavior:
+    `aiwg session`'s flags are last-occurrence-wins (restoring a real regression the first round
+    introduced by always resolving to the first occurrence); every other touched command remains
+    first-occurrence-wins, unchanged. `tools/contrib/sync-upstream.mjs`'s `--on-conflict` and
+    `src/mcp/cli.mjs`'s `--api-key-env` (both plain-JS duplicates of the shared parser, for the same
+    source/dist reasons documented at each site) gained the same validation.
+  - `aiwg init` gains `--custom-scripts true|false`, answering "add a custom script?" directly
+    (`false` declines outright) when `--script` itself was not given — closing the one remaining
+    selective-prompting gap (`aiwg init` with providers/default-scripts/worker-dispatch all supplied
+    still asked this one question).
+  - `aiwg setup-run` steps marked `interactive: true` now run headless when every name in their own
+    `params` field is resolved, instead of always being refused without a terminal — this field was
+    already optional and already used by `type: ask` steps; the bug was that `interactive: true`
+    steps never got the same treatment. Declared `ask`-step inputs still missing **at a terminal**
+    are now prompted for (the answer threads into every later step's env, same as a
+    `--param`-supplied one); an `ask` step declaring no params at all remains always refused, with
+    or without a terminal — one of exactly two permanent exceptions (the other: the contributor
+    sync-upstream strategy choice stays unargumented). The manifest step preflight (which runs
+    before any selected step executes) now also rejects a selected `agentic`/`chain` step up front —
+    both are refused unconditionally once reached — and recurses into the entire recovery sequence
+    any selected step's `on_fail` names, so a blocked recovery step can no longer let an earlier,
+    unrelated step run first.
+  - `aiwg setup project` now checks whether an unattended write can ever be confirmed
+    (`--yes`/terminal/`--dry-run`) *before* building the project plan, which makes four `git` calls
+    on its own — the refusal used to happen only after those calls (and the full plan print)
+    already ran. `aiwg session --prompt` for a provider that is spawnable but has no evidenced
+    headless transport (e.g. `antigravity`) is now checked in the same early spot as the
+    non-spawnable case, before the version-check/doctor/deployment/mcp-inject pre-flight runs.
+  - OpenCode's headless prompt temp file (`src/cli/handlers/session.ts`) now gets an explicit
+    `0600` mode via an exclusive create (`flag: 'wx'`), and cleanup ownership for its private
+    `mkdtemp()` directory starts immediately after that directory is created — before the write —
+    so a failed write cannot leave the directory behind any more than a failed launch would. The
+    directory itself stays under the system temp directory (never a custom location).
+  - The UAT hang guard (`test/uat/sync-headless-interactive.uat.ts`) now kills the whole process
+    group on the child's *ordinary* exit too, not only on the hang-guard timeout, and waits for
+    `'close'` (stdio fully drained) rather than `'exit'` before settling — the first round's version
+    settled on `exit` and never cleaned the remaining group at all, so a surviving descendant could
+    leak even when the direct child exited cleanly and quickly. Settles independently via a short
+    grace timer if a group kill ever fails for a reason other than "already gone". A new fixture
+    (`test/uat/fixtures/parent-exits-first.mjs`) proves a surviving grandchild is reaped even when
+    its parent's own exit is fast and ordinary. Every stub executable placed on `PATH` now gets an
+    absolute `#!<process.execPath>` shebang instead of `#!/usr/bin/env node`, so resolving it never
+    depends on `env` or on `PATH` containing a `node` at all.
+- A go/no-go review of #3062 found four blockers, all fixed in a third round:
+  - **Startup order (security):** `bin/aiwg.mjs` used to run a background update-notifier bootstrap
+    before it knew which command was running at all — and that bootstrap child copied the whole
+    parent environment. Under `NODE_DEBUG=child_process`, a credential-bearing variable the *command
+    itself* was about to read (`--api-key-env` for `aiwg mcp profile login`, or `JEV_API_KEY`/
+    `AIWG_DECISION_JEV_API_KEY` for `aiwg decision setup jev`) printed in the bootstrap's own spawn
+    diagnostics before the command's own (already-careful) handling ever ran. Fixed two ways,
+    composing for defense in depth: `bin/aiwg.mjs` now resolves whether the invocation is one of
+    these two credential-handling commands from argv alone, before starting the notifier bootstrap
+    (or any other bootstrap subprocess) at all for either one; and the notifier's own background
+    child (`src/update/notifier.mjs`) now gets an explicit environment allow-list
+    (`PATH`/`HOME`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`AIWG_CONFIG`/`NODE_EXTRA_CA_CERTS`) instead
+    of a full copy of the parent's, so a secret this CLI does not yet know to name is still never
+    copied into it, for *any* command. A second, independently-discovered instance of the same
+    full-environment-copy pattern — installation-identity creation's own `which`/`where.exe` lookup
+    for `git` (`src/installation/manager.mjs`), which runs before dispatch on every first invocation
+    — is now also PATH-only (plus `PATHEXT`/`SystemRoot` on Windows).
+  - **More secure ways to supply a credential:** `aiwg mcp profile login` gains `--api-key-stdin`
+    (piped from a secret manager, never touching an environment variable or argv) and
+    `--api-key-file <path>` (refused unless the file is a regular file, not a symlink, with exactly
+    one hard link, owned by the current user, and not readable/writable by group or other) alongside
+    the existing (now least-preferred) `--api-key-env`. Exactly one of the three may be given; more
+    than one is a usage error naming the flags given; none at all without a terminal errors naming
+    all three. In every case the key reaches `codex` over stdin only. See "Supplying Credentials
+    Safely" in `docs/mcp/codex-profiles.md`.
+  - **Unhandled EPIPE:** `loginInProfile()`'s async `--with-api-key` launch
+    (`src/mcp/adapters/codex-runtime.ts`) wrote to the child's stdin with no error listener and no
+    completion callback — a `codex` that exited (or closed stdin) before reading raised an unhandled
+    `EPIPE`/`ECONNRESET`, an uncaught exception rather than a normal failure result. Stdin error,
+    write completion, child `error`, child `exit`, and the deadline timer now all funnel through one
+    settle function that runs exactly once, always clears the timer and removes its own listeners,
+    and kills the child if it is still running when settling on a failure.
+  - **Setup-run recovery preflight was too eager:** `aiwg setup-run`'s preflight used to recurse into
+    every selected step's `on_fail` recovery procedure up front, before the main sequence even ran —
+    refusing a manifest whose main sequence would succeed outright, solely because its *unused*
+    recovery contained something unsupported, and (with no cycle protection) recursing without bound
+    on a recovery procedure that referenced itself (`RangeError: Maximum call stack size exceeded`).
+    The main sequence's own preflight no longer looks at `on_fail` at all; a recovery procedure is now
+    preflighted completely, but only at the moment a failure actually selects it, before any of its
+    steps run. A manifest-validation-time graph check (`detectRecoveryReferenceCycles`, independent of
+    the step preflight) catches a cycle among recovery procedures themselves as a clean validation
+    error instead of a stack overflow.
+  - **`aiwg session`'s `mcp` detection:** `args.includes('mcp')` (and the equivalent hand-rolled loop
+    this replaced, which already shipped on `main`) matched the literal word `mcp` anywhere in argv —
+    including inside a free-text `--prompt`/`--prompt-file` value (`aiwg session --prompt mcp` set
+    `mcp: true` and reached MCP config injection) or after a bare `--` terminator (`--persist` there
+    was still honored). `--no-repair`/`--persist`/`--non-interactive` had the same gap. The shared
+    flag parser (`src/cli/flag-parsing.ts`) gained `hasPositionalOrSwitch()`: a positional word or
+    boolean switch now excludes anything consumed as a value-taking flag's own value, and stops
+    recognizing anything at or after `--`, same as the value-flag parser already did.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
@@ -109,6 +336,29 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 ### Fixed
 
 - `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
+- The OMP provider failed in an installed package: its deploy tool imported two modules by a path
+  into the unshipped source tree, and `aiwg remove omp` imported that tool by a path that is one
+  directory short once compiled. Both now resolve from the installed layout (#3062, refs #3077).
+- A caller-supplied timeout of zero can no longer disable the bound on a synchronous child-process
+  call: such values go through a clamp helper, and the gate accepts a non-literal timeout only when
+  it resolves to a positive constant or to that helper (#3062).
+- A timed-out call whose child had already exited cleanly was read as success in the evaluation
+  harness, `aiwg doctor` and several lint and packaging tools; a timeout is now always a failure
+  (#3062).
+- `tools/qualification` and `tools/benchmarks` are no longer shipped in the npm package; nothing
+  installed uses them (#3062, refs #3075).
+- Shipped tools now find the bounded child-process helper through the same resolver they use for
+  other built code, instead of a path into the unshipped source tree. Without this an installed
+  `aiwg doctor`, deploy or new-project run would have failed to start. A packaging test now checks
+  that every relative import in a shipped tool resolves to a shipped file (#3062).
+- The bounded helper always kills with SIGKILL, also treats descriptor `0` and `process.stdin` as
+  inherited input, and states plainly that only the direct child is guaranteed gone. The gate
+  resolves renamed and destructured child-process bindings, rejects a `timeout` of `0`,
+  `undefined` or one a later spread could override, and normalises allow-list paths for Windows
+  (#3062).
+- Network and install operations in the contribution and packaging tools that were given the
+  30-second tier now use the network or long tier, and a timed-out remote branch check is reported
+  as unknown instead of absent (#3062).
 - `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
   detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
   capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:

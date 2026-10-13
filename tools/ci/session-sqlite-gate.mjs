@@ -3,9 +3,9 @@
 import {
   existsSync, mkdirSync, readFileSync, rmSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const require = createRequire(import.meta.url);
@@ -36,14 +36,17 @@ try {
   process.exit(1);
 }
 
-const sanitizer = spawnSync(process.execPath, [
+const sanitizer = boundedSpawnSync(process.execPath, [
   resolve(root, 'tools/ci/session-fixture-sanitize.mjs'),
-], {
+], 'long', {
   cwd: root,
   encoding: 'utf8',
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 if (sanitizer.error || sanitizer.status !== 0) {
+  // #3062 finding 17: sanitizer.error carries the enriched `long`-tier
+  // timeout explanation that status alone does not.
+  if (sanitizer.error) console.error(sanitizer.error.message);
   console.error('SQLite CI gate failed session regression corpus sanitization.');
   process.exit(sanitizer.status || 1);
 }
@@ -77,7 +80,7 @@ console.log(JSON.stringify({
 function runGroup(id, requiredFiles) {
   const reportPath = resolve(resultsRoot, `session-sqlite-${id}.json`);
   rmSync(reportPath, { force: true });
-  const result = spawnSync(process.execPath, [
+  const result = boundedSpawnSync(process.execPath, [
     vitest,
     'run',
     '--config',
@@ -86,7 +89,7 @@ function runGroup(id, requiredFiles) {
     '--outputFile',
     reportPath,
     ...requiredFiles,
-  ], {
+  ], 'long', {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'inherit', 'inherit'],

@@ -24,7 +24,7 @@
  *   - Safe defaults (cancel operations)
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -57,7 +57,8 @@ const colors = {
  */
 function exec(command, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -123,15 +124,24 @@ function getCommitCount(branch, cwd) {
 }
 
 /**
- * Check if branch exists on remote
+ * Check if branch exists on remote.
+ *
+ * `'network'`, not `'quick'` (#3062 finding 6): this hits the remote, not
+ * just local git state. Returns `'unknown'` rather than `false` when the
+ * check itself failed (including a bounded-helper timeout) so a timeout
+ * is never silently read as "branch absent" — that previously caused
+ * remote branches to go undeleted (and the user un-warned) whenever the
+ * network check failed or timed out.
+ *
  * @param {string} branch - Branch name
  * @param {string} remote - Remote name (default: origin)
  * @param {string} cwd - Working directory
- * @returns {boolean} True if branch exists on remote
+ * @returns {'exists'|'absent'|'unknown'}
  */
 function branchExistsOnRemote(branch, remote, cwd) {
-  const result = exec(`git ls-remote --heads ${remote} ${branch}`, { cwd });
-  return result.success && result.stdout.trim() !== '';
+  const result = exec(`git ls-remote --heads ${remote} ${branch}`, { cwd, tier: 'network' });
+  if (!result.success) return 'unknown';
+  return result.stdout.trim() !== '' ? 'exists' : 'absent';
 }
 
 /**
@@ -294,7 +304,7 @@ function deleteRemoteBranch(branch, remote, cwd) {
   console.log('');
   console.log('Deleting remote branch...');
 
-  const result = exec(`git push ${remote} --delete ${branch}`, { cwd });
+  const result = exec(`git push ${remote} --delete ${branch}`, { cwd, tier: 'network' });
   if (!result.success) {
     // Branch might already be deleted
     if (result.stderr.includes('not found') || result.stderr.includes('does not exist')) {
@@ -401,7 +411,16 @@ async function main() {
 
   // Check if branch exists on remote
   const remote = 'origin';
-  if (branchExistsOnRemote(branch, remote, cwd)) {
+  const remoteStatus = branchExistsOnRemote(branch, remote, cwd);
+  if (remoteStatus === 'unknown') {
+    // Do not conflate "could not check" with "absent" (#3062 finding 6) —
+    // say so and leave the manual command for the user to run themselves.
+    console.log('');
+    console.warn(`${colors.yellow}⚠${colors.reset} Could not determine whether ${remote}/${branch} exists on the remote (the check failed or timed out).`);
+    console.log('Check and delete manually if needed:');
+    console.log(`  git ls-remote --heads ${remote} ${branch}`);
+    console.log(`  git push ${remote} --delete ${branch}`);
+  } else if (remoteStatus === 'exists') {
     const shouldDeleteRemote = await promptDeleteRemote(branch);
 
     if (shouldDeleteRemote) {

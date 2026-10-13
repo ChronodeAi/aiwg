@@ -1,18 +1,20 @@
 // Opt-in component qualification against the owned agentic-sandbox issuer fixture.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import { createKeycloakDesktopVerifier, desktopBrowserAudience } from '../../apps/cockpit/bridge/src/desktop-identity-keycloak.mjs';
 import { createDesktopIssuerTransport } from '../../apps/cockpit/bridge/src/desktop-issuer-transport.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 const root = resolve(process.argv[2] ?? '');
 assert(process.argv[2], 'Owned fixture directory required');
 const info = statSync(root);
 assert(info.uid === process.getuid() && !(info.mode & 0o077), 'Private owned fixture required');
 const state = JSON.parse(readFileSync(join(root, 'state.json')));
-const [container] = JSON.parse(execFileSync('docker', ['inspect', '--type', 'container', state.container], { encoding: 'utf8' }));
+const [container] = JSON.parse(boundedExecFileSync('docker', ['inspect', '--type', 'container', state.container], 'quick', { encoding: 'utf8' }));
 assert(container.State.Running && container.Config.Labels['agentic.desktop-issuer-fixture'] === root);
 assert(state.mapper_sha256 && Number.isInteger(state.port) && state.port > 0 && state.port < 65536);
 const privateDir = join(root, 'private');

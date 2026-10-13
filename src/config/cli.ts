@@ -8,7 +8,7 @@
  *   validate            — Validate all config files
  *   reset [<key>]       — Reset key or all config to defaults
  *   path                — Print the active config directory path
- *   edit                — Open config in $EDITOR
+ *   edit [--print-path] — Open config in $EDITOR/$VISUAL, or print its path headlessly
  *   gitignore           — Show/check/fix .gitignore for AIWG runtime dirs
  *
  * Global flags:
@@ -22,6 +22,8 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
+import { isInteractive } from '../cli/env.js';
+import { exitCodeForSpawnResult } from '../cli/child-process-result.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -75,7 +77,7 @@ export async function main(args: string[]): Promise<void> {
       break;
 
     case 'edit':
-      await handleEdit(config);
+      await handleEdit(config, subArgs);
       break;
 
     case 'gitignore':
@@ -694,15 +696,45 @@ function handlePath(config: UserConfig): void {
   console.log(config.getPath());
 }
 
-async function handleEdit(config: UserConfig): Promise<void> {
-  const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+/**
+ * `aiwg config edit [--print-path]` (#3062). `--print-path` is the headless
+ * equivalent: it prints the resolved config file path and exits, so scripts
+ * and agents can read/edit the file themselves (or compose with
+ * `aiwg config get`/`set`) instead of needing $EDITOR. Without a terminal
+ * and without `--print-path`, this refuses instead of spawning an editor
+ * that would hang waiting for input nobody can supply.
+ */
+async function handleEdit(config: UserConfig, args: string[] = []): Promise<void> {
   const configPath = `${config.getPath()}/config.yaml`;
+
+  if (args.includes('--print-path')) {
+    // Ensure the config file exists before pointing a caller at it.
+    await config.ensureDir();
+    console.log(configPath);
+    return;
+  }
+
+  if (!isInteractive()) {
+    throw new AiwgError({
+      code: 'ERR_NON_INTERACTIVE_EDIT',
+      message: 'aiwg config edit requires an interactive terminal to open $EDITOR/$VISUAL.',
+      hint: 'Use `aiwg config set <key> <value>` to change a value headlessly, or `aiwg config edit --print-path` to get the file path and edit it yourself.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+
+  const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
 
   // Ensure the config file exists before opening
   await config.ensureDir();
 
   const { execSync } = await import('child_process');
   try {
+    // sync-spawn: interactive editor-launch — launches $EDITOR/$VISUAL on the
+    // config file; the user interacts with it directly (see tools/testing/
+    // sync-spawn-allowlist.json). Reached only when isInteractive() is true
+    // (#3062) — the no-terminal path above refuses before spawning anything.
+    // Not a candidate for a bounded timeout.
     execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
   } catch (err) {
     throw new AiwgError({
@@ -743,7 +775,7 @@ For project-level config: aiwg config show --project [--json]
 
   // Lazy-import to keep startup cost low for unrelated subcommands.
   const { readAiwgConfig, resolveRemotes, getProjectDir } = await import('./aiwg-config.js');
-  const { spawnSync } = await import('child_process');
+  const { boundedSpawnSync } = await import('../process/bounded-child-process.mjs');
 
   const projectDir = getProjectDir(undefined, args);
   const cfg = await readAiwgConfig(projectDir);
@@ -761,7 +793,7 @@ For project-level config: aiwg config show --project [--json]
 
   // Resolve each declared remote name to its URL via git. Best-effort.
   function getUrl(name: string): string | null {
-    const r = spawnSync('git', ['-C', projectDir, 'remote', 'get-url', name], {
+    const r = boundedSpawnSync('git', ['-C', projectDir, 'remote', 'get-url', name], 'quick', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -854,14 +886,23 @@ For project-level config: aiwg config show --project [--json]
 }
 
 async function handleGitignore(args: string[]): Promise<void> {
-  const { spawnSync } = await import('child_process');
+  const { boundedSpawnSync } = await import('../process/bounded-child-process.mjs');
   // Locate the gitignore CLI script relative to this compiled module
   // (#1228). At runtime this module lives at `dist/src/config/cli.js`,
   // so we need three `..` segments to reach the package root where
   // `tools/cli/` is shipped (see package.json `files`).
   const scriptPath = path.resolve(_scriptDir, '../../../tools/cli/config-gitignore.mjs');
-  const result = spawnSync(process.execPath, [scriptPath, ...args], { stdio: 'inherit' });
+  // Local script editing .gitignore blocks; quick tier (#3062).
+  const result = boundedSpawnSync(process.execPath, [scriptPath, ...args], 'quick', { stdio: 'inherit' });
   if (result.status !== 0) {
+    // #3062 review item 7: already correctly treats a null status
+    // (timeout/signal) as failure (`process.exit(result.status ?? 1)`
+    // below); surface the bounded helper's diagnostic too — `stdio:
+    // 'inherit'` means a normal script failure already printed its own
+    // output, but a bounded-helper timeout/kill would otherwise never be
+    // reported anywhere.
+    const { message } = exitCodeForSpawnResult(result, 'aiwg config gitignore');
+    if (message) console.error(message);
     process.exit(result.status ?? 1);
   }
 }
@@ -882,7 +923,8 @@ Subcommands:
     [--provider gitea|github|local] [--available-label NAME ...]
   reset [<key>]       Reset key or all config to defaults
   path                Print config directory path
-  edit                Open config in $EDITOR
+  edit                Open config in $EDITOR/$VISUAL (requires a terminal)
+  edit --print-path   Print the config file path instead of opening an editor
   gitignore           Show/check/fix .gitignore AIWG entries
 
 Global flags:

@@ -8,15 +8,44 @@
  */
 
 import { EventEmitter } from 'events';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
 import { hostname } from 'node:os';
 import { join, dirname } from 'path';
-import { execFileSync } from 'child_process';
 import { constants } from 'node:fs';
 import { open, opendir, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createWorkerHealthObserver } from './lib/worker-health.mjs';
+
+// This module is loaded standalone in some contexts (e.g. staged/partial
+// installs, or copied in isolation for a test) without its sibling
+// tools/_resolve-impl.mjs, or without src/dist/ nearby for it to resolve.
+// boundedExecFileSync is only needed by getProcessHealth()'s `ps` sampling
+// below; degrade that one feature instead of failing to load this module
+// at all for everything else (#3062 finding 1 — regression covered by
+// `WS19 staged installed monitor loads with no src/dist or MC state` in
+// test/conformance/orchestration-v1/worker-status.test.ts). The
+// `../_resolve-impl.mjs` import itself must be dynamic here, not a
+// top-level static import: a missing *static* import specifier fails
+// module linking before any of this module's own code (including a
+// try/catch) ever runs.
+//
+// Only the specific "this dependency is genuinely missing" error is
+// tolerated (#3062 B/C finding 12): a bare `catch {}` here would also
+// swallow a real defect in bounded-child-process.mjs itself (a syntax
+// error, a thrown assertion, ...) and silently report every live-process
+// health query as unavailable instead of surfacing the actual failure.
+let boundedExecFileSync = null;
+let processHealthUnavailableReason = null;
+try {
+  const { importImpl } = await import('../_resolve-impl.mjs');
+  ({ boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs'));
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+  boundedExecFileSync = null;
+  processHealthUnavailableReason = `bounded-child-process helper unavailable (standalone load without tools/_resolve-impl.mjs or src/dist/ nearby): ${error.message}`;
+}
 
 /** Side-effect-free Linux sample. Unknown identity never grants signal authority. */
 export function sampleWorkerIdentity(pid) {
@@ -312,12 +341,20 @@ export class ProcessMonitor extends EventEmitter {
       };
     }
 
+    if (!boundedExecFileSync) {
+      // #3062 B/C finding 12: surface *why* no metrics are available
+      // (module header) instead of returning a bare `null` indistinguishable
+      // from "process not monitored"/"ps produced nothing useful".
+      return { pid, cpu: null, memory: null, uptime: null, status: 'unavailable', unavailableReason: processHealthUnavailableReason };
+    }
+
     try {
       // Use ps command to get process stats
       // RSS is reported in KiB; unlike %mem it does not lose small readings
       // to percentage rounding or require an assumed host memory capacity.
-      const output = execFileSync(
+      const output = boundedExecFileSync(
         'ps', ['-p', String(pid), '-o', '%cpu,rss,etime,stat', '--no-headers'],
+        'quick',
         { encoding: 'utf8' }
       ).trim();
 

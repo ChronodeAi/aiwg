@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -138,7 +138,7 @@ if (missingExecutableMetadata.length > 0) {
 }
 
 try {
-  const discover = spawnSync(
+  const discover = boundedSpawnSync(
     process.execPath,
     [
       'bin/aiwg.mjs',
@@ -153,6 +153,7 @@ try {
       '3',
       '--json',
     ],
+    'quick',
     {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -165,7 +166,11 @@ try {
       },
     },
   );
-  if (discover.status !== 0) {
+  // `.error ||`, not just `status !== 0`, on every check below (#3062 B/C
+  // finding 13): a surviving descendant holding the pipe can produce
+  // ETIMEDOUT with status 0 — status alone would then read as success.
+  if (discover.error || discover.status !== 0) {
+    if (discover.error) console.error(discover.error.message);
     console.error(discover.stdout);
     console.error(discover.stderr);
     fail(`Fortemi Core prebuilt fallback discovery exited with status ${discover.status}`);
@@ -174,9 +179,10 @@ try {
   const metadataMatches = [];
   for (const entry of result.results ?? []) {
     if (entry.type !== 'skill' || typeof entry.id !== 'string') continue;
-    const show = spawnSync(
+    const show = boundedSpawnSync(
       process.execPath,
       ['bin/aiwg.mjs', 'show', 'metadata', entry.id, '--graph', 'framework', '--backend', 'fortemi-core', '--json'],
+      'quick',
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -189,7 +195,8 @@ try {
         },
       },
     );
-    if (show.status !== 0) {
+    if (show.error || show.status !== 0) {
+      if (show.error) console.error(show.error.message);
       console.error(show.stdout);
       console.error(show.stderr);
       fail(`Fortemi Core prebuilt fallback metadata lookup exited with status ${show.status}`);
@@ -213,20 +220,24 @@ try {
   // The release-age override is scoped to this packed-install smoke so the
   // gate verifies production packaging even while the dependency is inside
   // the normal seven-day freshness window.
-  const install = spawnSync('npm', ['install', '--omit=dev', '--min-release-age=0', '--prefix', installDir, tarball], {
+  const install = boundedSpawnSync('npm', ['install', '--omit=dev', '--min-release-age=0', '--prefix', installDir, tarball], 'long', {
     cwd: tmp,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (install.status !== 0) {
+  if (install.error || install.status !== 0) {
+    // #3062 finding 17: install.error carries the enriched `long`-tier
+    // timeout explanation that status/stdout/stderr alone do not.
+    if (install.error) console.error(install.error.message);
     console.error(install.stdout);
     console.error(install.stderr);
     fail(`packed production install exited with status ${install.status}`);
   }
   const installedCli = path.join(installDir, 'node_modules', 'aiwg', 'bin', 'aiwg.mjs');
-  const installedDiscover = spawnSync(
+  const installedDiscover = boundedSpawnSync(
     process.execPath,
     [installedCli, 'discover', 'test', '--limit', '1', '--json'],
+    'quick',
     {
       cwd: tmp,
       encoding: 'utf8',
@@ -239,7 +250,8 @@ try {
       },
     },
   );
-  if (installedDiscover.status !== 0) {
+  if (installedDiscover.error || installedDiscover.status !== 0) {
+    if (installedDiscover.error) console.error(installedDiscover.error.message);
     console.error(installedDiscover.stdout);
     console.error(installedDiscover.stderr);
     fail(`packed production install discover smoke exited with status ${installedDiscover.status}`);
@@ -263,9 +275,10 @@ try {
     const record = exported.items.find((item) => item.type === 'aiwg.skill' && item.name === executable.name);
     if (!record) fail(`prebuilt export is missing executable skill ${executable.name}`);
     for (const selector of [executable.name, record.id]) {
-      const run = spawnSync(
+      const run = boundedSpawnSync(
         process.execPath,
         [installedCli, 'run', 'skill', selector, '--', ...executable.args],
+        'long',
         {
           cwd: tmp,
           encoding: 'utf8',
@@ -278,7 +291,8 @@ try {
           },
         },
       );
-      if (run.status !== 0) {
+      if (run.error || run.status !== 0) {
+        if (run.error) console.error(run.error.message);
         console.error(run.stdout);
         console.error(run.stderr);
         fail(`packed production executable skill ${executable.name} failed via ${selector === record.id ? 'stable ID' : 'name'} (status ${run.status})`);
@@ -286,9 +300,10 @@ try {
     }
   }
 
-  const installedDoctor = spawnSync(
+  const installedDoctor = boundedSpawnSync(
     process.execPath,
     [path.join(installedRoot, 'tools', 'cli', 'doctor.mjs'), '--no-budget-check'],
+    'quick',
     {
       cwd: tmp,
       encoding: 'utf8',

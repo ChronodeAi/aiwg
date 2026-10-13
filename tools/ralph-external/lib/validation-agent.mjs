@@ -11,6 +11,9 @@
 import { spawnSync, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { positiveTimeoutMs } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * @typedef {Object} ValidationResult
@@ -50,6 +53,9 @@ export class ValidationAgent {
     this.runTests = options.runTests !== false;
     this.checkBuild = options.checkBuild !== false;
     this.checkLint = options.checkLint !== false;
+    // Caller-controlled; every spawnSync call below clamps it again via
+    // positiveTimeoutMs so a negative value (which `||` doesn't catch)
+    // can't invert the bound either (#3062 B/C finding 8).
     this.timeout = options.timeout || 60000;
     this.verbose = options.verbose || false;
   }
@@ -297,7 +303,7 @@ export class ValidationAgent {
       const testResult = spawnSync('npm', ['test', '--', '--reporter=json'], {
         cwd: this.projectRoot,
         encoding: 'utf8',
-        timeout: this.timeout,
+        timeout: positiveTimeoutMs(this.timeout, 60000),
       });
 
       result.ran = true;
@@ -368,7 +374,7 @@ export class ValidationAgent {
         const buildResult = spawnSync('npx', ['tsc', '--noEmit'], {
           cwd: this.projectRoot,
           encoding: 'utf8',
-          timeout: this.timeout,
+          timeout: positiveTimeoutMs(this.timeout, 60000),
         });
 
         result.ran = true;
@@ -413,7 +419,7 @@ export class ValidationAgent {
       const lintResult = spawnSync('npm', ['run', 'lint', '--', '--format=json'], {
         cwd: this.projectRoot,
         encoding: 'utf8',
-        timeout: this.timeout,
+        timeout: positiveTimeoutMs(this.timeout, 60000),
       });
 
       result.ran = true;
