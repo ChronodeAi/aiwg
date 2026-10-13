@@ -988,6 +988,20 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     const { stopOverflowWorker } = await loadRalphExternal('lib/worker-overflow.mjs');
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const client = new Client({ name: 'aiwg-mcp-worker-invoke', version: '1.0.0' }, { capabilities: {} });
+    // #2915 review 5 ("a second worker over unresolved execution"): a
+    // serialized/per-instance queue (D2, below) may have held this call long
+    // enough that its ALREADY-ADMITTED canary reservation's own deadline
+    // (min(task deadline, admission+300s)) has since passed — the breaker's
+    // own sweep reopens the scope and installs a blocking marker the moment
+    // anything next calls `admit()`/`settle()` on it (possibly a sibling
+    // request), regardless of whether THIS queued call ever actually
+    // launches. Revalidate immediately before launch, matching the
+    // registry-qualification recheck just above: an expired admission must
+    // never launch.
+    if (admission?.gated && admission.token
+      && (admission.breaker?.nowMs?.() ?? Date.now()) > admission.token.deadlineMs) {
+      return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
+    }
     // B2: gate + launch the MCP worker SERVER process through the same
     // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
     const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, admission, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
@@ -1178,6 +1192,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
   const launchShellWorkerImpl = options.launchShellWorker ?? defaultLaunchShellWorker;
   const callMcpWorkerImpl = options.callMcpWorker ?? defaultCallMcpWorker;
   const waitForUnitImpl = options.waitForUnitTermination ?? waitForUnitTermination;
+  // #2915 review 5 ("a second worker over unresolved execution"): the
+  // degraded-isolation shell wait path below shares the launcher's own
+  // bounded SIGTERM-then-SIGKILL escalation (`terminateChildWithGrace`)
+  // rather than sending an unobserved SIGTERM alone.
+  const terminateChildImpl = options.terminateChildWithGrace
+    ?? (async child => (await loadRalphExternal('session-launcher.mjs')).terminateChildWithGrace(child));
   const mcpWorkerMemoryMaxGb = options.mcpWorkerMemoryMaxGb; // undefined -> defaultLaunchMcpWorkerProcess's own fallback
   // Test-only: `planDirectWorkerLaunch`'s own dispatch-gate passthroughs
   // (`checkWorkerDispatch({ live, readers, thresholdOverlay })`), forwarded
@@ -1424,6 +1444,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       const taskDeadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
       let observation;
       let rawOutput;
+      // #2915 review 5 ("a second worker over unresolved execution"): a
+      // SEPARATE fact from `kind` threaded into every `settleRecovery` call
+      // below — whether THIS attempt's own descendant tree is launcher-
+      // confirmed stopped, so a settlement arriving against an already-
+      // canary-deadline-expired reservation can resolve that reservation's
+      // blocking marker (see `ScopedFailureBreaker.settle()`). Stays false
+      // for native MCP (response completion is not stop proof).
+      let confirmedStop = false;
       if (invocation.transport === 'shell') {
         // #2915 review 5 (finding 2b): set BEFORE calling, not after
         // inspecting the result -- `launchShellWorkerImpl` itself may
@@ -1463,6 +1491,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           killUnit: options.killWorkerUnit,
           graceMs: options.shellStopGraceMs ?? (invocation.health?.terminateGraceSeconds ?? 1) * 1000,
           onConfirmed: async () => {
+            confirmedStop = true;
             if (!launch.launched) await cleanupReservation();
             await Promise.resolve().then(() => launch.cleanup?.()).catch(() => {});
             const live = registry.get(entry.invocationId);
@@ -1479,6 +1508,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // Honor a cancel that arrived while the launcher was still pending.
         if (registry.get(entry.invocationId)?.cancelRequested) await control.stop();
         const outcome = launch.launched ? await control.wait(deadlineMs) : await control.stopAndConfirm();
+        confirmedStop = outcome.termination === 'confirmed';
         observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode };
         // #2915 final (evidence contract): the attempt-level fact is derived
         // from this bridge's own launcher-observed wait status — never a
@@ -1505,7 +1535,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: ['worker termination could not be confirmed before the deadline'] });
         }
         if (outcome.exitCode !== 0) {
-          settleRecovery({ kind: 'failed', evidenceSource: 'launcher' });
+          settleRecovery({ kind: 'failed', evidenceSource: 'launcher', confirmedStop });
         }
         await Promise.resolve().then(() => launch.cleanup?.()).catch(() => {
           console.error('[worker-invoke] stdin cleanup failed after confirmed termination');
@@ -1528,7 +1558,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // failed now rather than leaving it candidate-success forever
           // (the bad-exit branch above already settled; this is a no-op
           // there).
-          settleRecovery({ kind: 'failed' });
+          settleRecovery({ kind: 'failed', confirmedStop });
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker final output was not written'] });
         }
       } else {
@@ -1544,6 +1574,18 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // admission, so a queued launch can detect a registry edit that
         // happened while it was waiting (see `serverDefinitionDigest`).
         const qualifiedServerDigest = serverDefinitionDigest(mcpServer);
+        // #2915 review 5 ("a second worker over unresolved execution"):
+        // clipped to the admitted canary's own deadline (min(task deadline,
+        // admission+300s)), matching the shell path's clip above — native
+        // MCP previously always received the resolved invocation's full
+        // `mcp.timeoutSeconds` (observed 900s) regardless of whether this
+        // attempt is the breaker's bounded canary.
+        let mcpBinding = invocation.mcp;
+        if (admission?.gated && admission.token?.canaryKeys?.length > 0) {
+          const canaryRemainingSeconds = Math.max(0, (admission.token.deadlineMs - (admission.breaker?.nowMs?.() ?? Date.now())) / 1000);
+          const clippedTimeoutSeconds = Math.min(mcpBinding.timeoutSeconds, canaryRemainingSeconds);
+          if (clippedTimeoutSeconds < mcpBinding.timeoutSeconds) mcpBinding = { ...mcpBinding, timeoutSeconds: clippedTimeoutSeconds };
+        }
         // #2915 review 5 (finding 2b): set BEFORE calling, not after
         // inspecting `result.outcome` -- `callMcpWorkerImpl` itself may
         // already have launched a real MCP server process and sent bytes
@@ -1552,7 +1594,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // it can never be proven to be pre-spawn.
         spawnAttempted = true;
         mayHaveLaunched = true;
-        const result = await callMcpWorkerImpl(invocation.mcp, mcpServer, {
+        const result = await callMcpWorkerImpl(mcpBinding, mcpServer, {
           sessionIsolation: invocation.mcp.sessionIsolation, mcpRegistry, allowDegraded, config: snapshot.config,
           // #2892 (CI fix): the resolved invocation's own worktree
           // (`invocation.cwd`, #2887's `request.workdir`) — without it the
@@ -1655,7 +1697,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // settles 'succeeded' even with valid claims (the operator asked to
       // stop it); an invalid/non-completed claim settles 'failed', exactly
       // like every other claim-rejection path above.
-      settleRecovery({ kind: cancelled ? 'uncertain' : strictlyCompleted ? 'succeeded' : 'failed' });
+      settleRecovery({ kind: cancelled ? 'uncertain' : strictlyCompleted ? 'succeeded' : 'failed', confirmedStop });
       return registry.markTerminal(entry.invocationId, {
         status: cancelled ? 'cancelled' : (strictlyCompleted ? 'completed' : 'failed'),
         termination: 'confirmed',

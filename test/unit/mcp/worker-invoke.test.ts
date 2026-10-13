@@ -753,7 +753,8 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(maxBytes).toBe(10 * 1024 * 1024);
     const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
     const fakeChild: any = {
-      stdout: new EventEmitter(), stderr: fakeStderr, stdin: new EventEmitter(),
+      stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }), stderr: fakeStderr,
+      stdin: Object.assign(new EventEmitter(), { destroy: vi.fn() }), kill: vi.fn(() => true),
       once(event: string, _handler: any) { return this; },
     };
     const transport = new (ChildProcessTransport as any)(fakeChild);
@@ -765,7 +766,9 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     // One unterminated chunk already past the bound -- never newline-framed.
     fakeChild.stdout.emit('data', Buffer.alloc(maxBytes + 1, 0x41));
     expect(errors).toHaveLength(1);
-    expect(errors[0].message).toMatch(/bound/);
+    expect(errors[0]).toMatchObject({ code: 'OG_WORKER_MCP_FRAME_TOO_LARGE' });
+    expect(fakeChild.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(fakeChild.stdout.destroy).toHaveBeenCalledOnce();
     expect(transport._buffer).toBeUndefined(); // never retained past the bound
     // Terminal, not transient: a SUBSEQUENT, perfectly well-formed
     // newline-terminated JSON-RPC response arriving on the SAME connection
@@ -774,7 +777,7 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     // silently resuming on the next clean frame.
     fakeChild.stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })}\n`));
     expect(messages).toHaveLength(0);
-    expect(errors.length).toBeGreaterThan(1);
+    expect(errors).toHaveLength(1); // terminal refusal reports once, even after more bytes
   });
 
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
@@ -1744,6 +1747,61 @@ setInterval(() => {}, 1000);
     expect(body.diagnostics.join(' ')).toMatch(/avail-mem/);
     await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // worker process was never launched
   }, 20000);
+
+  // #2915 review 5 ("a second worker over unresolved execution"): native
+  // MCP previously always received the resolved invocation's full
+  // `mcp.timeoutSeconds` (observed 900s in production), regardless of
+  // whether this attempt is the breaker's own bounded canary -- a hung
+  // canary's MCP call could then run arbitrarily long past the 300s window
+  // the breaker itself uses to decide a canary is overdue.
+  it('clips the native MCP call timeout to the admitted canary deadline instead of the full task timeoutSeconds', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    let capturedTimeoutSeconds: number | undefined;
+    const fakeBreaker: any = {
+      nowMs: () => Date.now(),
+      admit: () => ({ ok: true, token: { id: 'fake-canary', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: Date.now(), deadlineMs: Date.now() + 50 } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, {
+      scopedBreaker: fakeBreaker,
+      callMcpWorker: async (mcpBinding: any) => { capturedTimeoutSeconds = mcpBinding.timeoutSeconds; return { outcome: 'blocked', diagnostic: 'test-capture-only' }; },
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    // The fixture's own uncapped `mcp.timeoutSeconds` is 30 (buildFixture);
+    // a ~50ms-remaining canary must clip it to roughly 0.05s, never 30.
+    expect(capturedTimeoutSeconds).toBeDefined();
+    expect(capturedTimeoutSeconds!).toBeLessThan(1);
+    expect(capturedTimeoutSeconds!).toBeGreaterThanOrEqual(0);
+  }, 20000);
+
+  // #2915 review 5: a serialized/per-instance MCP queue may hold an
+  // already-admitted call long enough that its canary reservation's own
+  // deadline has since passed -- an expired admission must never launch,
+  // even though the registry-definition requalification (F5, above) alone
+  // would have let it through.
+  it('refuses a queued launch whose admission expired while waiting, instead of launching on a stale reservation', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'success' }));
+    const fakeBreaker: any = {
+      nowMs: () => 1_000_000,
+      admit: () => ({ ok: true, token: { id: 'already-expired', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: 500_000, deadlineMs: 700_000 } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, { scopedBreaker: fakeBreaker });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/admission expired while queued/);
+    await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // worker process was never launched
+  }, 20000);
 });
 
 // ---------------------------------------------------------------------------
@@ -2503,5 +2561,87 @@ setInterval(() => {}, 20);`);
     expect(spawnAsync).not.toHaveBeenCalled();
     expect(h.registry.canStart()).toBe(true);
     await expect(stat(h.input.final_output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 review 5 ("a second worker over unresolved execution"): a hung
+// canary's execution must actually be stopped at its own deadline, never
+// merely reported as an unconfirmed timeout while it keeps running.
+// ---------------------------------------------------------------------------
+describe('bounded stop escalation on canary-deadline timeout (#2915 review 5)', () => {
+  it('terminateChildWithGrace resolves confirmed without SIGKILL when SIGTERM alone stops the child', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const signals: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signals.push(sig);
+      if (sig === 'SIGTERM') { child.exitCode = 0; child.signalCode = null; queueMicrotask(() => child.emit('exit')); }
+    };
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 20 });
+    expect(result).toEqual({ terminated: true });
+    expect(signals).toEqual(['SIGTERM']);
+  });
+
+  it('terminateChildWithGrace escalates to SIGKILL after the bounded grace window when SIGTERM alone does not stop the child', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const signals: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signals.push(sig);
+      if (sig === 'SIGKILL') { child.exitCode = null; child.signalCode = 'SIGKILL'; }
+    };
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result).toEqual({ terminated: true });
+  });
+
+  it('terminateChildWithGrace reports not terminated when neither signal produced an observable exit', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = () => {};
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
+    expect(result).toEqual({ terminated: false });
+  });
+
+  it('shell stop control issues a stop and re-checks status once the deadline elapses, instead of returning an unconfirmed timeout unattended', async () => {
+    const { buildShellStopControl } = await import('../../../src/mcp/tools/worker-shell-control.mjs');
+    let active = true;
+    let stopCalls = 0;
+    const killUnit = vi.fn();
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'fake-unit' }, {
+      graceMs: 10, recheckMaxAttempts: 0,
+      waitForUnit: async () => active ? { termination: 'uncertain', exitCode: null, timedOut: true }
+        : { termination: 'confirmed', exitCode: 0 },
+      stopUnit: async () => { stopCalls += 1; active = false; return { ok: true }; },
+      killUnit,
+    });
+    try {
+      const result = await control.wait(10);
+      expect(stopCalls).toBe(1);
+      expect(killUnit).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ termination: 'confirmed', timedOut: true });
+    } finally { control.dispose(); }
+  });
+
+  it('shell stop control reports uncertain when the stop escalation does not actually stop the unit', async () => {
+    const { buildShellStopControl } = await import('../../../src/mcp/tools/worker-shell-control.mjs');
+    let stopCalls = 0;
+    const killUnit = vi.fn(async () => ({ ok: false }));
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'fake-unit' }, {
+      graceMs: 10, recheckMaxAttempts: 0,
+      waitForUnit: async () => ({ termination: 'uncertain', exitCode: null, timedOut: true }),
+      stopUnit: async () => { stopCalls += 1; return { ok: false }; },
+      killUnit,
+    });
+    try {
+      const result = await control.wait(10);
+      expect(stopCalls).toBe(1);
+      expect(killUnit).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ termination: 'uncertain', timedOut: true });
+    } finally { control.dispose(); }
   });
 });

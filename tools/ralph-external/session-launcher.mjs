@@ -185,6 +185,38 @@ export function signalOwnedWorker(identity, signal, { sample = sampleWorkerIdent
   try { kill(-identity.pgid, signal); return true; } catch { return false; }
 }
 
+/**
+ * Bounded SIGTERM-then-SIGKILL escalation against a single already-spawned
+ * child process (#2915 review 5, "a second worker over unresolved
+ * execution"): the degraded-isolation MCP wait path in
+ * `src/mcp/tools/worker-invoke.mjs` sent a single unobserved SIGTERM on
+ * timeout and never escalated, unlike this launcher's own identity-verified
+ * degraded `stop()` escalation inside `captureOneWorker`, which always
+ * follows an unacknowledged SIGTERM with SIGKILL after a bounded grace
+ * window. Exported so every caller that owns a plain (non-owned-group)
+ * child process shares this ONE escalation instead of re-implementing
+ * SIGTERM/grace/SIGKILL timing a second time.
+ *
+ * Resolves `{ terminated: boolean }` once the child's own `'exit'` event
+ * fires or the bounded window elapses, whichever is first — never waits
+ * unboundedly beyond `graceMs` plus one fixed 100ms settle tick.
+ */
+export function terminateChildWithGrace(child, { graceMs = 5000 } = {}) {
+  return new Promise(resolve => {
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    if (exited()) { resolve({ terminated: true }); return; }
+    let settled = false;
+    const done = terminated => { if (settled) return; settled = true; resolve({ terminated }); };
+    child.once('exit', () => done(true));
+    try { child.kill('SIGTERM'); } catch { done(exited()); return; }
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      setTimeout(() => done(exited()), 100);
+    }, graceMs);
+    if (killTimer.unref) killTimer.unref();
+  });
+}
+
 /** Execution-time files in the launcher's private directory. Content producers
  * are pure; preview paths remain ${artifact:name}. Workspace locations are a
  * future declaration kind and are refused here. */
@@ -1775,13 +1807,26 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
  * failures land in the invocation scope however loudly the worker blamed
  * the provider; only a launcher-observed pre-spawn missing-binary failure
  * implicates the installation.
+ *
+ * `confirmedStop` (#2915 review 5, "a second worker over unresolved
+ * execution") is a SEPARATE fact from `kind`: whether THIS attempt's own
+ * descendant tree is launcher-confirmed stopped (`result.termination ===
+ * 'confirmed'`), independent of whether the attempt succeeded or failed.
+ * `ScopedFailureBreaker.settle()` reads it only when this settlement
+ * arrives against a reservation whose own canary deadline already passed
+ * unresolved — it resolves that reservation's bounded blocking marker, never
+ * the ordinary success/failure transition. A degraded-isolation attempt can
+ * never confirm descendant termination (`captureOneWorker`'s own `confirmed`
+ * computation), so its marker — if any — stays blocking until some other
+ * owned isolation evidence resolves it.
  */
 export function classifyAttemptForSettlement(invocation, result, { quotaAccount = null, installationQualifier = null } = {}) {
   const kind = result?.attemptOutcome ?? 'uncertain';
-  if (kind !== 'failed') return { kind };
+  const confirmedStop = result?.termination === 'confirmed';
+  if (kind !== 'failed') return { kind, confirmedStop };
   const selected = invocation?.selected ?? {};
   const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
-  return { kind, reasonCode, evidenceSource, cli: selected.cli ?? null,
+  return { kind, confirmedStop, reasonCode, evidenceSource, cli: selected.cli ?? null,
     inferenceProvider: selected.inferenceProvider ?? null, quotaAccount, installationQualifier };
 }
 

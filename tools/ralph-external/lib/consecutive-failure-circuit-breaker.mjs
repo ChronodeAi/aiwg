@@ -586,6 +586,15 @@ export class ScopedFailureBreaker extends EventEmitter {
       const blockedBy = [];
       for (const scopeKey of openKeys) {
         const rec = this._scopes.get(scopeKey);
+        // #2915 review 5 ("a second worker over unresolved execution"): a
+        // bounded blocking marker (installed by `_sweepReservations` when a
+        // canary's own deadline passed with stop still unconfirmed) refuses
+        // admission regardless of elapsed backoff -- checked BEFORE the
+        // due-floor/backoff check below, which elapsed backoff alone could
+        // otherwise satisfy. Only a settlement carrying confirmed-
+        // termination evidence for that exact reservation clears it (see
+        // `settle()`).
+        if (rec.blockingMarker) { blockedBy.push(scopeKey); continue; }
         if (rec.activeCanary) { blockedBy.push(scopeKey); continue; }
         const dueFloor = Math.max(rec.nextProbeAtMs ?? 0, rec.resetAtMs ?? 0);
         if (now < dueFloor || !rec.breaker.canExecute()) { blockedBy.push(scopeKey); continue; }
@@ -612,7 +621,11 @@ export class ScopedFailureBreaker extends EventEmitter {
     const deadlineMs = canaryKeys.length > 0 ? now + this.policy.canaryTimeoutMs : Infinity;
     const token = Object.freeze({ id, breaker: this, invocationId, coveringKeys: Object.freeze(covering),
       canaryKeys: Object.freeze(canaryKeys), mintedAtMs: now, deadlineMs });
-    this._reservations.set(id, { token, settled: false });
+    // `expiredAt`/`markerResolved` (#2915 review 5): set only once this
+    // reservation's own canary deadline has passed unresolved (see
+    // `_sweepReservations`); `null`/`false` here for every reservation at
+    // mint time, canary or not.
+    this._reservations.set(id, { token, settled: false, expiredAt: null, markerResolved: false });
     this.noteLaunched(covering, invocationId);
     for (const scopeKey of canaryKeys) {
       const rec = this._scopes.get(scopeKey);
@@ -644,6 +657,19 @@ export class ScopedFailureBreaker extends EventEmitter {
    * scopes resolve per `outcome.kind` (recover / reopen+backoff / reopen
    * uncertain), and every covering scope's outstanding cohort membership is
    * cleared regardless of canary status (`all-covering-scopes-settle`).
+   *
+   * `outcome.confirmedStop` (#2915 review 5, "a second worker over
+   * unresolved execution") matters ONLY for a reservation whose own canary
+   * deadline already passed unresolved (`_sweepReservations` already
+   * reopened the scope and installed a blocking marker for it, below) — a
+   * settle() call against such a token is the launcher's bounded stop-
+   * escalation report arriving separately from the expiry itself, and
+   * resolves ONLY that marker, never the scope's normal recover/reopen
+   * transition (already applied exactly once, at expiry). `true` (the
+   * launcher's own confirmed termination evidence) clears the marker;
+   * anything else (including a late `kind: 'succeeded'`) leaves it in
+   * place with no further automatic resolution — late success can never
+   * close a scope this way.
    */
   settle(token, outcome = { kind: 'uncertain' }) {
     const now = this.nowMs();
@@ -660,7 +686,31 @@ export class ScopedFailureBreaker extends EventEmitter {
       return { ok: false, reason: 'reservation is not owned by this breaker' };
     }
     const entry = this._reservations.get(token.id);
-    if (!entry || entry.settled || entry.token !== token) {
+    if (!entry || entry.token !== token) {
+      return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
+    }
+    if (entry.expiredAt !== null) {
+      // This reservation already failed its own canary deadline (possibly
+      // via the sweep this very call just performed, above). Resolve the
+      // blocking marker it left behind instead of re-running the normal
+      // recover/reopen transition below.
+      if (entry.markerResolved) {
+        return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
+      }
+      entry.markerResolved = true;
+      const confirmed = outcome?.confirmedStop === true;
+      for (const scopeKey of entry.token.canaryKeys) {
+        const rec = this._scopes.get(scopeKey);
+        if (rec?.blockingMarker?.reservationId === token.id && confirmed) rec.blockingMarker = null;
+      }
+      // A confirmed stop frees this reservation's slot; an unconfirmed stop
+      // deliberately keeps it occupying one of `maxOutstandingReservations`
+      // — the explicit bound a persistent blocking marker counts against,
+      // rather than a separate marker cap or an invented auto-expiry.
+      if (confirmed) this._reservations.delete(token.id);
+      return { ok: true };
+    }
+    if (entry.settled) {
       return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
     }
     entry.settled = true;
@@ -832,31 +882,45 @@ export class ScopedFailureBreaker extends EventEmitter {
   }
 
   /**
-   * Account and settle (as uncertain) every reservation past its own
-   * deadline — including non-canary reservations, which share the same
-   * bounded TTL so `_reservations` cannot grow without bound from attempts
-   * whose caller crashed before calling `settle()`. A hung or unreported
-   * canary is treated as a failed canary: it reopens with backoff and frees
-   * the scope for a fresh admission once due (the deadline enforcement
+   * Account every reservation past its own deadline — including non-canary
+   * reservations, which share the same bounded-TTL field (though its value
+   * is `Infinity` for them in practice) so `_reservations` cannot grow
+   * without bound from attempts whose caller crashed before calling
+   * `settle()`. A hung or unreported canary is treated as a failed canary:
+   * it reopens with doubled backoff immediately (the deadline enforcement
    * `expireStaleReservations` used to apply only at the scope level now
-   * applies uniformly through the reservation registry). Called at the top
-   * of every `admit`/`settle`, so expiry is always observed on the very next
-   * call even when the admitted attempt never reports back at all (process
-   * crash, dropped callback) — the backstop that makes the design
-   * deadlock-free (`deadline-reopens-before-readmission`).
+   * applies uniformly through the reservation registry).
+   *
+   * #2915 review 5 ("a second worker over unresolved execution"): reopening
+   * with backoff is NOT settlement here — the reservation itself is
+   * deliberately retained (not deleted) and a bounded blocking marker is
+   * installed on every canary scope it covered, because expiry alone proves
+   * nothing about whether the attempt actually stopped. `admit()` refuses
+   * while the marker is set, regardless of elapsed backoff; only a later
+   * `settle()` call against this exact token, carrying confirmed-
+   * termination evidence (`outcome.confirmedStop`), clears it — see
+   * `settle()`. `entry.expiredAt` guards this block from re-running on a
+   * later sweep of the same still-unresolved entry.
+   *
+   * Called at the top of every `admit`/`settle`, so expiry is always
+   * observed on the very next call even when the admitted attempt never
+   * reports back at all (process crash, dropped callback) — the backstop
+   * that makes the design deadlock-free once stop is eventually confirmed
+   * (`deadline-reopens-before-readmission`).
    */
   _sweepReservations(now) {
     for (const [id, entry] of this._reservations) {
       if (entry.settled) { this._reservations.delete(id); continue; }
       if (now <= entry.token.deadlineMs) continue;
-      entry.settled = true;
-      this._reservations.delete(id);
+      if (entry.expiredAt !== null) continue; // already reopened + marked; awaiting settle() to resolve the marker
+      entry.expiredAt = now;
       const { invocationId, coveringKeys, canaryKeys } = entry.token;
       for (const scopeKey of canaryKeys) {
         const rec = this._scopes.get(scopeKey);
         if (rec?.activeCanary?.id === id) {
           rec.activeCanary = null;
           this._reopen(rec, now);
+          rec.blockingMarker = { reservationId: id, invocationId, setAtMs: now };
         }
       }
       this.noteSettled({ scopeKeys: coveringKeys, invocationId });
@@ -902,6 +966,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       outstanding: this._outstanding.get(scopeKey)?.size ?? 0,
       cohortSize: rec.cohort?.size ?? 0,
       activeCanary: rec.activeCanary ? { ...rec.activeCanary } : null,
+      blockingMarker: rec.blockingMarker ? { ...rec.blockingMarker } : null,
       episodeCooldownMs: rec.episodeCooldownMs,
       nextProbeAtMs: rec.nextProbeAtMs,
       resetAtMs: rec.resetAtMs,
@@ -998,6 +1063,10 @@ export class ScopedFailureBreaker extends EventEmitter {
       nextProbeAtMs: 0,
       episodeCooldownMs: this.policy.cooldownMs,
       activeCanary: null,
+      // #2915 review 5: a bounded marker set when a canary's own deadline
+      // passes with stop unconfirmed (see `_sweepReservations`); cleared
+      // only by a `settle()` call carrying confirmed-termination evidence.
+      blockingMarker: null,
       reopens: 0,
       attemptsObserved: 0,
       canariesObserved: 0,
@@ -1048,7 +1117,9 @@ export class ScopedFailureBreaker extends EventEmitter {
     let oldestAt = Infinity;
     for (const [key, rec] of this._scopes) {
       if ((rec.scope === FailureScope.INVOCATION) !== isInvocation) continue;
-      if (rec.status !== 'closed' || rec.activeCanary) continue;
+      // A blocking marker (#2915 review 5) is never memberless/inert even if
+      // `status` somehow read otherwise — never evict it.
+      if (rec.status !== 'closed' || rec.activeCanary || rec.blockingMarker) continue;
       const outstanding = this._outstanding.get(key);
       if (outstanding && outstanding.size > 0) continue;
       if (rec.failures.some((f) => now - f.atMs < this.policy.windowMs)) continue;
@@ -1080,7 +1151,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     const now = this.nowMs();
     for (const rec of this._scopes.values()) {
       if (rec.scope === FailureScope.INVOCATION) continue;
-      if (rec.status !== 'closed' || rec.activeCanary) continue;
+      if (rec.status !== 'closed' || rec.activeCanary || rec.blockingMarker) continue;
       const outstanding = this._outstanding.get(rec.scopeKey);
       if (outstanding && outstanding.size > 0) continue;
       if (rec.failures.some((f) => now - f.atMs < this.policy.windowMs)) continue;

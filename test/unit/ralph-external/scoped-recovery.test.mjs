@@ -544,7 +544,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     expect(breaker.getState(INSTALL).state).toBe('closed');
   });
 
-  it('expires a hung canary with backoff instead of gating forever (no deadlock)', () => {
+  it('expires a hung canary with backoff and a persistent blocking marker, never admitting a second worker while stop is unconfirmed', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
     const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
@@ -552,18 +552,77 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     expect(probe(breaker, [INSTALL]).ok).toBe(false);
     // The admitted attempt never reports back at all (crash/dropped
     // callback) -- past its canaryTimeoutMs deadline, the very next gate
-    // check sweeps it as a failed canary, closes the reservation and
-    // reopens with doubled backoff: the scope is never gated forever.
+    // check sweeps it as a failed canary, reopens with doubled backoff, AND
+    // retains a bounded blocking marker (#2915 review 5, "a second worker
+    // over unresolved execution"): expiry alone proves nothing about
+    // whether the attempt actually stopped.
     vi.advanceTimersByTime(300_001);
     expect(probe(breaker, [INSTALL]).ok).toBe(false);
     expect(breaker.getState(INSTALL).activeCanary).toBeNull();
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
-    // And it eventually resumes at the doubled backoff, proving the path
-    // back to a real launch is reachable, not merely closed.
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // Backoff alone is NOT sufficient to re-admit: even once fully elapsed,
+    // the marker still refuses every admission for this scope.
+    vi.advanceTimersByTime(240_000);
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    // A late 'succeeded' report against the expired reservation is accepted
+    // as a settlement of the MARKER, but carries no confirmed-termination
+    // evidence -- it can never close the scope and never clears the marker
+    // either (late success cannot close a scope).
+    expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: true });
+    expect(breaker.getState(INSTALL).state).toBe('open');
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    // Reusing the already-resolved token a second time is refused.
+    expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: false, reason: expect.any(String) });
+  });
+
+  it('a settlement carrying confirmed-termination evidence clears the blocking marker and re-admits once due (no permanent deadlock)', () => {
+    openInstall();
+    vi.advanceTimersByTime(120_000);
+    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    expect(admitted.ok).toBe(true);
+    vi.advanceTimersByTime(300_001);
+    // Sweeps the expiry and installs the marker (no settle() has happened yet).
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // The launcher's own bounded diagnostic-then-stop escalation confirms
+    // the attempt actually stopped; it reports that evidence through the
+    // SAME reservation token -- there is nothing left to admit for this
+    // specific reservation, only its marker to resolve.
+    expect(breaker.settle(admitted.token, { kind: 'uncertain', confirmedStop: true })).toEqual({ ok: true });
+    expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
+    // Not yet due: refused by ordinary backoff, not the (now-cleared) marker.
+    expect(probe(breaker, [INSTALL]).ok).toBe(false);
     vi.advanceTimersByTime(240_000);
     expect(probe(breaker, [INSTALL]).ok).toBe(true);
-    // Settling the long-expired, already-swept token is refused.
-    expect(breaker.settle(admitted.token, { kind: 'succeeded' }).ok).toBe(false);
+  });
+
+  it('a blocking marker continues to occupy its reservation slot until confirmed, bounded by the existing maxOutstandingReservations cap', () => {
+    const smallCapBreaker = new ScopedFailureBreaker({ jitterMs: () => 0, policy: { maxOutstandingReservations: 1 } });
+    try {
+      fail(smallCapBreaker, [INSTALL], 'a', installFailure('a'));
+      fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
+      fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
+      vi.advanceTimersByTime(120_000);
+      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      expect(admitted.ok).toBe(true);
+      vi.advanceTimersByTime(300_001);
+      // Sweeping this expiry installs an unresolved blocking marker that
+      // keeps the reservation live (occupying the one available slot) --
+      // no separate marker cap and no auto-expiry were invented; it is
+      // bounded by the SAME `maxOutstandingReservations` every other
+      // reservation already counts against.
+      const unrelated = smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] });
+      expect(unrelated.ok).toBe(false);
+      expect(unrelated.blockedBy).toContain('reservation-capacity');
+      // Confirming the stop frees the slot.
+      expect(smallCapBreaker.settle(admitted.token, { kind: 'uncertain', confirmedStop: true })).toEqual({ ok: true });
+      const afterwards = smallCapBreaker.admit({ invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
+      expect(afterwards.ok).toBe(true);
+    } finally {
+      smallCapBreaker.destroy();
+    }
   });
 
   // #2915 final review step 2, named tests ------------------------------
@@ -638,10 +697,14 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     const overlapping = breaker.admit({ invocationId: 'overlapping', scopeKeys: [INSTALL] });
     expect(overlapping.ok).toBe(false); // reopened with doubled backoff, not yet due again
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
-    // A late success report against the now-expired, already-swept token
-    // never closes the scope — late success cannot close a scope.
-    expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: false, reason: expect.any(String) });
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
+    // A late success report against the now-expired reservation settles
+    // only the marker it left behind (#2915 review 5) — it carries no
+    // confirmed-termination evidence, so it never closes the scope and
+    // never clears the marker either. Late success cannot close a scope.
+    expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: true });
     expect(breaker.getState(INSTALL).state).toBe('open');
+    expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
   });
 
   it('hard-caps-preserve-open-scopes', () => {
@@ -1194,12 +1257,32 @@ describe('classifyAttemptForSettlement / admitDirectWorker (replaces recordRecov
       const admission = await admitDirectWorker({ gateEnabled: true, config, invocation, invocationId: 'ok-1', scopedBreaker: breaker, drivers: {} });
       const result = { termination: 'confirmed', exitCode: 0, attemptOutcome: 'succeeded' };
       const outcome = classifyAttemptForSettlement(invocation, result);
-      expect(outcome).toEqual({ kind: 'succeeded' });
+      expect(outcome).toEqual({ kind: 'succeeded', confirmedStop: true });
       settleDirectWorker(admission, outcome);
       expect(breaker.snapshot().attemptsObserved).toBe(1);
     } finally {
       breaker.destroy();
     }
+  });
+
+  // #2915 review 5 ("a second worker over unresolved execution"): a
+  // degraded-isolation attempt can never confirm descendant termination
+  // (`captureOneWorker`'s own `confirmed` computation is always false for
+  // it), so `confirmedStop` must read false even on a genuinely SUCCESSFUL
+  // attempt — this is the fact `ScopedFailureBreaker.settle()` consults to
+  // decide whether a canary's blocking marker may clear, entirely separate
+  // from `kind` (attempt success/failure).
+  it('confirmedStop reflects result.termination independently of attemptOutcome', () => {
+    const invocation = { selected: { cli: 'codex' } };
+    expect(classifyAttemptForSettlement(invocation, { termination: 'confirmed', attemptOutcome: 'succeeded' }))
+      .toEqual({ kind: 'succeeded', confirmedStop: true });
+    expect(classifyAttemptForSettlement(invocation, { termination: 'uncertain', attemptOutcome: 'succeeded' }))
+      .toEqual({ kind: 'succeeded', confirmedStop: false });
+    expect(classifyAttemptForSettlement(invocation, { termination: 'uncertain', attemptOutcome: 'uncertain' }))
+      .toEqual({ kind: 'uncertain', confirmedStop: false });
+    const failed = classifyAttemptForSettlement(invocation,
+      { termination: 'confirmed', attemptOutcome: 'failed', errorCode: 'ENOENT', sawExit: false, exitCode: null });
+    expect(failed).toMatchObject({ kind: 'failed', confirmedStop: true, reasonCode: 'NOT_FOUND', evidenceSource: 'launcher' });
   });
 });
 
