@@ -83,20 +83,111 @@ function sourceFiles(root, dirNames) {
 const CHILD_PROCESS_MODULE_SPECIFIERS = new Set(['child_process', 'node:child_process']);
 
 /**
+ * Resolve a possible relative import/export specifier to the absolute file
+ * it names, trying each plausible extension (this repo's relative specs
+ * are always written with an explicit extension already, but a `.js`
+ * specifier may point at either a `.js` file or, in a `tools/**` script
+ * resolved from TypeScript source, a same-named `.ts` file).
+ *
+ * @param {string} fromFile - absolute path of the file containing the specifier
+ * @param {string} specifier
+ * @returns {string | null}
+ */
+function resolveRelativeSpecifier(fromFile, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const resolved = path.resolve(path.dirname(fromFile), specifier);
+  if (fs.existsSync(resolved)) return resolved;
+  if (resolved.endsWith('.js')) {
+    const tsCandidate = resolved.slice(0, -3) + '.ts';
+    if (fs.existsSync(tsCandidate)) return tsCandidate;
+  }
+  return null;
+}
+
+/**
+ * Cross-file re-export resolution (#3062 B/C finding 8): a file can
+ * re-export a sync child-process API from `node:child_process` under a
+ * new name (`export { execSync as runSync } from 'node:child_process'`),
+ * or re-export *that* re-export from yet another local file. A single-file
+ * scan can never see this — the identifier a caller imports (`runSync`)
+ * never appears anywhere near the real API name in the caller's own
+ * source. This builds one index, across every file this gate scans, of
+ * `resolved absolute file path -> Map<locally exported name, real API
+ * name>`, resolving relative-reexport chains to a fixed point so the order
+ * files happen to be visited in doesn't matter.
+ *
+ * @param {string[]} absoluteFiles
+ * @returns {Map<string, Map<string, string>>}
+ */
+export function buildReExportIndex(absoluteFiles) {
+  const index = new Map();
+  /** @type {{ file: string, exportedName: string, targetFile: string, originalName: string }[]} */
+  const pendingRelative = [];
+
+  for (const file of absoluteFiles) {
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const exportsForFile = new Map();
+    const visit = (node) => {
+      if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)
+          && node.exportClause && ts.isNamedExports(node.exportClause)) {
+        const specifier = node.moduleSpecifier.text;
+        for (const element of node.exportClause.elements) {
+          const originalName = (element.propertyName ?? element.name).text;
+          const exportedName = element.name.text;
+          if (CHILD_PROCESS_MODULE_SPECIFIERS.has(specifier) && SYNC_APIS.has(originalName)) {
+            exportsForFile.set(exportedName, originalName);
+          } else if (specifier.startsWith('.')) {
+            const targetFile = resolveRelativeSpecifier(file, specifier);
+            if (targetFile) pendingRelative.push({ file, exportedName, targetFile, originalName });
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    index.set(file, exportsForFile);
+  }
+
+  for (let pass = 0; pass < 5; pass += 1) {
+    let changed = false;
+    for (const edge of pendingRelative) {
+      if (index.get(edge.file)?.has(edge.exportedName)) continue;
+      const resolved = index.get(edge.targetFile)?.get(edge.originalName);
+      if (resolved) {
+        index.get(edge.file).set(edge.exportedName, resolved);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return index;
+}
+
+/**
  * Resolve local bindings for the raw sync child-process APIs within one
  * file (#3062 finding 3): aliased named imports (`execSync as nodeExecSync`),
  * namespace/default imports (`import cp from 'child_process'`, `import *
  * as cp`), `require('child_process')` — whole-module or destructured, with
- * or without a rename — and a simple same-file reassignment chain
- * (`const foo = nodeExecSync` / `const foo = cp.execSync`). This lets
+ * or without a rename — a re-export from another local file (resolved via
+ * `crossFile`, #3062 B/C finding 8), and a same-file reassignment chain
+ * (`const foo = nodeExecSync`, `const foo = cp.execSync`,
+ * `const foo = cp['execSync']`, or `const { execSync: x } = cp`). This lets
  * `calledApi` recognize a call through any of those bindings, not just a
  * literal `execSync`/`execFileSync`/`spawnSync` identifier or property
  * name.
  *
  * @param {ts.SourceFile} source
+ * @param {{ file: string, reExportIndex: Map<string, Map<string, string>> } | undefined} crossFile
  * @returns {{ aliasToApi: Map<string, string>, namespaceAliases: Set<string> }}
  */
-function collectChildProcessApiAliases(source) {
+function collectChildProcessApiAliases(source, crossFile) {
   const aliasToApi = new Map();
   const namespaceAliases = new Set();
 
@@ -109,17 +200,29 @@ function collectChildProcessApiAliases(source) {
     && CHILD_PROCESS_MODULE_SPECIFIERS.has(node.arguments[0].text);
 
   const visit = (node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)
-        && CHILD_PROCESS_MODULE_SPECIFIERS.has(node.moduleSpecifier.text) && node.importClause) {
-      const clause = node.importClause;
-      if (clause.name) namespaceAliases.add(clause.name.text); // default import
-      if (clause.namedBindings) {
-        if (ts.isNamespaceImport(clause.namedBindings)) {
-          namespaceAliases.add(clause.namedBindings.name.text);
-        } else if (ts.isNamedImports(clause.namedBindings)) {
-          for (const element of clause.namedBindings.elements) {
-            const importedName = (element.propertyName ?? element.name).text;
-            if (SYNC_APIS.has(importedName)) aliasToApi.set(element.name.text, importedName);
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier) && node.importClause) {
+      const specifier = node.moduleSpecifier.text;
+      const isChildProcess = CHILD_PROCESS_MODULE_SPECIFIERS.has(specifier);
+      // A relative import might be importing a re-export (#3062 B/C
+      // finding 8): resolve it through the cross-file index when this
+      // isn't a direct `node:child_process` import.
+      const reExports = !isChildProcess && crossFile && specifier.startsWith('.')
+        ? crossFile.reExportIndex.get(resolveRelativeSpecifier(crossFile.file, specifier) ?? '')
+        : undefined;
+      if (isChildProcess || reExports) {
+        const clause = node.importClause;
+        if (clause.name && isChildProcess) namespaceAliases.add(clause.name.text); // default import
+        if (clause.namedBindings) {
+          if (ts.isNamespaceImport(clause.namedBindings) && isChildProcess) {
+            namespaceAliases.add(clause.namedBindings.name.text);
+          } else if (ts.isNamedImports(clause.namedBindings)) {
+            for (const element of clause.namedBindings.elements) {
+              const importedName = (element.propertyName ?? element.name).text;
+              const resolvedApi = isChildProcess
+                ? (SYNC_APIS.has(importedName) ? importedName : undefined)
+                : reExports.get(importedName);
+              if (resolvedApi) aliasToApi.set(element.name.text, resolvedApi);
+            }
           }
         }
       }
@@ -141,29 +244,57 @@ function collectChildProcessApiAliases(source) {
   visit(source);
 
   // Same-file reassignment chain: `const foo = nodeExecSync;` (alias of an
-  // alias) or `const foo = cp.execSync;` (property read off a namespace
-  // alias). Fixed-point over a few passes handles chains in either
-  // declaration order.
+  // alias), `const foo = cp.execSync;` (property read off a namespace
+  // alias), `const foo = cp['execSync'];` (the same, via computed element
+  // access — #3062 B/C finding 8), or `const { execSync: x } = cp;`
+  // (destructuring a namespace alias, as opposed to destructuring
+  // `require(...)` directly, which the pass above already covers).
+  // Fixed-point over a few passes handles chains in either declaration
+  // order.
   for (let pass = 0; pass < 5; pass += 1) {
     let changed = false;
     const propagate = (node) => {
-      if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+      if (ts.isVariableDeclaration(node) && node.initializer) {
         const init = node.initializer;
-        const targetName = node.name.text;
-        if (ts.isIdentifier(init)) {
-          if (!aliasToApi.has(targetName) && aliasToApi.has(init.text)) {
-            aliasToApi.set(targetName, aliasToApi.get(init.text));
+        if (ts.isIdentifier(node.name)) {
+          const targetName = node.name.text;
+          if (ts.isIdentifier(init)) {
+            if (!aliasToApi.has(targetName) && aliasToApi.has(init.text)) {
+              aliasToApi.set(targetName, aliasToApi.get(init.text));
+              changed = true;
+            }
+            if (!namespaceAliases.has(targetName) && namespaceAliases.has(init.text)) {
+              namespaceAliases.add(targetName);
+              changed = true;
+            }
+          } else if (ts.isPropertyAccessExpression(init) && ts.isIdentifier(init.expression)
+              && namespaceAliases.has(init.expression.text) && SYNC_APIS.has(init.name.text)
+              && !aliasToApi.has(targetName)) {
+            aliasToApi.set(targetName, init.name.text); // const foo = cp.execSync
+            changed = true;
+          } else if (ts.isElementAccessExpression(init) && ts.isIdentifier(init.expression)
+              && namespaceAliases.has(init.expression.text)
+              && ts.isStringLiteralLike(init.argumentExpression)
+              && SYNC_APIS.has(init.argumentExpression.text)
+              && !aliasToApi.has(targetName)) {
+            aliasToApi.set(targetName, init.argumentExpression.text); // const foo = cp['execSync']
             changed = true;
           }
-          if (!namespaceAliases.has(targetName) && namespaceAliases.has(init.text)) {
-            namespaceAliases.add(targetName);
-            changed = true;
+        } else if (ts.isObjectBindingPattern(node.name) && ts.isIdentifier(init)
+            && namespaceAliases.has(init.text)) {
+          // const { execSync: x } = cp — destructuring a namespace alias
+          // (as opposed to destructuring require('child_process') directly,
+          // which the import/require pass above already handles).
+          for (const element of node.name.elements) {
+            if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) continue;
+            const importedName = element.propertyName && ts.isIdentifier(element.propertyName)
+              ? element.propertyName.text
+              : element.name.text;
+            if (SYNC_APIS.has(importedName) && !aliasToApi.has(element.name.text)) {
+              aliasToApi.set(element.name.text, importedName);
+              changed = true;
+            }
           }
-        } else if (ts.isPropertyAccessExpression(init) && ts.isIdentifier(init.expression)
-            && namespaceAliases.has(init.expression.text) && SYNC_APIS.has(init.name.text)
-            && !aliasToApi.has(targetName)) {
-          aliasToApi.set(targetName, init.name.text);
-          changed = true;
         }
       }
       ts.forEachChild(node, propagate);
@@ -173,6 +304,94 @@ function collectChildProcessApiAliases(source) {
   }
 
   return { aliasToApi, namespaceAliases };
+}
+
+/** The exported name the gate trusts to produce a provably positive timeout; see positiveTimeoutMs() in src/process/bounded-child-process.mjs. */
+const TRUSTED_TIMEOUT_HELPER_NAME = 'positiveTimeoutMs';
+
+/**
+ * Local identifiers bound to `positiveTimeoutMs` (#3062 B/C finding 8): a
+ * renamed named import, destructuring it out of any call (deliberately
+ * permissive about the call itself — `await importImpl(...)`,
+ * `require(...)`, or anything else; naming a local binding
+ * `positiveTimeoutMs` is the signal, not which call produced it), or a
+ * same-file reassignment of an already-trusted binding. A call to one of
+ * these is treated as a provably positive timeout by
+ * `hasProvablyPositiveTimeout` below, because the helper itself guarantees
+ * that contract — see its own doc comment.
+ *
+ * @param {ts.SourceFile} source
+ * @returns {Set<string>}
+ */
+function collectTrustedTimeoutHelperAliases(source) {
+  const trusted = new Set();
+
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node) && node.importClause?.namedBindings
+        && ts.isNamedImports(node.importClause.namedBindings)) {
+      for (const element of node.importClause.namedBindings.elements) {
+        if ((element.propertyName ?? element.name).text === TRUSTED_TIMEOUT_HELPER_NAME) {
+          trusted.add(element.name.text);
+        }
+      }
+    } else if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name)) {
+      for (const element of node.name.elements) {
+        if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) continue;
+        const sourceName = element.propertyName && ts.isIdentifier(element.propertyName)
+          ? element.propertyName.text
+          : element.name.text;
+        if (sourceName === TRUSTED_TIMEOUT_HELPER_NAME) trusted.add(element.name.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+
+  for (let pass = 0; pass < 5; pass += 1) {
+    let changed = false;
+    const propagate = (node) => {
+      if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)
+          && ts.isIdentifier(node.initializer) && trusted.has(node.initializer.text)
+          && !trusted.has(node.name.text)) {
+        trusted.add(node.name.text);
+        changed = true;
+      }
+      ts.forEachChild(node, propagate);
+    };
+    propagate(source);
+    if (!changed) break;
+  }
+
+  return trusted;
+}
+
+/**
+ * `const` declarations in `source` whose initializer resolves to a numeric
+ * value via `literalNumericValue` (a plain numeric literal or a simple
+ * constant arithmetic expression of such literals) — the only form of
+ * same-file identifier resolution the non-literal-timeout rule allows
+ * (#3062 B/C finding 8's tightened rule, replacing "any expression is
+ * accepted"). A `let`/`var` is deliberately excluded: it can be
+ * reassigned after declaration, so resolving it here would be unsound.
+ *
+ * @param {ts.SourceFile} source
+ * @returns {Map<string, number>}
+ */
+function collectConstNumericLiterals(source) {
+  const values = new Map();
+  const visit = (node) => {
+    if (ts.isVariableStatement(node) && (node.declarationList.flags & ts.NodeFlags.Const)) {
+      for (const declaration of node.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer) {
+          const value = literalNumericValue(declaration.initializer);
+          if (value !== null) values.set(declaration.name.text, value);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return values;
 }
 
 /**
@@ -240,44 +459,95 @@ function isUndefinedKeyword(expr) {
 }
 
 /**
- * Whether `expr` is provably *not* a usable bound: the literal `undefined`,
- * or a numeric literal (or simple constant expression of literals) that
- * resolves to `<= 0`. Anything else — including an identifier, property
- * access, or call expression whose runtime value cannot be known from
- * syntax alone — is not provably bad, so it is left accepted exactly as
- * before (#3062 finding 4 narrows acceptance only for the specific cases
- * named in the review: `timeout: 0`, `timeout: undefined`, and a `timeout`
- * literal followed by a spread that could silently override it; it does
- * not require every `timeout` value to be a literal).
+ * Whether `expr` is a provably positive timeout value. In `strict` mode
+ * (the product-code scan, `checkProduct()` — #3062 B/C finding 8, which
+ * replaces the earlier "accept anything not provably bad" rule):
+ *
+ *   - a numeric literal, or a simple constant arithmetic expression of
+ *     such literals, that resolves `> 0`;
+ *   - a plain identifier that resolves, in the same file, to a `const`
+ *     declaration meeting the above (via `constLiterals`);
+ *   - a call to the gate-trusted `positiveTimeoutMs` helper (via
+ *     `trustedTimeoutHelperAliases`), which guarantees a positive result
+ *     by construction (see its doc comment in
+ *     src/process/bounded-child-process.mjs) regardless of what dynamic
+ *     value it was given.
+ *
+ * Anything else — `undefined`, a property access (`options.timeout`), an
+ * identifier that isn't a resolvable same-file `const`, a call to
+ * anything other than the trusted helper, etc. — is not provably
+ * positive: the call must go through the bounded helper instead.
+ *
+ * Strict mode is deliberately scoped to product code: it targets
+ * caller-controlled, unvalidated dynamic bounds reaching a real execution
+ * path. `check()`'s test/ scan passes `lenientTimeout: true`, keeping the
+ * original, broader rule (anything not provably `<= 0` or `undefined` is
+ * accepted) for test fixtures that commonly reference a timeout constant
+ * imported from elsewhere — tightening that scan too would fail on
+ * unrelated, pre-existing test files far outside any one issue's scope,
+ * for a case this rule isn't really targeting (a test author's own
+ * fixture value, not untrusted runtime input).
  *
  * @param {ts.Expression} expr
+ * @param {{ constLiterals: Map<string, number>, trustedTimeoutHelperAliases: Set<string>, lenientTimeout: boolean }} context
  * @returns {boolean}
  */
-function isProvablyNotAUsableTimeout(expr) {
-  if (isUndefinedKeyword(expr)) return true;
+function isTimeoutExpressionProvablyPositive(expr, { constLiterals, trustedTimeoutHelperAliases, lenientTimeout }) {
+  if (isUndefinedKeyword(expr)) return false;
   const numeric = literalNumericValue(expr);
-  return numeric !== null && numeric <= 0;
+  if (numeric !== null) return numeric > 0;
+  if (ts.isIdentifier(expr)) {
+    const resolved = constLiterals.get(expr.text);
+    if (resolved !== undefined) return resolved > 0;
+    return lenientTimeout;
+  }
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+    if (trustedTimeoutHelperAliases.has(expr.expression.text)) return true;
+    return lenientTimeout;
+  }
+  return lenientTimeout; // e.g. a property access like options.timeout
 }
 
-/** @param {ts.ObjectLiteralExpression} objectLiteral @param {ts.SourceFile} source @returns {boolean} */
-function hasProvablyPositiveTimeout(objectLiteral, source) {
+/**
+ * The `timeout` property's name, including the duplicate-key evasion a
+ * computed, quoted key can hide behind (#3062 B/C finding 8):
+ * `['timeout']: 0` or `["timeout"]: 0` is semantically the same key as a
+ * plain `timeout:` property — object literals let a later key of the same
+ * name silently win — so it must be recognized the same way, not skipped
+ * just because `ts.isComputedPropertyName` is true.
+ *
+ * @param {ts.ObjectLiteralElementLike} property
+ * @param {ts.SourceFile} source
+ * @returns {string | null}
+ */
+function propertyKeyName(property, source) {
+  if (!property.name) return null;
+  if (!ts.isComputedPropertyName(property.name)) return property.name.getText(source);
+  const expression = property.name.expression;
+  return ts.isStringLiteralLike(expression) ? expression.text : null;
+}
+
+/**
+ * @param {ts.ObjectLiteralExpression} objectLiteral
+ * @param {ts.SourceFile} source
+ * @param {{ constLiterals: Map<string, number>, trustedTimeoutHelperAliases: Set<string> }} context
+ * @returns {boolean}
+ */
+function hasProvablyPositiveTimeout(objectLiteral, source, context) {
   let timeoutIsPositive = false;
   for (const property of objectLiteral.properties) {
     if (ts.isSpreadAssignment(property)) {
       timeoutIsPositive = false; // an unresolved spread can override/remove a preceding `timeout`
       continue;
     }
-    const name = property.name && !ts.isComputedPropertyName(property.name)
-      ? property.name.getText(source)
-      : null;
-    if (name !== 'timeout') continue;
+    if (propertyKeyName(property, source) !== 'timeout') continue;
     if (ts.isPropertyAssignment(property)) {
-      timeoutIsPositive = !isProvablyNotAUsableTimeout(property.initializer);
+      timeoutIsPositive = isTimeoutExpressionProvablyPositive(property.initializer, context);
     } else if (ts.isShorthandPropertyAssignment(property)) {
-      // `{ ..., timeout, ... }` — same as `{ timeout: timeout }`: not
-      // provably bad (we have no data-flow into the referenced variable),
-      // so treated the same as any other unresolvable identifier value.
-      timeoutIsPositive = !isProvablyNotAUsableTimeout(property.name);
+      // `{ ..., timeout, ... }` — same as `{ timeout: timeout }`: resolve
+      // the referenced identifier the same way a property-assignment value
+      // would be.
+      timeoutIsPositive = isTimeoutExpressionProvablyPositive(property.name, context);
     } else {
       timeoutIsPositive = false; // e.g. a method named `timeout` — not an option value at all
     }
@@ -293,7 +563,16 @@ function hasProvablyPositiveTimeout(objectLiteral, source) {
  * helper" requires no special-casing below — it is the identifier match
  * failing, same as a literal `timeout` option, except covered without one.
  */
-export function findUnboundedCalls(file, text) {
+/**
+ * @param {string} file - POSIX-relative path, for reporting
+ * @param {string} text
+ * @param {{ absoluteFile: string, reExportIndex: Map<string, Map<string, string>> } | undefined} crossFile
+ *   - needed only to resolve a re-export from another local file (#3062
+ *   B/C finding 8); omitted by single-file callers (including every
+ *   existing unit test), which simply can't see re-exports from files
+ *   they never passed in.
+ */
+export function findUnboundedCalls(file, text, crossFile, { lenientTimeout = false } = {}) {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   // The bounded helper's own implementation is exempt from binding
   // resolution (#3062 finding 3): it necessarily calls the raw Node APIs
@@ -304,7 +583,14 @@ export function findUnboundedCalls(file, text) {
   // boundedExecSync. Elsewhere, the raw spelling check alone still
   // catches a literal `execSync(...)`/`execFileSync(...)`/`spawnSync(...)`
   // here, if one is ever added outside the three documented wrappers.
-  const aliases = file === BOUNDED_HELPER_IMPLEMENTATION_FILE ? undefined : collectChildProcessApiAliases(source);
+  const aliases = file === BOUNDED_HELPER_IMPLEMENTATION_FILE
+    ? undefined
+    : collectChildProcessApiAliases(source, crossFile && { file: crossFile.absoluteFile, reExportIndex: crossFile.reExportIndex });
+  const timeoutContext = {
+    constLiterals: collectConstNumericLiterals(source),
+    trustedTimeoutHelperAliases: collectTrustedTimeoutHelperAliases(source),
+    lenientTimeout,
+  };
   const findings = [];
   const visit = (node) => {
     if (ts.isCallExpression(node)) {
@@ -312,7 +598,7 @@ export function findUnboundedCalls(file, text) {
       if (api && SYNC_APIS.has(api)) {
         const options = node.arguments.at(-1);
         const hasTimeout = options && ts.isObjectLiteralExpression(options)
-          && hasProvablyPositiveTimeout(options, source);
+          && hasProvablyPositiveTimeout(options, source, timeoutContext);
         if (!hasTimeout) {
           const position = source.getLineAndCharacterOfPosition(node.getStart(source));
           findings.push({ file, line: position.line + 1, api, node, source });
@@ -484,9 +770,15 @@ function fixFile(file, text, findings) {
  */
 export function check(root, { fix = false } = {}) {
   const findings = [];
-  for (const file of sourceFiles(root, ['test'])) {
+  const testFiles = sourceFiles(root, ['test']);
+  const reExportIndex = buildReExportIndex(testFiles);
+  for (const file of testFiles) {
     const text = fs.readFileSync(file, 'utf8');
-    const fileFindings = findUnboundedCalls(toPosixRelative(root, file), text);
+    // lenientTimeout: true — see isTimeoutExpressionProvablyPositive's doc
+    // comment. The strict (#3062 B/C finding 8) rule targets product code;
+    // test fixtures routinely reference a timeout constant imported from
+    // elsewhere, which strict mode can't resolve and was never meant to.
+    const fileFindings = findUnboundedCalls(toPosixRelative(root, file), text, { absoluteFile: file, reExportIndex }, { lenientTimeout: true });
     findings.push(...fileFindings);
     if (fix && fileFindings.length) fixFile(file, text, fileFindings);
   }
@@ -505,13 +797,18 @@ export function checkProduct(root) {
   const allowList = loadAllowList(root);
   const attachedMarkerCountByKey = new Map();
   const allFindings = [];
+  const productFiles = sourceFiles(root, PRODUCT_DIRS);
+  // Built once, across every product file, so a re-export chain resolves
+  // regardless of which file's exports get scanned first (#3062 B/C
+  // finding 8).
+  const reExportIndex = buildReExportIndex(productFiles);
 
-  for (const file of sourceFiles(root, PRODUCT_DIRS)) {
+  for (const file of productFiles) {
     const relFile = toPosixRelative(root, file);
     const text = fs.readFileSync(file, 'utf8');
     const markers = findInteractiveMarkers(relFile, text);
     const lines = text.split('\n');
-    for (const finding of findUnboundedCalls(relFile, text)) {
+    for (const finding of findUnboundedCalls(relFile, text, { absoluteFile: file, reExportIndex })) {
       const marker = markerForFinding(markers, finding, lines);
       if (marker) {
         const key = allowListKey(marker.file, marker.anchor);

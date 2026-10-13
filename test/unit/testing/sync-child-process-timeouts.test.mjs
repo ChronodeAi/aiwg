@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import path from 'node:path';
@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 import {
   ALLOWLIST_RELATIVE_PATH,
+  buildReExportIndex,
   findInteractiveMarkers,
   findUnboundedCalls,
   TEST_PROCESS_TIMEOUT_MS,
@@ -103,6 +104,98 @@ describe('findUnboundedCalls — resolves bindings, not just spelling (#3062 fin
     `;
     expect(findUnboundedCalls('fixture.ts', source).map(({ api }) => api)).toEqual(['spawnSync']);
   });
+
+  it('flags a reassignment via computed element access (const run = cp[\'execSync\']) (#3062 B/C finding 8)', () => {
+    const source = `
+      import cp from 'node:child_process';
+      const run = cp['execSync'];
+      run('git status');
+    `;
+    expect(findUnboundedCalls('fixture.ts', source).map(({ api }) => api)).toEqual(['execSync']);
+  });
+
+  it('flags namespace destructuring with a rename (const { execSync: x } = cp) (#3062 B/C finding 8)', () => {
+    const source = `
+      import * as cp from 'node:child_process';
+      const { execSync: x } = cp;
+      x('git status');
+    `;
+    expect(findUnboundedCalls('fixture.ts', source).map(({ api }) => api)).toEqual(['execSync']);
+  });
+
+  it('flags namespace destructuring without a rename (const { spawnSync } = cp)', () => {
+    const source = `
+      import cp from 'node:child_process';
+      const { spawnSync } = cp;
+      spawnSync('git', ['status']);
+    `;
+    expect(findUnboundedCalls('fixture.ts', source).map(({ api }) => api)).toEqual(['spawnSync']);
+  });
+});
+
+describe('findUnboundedCalls / buildReExportIndex — resolves a re-export from another local module (#3062 B/C finding 8)', () => {
+  let dir;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function writeFiles(entries) {
+    dir = mkdtempSync(join(tmpdir(), 'aiwg-sync-spawn-reexport-'));
+    const paths = {};
+    for (const [name, content] of Object.entries(entries)) {
+      const filePath = join(dir, name);
+      writeFileSync(filePath, content);
+      paths[name] = filePath;
+    }
+    return paths;
+  }
+
+  it('flags a call through a binding re-exported (and renamed) from node:child_process by a sibling file', () => {
+    const paths = writeFiles({
+      'raw.ts': "export { execSync as runSync } from 'node:child_process';\n",
+      'caller.ts': "import { runSync } from './raw.ts';\nrunSync('git status');\n",
+    });
+    const reExportIndex = buildReExportIndex([paths['raw.ts'], paths['caller.ts']]);
+    const findings = findUnboundedCalls('caller.ts', readFileSync(paths['caller.ts'], 'utf8'), {
+      absoluteFile: paths['caller.ts'],
+      reExportIndex,
+    });
+    expect(findings.map(({ api }) => api)).toEqual(['execSync']);
+  });
+
+  it('flags a call through a two-hop re-export chain', () => {
+    const paths = writeFiles({
+      'raw.ts': "export { execSync as runSync } from 'node:child_process';\n",
+      'middle.ts': "export { runSync as go } from './raw.ts';\n",
+      'caller.ts': "import { go } from './middle.ts';\ngo('git status');\n",
+    });
+    const reExportIndex = buildReExportIndex([paths['raw.ts'], paths['middle.ts'], paths['caller.ts']]);
+    const findings = findUnboundedCalls('caller.ts', readFileSync(paths['caller.ts'], 'utf8'), {
+      absoluteFile: paths['caller.ts'],
+      reExportIndex,
+    });
+    expect(findings.map(({ api }) => api)).toEqual(['execSync']);
+  });
+
+  it('does not flag an import of an unrelated re-exported name', () => {
+    const paths = writeFiles({
+      'raw.ts': "export { execSync as runSync } from 'node:child_process';\nexport function helper() {}\n",
+      'caller.ts': "import { helper } from './raw.ts';\nhelper();\n",
+    });
+    const reExportIndex = buildReExportIndex([paths['raw.ts'], paths['caller.ts']]);
+    const findings = findUnboundedCalls('caller.ts', readFileSync(paths['caller.ts'], 'utf8'), {
+      absoluteFile: paths['caller.ts'],
+      reExportIndex,
+    });
+    expect(findings).toEqual([]);
+  });
+
+  it('without crossFile context (e.g. a bare unit-test call), a re-export is simply invisible, not mis-flagged', () => {
+    const source = "import { runSync } from './raw.ts';\nrunSync('git status');";
+    expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
+  });
 });
 
 describe('findUnboundedCalls — requires a provably positive timeout (#3062 finding 4)', () => {
@@ -141,29 +234,91 @@ describe('findUnboundedCalls — requires a provably positive timeout (#3062 fin
     expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
   });
 
-  it('does not flag an identifier-valued timeout (not provably bad, even though not a literal)', () => {
-    // Real call sites across the codebase legitimately pass a validated,
-    // runtime-resolved timeout (e.g. `{ timeout: warmTimeoutMs }`); the
-    // gate cannot prove it positive from syntax alone, but it must not
-    // reject it either — only the specific named-bad cases (0, undefined,
-    // an overriding spread) are rejected.
+  it('flags an identifier-valued timeout that does not resolve to a same-file const literal (#3062 B/C finding 8)', () => {
+    // Tightened rule: "any expression not provably bad" used to be
+    // accepted, which let a caller-controlled, unvalidated value (an
+    // options property, a function parameter) through unchecked. A plain
+    // identifier must now actually resolve to a same-file `const` numeric
+    // literal; a parameter like `warmTimeoutMs` with no such declaration
+    // does not, so this must go through the bounded helper instead.
     const source = "execSync('git status', { timeout: warmTimeoutMs });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('accepts an identifier timeout that resolves to a same-file const positive literal', () => {
+    const source = "const DEFAULT_TIMEOUT_MS = 30_000;\nexecSync('git status', { timeout: DEFAULT_TIMEOUT_MS });";
     expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
   });
 
-  it('does not flag a shorthand `{ timeout }` property referencing a non-provably-bad variable', () => {
+  it('flags an identifier timeout resolving to a same-file const that is not positive', () => {
+    const source = "const DEFAULT_TIMEOUT_MS = 0;\nexecSync('git status', { timeout: DEFAULT_TIMEOUT_MS });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('flags an identifier timeout resolving to a let (reassignable, so not provable)', () => {
+    const source = "let defaultTimeoutMs = 30_000;\nexecSync('git status', { timeout: defaultTimeoutMs });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('flags a property-access timeout (e.g. options.timeout) even when options looks validated elsewhere', () => {
+    const source = "const options = { timeout: 30000 };\nexecSync('git status', { timeout: options.timeout });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('flags a shorthand `{ timeout }` property referencing an unresolvable variable (#3062 B/C finding 8)', () => {
     // Regression: object shorthand (`{ cwd, timeout }`) is a
-    // ShorthandPropertyAssignment, not a PropertyAssignment: an earlier
-    // version of this check treated every shorthand as unresolvable and
-    // rejected it outright, which flagged real call sites across the
-    // codebase that use shorthand with an already-validated timeout
-    // variable (e.g. test/characterization/cli-router.test.ts).
+    // ShorthandPropertyAssignment, not a PropertyAssignment — resolved the
+    // same way as a property-assignment value, so an unresolvable
+    // shorthand is rejected under the tightened rule just like
+    // `{ timeout: warmTimeoutMs }` is.
     const source = 'execSync(cmd, { encoding: "utf-8", cwd, timeout });';
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('accepts a shorthand `{ timeout }` property referencing a same-file const positive literal', () => {
+    const source = 'const timeout = 30_000;\nexecSync(cmd, { encoding: "utf-8", timeout });';
     expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
   });
 
-  it('treats a bare shorthand `{ timeout }` the same as any other unresolvable identifier value', () => {
-    const source = 'execSync(cmd, { timeout });';
+  it('accepts a call to the gate-trusted positiveTimeoutMs helper, regardless of its argument', () => {
+    const source = [
+      "import { positiveTimeoutMs } from '../../src/process/bounded-child-process.mjs';",
+      "execSync('git status', { timeout: positiveTimeoutMs(userSuppliedValue, 30_000) });",
+    ].join('\n');
+    expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
+  });
+
+  it('accepts a renamed positiveTimeoutMs helper binding', () => {
+    const source = [
+      "import { positiveTimeoutMs as clampTimeout } from '../../src/process/bounded-child-process.mjs';",
+      "execSync('git status', { timeout: clampTimeout(userSuppliedValue, 30_000) });",
+    ].join('\n');
+    expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
+  });
+
+  it('accepts positiveTimeoutMs destructured from any call (bound by name, not by call target)', () => {
+    const source = [
+      "const { positiveTimeoutMs } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');",
+      "execSync('git status', { timeout: positiveTimeoutMs(userSuppliedValue, 30_000) });",
+    ].join('\n');
+    expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
+  });
+
+  it('does not accept a call to an untrusted function as a timeout value', () => {
+    const source = "execSync('git status', { timeout: computeTimeout(userSuppliedValue) });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('flags a duplicate quoted/computed timeout key that overrides an earlier literal (#3062 B/C finding 8)', () => {
+    // Object literals let a later key of the same name win; a computed
+    // ['timeout'] key is the same key as a plain `timeout:` property, so
+    // it must be recognized, not skipped as an opaque computed name.
+    const source = "execSync('git status', { timeout: 1000, ['timeout']: 0 });";
+    expect(findUnboundedCalls('fixture.ts', source)).toHaveLength(1);
+  });
+
+  it('accepts a duplicate quoted/computed timeout key when the later one is itself positive', () => {
+    const source = 'execSync(\'git status\', { timeout: 0, ["timeout"]: 30_000 });';
     expect(findUnboundedCalls('fixture.ts', source)).toEqual([]);
   });
 });
