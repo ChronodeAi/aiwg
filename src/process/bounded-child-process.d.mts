@@ -23,6 +23,8 @@ export const SYNC_PROCESS_TIER_BOUNDS_MS: Readonly<{
 
 export function resolveSyncProcessTimeoutMs(tier: SyncProcessTier): number;
 
+export function positiveTimeoutMs(value: unknown, fallbackMs: number): number;
+
 // Overloads mirror Node's own execSync/execFileSync/spawnSync overload set
 // (string vs Buffer return type keyed on `options.encoding`), with the
 // required `tier` inserted right before `options` — same narrowing behavior

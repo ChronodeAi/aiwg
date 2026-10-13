@@ -164,6 +164,36 @@ function effectiveTimeoutMs(tier, options) {
 }
 
 /**
+ * Clamp a caller-controlled value to a guaranteed-positive millisecond
+ * bound, for the one case `boundedExecSync`/`boundedExecFileSync`/
+ * `boundedSpawnSync` don't cover by themselves: a *raw* `execSync`/
+ * `execFileSync`/`spawnSync` call site whose `timeout` option is computed
+ * from caller input (a CLI flag, a config value, a converted unit) rather
+ * than a literal — `timeout: options.timeout` or `timeout: timeoutSec *
+ * 1000` with an untrusted `timeoutSec`, for example. `tools/testing/
+ * check-sync-child-process-timeouts.mjs` (#3062 B/C finding 8) recognizes
+ * a call to this function, by binding, as a provably positive timeout —
+ * so wrap the dynamic value here instead of passing it through directly.
+ *
+ * `value` passes through only when it is itself a finite number `> 0`;
+ * anything else (`0`, a negative number, `NaN`, `undefined`, a string,
+ * ...) falls back to `fallbackMs` — so a caller-controlled `timeoutSec: 0`
+ * cannot disable the bound. `fallbackMs` itself falls back to the `quick`
+ * tier bound if it is not a valid positive number, so this function can
+ * never itself return a non-positive or non-finite value.
+ *
+ * @param {unknown} value
+ * @param {number} fallbackMs
+ * @returns {number}
+ */
+export function positiveTimeoutMs(value, fallbackMs) {
+  const resolvedFallback = typeof fallbackMs === 'number' && Number.isFinite(fallbackMs) && fallbackMs > 0
+    ? fallbackMs
+    : SYNC_PROCESS_TIER_BOUNDS_MS.quick;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : resolvedFallback;
+}
+
+/**
  * Whether a `stdio[0]` (stdin slot) value describes the parent's own stdin —
  * the form Node would otherwise inherit from. Covers the string shorthand,
  * the literal fd `0`, and the `process.stdin` stream object itself; leaves
@@ -178,16 +208,34 @@ function isParentStdinDescriptor(value) {
 
 /**
  * A bounded call never inherits stdin; stdout/stderr may still be inherited
- * for progress output. Leaves `options` untouched when the caller supplies
- * `input` (Node feeds stdin from that value regardless of `stdio`, and
- * forcing it to `'ignore'` would break that) or when stdin was not going to
- * be inherited anyway.
+ * for progress output. When the caller supplies `input`, an inherited
+ * stdin form is normalized to `'pipe'` instead of `'ignore'` — `input`
+ * needs a real pipe to deliver its payload through, and `'ignore'` would
+ * silently drop it (#3062 B/C finding 9). `options` is otherwise left
+ * untouched when stdin was not going to be inherited anyway.
  *
  * @param {Record<string, unknown>} options
  * @returns {Record<string, unknown>}
  */
 function withoutInheritedStdin(options) {
-  if (options.input !== undefined) return options;
+  if (options.input !== undefined) {
+    // `input` needs stdin to actually be a pipe to deliver its payload —
+    // a caller-specified inherited-stdin form in `stdio[0]` must not win
+    // over that (#3062 B/C finding 9: an earlier version returned
+    // `options` completely untouched here, so `input` combined with
+    // `stdio: 'inherit'`/fd `0`/`process.stdin` could still leave stdin
+    // connected to the parent's real stdin instead of the pipe `input`
+    // is written to). stdout/stderr and the payload itself are untouched.
+    if (options.stdio === 'inherit') {
+      return { ...options, stdio: ['pipe', 'inherit', 'inherit'] };
+    }
+    if (Array.isArray(options.stdio) && isParentStdinDescriptor(options.stdio[0])) {
+      const stdio = options.stdio.slice();
+      stdio[0] = 'pipe';
+      return { ...options, stdio };
+    }
+    return options;
+  }
   if (options.stdio === 'inherit') {
     return { ...options, stdio: ['ignore', 'inherit', 'inherit'] };
   }

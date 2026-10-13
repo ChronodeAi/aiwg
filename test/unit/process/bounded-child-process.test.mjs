@@ -187,6 +187,47 @@ describe('boundedSpawnSync — stdin is never inherited', () => {
     // here is only that this call does not hang or error.
     expect(result.stdout?.trim()).toBe('EOF');
   });
+
+  it('delivers `input` even when stdio: "inherit" is also supplied (#3062 B/C finding 9)', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: 'inherit',
+      input: 'hello-from-input',
+      encoding: 'utf8',
+    });
+    // 'inherit' applies to all three streams, so stdout isn't captured —
+    // the only observable proof the payload reached the child is its exit
+    // status (read-stdin.mjs never throws on bad input, so this alone
+    // isn't conclusive); the array forms below are the decisive proof.
+    expect(result.status).toBe(0);
+  });
+
+  it('delivers `input` even when stdio[0] is the literal fd 0 (#3062 B/C finding 9)', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: [0, 'pipe', 'pipe'],
+      input: 'hello-from-input',
+      encoding: 'utf8',
+    });
+    expect(result.stdout?.trim()).toBe('DATA:hello-from-input');
+  });
+
+  it('delivers `input` even when stdio[0] is process.stdin (#3062 B/C finding 9)', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: [process.stdin, 'pipe', 'pipe'],
+      input: 'hello-from-input',
+      encoding: 'utf8',
+    });
+    expect(result.stdout?.trim()).toBe('DATA:hello-from-input');
+  });
+
+  it('preserves stdout/stderr settings when normalizing stdin for `input`', () => {
+    const result = boundedSpawnSync('node', [readStdinScript], 'quick', {
+      stdio: ['inherit', 'pipe', 'ignore'],
+      input: 'hello-from-input',
+      encoding: 'utf8',
+    });
+    expect(result.stdout?.trim()).toBe('DATA:hello-from-input');
+    expect(result.stderr).toBeNull(); // 'ignore' preserved, not captured
+  });
 });
 
 describe('boundedSpawnSync — a child that ignores SIGTERM does not outlive the bound', () => {
