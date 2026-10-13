@@ -390,6 +390,25 @@ async function launchOneWorker(owner, options) {
   if (isolation.mode === 'degraded' && !options.allowDegraded) {
     throw new Error('Worker isolation unavailable; explicitly select --allow-degraded-worker or use manual observation');
   }
+  // #2915 round 8 (D6): the COMPLETE eligibility decision — global switch,
+  // per-CLI switch, `canVerifyAttempt`, explicit breaker override — made
+  // ONCE here, at the earliest point every input it needs (`gate.enabled`,
+  // the resolved `invocation`, `inputs.drivers`, `options.scopedBreaker`)
+  // is actually known, and strictly before anything #2915 added runs
+  // (before the task digest). `admitDirectWorker` below calls this exact
+  // same predicate with these exact same inputs, so its own `gated` can
+  // never disagree with this one — not "kept in sync by two matching
+  // conditions", structurally the same answer by construction. Not gated:
+  // hand off to `launchOneWorkerBaseline`, the frozen `a4085b86a`
+  // reproduction above, and return directly — none of the digest,
+  // admission, correction-budget or recovery-settlement code below this
+  // point ever runs for this attempt.
+  const eligibility = directRecoveryEligibility({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
+    invocation, drivers: inputs.drivers, scopedBreaker: options?.scopedBreaker });
+  if (!eligibility.gated) {
+    return launchOneWorkerBaseline(owner, options, { saved, invocation, runDir, runExists, paths, gate, isolation,
+      verifiedPreviousAttemptId, loadInputs, validate, inspect, clock, qualificationDigest, inputs, brief, stdinBytes });
+  }
   // #2915 final (one admission, step 3): invocation ids are minted BEFORE
   // admission, so the exact covering-key set that gated this attempt is the
   // same set `settleDirectWorker` later resolves against — no separate
@@ -404,19 +423,18 @@ async function launchOneWorker(owner, options) {
   // into invocation.json below — never recomputed from a possibly-stale
   // `invocation` snapshot after the mid-attempt revalidation further down.
   //
-  // #2915 review 6 (finding 6, "changed disabled behavior"): when dispatch
-  // is globally disabled, `admitDirectWorker` never consults `taskDigest`
-  // at all (it returns `{ gated: false }` before even looking at it), so
-  // there is no functional reason to compute the NEW role/task/group/
-  // brief-content identity here -- and every reason not to, because this
-  // same value is published into `invocation.json` below regardless of
-  // gating. Preserve the EXACT origin/main algorithm
-  // (`qualificationDigest(saved.request)`) for that published value when
-  // disabled, so a disabled-dispatch launch writes byte-for-byte the same
-  // `taskDigest` origin/main always did.
-  const taskDigest = gate.enabled
-    ? await stableTaskChainDigest(saved.request, invocation.briefDigest)
-    : qualificationDigest(saved.request);
+  // #2915 round 8 (D6, formerly review 6 finding 6 / review 7 finding 13):
+  // this line is reached ONLY when `eligibility.gated` is true (the branch
+  // above already returned for every not-gated case — global switch,
+  // per-CLI switch, `canVerifyAttempt`, explicit breaker override — via
+  // the frozen `launchOneWorkerBaseline`, which publishes the origin/main
+  // `qualificationDigest(saved.request)` algorithm instead). There is no
+  // remaining not-gated case for this line to preserve origin/main
+  // behavior for; computing the new stable task-chain digest
+  // unconditionally here is exactly as safe as computing it conditionally
+  // was unsafe — this file no longer has two places that both decide
+  // "is this gated" and can disagree.
+  const taskDigest = await stableTaskChainDigest(saved.request, invocation.briefDigest);
   let admission;
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
@@ -1268,6 +1286,450 @@ async function captureOneWorker(owner, ctx) {
   owner.emit('launched', launchEvent);
   return done;
 }
+
+// ===========================================================================
+// FROZEN TO a4085b86a (#2915 round 8, D6) — do not modify.
+//
+// `launchOneWorkerBaseline` and `captureOneWorkerBaseline` are a literal,
+// byte-for-byte reproduction of `launchOneWorker`/`captureOneWorker` as
+// they existed at base commit `a4085b86a` (`git show
+// a4085b86a:tools/ralph-external/session-launcher.mjs`) — before any
+// #2915 direct-recovery code existed in this file. `launchOneWorker`
+// above calls `launchOneWorkerBaseline` for every attempt
+// `directRecoveryEligibility` (see above) decides is NOT gated, instead
+// of threading that decision through conditions inside the single
+// gated-and-not-gated function #2915 originally grew into. That pattern
+// — "if (gated) do the new thing else do the old thing" scattered across
+// one shared function — is what seven straight review rounds found drift
+// in (the persisted `taskDigest`, the constructor's instance shape, an
+// an MCP callback argument list, …): a new piece of gated-path logic could
+// be added without a matching `if (!gated)`/`if (gated)` guard, and
+// nothing would catch it until the next review. Calling an entirely
+// separate, frozen function makes that class of defect structurally
+// impossible for the code below: there is no gated-path line for a
+// future change to add without touching this delimited block, and
+// touching this block is exactly what the comment above forbids.
+//
+// Both functions below call ONLY:
+//   - helpers in this same file that are BYTE-IDENTICAL to their
+//     `a4085b86a` originals (verified by diff when this block was
+//     written: `publishWorkerRecord`, `withWorkerPath`,
+//     `materializeWorkerArtifacts`, `signalOwnedWorker`,
+//     `verifyWorkerContainment`, `bytesDigest`, `boundedPrivateRead` —
+//     the last gained optional trailing parameters after `a4085b86a`
+//     that default to its exact original behavior, so every call below,
+//     which never passes them, is unaffected);
+//   - exports from `./lib/worker-isolation.mjs` that changed on this
+//     branch for the D2 dispatch-commit hook, called here exactly as
+//     `a4085b86a` called them — with NO `onDispatchCommit` — which that
+//     module's own dual-mode contract (`_runDispatchCommit`) defines as
+//     "behaves exactly as before the hook existed";
+//   - unchanged imports (`process-monitor.mjs`, `lib/worker-health.mjs`,
+//     `serve/worker-invocation.js`, `models/qualification-digest.mjs`).
+// Neither function imports, reads, or references the breaker, the
+// ledger, `admission`, `recoveryGated`, `canaryDeadlineMs`, or any other
+// #2915 identifier. If a future change to this file needs these
+// functions to do something new, that is new #2915 behavior and belongs
+// in `launchOneWorker`/`captureOneWorker` above, gated — never here.
+// ===========================================================================
+
+async function launchOneWorkerBaseline(owner, options, ctx) {
+  const { saved, invocation, runDir, runExists, paths, gate, isolation, verifiedPreviousAttemptId,
+    loadInputs, validate, inspect, clock, qualificationDigest } = ctx;
+  let inputs = ctx.inputs;
+  let localGate = gate;
+  if (!runExists) await mkdir(runDir, { mode: 0o700 }); // exclusive attempt: no recursive creation or reuse
+  const runStat = await lstat(runDir);
+  if (runStat.uid !== process.getuid()) throw new Error('Worker run directory must be conductor-owned');
+  await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { await handle.chmod(0o700); } finally { await handle.close(); } });
+  const invocationId = randomUUID();
+  const reservation = await withWorkerPath(join(runDir, '.launch-owner'), target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+  try { await reservation.writeFile(invocationId); await reservation.sync(); } finally { await reservation.close(); }
+  const supervisor = sampleWorkerIdentity(process.pid);
+  const launchTime = new Date().toISOString();
+  const monotonicStart = process.hrtime.bigint().toString();
+  const profile = inputs.drivers[invocation.selected.cli].qualification.adapter.invocationProfiles[invocation.selected.profileRef];
+  const captures = { stdout: join(runDir, profile.health?.outputFraming === 'jsonl' ? 'stdout.events.jsonl' : 'stdout.log'),
+    stderr: join(runDir, 'stderr.log') };
+  const writeRecord = options.publishRecord ?? publishWorkerRecord;
+  const publishFailures = [];
+  let publishing = Promise.resolve();
+  const publish = (name, value) => {
+    const write = publishing.catch(() => {}).then(() => writeRecord(runDir, name, value, inspect));
+    publishing = write.catch(error => { publishFailures.push({ name, error: error?.message ?? String(error) }); });
+    return write;
+  };
+  const handles = [];
+  let outcome;
+  let artifacts;
+  try {
+    artifacts = await materializeWorkerArtifacts(invocation, runDir);
+    const displayArgv = artifacts.argv.map((token, i) => i === 0 ? token : `<argument:${bytesDigest(token)}>`);
+    await publish('invocation.json', { version: 1, origin: 'launcher', invocationId, attemptId: invocationId,
+      previousAttemptId: verifiedPreviousAttemptId ?? null, requestId: invocationId, taskDigest: qualificationDigest(saved.request), role: saved.request.role,
+      selected: invocation.selected, planDigest: qualificationDigest(saved), invocationDigest: qualificationDigest(invocation),
+      policyDigest: invocation.policyDigest, catalogDigest: invocation.catalogDigest, profileDigest: invocation.profileDigest,
+      expiresAt: invocation.expiresAt, argv: displayArgv, commandDisplay: displayArgv.map(token => JSON.stringify(token)).join(' '),
+      // Retain the legacy digest binding while naming both argv stages explicitly.
+      argvDigest: qualificationDigest(invocation.argv), placeholderArgvDigest: qualificationDigest(invocation.argv),
+      executedArgvDigest: qualificationDigest(artifacts.argv),
+      artifacts: (invocation.artifacts ?? []).map(artifact => ({ name: artifact.name,
+        byteLength: Buffer.byteLength(artifact.content), sha256: bytesDigest(artifact.content) })),
+      envNames: invocation.envNames, stdin: invocation.stdin,
+      prompt: { path: invocation.briefPath, digest: invocation.briefDigest }, cwd: invocation.cwd,
+      worktree: { path: invocation.cwd, baseRevision: null }, paths, captures, outputFraming: profile.health?.outputFraming ?? 'opaque',
+      health: invocation.health ?? null, transport: invocation.transport,
+      isolation: { mode: isolation.mode, memoryMaxGb: options.memoryMaxGb ?? 4 },
+      limits: invocation.limits, maxOutputBytes: Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) });
+    await publish('process.json', { invocationId, origin: 'launcher', supervisor, worker: null,
+      launchTime, monotonicStart, ownership: 'unknown', isolation: isolation.mode });
+    // All captures (including the reserved final) open successfully BEFORE spawn.
+    for (const filename of [...Object.values(paths), ...Object.values(captures)]) {
+      const handle = await withWorkerPath(filename, target => (options.openCapture ?? open)(target, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      handles.push(handle);
+    }
+    // Recheck policy, prompt, installation and exact bindings after file preparation.
+    inputs = await loadInputs();
+    await validate(saved, inputs.snapshot, inputs.drivers, clock());
+    localGate = (options.checkDispatch ?? checkWorkerDispatch)({ config: inputs.snapshot.config });
+    if (!localGate.ok) throw new Error('Worker dispatch resource gate refused launch');
+    if (bytesDigest(await boundedPrivateRead(invocation.briefPath, 262144, inspect)) !== invocation.briefDigest) throw new Error('Worker prompt changed before spawn');
+    const environment = Object.fromEntries(invocation.envNames.filter(name => process.env[name] !== undefined)
+      .map(name => [name, process.env[name]]));
+    const baselineContent = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
+    // The real `launchIsolatedWorker`, called with no `onDispatchCommit`
+    // (never passed anywhere in this frozen function), is synchronous —
+    // its own dual-mode contract (`_runDispatchCommit`) guarantees that,
+    // matching `a4085b86a` exactly. The thenable check below exists only
+    // to tolerate a test-injected `options.launchIsolated` written as an
+    // `async` function (a test-infrastructure convenience shared with the
+    // gated path's own test doubles, not a behavior this branch adds):
+    // `await`ing a value that was never a Promise resolves to that exact
+    // value with no observable difference.
+    const launchResult = (options.launchIsolated ?? launchIsolatedWorker)({ name: invocationId,
+      command: artifacts.argv[0], args: artifacts.argv.slice(1), cwd: invocation.cwd,
+      memoryMaxGb: options.memoryMaxGb ?? 4, gate: localGate, config: inputs.snapshot.config, isolation,
+      allowDegraded: !!options.allowDegraded, attached: true, ownedGroup: true,
+      env: environment, envNames: invocation.envNames, stdin: invocation.stdin, runDir });
+    outcome = typeof launchResult?.then === 'function' ? await launchResult : launchResult;
+    if (!outcome.child) throw new Error('Worker launch did not return an attached child');
+    return await captureOneWorkerBaseline(owner, { child: outcome.child, outcome, invocation, invocationId, supervisor,
+      launchTime, monotonicStart, publish, publishFailures, paths, handles, inspect, inputs, profile, baselineContent, options,
+      brief: ctx.brief, stdinBytes: ctx.stdinBytes, runDir });
+  } catch (error) {
+    if (!outcome?.child) await publish('exit.json', { invocationId, exitCode: null, signal: null,
+      endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    throw error;
+  } finally {
+    try { await artifacts?.cleanup(); } finally {
+      // Never chmod a worker-replaced pathname; only the inodes we opened.
+      for (const handle of handles) { await handle.chmod(0o600).catch(() => {}); await handle.close().catch(() => {}); }
+      await inspect(runDir, 'directory');
+      await withWorkerPath(runDir, async target => { const handle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        try { await handle.chmod(0o700); } finally { await handle.close(); } });
+    }
+  }
+}
+
+async function captureOneWorkerBaseline(owner, ctx) {
+  const { child, outcome, invocation, invocationId, supervisor, launchTime, monotonicStart, publish, paths, handles, options } = ctx;
+  const hasTransport = outcome.mode === 'systemd-unit' || outcome.transportSupervisor;
+  const sampleIdentity = options.sampleIdentity ?? sampleWorkerIdentity;
+  const sampleNativeSupervisor = options.sampleNativeSupervisor ?? sampleWorkerIdentity;
+  // For our own detached child, spawn waits through setsid/exec; one owned leader sample suffices.
+  const immediate = !hasTransport ? sampleIdentity(child.pid) : null;
+  let identity = immediate?.pid === child.pid && immediate?.pid === immediate?.pgid
+    && immediate?.uid === process.getuid?.() && immediate?.parentPid === process.pid ? immediate : null;
+  let nativeSupervisor = hasTransport && outcome.mode !== 'systemd-unit' ? sampleNativeSupervisor(child.pid) : null;
+  const streams = [handles[0], handles[1], handles[3], handles[4]].map(handle => createWriteStream('', { fd: handle.fd, autoClose: false }));
+  let identityObservation = 'pending';
+  let reportedWorker = null;
+  let output = Buffer.alloc(0);
+  let total = 0;
+  let timedOut = false;
+  let stopRequested = false;
+  let stopReason = null;
+  let errorCode = null;
+  let settled = false;
+  let waitCode = null;
+  let waitSignal = null;
+  let deliveredSignal = null;
+  let sawExit = false;
+  let sawClose = false;
+  const driver = ctx.inputs.drivers[invocation.selected.cli];
+  const observationOptions = { provider: driver.qualification.adapter.provider, profile: ctx.profile,
+    effectiveHealth: invocation.health, invocationId, startedAt: Number(BigInt(monotonicStart)) / 1e6,
+    launchTime, contentDigest: ctx.baselineContent, sessionId: options.healthSessionLog?.sessionId ?? null,
+    runId: options.healthSessionLog?.runId ?? null, maxOutputBytes: invocation.maxOutputBytes };
+  const observer = driver.createHealthObserver?.(observationOptions) ?? createWorkerHealthObserver(observationOptions);
+  const tickRate = qualifyWorkerCpuTickRate();
+  let previousCpu = null;
+  let stdoutOffset = 0;
+  let stderrOffset = 0;
+  let logCursor = { inode: null, offset: 0, generation: 0 };
+  const reportHealth = async () => {
+    const health = observer.snapshot();
+    owner.emit('health', health);
+    try { await publish('health.json', { origin: 'observer', invocationId, health, evidence: observer.evidence() }); }
+    catch { observer.gap('CAPTURE_WRITE'); }
+    return health;
+  };
+  const timers = new Set();
+  const later = (fn, ms) => {
+    if (settled) return null;
+    const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t;
+  };
+  const graceMs = (invocation.health?.terminateGraceSeconds ?? 5) * 1000;
+  const signal = value => {
+    if (settled || !signalOwnedWorker(identity, value, { supervisor })) return false;
+    deliveredSignal = value;
+    return true;
+  };
+  const readNative = () => { try { return (options.isolationStatus ?? getWorkerIsolationStatus)(outcome.unit); } catch { return null; } };
+  const transportRecord = async filename => {
+    const target = join(ctx.runDir, filename);
+    try {
+      const stat = await lstat(target);
+      if (stat.uid !== process.getuid() || (stat.mode & 0o077)) return null;
+      const record = JSON.parse((await boundedPrivateRead(target, 65536, ctx.inspect)).toString('utf8'));
+      if (filename === 'worker-exit.json' && (!(record.exitCode === null || Number.isInteger(record.exitCode) && record.exitCode >= 0 && record.exitCode <= 255)
+        || !(record.signal === null || typeof record.signal === 'string' && /^SIG[A-Z0-9]+$/.test(record.signal))
+        || record.errorCode != null && (typeof record.errorCode !== 'string' || !/^[A-Z0-9_]{1,64}$/.test(record.errorCode)))) return null;
+      return record.invocationId === invocationId ? record : null;
+    } catch { return null; }
+  };
+  const stopUnit = () => { try { return (options.stopUnit ?? stopWorkerUnit)(outcome.unit); } catch { return { ok: false }; } };
+  const stop = (cause = errorCode ? 'PROVIDER_ERROR' : 'CANCELLED') => {
+    if (settled || stopRequested) return;
+    stopRequested = true; stopReason = cause;
+    timedOut = ['HARD_DEADLINE', 'STARTUP_DEADLINE', 'NO_PROGRESS'].includes(cause);
+    if (outcome.mode === 'systemd-unit' && outcome.unit) {
+      stopUnit();
+      later(() => { if (!settled) finish(); }, Math.min(graceMs, hardRemaining()));
+      return;
+    }
+    signal('SIGTERM');
+    const remainingGrace = Math.min(graceMs, hardRemaining());
+    if (remainingGrace === 0) { signal('SIGKILL'); later(() => finish(), 100); }
+    else later(() => { signal('SIGKILL'); later(() => finish(), 100); }, remainingGrace);
+  };
+  owner.currentProcess = child;
+  owner.workerStop = stop;
+  const onSignal = () => stop();
+  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+  child.stdout.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stdout', id: 'stdout', generation: 0, offset: stdoutOffset }); stdoutOffset += chunk.length;
+    total += chunk.length;
+    const remaining = Math.max(0, Math.min(invocation.maxOutputBytes ?? 10485760, 10485760) - output.length);
+    if (remaining) { const bounded = chunk.subarray(0, remaining); output = Buffer.concat([output, bounded]); streams[0].write(bounded); streams[2].write(bounded); }
+    if (remaining < chunk.length) { errorCode = 'OUTPUT_LIMIT'; stop(); }
+    owner.emit('stdout', chunk);
+  });
+  let stderrBytes = 0;
+  child.stderr.on('data', chunk => {
+    observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
+    const remaining = Math.max(0, 10485760 - stderrBytes);
+    streams[1].write(chunk.subarray(0, remaining)); streams[3].write(chunk.subarray(0, remaining)); stderrBytes += chunk.length;
+    if (stderrBytes > 10485760) { errorCode = 'OUTPUT_LIMIT'; stop(); }
+    owner.emit('stderr', chunk);
+  });
+  for (const stream of streams) stream.on('error', () => { errorCode = 'CAPTURE_WRITE'; stop(); });
+  child.stdin?.on('error', error => { if (error.code !== 'EPIPE') { errorCode = 'STDIN_WRITE'; stop(); } });
+  child.stdin?.end(ctx.stdinBytes ?? undefined);
+  const recordProcess = () => publish('process.json', { invocationId, origin: 'launcher', supervisor,
+    transportProcess: hasTransport ? sampleWorkerIdentity(child.pid) : null,
+    nativeSupervisor,
+    worker: identity ?? reportedWorker, identityObservation, launchTime, monotonicStart, ownership: identity ? 'owned-group' : 'unknown',
+    isolation: outcome.mode, unit: outcome.unit ?? null });
+  let resolveDone;
+  const done = new Promise(resolve => { resolveDone = resolve; });
+  const finish = async () => {
+    if (settled) return;
+    settled = true;
+    identityObservation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
+    owner.currentProcess = null; owner.workerStop = null;
+    child.stdout.destroy(); child.stderr.destroy(); child.stdin?.destroy(); child.unref();
+    for (const stream of streams) await new Promise(resolve => { if (stream.destroyed) resolve(); else stream.end(resolve); });
+    const native = outcome.mode === 'systemd-unit' ? readNative() : null;
+    const members = identity ? sampleWorkerGroup(identity.pgid) : null;
+    const confirmed = outcome.mode === 'systemd-unit' ? native?.active === false && [1, 2, 3].includes(native.execMainCode)
+      : child.pid === undefined;
+    const workerExit = hasTransport ? await transportRecord('worker-exit.json') : null;
+    if (!identity && hasTransport && nativeSupervisor) {
+      const workerStart = await transportRecord('worker-identity.json');
+      if (workerStart?.worker && sameWorkerIdentity(workerStart.supervisor, nativeSupervisor)
+        && workerStart.worker.parentPid === nativeSupervisor.pid) {
+        reportedWorker = workerStart.worker;
+        identityObservation = 'transport-reported-unverified';
+      }
+    }
+    const nativeExited = outcome.mode === 'systemd-unit' && [1, 2, 3].includes(native?.execMainCode);
+    const resultSignal = (outcome.mode === 'systemd-unit' && [2, 3].includes(native?.execMainCode)
+      ? signalNumberToName[native.execMainStatus] ?? null : waitSignal)
+      ?? (!sawExit && waitCode === null && waitSignal === null && !nativeExited ? deliveredSignal : null);
+    const exitCode = resultSignal ? null
+      : outcome.mode === 'systemd-unit' && native?.execMainCode === 1 ? native.execMainStatus : waitCode;
+    const result = { invocationId, exitCode, signal: resultSignal,
+      endedAt: new Date().toISOString(), termination: confirmed ? 'confirmed' : 'uncertain',
+      descendants: confirmed ? 'stopped' : 'unknown', timedOut: timedOut || hardRemaining() === 0,
+      cancelled: stopReason === 'CANCELLED', stopReason, errorCode: errorCode ?? null, capturedBytes: Math.min(total, output.length),
+      workerTermination: hasTransport ? workerExit && !workerExit.errorCode ? 'confirmed' : 'uncertain' : sawExit ? 'confirmed' : 'uncertain',
+      workerReportedExit: workerExit ? { exitCode: workerExit.exitCode, signal: workerExit.signal, errorCode: workerExit.errorCode ?? null } : null,
+      groupMembersRemaining: members?.length ?? null,
+      nativeExitCode: native?.execMainCode === 1 ? native.execMainStatus : null,
+      captureCoverage: sawClose ? 'complete' : 'gap', isolation: outcome.mode, nativeResult: native?.result ?? null,
+      publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
+    let healthFinalValid = false;
+    try {
+      const finalStat = await lstat(paths.final);
+      if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || finalStat.size > 262144) throw new Error('Invalid final output');
+      await ctx.inspect(paths.final, 'file');
+      let extracted = false;
+      if (finalStat.size === 0 && driver.extractFinal) {
+        const final = driver.extractFinal(output.toString('utf8'));
+        if (final === null || final === undefined || final.success === false) throw new Error('Missing or unsuccessful final extraction');
+        const bytes = JSON.stringify({ invocationId, source: 'adapter-extraction', candidate: true, verified: false, result: final });
+        if (Buffer.byteLength(bytes) > 262144) throw new Error('Final exceeds bound');
+        await handles[2].writeFile(bytes); extracted = true;
+      }
+      const finalBytes = await boundedPrivateRead(paths.final, 262144, ctx.inspect, true);
+      if (!finalBytes.length) throw new Error('Missing final output');
+      if (!extracted && driver.extractFinal) {
+        const parsed = driver.extractFinal(finalBytes.toString('utf8'));
+        if (parsed === null || parsed === undefined || parsed.success === false) throw new Error('Invalid final output');
+      }
+      await publish('final-evidence.json', { invocationId, path: paths.final, digest: bytesDigest(finalBytes),
+        source: extracted ? 'adapter-extraction' : 'worker-output', candidate: true, verified: false,
+        terminalSuccess: result.exitCode === 0 && !result.timedOut && !result.errorCode });
+      if (driver.parseWorkerFinal) {
+        try {
+          await driver.parseWorkerFinal(extracted ? output : finalBytes, {
+            format: extracted && ctx.profile.health?.outputFraming === 'jsonl' ? 'jsonl' : 'json', observation: { transport: 'shell',
+            status: result.exitCode === 0 && !result.errorCode && !result.timedOut ? 'completed' : 'failed',
+            termination: result.termination, exitCode: result.exitCode } });
+          healthFinalValid = true;
+        } catch { /* failed strict claims remain unverified candidate evidence */ }
+      }
+    } catch { result.errorCode ??= 'FINAL_OUTPUT_INVALID'; }
+    try { await recordProcess(); }
+    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
+    finally {
+      try { await publish('exit.json', result); }
+      catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; }
+    }
+    result.health = observer.finish({ ...result, finalValid: healthFinalValid });
+    result.healthEvidence = observer.evidence();
+    try { await publish('exit.json', result); }
+    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
+    await reportHealth();
+    owner.emit('complete', result);
+    resolveDone(result);
+  };
+  child.once('error', error => {
+    errorCode = error.code ?? 'SPAWN_ERROR';
+    observer.observe(classifyWorkerHealthFailure({ code: errorCode }, { source: { kind: 'stderr' } }));
+    later(() => finish(), 0);
+  });
+  child.once('exit', (code, sig) => {
+    if (settled) return;
+    sawExit = true; waitCode = code; waitSignal = sig; later(() => finish(), graceMs);
+  });
+  child.once('close', () => { sawClose = true; finish(); });
+  const hardRemaining = () => Math.max(0, Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds,
+    invocation.limits.wallSeconds) * 1000 - (Number(process.hrtime.bigint() - BigInt(monotonicStart)) / 1e6));
+  later(() => {
+    observer.check();
+    reportHealth(); stop('HARD_DEADLINE');
+  }, hardRemaining());
+  const identityCapture = createWorkerIdentityCapture();
+  const observeIdentity = async (firstSample) => {
+    if (settled) return;
+    let candidate = !hasTransport ? firstSample === undefined ? sampleIdentity(child.pid) : firstSample : null;
+    if (hasTransport && !sawExit) {
+      const native = outcome.mode === 'systemd-unit' ? readNative() : { mainPid: child.pid };
+      const recorded = await transportRecord('worker-identity.json');
+      if (settled || sawExit) return;
+      nativeSupervisor ??= sampleNativeSupervisor(native?.mainPid);
+      const contained = candidatePid => verifyWorkerContainment(candidatePid, { mode: outcome.mode, unit: outcome.unit, nativeSupervisor });
+      const current = recorded?.worker ? sampleIdentity(recorded.worker.pid) : null;
+      if (recorded && sameWorkerIdentity(recorded.supervisor, nativeSupervisor)
+        && sameWorkerIdentity(recorded.worker, current)
+        && contained(current?.pid)) {
+        candidate = current;
+        if (current.pid === current.pgid && current.uid === process.getuid()) identity ??= current;
+      } else {
+        const children = (options.sampleChildren ?? sampleWorkerChildren)(nativeSupervisor?.pid);
+        if (children?.length === 1 && children[0].uid === process.getuid() && children[0].parentPid === nativeSupervisor.pid
+          && contained(children[0].pid)) {
+          const current = sampleIdentity(children[0].pid);
+          if (current?.parentPid === nativeSupervisor.pid && contained(current.pid)) candidate = current;
+        }
+      }
+    }
+    const observed = identityCapture.observe(candidate);
+    if (observed && (hasTransport || observed.parentPid === process.pid)) identity ??= observed;
+    if (identity) observer.processStarted(identity);
+    if (!identity && !identityCapture.expired()) {
+      later(observeIdentity, identityCapture.started() ? 5 : 50); return;
+    }
+    const observation = identity ? 'stable-owned-group' : 'no-stable-owned-group';
+    if (identityObservation !== observation) {
+      identityObservation = observation;
+      recordProcess().catch(() => { errorCode = 'PROCESS_RECORD'; stop(); });
+    }
+    if (!identity) later(observeIdentity, 50);
+  };
+  observeIdentity(immediate);
+  const sampleLog = async () => {
+    const locator = options.healthSessionLog;
+    if (!locator || !ctx.profile.health?.sessionLogLocator || !locator.sessionId) return;
+    const filename = locator.path;
+    let handle;
+    try {
+      await ctx.inspect(filename, 'file');
+      handle = await withWorkerPath(filename, target => open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1) throw new Error('Unavailable session source');
+      if (logCursor.inode !== null && (logCursor.inode !== stat.ino || stat.size < logCursor.offset)) {
+        observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' });
+        logCursor = { inode: stat.ino, offset: 0, generation: logCursor.generation + 1 };
+      }
+      logCursor.inode = stat.ino;
+      const bytes = Buffer.alloc(Math.min(65536, Math.max(0, stat.size - logCursor.offset)));
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, logCursor.offset);
+      observer.feed(bytes.subarray(0, bytesRead), { kind: 'session-log', id: 'session-log', generation: logCursor.generation, offset: logCursor.offset });
+      logCursor.offset += bytesRead;
+    } catch { observer.gap('SOURCE_GAP', { kind: 'session-log', id: 'session-log' }); }
+    finally { await handle?.close(); }
+  };
+  const sampleHealth = async () => {
+    if (settled) return;
+    const current = identity ? sampleWorkerIdentity(identity.pid) : null;
+    const cpu = identity ? sampleWorkerCpuTime(identity, current, tickRate, previousCpu) : { cpuTimeMs: null };
+    previousCpu = current;
+    const content = await sampleOwnedWorktreeContent(invocation.cwd, { files: options.healthArtifacts });
+    await sampleLog();
+    if (settled) return;
+    observer.sampleActivity({ running: current && sameWorkerIdentity(identity, current) ? true : null, cpu: cpu.cpuTimeMs, content });
+    const health = observer.check();
+    await reportHealth();
+    if (settled) return;
+    if (observer.shouldStop?.() || ['hung', 'failed-to-start'].includes(health.state) || ['HARD_DEADLINE', 'STEP_LIMIT'].includes(health.reasonCode)) stop(health.reasonCode);
+    else later(sampleHealth, Math.min(observer.nextDelayMs(), hardRemaining()));
+  };
+  sampleHealth().catch(() => { observer.gap(); later(sampleHealth, (invocation.health?.checkSeconds ?? 15) * 1000); });
+  const launchEvent = { invocationId, pid: identity?.pid ?? null, supervisorPid: process.pid, isolation: outcome.mode };
+  owner.emit('started', launchEvent); // Preserve the public OS-launch event API.
+  owner.emit('launched', launchEvent);
+  return done;
+}
+// ===========================================================================
+// END FROZEN TO a4085b86a
+// ===========================================================================
 
 /**
  * @typedef {Object} LaunchOptions
@@ -2440,6 +2902,61 @@ export async function recoveryScopeKeysForInvocation(invocation, { invocationId 
 export const RECOVERY_SCOPE_OPEN_CODE = 'RECOVERY_SCOPE_OPEN';
 
 /**
+ * #2915 round 8 (D6): the COMPLETE, pure direct-recovery eligibility
+ * decision, extracted so every surface that must decide "is recovery
+ * gated for this attempt" — `admitDirectWorker` below, the attached
+ * launcher's `launchOneWorker`, `planDirectWorkerLaunch`'s standalone
+ * branch, and (via this same export) the MCP `run()` bridge in
+ * `src/mcp/tools/worker-invoke.mjs` — calls the SAME function with the
+ * SAME inputs, instead of re-deriving (or partially re-deriving) the
+ * decision inline. Seven prior review rounds found drift specifically
+ * because the disabled/enabled decision was threaded through new code as
+ * ad hoc conditions (`if (gate.enabled) ... else ...`, `if (admission.
+ * gated) ...`) that could fall out of sync with `admitDirectWorker`'s own
+ * checks; one shared predicate makes that drift structurally impossible
+ * for every call site that uses it.
+ *
+ * The decision has exactly four components, checked in order, matching
+ * what `admitDirectWorker` itself checked inline before this extraction:
+ *   1. the global switch (`gateEnabled`, resolved by the caller's own
+ *      `checkWorkerDispatch()`/dispatch-gate result — never re-derived
+ *      here, so this performs no new I/O);
+ *   2. per-CLI enablement (`config.parallelism.clis[<cli>].enabled`);
+ *   3. `canVerifyAttempt: false` (Warp, Copilot — an adapter that can
+ *      never report a verified success back to the breaker is never
+ *      eligible for recovery-breaker gating at all, see
+ *      `worker-installation.mjs`);
+ *   4. an explicit breaker override (`scopedBreaker: null`) or, in the
+ *      hypothetical case the shared breaker getter itself returns a
+ *      falsy value, the ambient shared breaker being unavailable.
+ *
+ * Performs no reservation, no breaker/ledger import, and no I/O beyond
+ * what `admitDirectWorker` already performed at this exact point before
+ * this extraction (a synchronous config/driver lookup and the existing
+ * `getDirectRecoveryBreaker()` accessor, already imported by this file).
+ *
+ * Returns `{ gated: false, reason }` (same `reason` strings
+ * `admitDirectWorker` always returned for these cases — `undefined` for
+ * the first two, which never carried one) or `{ gated: true }`.
+ */
+export function directRecoveryEligibility({ gateEnabled, config, invocation, drivers = {}, scopedBreaker } = {}) {
+  if (!gateEnabled) return { gated: false };
+  const cli = invocation?.selected?.cli ?? null;
+  if (cli && config?.parallelism?.clis?.[cli]?.enabled === false) return { gated: false };
+  // #2915 follow-up: an adapter whose `parseWorkerFinal`/`parseWorkerAttemptFinal`
+  // can NEVER validate a final (Warp, Copilot — `canVerifyAttempt: false`,
+  // see worker-installation.mjs) can never report a verified success back
+  // to the breaker. Admitting a canary for such a CLI would gate it behind
+  // a success that is structurally unreachable, not merely unlikely — so
+  // this CLI is never eligible for recovery-breaker gating at all, exactly
+  // like the global/per-CLI dispatch switch being off.
+  if (cli && drivers?.[cli]?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
+  const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
+  if (!breaker) return { gated: false };
+  return { gated: true };
+}
+
+/**
  * ONE admission entry point (#2915 final review step 3), shared by
  * `launchOneWorker`, `planDirectWorkerLaunch` and the MCP `run()` bridge
  * (`src/mcp/tools/worker-invoke.mjs`). Replaces the three independent
@@ -2456,7 +2973,9 @@ export const RECOVERY_SCOPE_OPEN_CODE = 'RECOVERY_SCOPE_OPEN';
  * constructed or consulted, so behaviour is byte-for-byte what it was
  * before this feature existed (#2915 final review, finding 1: the planner
  * checked only the global switch, so a per-CLI-disabled selection still
- * constructed and consulted the breaker).
+ * constructed and consulted the breaker). This eligibility decision is
+ * `directRecoveryEligibility` above — the same function every other
+ * decision point in this file (and the MCP bridge) calls.
  *
  * Returns one of:
  *   - `{ gated: false }` — recovery is not in effect for this attempt.
@@ -2475,17 +2994,9 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // required to reserve; omitting either (a caller with no resolved task,
   // e.g. a flat-option standalone planner call) simply skips the ledger.
   taskChainDigest = null, maxAttempts = null, captureRoot = null } = {}) {
-  if (!gateEnabled) return { gated: false };
+  const eligibility = directRecoveryEligibility({ gateEnabled, config, invocation, drivers, scopedBreaker });
+  if (!eligibility.gated) return eligibility;
   const cli = invocation?.selected?.cli ?? null;
-  if (cli && config?.parallelism?.clis?.[cli]?.enabled === false) return { gated: false };
-  // #2915 follow-up: an adapter whose `parseWorkerFinal`/`parseWorkerAttemptFinal`
-  // can NEVER validate a final (Warp, Copilot — `canVerifyAttempt: false`,
-  // see worker-installation.mjs) can never report a verified success back
-  // to the breaker. Admitting a canary for such a CLI would gate it behind
-  // a success that is structurally unreachable, not merely unlikely — so
-  // this CLI is never eligible for recovery-breaker gating at all, exactly
-  // like the global/per-CLI dispatch switch being off.
-  if (cli && drivers?.[cli]?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
   const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
   if (!breaker) return { gated: false };
   const resolvedInstallationQualifier = installationQualifier
@@ -2652,18 +3163,47 @@ export function classifyAttemptForSettlement(invocation, result, { quotaAccount 
     inferenceProvider: selected.inferenceProvider ?? null, quotaAccount, installationQualifier };
 }
 
+// #2915 round 8 (D6, "lazy public fields still differ after mixed use"):
+// `lastAttemptResult`/`lastAttemptInvocationId` are informational
+// bookkeeping only (#2915 step 4 — the retry gate no longer reads them;
+// see `launchWorker`'s `options.retryOf`, verified fresh against disk
+// evidence on every call) that origin/main's `SessionLauncher` never had
+// as instance fields at all. Keeping them as `this.*` assignments in the
+// constructor (even initialized to `null`) made `Object.keys(new
+// SessionLauncher())` differ from origin/main unconditionally, and a
+// gated launch followed by a not-gated one on the SAME instance left the
+// gated launch's own values sitting on an instance a not-gated-only
+// caller would otherwise see as untouched. Keyed by instance in this
+// module-private `WeakMap` instead, surfaced through plain accessor
+// properties on the prototype (never an own, enumerable instance
+// property) so every existing reader/writer (`owner.lastAttemptResult =
+// result` inside `launchOneWorker`, every test that reads
+// `launcher.lastAttemptResult`) keeps working unchanged, while
+// `Object.keys()`/`JSON.stringify()`/`for...in` on the instance see
+// exactly origin/main's three fields.
+const lastAttemptState = new WeakMap();
+
 export class SessionLauncher extends EventEmitter {
   constructor() {
     super();
-    // Informational bookkeeping only (#2915 step 4): the retry gate itself
-    // no longer reads these — see `launchWorker`'s `options.retryOf`,
-    // verified fresh against disk evidence on every call.
-    this.lastAttemptResult = null;
-    this.lastAttemptInvocationId = null;
     this.currentProcess = null;
     this.startTime = null;
     /** @type {import('./lib/provider-adapter.mjs').ProviderAdapter|null} */
     this.providerAdapter = null;
+  }
+
+  /** Informational-only; see the `lastAttemptState` WeakMap doc comment above. */
+  get lastAttemptResult() { return lastAttemptState.get(this)?.result ?? null; }
+
+  set lastAttemptResult(value) {
+    lastAttemptState.set(this, { ...lastAttemptState.get(this), result: value });
+  }
+
+  /** Informational-only; see the `lastAttemptState` WeakMap doc comment above. */
+  get lastAttemptInvocationId() { return lastAttemptState.get(this)?.invocationId ?? null; }
+
+  set lastAttemptInvocationId(value) {
+    lastAttemptState.set(this, { ...lastAttemptState.get(this), invocationId: value });
   }
 
   /**
@@ -3781,6 +4321,30 @@ export function planDirectWorkerLaunch({
     };
     return launch(onDispatchCommit);
   }
+  // #2915 round 8 (D6): the COMPLETE eligibility decision — adding
+  // `canVerifyAttempt` and the explicit breaker override to the
+  // `gate.enabled`/per-CLI checks already made above — decided HERE,
+  // synchronously, at the Standalone branch's own earliest point, using
+  // the exact SAME `directRecoveryEligibility` predicate
+  // `admitDirectWorker` below would otherwise independently re-derive.
+  // Not gated: return the synchronous, base-shaped `launch()` result
+  // directly, exactly like the `!gate.enabled`/per-CLI branches above —
+  // never enter the admission IIFE at all.
+  //
+  // This also closes a real defect the predicate's extraction surfaced:
+  // without this check, a standalone call with `scopedBreaker: null` (or
+  // a driver whose `canVerifyAttempt` is `false`) reached the admission
+  // IIFE below, `admitDirectWorker` correctly returned `{ gated: false }`
+  // for it, and execution fell through to the un-guarded
+  // `onDispatchCommit` closure that unconditionally calls
+  // `admission.breaker.beginDispatch(...)` — `admission.breaker` is
+  // `undefined` on a not-gated admission, so any caller actually hitting
+  // either condition crashed with a `TypeError` at dispatch time instead
+  // of launching, exactly the kind of divergence `directRecoveryEligibility`
+  // exists to make impossible by construction.
+  const standaloneEligibility = directRecoveryEligibility({ gateEnabled: gate.enabled, config, invocation,
+    drivers: drivers ?? {}, scopedBreaker });
+  if (!standaloneEligibility.gated) return launch(); // not-gated: synchronous, byte-for-byte legacy behaviour
   // Standalone: the planner performs its own admission. It settles LOCALLY
   // only on a pre-spawn refusal/exception (no observer exists to report a
   // post-spawn outcome back here); a successful launch returns its
