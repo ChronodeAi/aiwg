@@ -192,6 +192,11 @@ const ENUM_RULES: Record<string, readonly string[]> = {
   'security.threatAssessment.mode': ['off', 'audit', 'enforce'],
   'artifact_outputs.canonical': ['aiwg'],
   'artifact_outputs.provider_native': ['disabled', 'explicit-only', 'project-default'],
+  // #3050: a setup/onboarding preference, not worker policy — kept out of
+  // the frozen `parallelism` contract fragment (B-OG-29). String enum (not
+  // boolean) so a future state (e.g. "snoozed") can be added without a
+  // breaking schema change.
+  'setup.worker_dispatch_offer': ['declined'],
 };
 
 const BOOLEAN_FIELDS = new Set([

@@ -367,6 +367,7 @@
     "decision/README",
     "decision/cli-mcp-driver",
     "getting-started/session-history",
+    "getting-started/worker-dispatch",
     "sessions/cli",
     "configuration",
     "frameworks/forensics-complete/agent-examples",
@@ -2834,6 +2835,13 @@
       "title": "Import AI Session History",
       "summary": "Discover, import, and search prior AI conversations across providers in a local, privacy-aware session catalog",
       "file": "getting-started/session-history.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "getting-started/worker-dispatch",
+      "title": "Turn On Direct Worker Dispatch",
+      "summary": "What parallelism.worker_dispatch does, what it costs, how AIWG offers it, and how to turn it on or off",
+      "file": "getting-started/worker-dispatch.md",
       "parent": "getting-started"
     },
     {

@@ -600,6 +600,14 @@ export interface AiwgConfig {
   telemetry?: TelemetryConfig;
 
   /**
+   * Setup/onboarding preferences — answers to opt-in offers presented during
+   * `aiwg init` / `aiwg setup project` that are not worker policy and must
+   * not live in `parallelism` (a frozen contract fragment, B-OG-29).
+   * @implements #3050
+   */
+  setup?: SetupConfig;
+
+  /**
    * Project build policy. Large build workflows consult this before expensive
    * package installs, TypeScript compilation, or web bundle generation.
    * @implements #1692
@@ -649,6 +657,26 @@ export interface SkillUsageConfig {
   scopes?: Array<'project' | 'global'>;
   /** Maximum bytes per JSONL store before rotation to `.1`. */
   max_bytes?: number;
+}
+
+/**
+ * Setup/onboarding preferences (#3050). String enum (not boolean) so a
+ * future "snoozed" or "asked-but-no-answer" state can be added without a
+ * breaking schema change.
+ */
+export type WorkerDispatchOfferPreference = 'declined';
+
+/** Setup/onboarding preferences — answers to opt-in offers, not worker policy. */
+export interface SetupConfig {
+  /**
+   * Set to `"declined"` when a person explicitly said no to the
+   * `parallelism.worker_dispatch` opt-in offer presented by `aiwg init` /
+   * `aiwg setup project`. Suppresses the offer and every hint surface
+   * (regenerate/refresh/doctor/generated context) until cleared, so a
+   * decline is never re-asked on every run. The setting itself can still be
+   * turned on later with `aiwg config set --project parallelism.worker_dispatch true`.
+   */
+  worker_dispatch_offer?: WorkerDispatchOfferPreference;
 }
 
 /** Large-build host resource preflight mode (#1692). */

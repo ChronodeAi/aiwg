@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { Interface as ReadlineInterface } from 'readline';
 import {
   askString,
@@ -17,6 +18,7 @@ import {
   askChoice,
   listSelect,
   askWithTimeout,
+  askConsent,
 } from '../../../src/cli/prompt-utils.js';
 
 /**
@@ -27,14 +29,18 @@ function makeMockInterface() {
   let pendingCallback: ((answer: string) => void) | null = null;
   let pendingPrompt: string | null = null;
   const closeSpy = vi.fn();
+  // A real EventEmitter backs `on`/`removeListener`/`emit` so askConsent's
+  // `rl.on('close', ...)` wiring works without disturbing `question`/`close`,
+  // which every other test in this file already depends on.
+  const emitter = new EventEmitter();
 
-  const iface = {
+  const iface = Object.assign(emitter, {
     question(prompt: string, cb: (answer: string) => void) {
       pendingPrompt = prompt;
       pendingCallback = cb;
     },
     close: closeSpy,
-  } as unknown as ReadlineInterface;
+  }) as unknown as ReadlineInterface;
 
   return {
     iface,
@@ -48,6 +54,10 @@ function makeMockInterface() {
       return pendingPrompt;
     },
     closeSpy,
+    /** Simulate stdin EOF / the interface closing before any answer. */
+    emitClose() {
+      emitter.emit('close');
+    },
   };
 }
 
@@ -223,5 +233,80 @@ describe('askWithTimeout custom timeout override', () => {
     );
     vi.advanceTimersByTime(50);
     await expect(promise).resolves.toBe('timeout-value');
+  });
+});
+
+// #3050 review items 2 and 4: a consent prompt needs (1) strict y/yes
+// parsing — unlike askYesNo's startsWith('y') — and (2) a distinguishable
+// outcome so a caller never persists a decline for a timeout or closed
+// stdin, only for an actually-answered "no".
+describe('askConsent', () => {
+  it('treats exact "y" as an answered yes', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ');
+    mock.respond('y');
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: true });
+  });
+
+  it('treats exact "yes" (any case, with surrounding whitespace) as an answered yes', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ');
+    mock.respond('  YES  ');
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: true });
+  });
+
+  it('rejects "yesterday" (any text merely starting with y) as an answered no, not a yes', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ');
+    mock.respond('yesterday');
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: false });
+  });
+
+  it('treats an empty answer as an answered no', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ');
+    mock.respond('');
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: false });
+  });
+
+  it('treats plain "no" as an answered no', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ');
+    mock.respond('no');
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: false });
+  });
+
+  it('resolves to {kind: "timeout"} on timeout, distinguishable from an answered no', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ', 1000);
+    vi.advanceTimersByTime(1000);
+    await expect(promise).resolves.toEqual({ kind: 'timeout' });
+  });
+
+  it('resolves to {kind: "closed"} immediately when the interface closes before any answer, without waiting out the timeout', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ', 60_000);
+    mock.emitClose();
+    // No vi.advanceTimersByTime at all — this must settle without the timer
+    // ever firing, proving a closed stdin cannot hang the prompt.
+    await expect(promise).resolves.toEqual({ kind: 'closed' });
+  });
+
+  it('does not resolve to "closed" after an answer already settled the promise', async () => {
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ', 60_000);
+    mock.respond('y');
+    mock.emitClose();
+    await expect(promise).resolves.toEqual({ kind: 'answered', value: true });
+  });
+
+  it('rejects when signal is aborted mid-prompt', async () => {
+    const controller = new AbortController();
+    const mock = makeMockInterface();
+    const promise = askConsent(mock.iface, 'Enable? ', 60_000, controller.signal);
+    promise.catch(() => {});
+    controller.abort('user-cancel');
+    await expect(promise).rejects.toBe('user-cancel');
+    expect(mock.closeSpy).toHaveBeenCalled();
   });
 });

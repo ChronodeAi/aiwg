@@ -163,6 +163,20 @@ async function handleRegenerate(args: string[], cwd: string): Promise<void> {
   console.log(`  Selected: ${selection.explicit ? 'explicit' : 'inferred'} — ${selection.reason}`);
   if (selection.evidence.length > 0) console.log(`  Evidence: ${selection.evidence.join(', ')}`);
 
+  // #3050: regenerate never prompts. Point at direct worker dispatch when
+  // it is off and two or more worker CLIs are detected (presence-only PATH
+  // scan, no spawn); silent otherwise, including after a decline.
+  try {
+    const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+    const { detectInstalledWorkerClis, evaluateWorkerDispatchOffer, workerDispatchOfferHint } =
+      await import('../../models/worker-dispatch-offer.js');
+    const dispatchConfig = await readAiwgConfig(target);
+    const offer = evaluateWorkerDispatchOffer(dispatchConfig?.parallelism, dispatchConfig?.setup, detectInstalledWorkerClis());
+    if (offer.shouldOffer) console.log(`  ${workerDispatchOfferHint(offer.detected)}`);
+  } catch {
+    // Non-fatal — this is an informational nudge, never a regenerate gate.
+  }
+
   if (existingProject) {
     const preflight = await migrateWorkspaceContext(target, {
       dryRun: true,

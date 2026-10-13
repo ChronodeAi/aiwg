@@ -17,7 +17,7 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPackageRoot } from '../../cli/find-package-root.js';
-import { readAiwgConfigCandidate, validateWorkerConfigCandidate, resolveParallelism, PROVIDER_PARALLELISM_DEFAULTS, type AiwgConfig, type ParallelismConfig, type WorkerGroup } from '../../config/aiwg-config.js';
+import { readAiwgConfigCandidate, validateWorkerConfigCandidate, resolveParallelism, PROVIDER_PARALLELISM_DEFAULTS, type AiwgConfig, type ParallelismConfig, type SetupConfig, type WorkerGroup } from '../../config/aiwg-config.js';
 
 export const PARALLELISM_BLOCK_START = '<!-- AIWG-PARALLELISM-CAP:START -->';
 export const PARALLELISM_BLOCK_END = '<!-- AIWG-PARALLELISM-CAP:END -->';
@@ -133,6 +133,31 @@ function healthValue(health: ParallelismConfig['health'],
   return { value, origin: health?.[field] === undefined ? 'default' : 'project config' };
 }
 
+/**
+ * Plain-language dispatch state line (#3050 item 5). Agents must not assume
+ * other worker CLIs are unavailable just because dispatch is off — they
+ * should detect them and offer the opt-in, not silently work around it.
+ */
+function workerDispatchStateLine(parallelism: ParallelismConfig | undefined, setup: SetupConfig | undefined): string {
+  if (parallelism?.worker_dispatch === true) {
+    return '**Direct worker dispatch**: on (`parallelism.worker_dispatch`).';
+  }
+  // A recorded decline (#3050 review item 3) means a person already said no
+  // to this offer — render the plain off state without repeating the
+  // detect-and-offer instruction, so agents stop re-litigating a settled
+  // decision every session. The decline is a setup/onboarding preference,
+  // not worker policy, so it lives in `setup`, not in the frozen
+  // `parallelism` contract fragment (B-OG-29).
+  if (setup?.worker_dispatch_offer === 'declined') {
+    return '**Direct worker dispatch**: off (`parallelism.worker_dispatch`); a prior offer was declined '
+      + '(`setup.worker_dispatch_offer`). Do not re-offer it. It can still be turned on with '
+      + '`aiwg config set --project parallelism.worker_dispatch true` if the user asks for it directly.';
+  }
+  return '**Direct worker dispatch**: off (`parallelism.worker_dispatch`). Do not assume other worker CLIs '
+    + 'are unavailable — detect them yourself and offer `aiwg config set --project parallelism.worker_dispatch true` '
+    + 'to the user if it would help.';
+}
+
 function delegationSupport(provider: string | undefined): string {
   switch (provider) {
     case 'antigravity':
@@ -233,6 +258,8 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
   lines.push('The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.');
   lines.push('');
   lines.push(delegationSupport(primary));
+  lines.push('');
+  lines.push(workerDispatchStateLine(cfg.parallelism, cfg.setup));
   lines.push('');
   // Group dispatch disabled (worker_dispatch unset/false): the resolver reports
   // `disabled`, so no group block renders — the native-delegation rubric above

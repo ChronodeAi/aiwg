@@ -2105,6 +2105,24 @@ async function runDoctor() {
     }
   }
 
+  // #3050: direct-worker dispatch opt-in next step. Only on --probe-workers
+  // (an explicit ask), presence-only PATH scan (no spawn beyond what the
+  // section above already does), silent unless dispatch is off and two or
+  // more worker CLIs are detected (and silent after a previous decline).
+  if (probeWorkers) {
+    try {
+      if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
+      const { detectInstalledWorkerClis, evaluateWorkerDispatchOffer, workerDispatchOfferHint } =
+        await importImpl(import.meta.url, 'models/worker-dispatch-offer.js');
+      const offer = evaluateWorkerDispatchOffer(workerSectionsConfig?.parallelism, workerSectionsConfig?.setup, detectInstalledWorkerClis());
+      if (offer.shouldOffer) {
+        check('Direct Worker Dispatch Offer', 'info', workerDispatchOfferHint(offer.detected));
+      }
+    } catch {
+      // Non-fatal — this is an informational nudge, never a diagnostic gate.
+    }
+  }
+
   // 11d-bis. Live host resources and worker isolation mode (#2954).
   // Read-only: samples /proc signals and probes the systemd user manager.
   // Never launches workers and never mutates configuration.

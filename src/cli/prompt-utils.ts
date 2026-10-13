@@ -171,6 +171,91 @@ export async function askChoice<T>(
 }
 
 /**
+ * Outcome of {@link askConsent}. Only `'answered'` reflects a person's
+ * actual input — `'timeout'`, `'closed'` (EOF/stdin closed before any
+ * answer), and the signal-abort rejection path must never be treated as an
+ * answered "no" by a caller that persists consent decisions.
+ */
+export type ConsentOutcome =
+  | { kind: 'answered'; value: boolean }
+  | { kind: 'timeout' }
+  | { kind: 'closed' };
+
+/**
+ * Prompt for a strict, distinguishable consent answer. Two differences from
+ * {@link askYesNo}, both deliberately scoped to this helper so no existing
+ * `askYesNo` call site changes behavior:
+ *
+ * 1. **Strict parsing**: only a trimmed, case-insensitive `y` or `yes`
+ *    counts as yes. `askYesNo`'s `startsWith('y')` would also accept
+ *    `yesterday` or `yolo` — too loose for an irreversible opt-in.
+ * 2. **Answered vs. not-answered**: the caller gets a {@link ConsentOutcome}
+ *    instead of a bare boolean, so a timeout or a closed/EOF'd stdin (the
+ *    `rl.on('close', ...)` listener settles immediately — it does not wait
+ *    out the timeout) is distinguishable from an actual "no" answer. A
+ *    caller that records a persistent decline must only do so for
+ *    `{ kind: 'answered', value: false }`.
+ *
+ * Signal abort still rejects (same contract as {@link askWithTimeout}).
+ */
+export function askConsent(
+  rl: readline.Interface,
+  question: string,
+  timeoutMs: number = promptTimeoutMs(),
+  signal?: AbortSignal,
+): Promise<ConsentOutcome> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      rl.removeListener('close', onClose);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ui.warn(`  No input within ${Math.round(timeoutMs / 1000)}s — leaving the setting unchanged.`);
+      cleanup();
+      resolve({ kind: 'timeout' });
+    }, timeoutMs);
+    // See askWithTimeout: unref so a closed event loop never waits on this.
+    timer.unref?.();
+
+    // Stdin closing (EOF, piped input exhausted, or the interface being
+    // closed elsewhere) must settle immediately, not after the full
+    // timeout — a closed stdin must never hang a consent prompt.
+    const onClose = (): void => {
+      if (settled) return;
+      settled = true;
+      ui.warn('  Input closed before an answer — leaving the setting unchanged.');
+      cleanup();
+      resolve({ kind: 'closed' });
+    };
+    rl.on('close', onClose);
+
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { rl.close(); } catch { /* already closed */ }
+      reject(signal!.reason ?? new Error('Aborted'));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    rl.question(question, (answer) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ kind: 'answered', value: ['y', 'yes'].includes(answer.trim().toLowerCase()) });
+    });
+  });
+}
+
+/**
  * Prompt for a labeled selection from a list of options. Renders each option
  * as a numbered line before asking. Users can respond by number (1-based) or
  * by matching the exact `label`. On timeout or invalid input, returns
