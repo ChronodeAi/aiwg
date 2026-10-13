@@ -207,6 +207,48 @@ describe('setup manifest CLI handlers', () => {
     }
   });
 
+  // Go/no-go review blocker 3: a recovery procedure referencing itself (or
+  // another recovery that references back) is a clean validation error —
+  // the `RangeError: Maximum call stack size exceeded` the review
+  // reproduced — not a crash. `detectRecoveryReferenceCycles()`'s own doc
+  // comment explains why this is a bounded graph walk, not a recursive
+  // preflight.
+  it.each([
+    {
+      label: 'a recovery procedure whose own step on_fails back to itself',
+      recovery: [{
+        id: 'recover-install',
+        steps: [{ id: 'retry', type: 'verify', commands: ['false'], on_fail: 'recover-install' }],
+      }],
+    },
+    {
+      label: 'two recovery procedures that on_fail into each other',
+      recovery: [
+        { id: 'recover-a', steps: [{ id: 'retry-a', type: 'verify', commands: ['false'], on_fail: 'recover-b' }] },
+        { id: 'recover-b', steps: [{ id: 'retry-b', type: 'verify', commands: ['false'], on_fail: 'recover-a' }] },
+      ],
+    },
+  ])('reports a clean recoveryCycle error, not a crash, for $label', ({ recovery }) => {
+    const manifest = baseManifest({ id: 'install', type: 'verify', commands: ['false'], on_fail: recovery[0]!.id });
+    (manifest.spec as Record<string, unknown>).recovery = recovery;
+    writeManifest(tmpDir, manifest, 'recovery-cycle.yaml');
+
+    const findings = validateSetupManifest({
+      cwd: tmpDir,
+      frameworkRoot: REPO_ROOT,
+      manifestPath: 'recovery-cycle.yaml',
+    }).findings;
+
+    expect(findings).toContainEqual(expect.objectContaining({
+      severity: 'error',
+      path: '/spec/recovery',
+      rule: 'recoveryCycle',
+    }));
+    // Exactly one finding per distinct cycle — not one per node visited,
+    // which would otherwise silently reveal an unbounded walk.
+    expect(findings.filter((finding) => finding.rule === 'recoveryCycle')).toHaveLength(1);
+  });
+
   it('dry-runs a valid manifest without executing steps', async () => {
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
@@ -545,25 +587,61 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  // #3062 second review, finding 7: preflight must cover the recovery
-  // sequence a failing step would run, before the failing step itself
-  // executes — an early recovery-blocking condition must not let the
-  // selected steps mutate state first.
-  it('rejects an unresolved recovery sequence up front, before the step it would recover ever runs', async () => {
+  // Go/no-go review blocker 3: the previous preflight recursed into every
+  // selected step's `on_fail` recovery up front, so a manifest whose main
+  // sequence succeeds outright was refused solely because its *unused*
+  // recovery contained something unsupported. The main sequence now runs
+  // to completion regardless of what its unused recovery declares.
+  it('runs the main sequence to completion with an unusable recovery defined that is never selected', async () => {
     const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), '#!/usr/bin/env sh\nprintf ran > ' + marker + '\n');
+    const result = await runManifest({
+      params: [{ name: 'RECOVERY_TARGET', type: 'string' }],
+      steps: [{ id: 'install', type: 'script', script: 'scripts/install.sh', on_fail: 'recover-install' }],
+      recovery: [{
+        // Would be refused if ever preflighted (no declared params at
+        // all) — but `install` succeeds, so this is never selected.
+        id: 'recover-install',
+        steps: [{ id: 'confirm-recovery', type: 'ask', message: 'Recover how?' }],
+      }],
+    }, {});
+
+    expect(result.exitCode).toBe(0);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(consoleErrorSpy.mock.calls.flat().join('\n')).not.toContain('confirm-recovery');
+  });
+
+  // Go/no-go review blocker 3 (was: "rejects an unresolved recovery
+  // sequence up front, before the step it would recover ever runs" — the
+  // *up front* part is exactly what blocker 3 removes). The main step now
+  // runs (and fails) normally; only once that failure actually selects the
+  // recovery is the recovery's own blocker found — and at that point
+  // nothing in the recovery sequence has executed yet, verified by a
+  // second marker the recovery's own first step would have written.
+  it('a failure selecting a recovery with an unresolvable ask step refuses before any recovery step runs', async () => {
+    const marker = path.join(tmpDir, 'marker');
+    const recoveryMarker = path.join(tmpDir, 'recovery-marker');
     writeExecutable(path.join(tmpDir, 'scripts', 'fail.sh'), '#!/usr/bin/env sh\nprintf ran > ' + marker + '\nexit 7\n');
+    writeExecutable(path.join(tmpDir, 'scripts', 'recovery-step.sh'), '#!/usr/bin/env sh\nprintf ran > ' + recoveryMarker + '\n');
     const result = await runManifest({
       params: [{ name: 'RECOVERY_TARGET', type: 'string' }],
       steps: [{ id: 'install', type: 'script', script: 'scripts/fail.sh', on_fail: 'recover-install' }],
       recovery: [{
         id: 'recover-install',
-        steps: [{ id: 'confirm-recovery', type: 'ask', message: 'Recover how?', params: ['RECOVERY_TARGET'] }],
+        steps: [
+          { id: 'confirm-recovery', type: 'ask', message: 'Recover how?', params: ['RECOVERY_TARGET'] },
+          { id: 'apply-recovery', type: 'script', script: 'scripts/recovery-step.sh' },
+        ],
       }],
     }, {});
 
     expect(result.exitCode).not.toBe(0);
     expect(result.message).toContain('RECOVERY_TARGET');
-    // The step the (blocked) recovery would have applied to never ran.
-    expect(fs.existsSync(marker)).toBe(false);
+    // The main step DID run — its own failure is what selected the
+    // recovery in the first place.
+    expect(fs.existsSync(marker)).toBe(true);
+    // Zero recovery steps executed: not the blocked `ask` step, and not
+    // the later script step that would have run after it.
+    expect(fs.existsSync(recoveryMarker)).toBe(false);
   });
 });

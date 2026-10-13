@@ -381,6 +381,83 @@ function existingRelative(manifestDir: string, rel: string | undefined): boolean
   return !!rel && existsSync(path.resolve(manifestDir, rel));
 }
 
+/**
+ * Detect `on_fail` reference cycles among recovery procedures themselves —
+ * go/no-go review blocker 3. A step's `on_fail` can name any recovery
+ * procedure, including (structurally, per the shared `SetupStep` type) a
+ * step *inside* a recovery procedure's own `steps`. A recovery procedure
+ * that (directly, or through another recovery procedure) names itself used
+ * to make the old, eager preflight recurse into it forever —
+ * `RangeError: Maximum call stack size exceeded`, reproduced in memory by
+ * the review.
+ *
+ * This is a one-time, bounded graph walk over `manifest.spec.recovery[]`
+ * only (at most `recovery.length` nodes) — a visited/"on the current path"
+ * marker per node means each node is fully explored exactly once, so this
+ * terminates and never re-enters a node already being explored; it reports
+ * one finding per distinct cycle instead of throwing. An `on_fail` that
+ * does not resolve to a known recovery id is reported separately by the
+ * existing unresolved-recovery check (`installerConsistencyChecks` above)
+ * and is not itself a cycle.
+ *
+ * This graph check is independent of, and does not change, how `on_fail`
+ * references are actually used (`collectPreflightBlockers()`/`runStep()`
+ * below): execution never follows an `on_fail` reference more than once
+ * (a failing recovery step reports failure directly, it does not itself
+ * trigger further recovery), so neither the main-sequence preflight nor a
+ * selected recovery's own preflight recurses through `on_fail` at all —
+ * see `collectPreflightBlockers()`'s own doc comment. This cycle check
+ * exists for the case the type system permits but execution never
+ * exercises: a recovery procedure's own steps declaring `on_fail`.
+ */
+function detectRecoveryReferenceCycles(manifest: SetupManifest): SetupValidationFinding[] {
+  const recoveries = manifest.spec.recovery ?? [];
+  if (recoveries.length === 0) return [];
+
+  const onFailTargets = new Map<string, string[]>();
+  for (const recovery of recoveries) {
+    const targets: string[] = [];
+    const collect = (steps: SetupStep[] | undefined): void => {
+      steps?.forEach((step) => {
+        if (step.on_fail && step.on_fail !== 'recover') targets.push(step.on_fail);
+        step.routes?.forEach((route) => collect(route.steps));
+      });
+    };
+    collect(recovery.steps);
+    onFailTargets.set(recovery.id, targets);
+  }
+
+  const findings: SetupValidationFinding[] = [];
+  const reportedCycles = new Set<string>();
+  const state = new Map<string, 'on-path' | 'done'>();
+
+  const visit = (id: string, path: readonly string[]): void => {
+    if (state.get(id) === 'done') return;
+    if (state.get(id) === 'on-path') {
+      const cycle = [...path.slice(path.indexOf(id)), id];
+      const key = [...new Set(cycle)].sort().join('\u0000');
+      if (!reportedCycles.has(key)) {
+        reportedCycles.add(key);
+        findings.push({
+          severity: 'error',
+          path: '/spec/recovery',
+          rule: 'recoveryCycle',
+          message: `recovery reference cycle: ${cycle.join(' -> ')}`,
+        });
+      }
+      return;
+    }
+    state.set(id, 'on-path');
+    for (const next of onFailTargets.get(id) ?? []) {
+      if (onFailTargets.has(next)) visit(next, [...path, id]);
+    }
+    state.set(id, 'done');
+  };
+
+  for (const recovery of recoveries) visit(recovery.id, []);
+  return findings;
+}
+
 function installerConsistencyChecks(manifest: SetupManifest | null, manifestDir: string): SetupValidationFinding[] {
   if (!manifest) return [];
   const findings: SetupValidationFinding[] = [];
@@ -405,6 +482,9 @@ function installerConsistencyChecks(manifest: SetupManifest | null, manifestDir:
       findings.push({ severity: 'error', path: `/spec/steps/${index}/on_fail`, rule: 'on_fail', message: `unresolved recovery '${step.on_fail}'` });
     }
   }
+
+  // Go/no-go review blocker 3.
+  findings.push(...detectRecoveryReferenceCycles(manifest));
 
   for (const { step, pointer } of allSteps(manifest)) {
     if (step.type === 'script' && !existingRelative(manifestDir, step.script)) {
@@ -811,14 +891,39 @@ function missingAskParams(step: SetupStep, params: Record<string, string>): stri
 }
 
 /**
- * Preflight every selected step (recursively into `platform-route` nested
- * steps, and into the recovery sequence any selected step's `on_fail`
- * names) for conditions that would block it from running at all, and
+ * Preflight every step in `steps` (recursively into `platform-route` nested
+ * steps only) for conditions that would block it from running at all, and
  * return one message per blocker — never a partial list halted at the
  * first step (#3062 review item 13, and the second review's finding 7:
- * refusal must happen before ANY step executes, including before a
- * recovery sequence a *later* failing step would trigger, not inside the
- * per-step sequential loop).
+ * refusal must happen before ANY step executes).
+ *
+ * Used for two distinct call sites, both passing only the steps that are
+ * actually about to run:
+ *
+ *   1. The main selected sequence, up front, before any of it runs
+ *      (`runSetupManifest()`'s own preflight call, below).
+ *   2. A *specific* recovery procedure's own steps, called again at the
+ *      moment a failed step selects it — completely, before that
+ *      recovery's first step runs (go/no-go review blocker 3).
+ *
+ * This function never itself follows a step's `on_fail` into another
+ * recovery procedure, in either case — go/no-go review blocker 3's
+ * "preflight is too eager" finding: the previous version always recursed
+ * into every selected step's `on_fail` recovery during the main, up-front
+ * preflight, which (a) refused a manifest whose main sequence would
+ * succeed outright, solely because its *unused* recovery contained an
+ * unsupported step, and (b) had no cycle protection, so a recovery whose
+ * own steps' `on_fail` pointed back into a recovery already being
+ * preflighted recursed without bound (`RangeError: Maximum call stack
+ * size exceeded`, reproduced by the review). Not recursing into `on_fail`
+ * here also matches what execution itself does: a failing step triggers
+ * its *one* named recovery exactly once; a failing step *within* that
+ * recovery reports failure directly rather than following a further
+ * `on_fail` — so preflight never needs to follow one either. (A
+ * recovery-to-recovery `on_fail` reference cycle in the manifest itself is
+ * still caught — as a graph check over `manifest.spec.recovery[]`, not a
+ * recursive preflight — by `detectRecoveryReferenceCycles()` during
+ * manifest validation.)
  *
  *   - `interactive: true` without a terminal AND without every declared
  *     `params` entry resolved: with every declared param supplied, the
@@ -896,16 +1001,20 @@ function collectPreflightBlockers(
       const route = step.routes?.find((item) => item.platform === targetOs);
       if (route) blockers.push(...collectPreflightBlockers(route.steps, manifest, targetOs, params, terminalPresent));
     }
-
-    if (step.on_fail) {
-      const recoveryProcedure = manifest.spec.recovery?.find((item) => item.id === step.on_fail);
-      if (recoveryProcedure) {
-        const recoveryBlockers = collectPreflightBlockers(recoveryProcedure.steps, manifest, targetOs, params, terminalPresent);
-        blockers.push(...recoveryBlockers.map((b) => `[recovery '${recoveryProcedure.id}' for step '${step.id}'] ${b}`));
-      }
-    }
   }
   return blockers;
+}
+
+/**
+ * Preflight a *specific* recovery procedure's own steps — go/no-go review
+ * blocker 3. Called at the moment a failed step selects it, completely,
+ * before any of its steps run. Returns `undefined` when the recovery id
+ * does not resolve to a known procedure (the schema/consistency check
+ * already reports that as a manifest error; this function's caller treats
+ * an unresolved id as "no recovery available", same as before).
+ */
+function findRecoveryProcedure(manifest: SetupManifest, recoveryId: string): { id: string; steps: SetupStep[] } | undefined {
+  return manifest.spec.recovery?.find((item) => item.id === recoveryId);
 }
 
 /**
@@ -1134,8 +1243,22 @@ export async function runSetupManifest(options: RunOptions): Promise<HandlerResu
     const result = await runStep(step, manifest, validation.manifestDir, params.values, target.os, options.yes);
     if (!result.ok) {
       if (result.failedStep && step.on_fail) {
-        const recovery = manifest.spec.recovery?.find((item) => item.id === step.on_fail);
+        const recovery = findRecoveryProcedure(manifest, step.on_fail);
         if (recovery) {
+          // Go/no-go review blocker 3: preflight the *selected* recovery's
+          // own steps completely, now that a failure has actually chosen
+          // it — not when the manifest was first loaded (that preflighted
+          // the main sequence only, above) — and before any of its steps
+          // run. Refuses with zero recovery steps executed, same
+          // all-blockers-at-once shape as the main-sequence preflight.
+          const recoveryBlockers = collectPreflightBlockers(recovery.steps, manifest, target.os, params.values, isInteractive());
+          if (recoveryBlockers.length > 0) {
+            for (const blocker of recoveryBlockers) console.error(`setup-run: [recovery '${recovery.id}'] ${blocker}.`);
+            return {
+              exitCode: 2,
+              message: `setup-run: recovery '${recovery.id}' (for failed step '${result.failedStep}') refusing before executing any recovery step:\n${recoveryBlockers.map((b) => `  - ${b}`).join('\n')}`,
+            };
+          }
           console.error(`[setup] recovery '${recovery.id}' available for failed step '${result.failedStep}'`);
           for (const recoveryStep of recovery.steps) {
             const recoveryResult = await runStep(recoveryStep, manifest, validation.manifestDir, params.values, target.os, options.yes, true);
