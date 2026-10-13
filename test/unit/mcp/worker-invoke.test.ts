@@ -1556,6 +1556,48 @@ setInterval(() => {}, 1000);
     expect(body.termination).toBe('confirmed');
   }, 20000);
 
+  // #2915 review 5 ("Production/ownership/fault tests"): the former
+  // disabled-dispatch test called `admitDirectWorker` directly -- a unit
+  // test of the helper, never proving anything about the real `run()`
+  // bridge. Both `worker_dispatch: false` and `clis[cli].enabled: false`
+  // ALSO disable the models RESOLVER itself for that CLI (confirmed:
+  // probing `resolveWorkerInvocation` directly with this exact config
+  // returns "Installation is disabled" exclusions, never a launchable
+  // plan) -- so `run()` refuses at the resolver stage, well BEFORE it ever
+  // reaches admission. That is itself the proof this test names: the
+  // throwing breaker is unreachable not by luck, but because the SAME
+  // config field both the resolver and `admitDirectWorker`'s own per-CLI
+  // check consult keeps this CLI out of candidate selection entirely.
+  it('per-CLI disabled dispatch refuses at the resolver stage through the real run() bridge, never touching the recovery breaker', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = mcpFixture(root, config);
+    f.snapshot.config.parallelism!.clis = { codex: { enabled: false,
+      adapter: 'providers:codex', accountScope: 'fixture-account', quotaScope: 'fixture-quota' } };
+    await writeFile(briefPath, 'placeholder-before-structured-brief');
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached: codex is per-CLI disabled'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: `mcp-percli-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    // Blocked at the resolver, not by a caught admission exception: if the
+    // throwing breaker HAD been reached, `admitDirectWorker`'s own
+    // try/catch would surface "recovery admission failed closed: ..." in
+    // diagnostics instead of the resolver's own unresolved-plan diagnostic.
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(JSON.stringify(body.diagnostics ?? [])).not.toMatch(/recovery admission failed closed/);
+  }, 20000);
+
   it.skipIf(!supportsCapturedWorkerStdio || process.platform !== 'linux')('isError scenario: failed, confirmed termination (never parsed as success)', async () => {
     const root = await tempRoot();
     const config = path.join(root, 'fixture-config.json');

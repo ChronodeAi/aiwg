@@ -672,8 +672,15 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       // evicts either OPEN scope, and the hard cap of 2 is never exceeded.
       for (let n = 0; n < 6; n += 1) {
         const key = scopeKeyFor.installation(`overflow-cli-${n}`);
-        fail(smallCapBreaker, [key], `overflow-${n}`,
+        const result = fail(smallCapBreaker, [key], `overflow-${n}`,
           { scope: FailureScope.INSTALLATION, scopeKey: key, reasonCode: 'NOT_FOUND', evidenceSource: 'launcher', cli: `overflow-cli-${n}` });
+        // #2915 review 5 (finding 5): the admission itself is now REFUSED
+        // (not silently admitted-and-discarded) for a brand-new scope the
+        // tracking table has no room for -- the overflow case this test
+        // sets up must actually require refusal, not merely observe that
+        // no NEW scope record ended up tracked afterward.
+        expect(result.admitted, `overflow-${n} should have been refused, not admitted`).toBe(false);
+        expect(result.blockedBy).toContain('scope-tracking-capacity');
       }
       expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
       expect(smallCapBreaker.getState(PROVIDER).state).toBe('open');
