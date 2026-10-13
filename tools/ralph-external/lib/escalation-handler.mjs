@@ -10,6 +10,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { boundedSpawnSync } from '../../../src/process/bounded-child-process.mjs';
 import { existsSync, readFileSync } from 'fs';
 
 /**
@@ -129,12 +130,12 @@ export class EscalationHandler {
     }[level] || 'normal';
 
     try {
-      spawnSync('notify-send', [
+      boundedSpawnSync('notify-send', [
         '--urgency', urgency,
         '--app-name', 'Ralph Overseer',
         title,
         message,
-      ]);
+      ], 'quick');
     } catch (error) {
       // Silently fail - notifications are optional
     }

@@ -7,7 +7,7 @@
  * @implements @.aiwg/requirements/design-ralph-external.md
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -66,7 +66,7 @@ curl -s -X ${method} \\
 EOF`;
 
     try {
-      const result = execSync(script, { encoding: 'utf8' });
+      const result = boundedExecSync(script, 'network', { encoding: 'utf8' });
       return JSON.parse(result);
     } catch (error) {
       throw new Error(`Gitea API call failed: ${error.message}`);
@@ -186,7 +186,7 @@ Loop completed at ${new Date().toISOString()}
  */
 export function detectGiteaRepo(cwd) {
   try {
-    const remote = execSync('git remote get-url origin', {
+    const remote = boundedExecSync('git remote get-url origin', 'quick', {
       cwd,
       encoding: 'utf8',
     }).trim();

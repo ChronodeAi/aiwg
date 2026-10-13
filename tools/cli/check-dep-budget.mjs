@@ -23,7 +23,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
@@ -76,7 +76,7 @@ if (directCount > DIRECT_BUDGET) {
 let transitiveCount;
 if (includeTransitive) {
   try {
-    const raw = execSync('npm ls --prod --all --json', {
+    const raw = boundedExecSync('npm ls --prod --all --json', 'quick', {
       cwd: REPO_ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf-8',

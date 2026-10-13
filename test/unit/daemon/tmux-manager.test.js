@@ -59,7 +59,7 @@ describe('TmuxManager', () => {
       });
 
       expect(tmux.isTmuxAvailable()).toBe(true);
-      expect(execSync).toHaveBeenCalledWith('tmux -V', { stdio: 'pipe' });
+      expect(execSync).toHaveBeenCalledWith('tmux -V', { stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
     });
 
     it('should return false when tmux is not available', () => {
@@ -82,7 +82,7 @@ describe('TmuxManager', () => {
       expect(tmux.sessionExists()).toBe(true);
       expect(execSync).toHaveBeenCalledWith(
         'tmux has-session -t aiwg-daemon 2>/dev/null',
-        { stdio: 'pipe' }
+        { stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
 
@@ -106,7 +106,7 @@ describe('TmuxManager', () => {
 
       expect(execSync).toHaveBeenCalledWith(
         'tmux has-session -t custom 2>/dev/null',
-        { stdio: 'pipe' }
+        { stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
   });
@@ -135,11 +135,11 @@ describe('TmuxManager', () => {
       // Call 2: new-session
       expect(calls[2][0]).toContain('tmux new-session -d -s aiwg-daemon');
       expect(calls[2][0]).toContain('Chat pane ready');
-      expect(calls[2][1]).toEqual({ stdio: 'pipe' });
+      expect(calls[2][1]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
       // Call 3: split-window with 30% status pane
       expect(calls[3][0]).toContain('tmux split-window -t aiwg-daemon -v -p 30');
       expect(calls[3][0]).toContain('Status pane ready');
-      expect(calls[3][1]).toEqual({ stdio: 'pipe' });
+      expect(calls[3][1]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
       // Call 4: select-pane
       expect(calls[4][0]).toBe('tmux select-pane -t aiwg-daemon:0.0');
     });
@@ -370,7 +370,7 @@ describe('TmuxManager', () => {
 
       const sendCall = execSync.mock.calls.find(c => c[0].includes('send-keys'));
       expect(sendCall[0]).toBe('tmux send-keys -t aiwg-daemon:0.0 "test command" Enter');
-      expect(sendCall[1]).toEqual({ stdio: 'pipe' });
+      expect(sendCall[1]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
     });
 
     it('should send text without Enter when specified', () => {
@@ -378,7 +378,7 @@ describe('TmuxManager', () => {
 
       const sendCall = execSync.mock.calls.find(c => c[0].includes('send-keys'));
       expect(sendCall[0]).toBe('tmux send-keys -t aiwg-daemon:0.1 "partial text"');
-      expect(sendCall[1]).toEqual({ stdio: 'pipe' });
+      expect(sendCall[1]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
     });
 
     it('should escape double quotes in text', () => {
@@ -656,7 +656,7 @@ describe('TmuxManager', () => {
 
       expect(execSync).toHaveBeenCalledWith(
         'tmux kill-session -t aiwg-daemon',
-        { stdio: 'pipe' }
+        { stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
 
@@ -732,7 +732,7 @@ describe('TmuxManager', () => {
 
       expect(execSync).toHaveBeenCalledWith(
         'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}"',
-        { stdio: 'pipe', encoding: 'utf8' }
+        { stdio: 'pipe', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
 

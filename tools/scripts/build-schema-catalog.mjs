@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
@@ -23,7 +23,7 @@ function explicitlyCatalogedPaths() {
 
 function trackedSchemas() {
   const explicit = explicitlyCatalogedPaths();
-  return execFileSync('git', ['ls-files', '--cached', '--', '*.schema.json'], { cwd: root, encoding: 'utf8' })
+  return boundedExecFileSync('git', ['ls-files', '--cached', '--', '*.schema.json'], 'quick', { cwd: root, encoding: 'utf8' })
     .split('\n')
     .filter(Boolean)
     .filter(path => !path.startsWith('schemas/catalog/'))

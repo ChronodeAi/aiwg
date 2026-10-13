@@ -10,7 +10,7 @@
 
 import os from 'os';
 import { readFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { importImpl } from '../_resolve-impl.mjs';
@@ -86,7 +86,7 @@ function getNodeVersion() {
 
 function getNpmVersion() {
   try {
-    return execSync('npm --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return boundedExecSync('npm --version', 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch {
     return 'unknown';
   }

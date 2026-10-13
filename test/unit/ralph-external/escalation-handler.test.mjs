@@ -251,7 +251,8 @@ describe('EscalationHandler', () => {
           '--app-name', 'Ralph Overseer',
           expect.stringContaining('WARNING'),
           expect.stringContaining('Test warning'),
-        ])
+        ]),
+        { timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
 
@@ -269,7 +270,8 @@ describe('EscalationHandler', () => {
 
       expect(spawnSync).toHaveBeenCalledWith(
         'notify-send',
-        expect.arrayContaining(['--urgency', 'critical'])
+        expect.arrayContaining(['--urgency', 'critical']),
+        { timeout: 30000, killSignal: 'SIGKILL' }
       );
     });
 

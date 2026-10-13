@@ -12,7 +12,7 @@
  * @issue #683 (missing file caused aiwg sync to exit 254 silently)
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 
 function parseArg(args, flag) {
   const idx = args.indexOf(flag);
@@ -31,7 +31,7 @@ async function runDeploy() {
   console.log(`Deploying: ${cmd}`);
 
   try {
-    execSync(cmd, { stdio: 'inherit' });
+    boundedExecSync(cmd, 'long', { stdio: 'inherit' });
   } catch (err) {
     console.error(`Deploy failed for '${framework}': ${err.message}`);
     process.exit(1);

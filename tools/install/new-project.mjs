@@ -19,7 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 
 function printHelp() {
   console.log(`aiwg new — Scaffold a new AIWG project
@@ -300,7 +300,7 @@ function createOrUpdateSettings(aiwgPath, provider) {
       const agentArgs = ['--provider', provider, '--mode', 'sdlc'];
       if (provider === 'openai') agentArgs.push('--as-agents-md');
       console.log('Deploying SDLC agents...');
-      const agentRes = spawnSync('node', [deployPath, ...agentArgs], { stdio: 'inherit' });
+      const agentRes = boundedSpawnSync('node', [deployPath, ...agentArgs], 'long', { stdio: 'inherit' });
       if (agentRes.status !== 0) {
         console.warn('Agent deployment returned non-zero status');
       }
@@ -308,7 +308,7 @@ function createOrUpdateSettings(aiwgPath, provider) {
       // Deploy commands (SDLC flow commands)
       console.log('Deploying SDLC commands...');
       const cmdArgs = ['--deploy-commands', '--provider', provider, '--mode', 'sdlc'];
-      const cmdRes = spawnSync('node', [deployPath, ...cmdArgs], { stdio: 'inherit' });
+      const cmdRes = boundedSpawnSync('node', [deployPath, ...cmdArgs], 'long', { stdio: 'inherit' });
       if (cmdRes.status !== 0) {
         console.warn('Command deployment returned non-zero status');
       }
@@ -318,11 +318,11 @@ function createOrUpdateSettings(aiwgPath, provider) {
   // Initialize git repository if not present
   if (!fs.existsSync(path.resolve(process.cwd(), '.git'))) {
     try {
-      let r = spawnSync('git', ['init', '-b', 'main'], { stdio: 'inherit' });
+      let r = boundedSpawnSync('git', ['init', '-b', 'main'], 'quick', { stdio: 'inherit' });
       if (r.status !== 0) {
         // fallback for older git
-        spawnSync('git', ['init'], { stdio: 'inherit' });
-        spawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { stdio: 'inherit' });
+        boundedSpawnSync('git', ['init'], 'quick', { stdio: 'inherit' });
+        boundedSpawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], 'quick', { stdio: 'inherit' });
       }
       const gi = path.resolve(process.cwd(), '.gitignore');
       if (!fs.existsSync(gi)) {

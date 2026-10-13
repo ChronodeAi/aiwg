@@ -8,10 +8,11 @@
  */
 
 import { EventEmitter } from 'events';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
 import { hostname } from 'node:os';
 import { join, dirname } from 'path';
-import { execFileSync } from 'child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { constants } from 'node:fs';
 import { open, opendir, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -316,8 +317,9 @@ export class ProcessMonitor extends EventEmitter {
       // Use ps command to get process stats
       // RSS is reported in KiB; unlike %mem it does not lose small readings
       // to percentage rounding or require an assumed host memory capacity.
-      const output = execFileSync(
+      const output = boundedExecFileSync(
         'ps', ['-p', String(pid), '-o', '%cpu,rss,etime,stat', '--no-headers'],
+        'quick',
         { encoding: 'utf8' }
       ).trim();
 

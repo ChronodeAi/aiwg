@@ -22,7 +22,7 @@
  * Usage: node tools/cli/check-install-size.mjs [--verbose]
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 
 const PACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_PACKED_BUDGET_KB', 23_000);
 const UNPACKED_BUDGET_KB = parseIntEnv('AIWG_PACK_UNPACKED_BUDGET_KB', 70_000);
@@ -63,7 +63,7 @@ function parseNpmPackJson(stdout) {
 try {
   // `npm pack --dry-run --json` returns an array with one entry per tarball.
   // We use the first entry (single package).
-  const raw = execSync('npm pack --dry-run --json', { stdio: ['ignore', 'pipe', 'pipe'] });
+  const raw = boundedExecSync('npm pack --dry-run --json', 'quick', { stdio: ['ignore', 'pipe', 'pipe'] });
   const out = parseNpmPackJson(raw.toString());
   const pkg = Array.isArray(out) ? out[0] : out;
   if (!pkg || typeof pkg.size !== 'number') {

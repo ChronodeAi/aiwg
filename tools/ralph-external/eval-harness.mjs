@@ -18,7 +18,7 @@
  * @issue #1776 (#1585 Track 3)
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -103,7 +103,7 @@ export class EvalHarness {
     // Injectable for tests; defaults to execSync capturing exit code + stdout.
     this._run = opts.runner?.run || ((cmd, o) => {
       try {
-        const stdout = execSync(cmd, { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const stdout = boundedExecSync(cmd, 'long', { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
         return { code: 0, stdout };
       } catch (err) {
         return { code: err.status ?? 1, stdout: (err.stdout || '').toString() + (err.stderr || '').toString() };

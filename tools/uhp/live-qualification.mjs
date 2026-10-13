@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import path from 'node:path';
 import process from 'node:process';
 import { UhpClient, UHP_VERSION, resolveUhpProfile } from '../../dist/src/uhp/index.js';
@@ -25,7 +25,7 @@ async function main() {
   if (!/@sha256:[a-f0-9]{64}$/i.test(image)) throw new Error('--image must use an immutable @sha256 digest.');
   const container = required('--container');
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(container)) throw new Error('--container must be a simple Docker container name or id.');
-  const inspected = JSON.parse(execFileSync('docker', ['inspect', container], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }))[0];
+  const inspected = JSON.parse(boundedExecFileSync('docker', ['inspect', container], 'quick', { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }))[0];
   if (!inspected?.State?.Running) throw new Error(`HarnessRouter container '${container}' is not running.`);
   if (inspected?.Config?.Image !== image) throw new Error(`Container image '${String(inspected?.Config?.Image)}' does not match requested digest-pinned image.`);
   const profileName = required('--profile');
