@@ -471,12 +471,35 @@ async function launchOneWorker(owner, options) {
     return result;
   } catch (error) {
     if (!outcome?.child) {
-      // Pre-spawn failure (or a recovery-scope refusal): this attempt never
-      // ran, so it settles outstanding membership with NO failure evidence
-      // (#2915 final review: "every pre-spawn exit releases capacity").
+      // Pre-spawn failure (or a recovery-scope refusal): PROVEN -- this
+      // attempt never ran, so it settles outstanding membership with NO
+      // failure evidence (#2915 final review: "every pre-spawn exit
+      // releases capacity").
       settleDirectWorker(admission, { kind: 'uncertain' });
       await publish('exit.json', { invocationId, exitCode: null, signal: null,
         endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
+    } else {
+      // #2915 review 5 (finding 2a, "leaked capacity"): a child DID attach,
+      // but something thrown here means `captureOneWorker` never reached
+      // its own normal settlement call above (line ~469) -- its own
+      // internal paths are designed to always resolve a `result` rather
+      // than throw, so reaching this branch means an exception escaped
+      // that contract entirely (e.g. a synchronous failure building the
+      // health observer before `finish()` is even wired). Post-spawn
+      // uncertainty: unlike the proven pre-spawn case above, a worker may
+      // genuinely still be running, so this settles as 'uncertain' (no
+      // failure evidence asserted either way) rather than leaking the
+      // reservation forever by silently rethrowing without ever settling.
+      settleDirectWorker(admission, { kind: 'uncertain' });
+      // The exception escaped before `captureOneWorker` could attach its
+      // own `child.once('error', ...)`/`'exit'` listeners, so a subsequent
+      // async spawn failure (e.g. ENOENT arriving after this synchronous
+      // throw) would otherwise surface as an unhandled 'error' event on an
+      // EventEmitter with zero listeners. We have already decided this
+      // attempt is uncertain and are no longer tracking it further here;
+      // swallow any further event from this child rather than crashing the
+      // process over a child this code path is abandoning anyway.
+      outcome.child.on('error', () => {});
     }
     throw error;
   } finally {
@@ -749,7 +772,17 @@ async function captureOneWorker(owner, ctx) {
           // the worker's own strict claims carry their own `status`, and a
           // schema-valid `status: 'failed'` claim must never authorize
           // closure through this path either.
-          healthFinalValid = claims?.status === 'completed';
+          //
+          // #2915 review 5 (finding 6, disabled-dispatch equivalence): that
+          // stricter check must apply ONLY when recovery is actually
+          // gated. origin/main's own baseline (`healthFinalValid = true`
+          // once the strict parse itself succeeds, with no `.status`
+          // inspection) is what every disabled-dispatch caller must keep
+          // seeing byte-for-byte -- review 5 found a failed claim now
+          // changed disabled health from baseline `completed` to
+          // `failed-to-start`/`FINAL_INVALID`, a behavior change with
+          // recovery OFF that origin/main never had.
+          healthFinalValid = recoveryGated ? claims?.status === 'completed' : true;
         } catch { /* failed strict claims remain unverified candidate evidence */ }
       }
       // #2915: the attempt-terminal sibling validation, gating
@@ -787,19 +820,15 @@ async function captureOneWorker(owner, ctx) {
     result.healthEvidence = observer.evidence();
     // #2915 review 4 (finding 1): finalized HERE — after every
     // metadata-write attempt that has run so far (recordProcess() and the
-    // first exit.json publish, above), but BEFORE the last exit.json
-    // publish, so the field a write failure must gate is itself part of
-    // the persisted record, not written one write-attempt too late. A
-    // write failure discovered only in THIS LAST publish is a known,
-    // documented residual: `result.attemptOutcome` was already finalized
-    // by the time it could observe that specific failure. "Exit zero alone
-    // is insufficient": a clean process-level exit without a strictly-valid
-    // final, or with an earlier metadata-write failure, never reaches
-    // 'succeeded' — it downgrades to 'uncertain' (never fabricated as
-    // 'failed' either, since neither the process evidence nor a write
-    // failure shows a definite task failure). A process-level failure stays
-    // 'failed' regardless of final validity (a bad exit is bad regardless
-    // of what the final claims say).
+    // first exit.json publish, above), so the field a write failure must
+    // gate already reflects every failure observed up to this point. "Exit
+    // zero alone is insufficient": a clean process-level exit without a
+    // strictly-valid final, or with an earlier metadata-write failure,
+    // never reaches 'succeeded' — it downgrades to 'uncertain' (never
+    // fabricated as 'failed' either, since neither the process evidence nor
+    // a write failure shows a definite task failure). A process-level
+    // failure stays 'failed' regardless of final validity (a bad exit is
+    // bad regardless of what the final claims say).
     // #2915 review 4 (finding 7): only published when recovery is gated —
     // disabled dispatch must add no new field/behaviour versus origin/main.
     if (recoveryGated) {
@@ -808,7 +837,19 @@ async function captureOneWorker(owner, ctx) {
         : processLevelOutcome;
     }
     try { await publish('exit.json', result); }
-    catch { result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain'; }
+    catch {
+      result.termination = 'uncertain'; result.errorCode = 'METADATA_WRITE'; result.health.termination = 'uncertain';
+      // #2915 review 5 (finding 1b): the PRIOR round left this as a
+      // documented residual ("attemptOutcome was already finalized by the
+      // time it could observe this specific failure") -- review 5 correctly
+      // called that unsafe: a failure of THIS LAST exit.json publication
+      // still returned 'succeeded' and closed the breaker scope on an
+      // attempt whose own terminal record never durably landed. Downgrade
+      // here, exactly like every earlier metadata-write failure already
+      // downgrades above -- never upgrade a 'failed' outcome, only prevent
+      // an unconfirmed 'succeeded' from standing.
+      if (recoveryGated && result.attemptOutcome === 'succeeded') result.attemptOutcome = 'uncertain';
+    }
     await reportHealth();
     owner.emit('complete', result);
     resolveDone(result);
@@ -2743,6 +2784,29 @@ export function planDirectWorkerLaunch({
       throw error;
     }
     if (!result?.launched) { settleDirectWorker(admission, { kind: 'uncertain' }); return result; }
+    // #2915 review 5 (finding 2c, "leaked capacity"): a standalone
+    // successful launch previously transferred settlement responsibility
+    // entirely to the caller via this function's own documented contract
+    // ("a caller that wants to track completion can call
+    // settleDirectWorker itself") -- but a NON-canary admission's token has
+    // an `Infinity` deadline (only a canary gets the breaker's own bounded
+    // `canaryTimeoutMs`; see `ScopedFailureBreaker.admit`), so a caller
+    // that never settles leaks this reservation forever; the breaker's own
+    // sweep can never reclaim it. For the direct-child isolation modes
+    // (not `systemd-unit`, which has no simple exit event here), attach a
+    // bounded safety-net settlement tied to the actual child's own exit,
+    // so an unsettled admission is cleaned up once the process it gated
+    // has genuinely ended, regardless of whether the caller ever settles.
+    // `settleDirectWorker` is idempotent, so an explicit caller settlement
+    // with real evidence still wins if it happens first; this is purely a
+    // backstop against "forgot to settle", never a replacement for real
+    // evidence-based settlement, and it does not cover `systemd-unit` mode
+    // (no direct child to observe here) -- a caller using that mode must
+    // still settle explicitly.
+    if (result.child && typeof result.child.once === 'function') {
+      result.child.once('exit', () => settleDirectWorker(admission, { kind: 'uncertain' }));
+      result.child.once('error', () => settleDirectWorker(admission, { kind: 'uncertain' }));
+    }
     return { ...result, admission };
   })();
 }

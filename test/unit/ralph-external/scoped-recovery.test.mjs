@@ -49,6 +49,7 @@ import {
   stableTaskChainDigest,
   ALLOWANCE_EXHAUSTED_CODE,
   LEDGER_RECORD_INVALID_CODE,
+  publishWorkerRecord,
 } from '../../../tools/ralph-external/session-launcher.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
 
@@ -1212,6 +1213,54 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       breaker.destroy();
     }
   });
+
+  // #2915 review 5 (finding 2c, "leaked capacity"): a standalone successful
+  // launch (no borrowed admission -- the caller is responsible for its own
+  // settlement by this function's own documented contract) must not leak
+  // its reservation FOREVER when the caller never settles. A non-canary
+  // admission's token has an `Infinity` deadline (only a canary gets the
+  // breaker's bounded `canaryTimeoutMs`), so the breaker's own sweep can
+  // never reclaim it on its own -- proven here via the CANARY case, where
+  // a stuck reservation is directly observable: it would otherwise block
+  // every later admission for this scope, forever, with no caller ever
+  // calling `settleDirectWorker`.
+  it('a standalone successful launch settles itself once the real child exits, even though the caller never calls settleDirectWorker', async () => {
+    // An injected clock (never `vi.useFakeTimers()`, which would also fake
+    // the event loop timers the REAL spawned child's async exit depends
+    // on) -- the same `nowMs` pattern the canary-cycle tests above use.
+    let now = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    try {
+      for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      now += 120_000;
+      const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
+      // A real, fast-exiting child -- standalone, no `admission` borrowed,
+      // and the caller (this test) deliberately never calls
+      // `settleDirectWorker` on the returned admission.
+      const launch = await planDirectWorkerLaunch({
+        invocation, scopedBreaker: breaker, config: dispatchOnConfig, live: healthyLive,
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
+      });
+      expect(launch.launched).toBe(true);
+      expect(launch.admission).toBeDefined();
+      expect(launch.child).toBeDefined();
+      // Wait for the real child to actually exit.
+      await new Promise(resolve => launch.child.once('exit', resolve));
+      // Give the safety-net's own 'exit' listener a turn to run and settle.
+      await new Promise(resolve => setImmediate(resolve));
+      // The canary slot was freed by the safety net, not left stuck forever
+      // -- a fresh probe (and, if due, a new canary admission) must be
+      // reachable again. (The scope itself reopened on no confirmed
+      // success, as expected for an unconfirmed 'uncertain' settlement;
+      // what matters here is that it is NOT permanently wedged by a
+      // never-settled reservation.)
+      expect(breaker.getState(INSTALL).activeCanary).toBeNull();
+    } finally {
+      breaker.destroy();
+    }
+  });
 });
 
 describe('breaker restart semantics', () => {
@@ -1444,6 +1493,62 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     }
   }, 30_000);
 
+  // #2915 review 5 (finding 2a, "leaked capacity"): a capture-setup
+  // exception AFTER a child has already attached (post-spawn) must still
+  // settle the admission -- never leak it. Before this fix, the catch
+  // block in `launchOneWorker` only settled when `!outcome?.child` (proven
+  // pre-spawn); an exception reached after spawn left the breaker's
+  // reservation/canary slot outstanding forever, which — proven here via
+  // the real, production admit()/settle() wiring — permanently starved out
+  // every later attempt for the same scope.
+  it('a post-spawn capture-setup exception settles the admission instead of leaking it, never starving out later attempts', async () => {
+    const fx = await enoentFixtureRoot();
+    let now = 4_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    let attempt = 0;
+    const launchEnoent = async (drivers = fx.drivers) => {
+      attempt += 1;
+      return launcher.launchWorker({
+        invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `leak-run-${attempt}`),
+        inputs: { snapshot: fx.f.snapshot, drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      });
+    };
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const result = await launchEnoent();
+        expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      }
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      now += 121_000;
+      // The due canary attempt: a child attaches (spawn succeeds enough for
+      // Node to return a child object even though the binary is missing --
+      // the ENOENT surfaces asynchronously), but the capture pipeline
+      // itself throws synchronously BEFORE `captureOneWorker`'s own
+      // `finish()` closure is even wired, escaping its normal
+      // never-throws-just-resolves contract entirely.
+      const throwingDriver = { ...fx.drivers.codex, createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } };
+      await expect(launchEnoent({ codex: throwingDriver })).rejects.toThrow('synthetic capture-setup failure');
+      // Not leaked: the canary reservation was settled (uncertain), so the
+      // scope is still open with the normal doubled backoff, and -- the
+      // real proof -- the NEXT due attempt is still admitted as a fresh
+      // canary rather than being refused forever by a stuck, never-settled
+      // reservation.
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      now += breaker.getState(INSTALL).episodeCooldownMs;
+      const nextCanary = await launchEnoent();
+      expect(nextCanary).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   // #2915 final review step 5 (production closure): a genuinely successful
   // DEGRADED attempt (no systemd unit; `termination` can never reach
   // 'confirmed') must still close the scope through `launchWorker`'s real,
@@ -1533,6 +1638,100 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // Closure grants no blanket pass: it is NOT a replacement-permission
       // mechanism — a fresh, independent ENOENT failure can reopen the
       // scope again afterward through the exact same production path.
+      vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // #2915 review 5 (finding 1b, "false recovery"): the LAST exit.json
+  // publication is the one write-attempt the prior round left as a
+  // "documented residual" -- a genuinely successful attempt (clean direct-
+  // child exit, strict final validated) whose final metadata write still
+  // fails must downgrade to 'uncertain', never report 'succeeded' and close
+  // the breaker scope on a terminal record that never durably landed.
+  it('a failed LAST exit.json publication downgrades a genuine success to uncertain and never closes the scope', async () => {
+    const fx = await enoentFixtureRoot();
+    let now = 3_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    let attempt = 0;
+    const launchEnoent = async () => {
+      attempt += 1;
+      return launcher.launchWorker({
+        invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      });
+    };
+    const configPath = path.join(fx.root, 'lastwrite-config.json');
+    const recordPath = path.join(fx.root, 'lastwrite-record.json');
+    await writeFile(configPath, JSON.stringify({ scenario: 'success', recordPath }));
+    const realAdapter = fx.f.snapshot.registry.providers.codex.workerAdapter;
+    const realProfile = realAdapter.invocationProfiles['fixture-shell'];
+    realProfile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    const successDriver = {
+      qualification: fx.drivers.codex.qualification,
+      buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
+        '--model', input.selected.model, '--final-output', input.finalPath, '--', 'synthetic'],
+        stdin: 'closed', envNames: realProfile.envAllowlist }),
+      extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
+        return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
+      parseWorkerAttemptFinal: async (_output, options) => {
+        if (options?.observation?.attemptOutcome !== 'succeeded') throw new Error('attempt not succeeded');
+        return { status: 'completed' };
+      },
+    };
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const result = await launchEnoent();
+        expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      }
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      now += 121_000;
+      vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', configPath);
+      try {
+        attempt += 1;
+        const successRequest = { role: 'coding', task: 'implementation', group: 'workers',
+          brief: fx.brief, workdir: fx.cwd, final_output: path.join(fx.root, `lastwrite-final-${attempt}.json`) };
+        const successPlan = await resolveWorkerInvocation(fx.f.snapshot, successRequest, { codex: successDriver }, fx.f.request.now);
+        expect(successPlan.invocation).toBeDefined();
+        const successPlanPath = path.join(fx.root, `lastwrite-plan-${attempt}.json`);
+        await writeFile(successPlanPath, JSON.stringify(successPlan));
+        // Every publish succeeds EXCEPT the LAST `exit.json` write -- the
+        // first `exit.json` write (inside the `finally` right after
+        // `recordProcess()`, before `attemptOutcome` is even computed)
+        // still succeeds, so this isolates the exact residual review 5
+        // flagged: a write failure discovered ONLY in the final publish.
+        let exitJsonWrites = 0;
+        const canaryResult = await launcher.launchWorker({
+          invocationPath: successPlanPath, runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
+          inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
+          checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+          isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          publishRecord: async (runDir, name, value, inspect) => {
+            if (name === 'exit.json') {
+              exitJsonWrites += 1;
+              if (exitJsonWrites === 2) throw new Error('synthetic final exit.json publish failure');
+            }
+            return publishWorkerRecord(runDir, name, value, inspect);
+          },
+        });
+        expect(exitJsonWrites).toBe(2);
+        // Downgraded, never fabricated as a success.
+        expect(canaryResult.attemptOutcome).toBe('uncertain');
+        expect(canaryResult.termination).toBe('uncertain');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      // The scope must STAY OPEN: a success whose own terminal record never
+      // durably landed must never close it.
+      expect(breaker.getState(INSTALL).state).toBe('open');
       vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     } finally {
       resetDirectRecoveryBreaker();

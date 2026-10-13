@@ -643,10 +643,14 @@ async function defaultLaunchShellWorker(invocation, { memoryMaxGb = DEFAULT_MCP_
  * already resource-confined, already running with exactly its allowlisted
  * environment.
  */
-// #2915 review 4 (finding 9): matches the 10 MiB worker-output stream bound
-// (provider-adapter.mjs `WORKER_MAX_JSON_BYTES`-adjacent `streamLimit`) plus
-// headroom for one unterminated line — enforced BEFORE parsing, not after.
-const MCP_TRANSPORT_MAX_BUFFER_BYTES = 11 * 1024 * 1024;
+// #2915 review 4 (finding 9), review 5: matches the 10 MiB worker-output
+// stream bound exactly (provider-adapter.mjs `WORKER_MAX_JSON_BYTES`-adjacent
+// `streamLimit`) — enforced BEFORE parsing, not after. Review 5 found the
+// prior 11 MiB value let exactly 11 MiB through unbounded; there is no
+// headroom requirement here (unlike a line-oriented accumulator that must
+// tolerate one unterminated line past a known-good boundary) because this
+// buffer IS the thing being bounded, not a margin around it.
+const MCP_TRANSPORT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 export class ChildProcessTransport {
   constructor(child, { terminate = () => child.kill('SIGKILL') } = {}) {
@@ -684,6 +688,16 @@ export class ChildProcessTransport {
     // cap since a long-lived connection could otherwise grow it unbounded.
     this._rawResponses = new Map();
     this._buffer = undefined;
+    // #2915 review 5 (finding 1c): once the byte bound is exceeded this
+    // transport is PERMANENTLY refused, not merely for the one oversized
+    // chunk. The prior code only cleared `_buffer` and reported one error;
+    // a later, perfectly well-formed newline-terminated frame on the SAME
+    // connection still drained and parsed normally afterward, letting an
+    // attempt complete (and close a breaker scope) despite the earlier
+    // transport-bound violation. Every data event after overflow — and any
+    // residual bytes already in flight — now refuses, never silently
+    // resuming.
+    this._overflowed = false;
   }
 
   async start() {
@@ -691,6 +705,12 @@ export class ChildProcessTransport {
     this._messageSchema = JSONRPCMessageSchema;
     const child = this._child;
     child.stdout?.on('data', chunk => {
+      if (this._overflowed) {
+        // #2915 review 5 (finding 1c): already refused this connection;
+        // never resume parsing, no matter what arrives afterward.
+        this.onerror?.(new Error(`worker MCP transport already refused after exceeding the ${MCP_TRANSPORT_MAX_BUFFER_BYTES}-byte unterminated-frame bound`));
+        return;
+      }
       if (this._failure || this._closed) return;
       try {
         // Check each frame BEFORE concatenation or UTF-8 decoding.
@@ -715,6 +735,7 @@ export class ChildProcessTransport {
         // must refuse rather than growing `_buffer` without limit.
         if (this._buffer.length > MCP_TRANSPORT_MAX_BUFFER_BYTES) {
           this._buffer = undefined;
+          this._overflowed = true;
           this.onerror?.(new Error(`worker MCP transport exceeded the ${MCP_TRANSPORT_MAX_BUFFER_BYTES}-byte unterminated-frame bound`));
           return;
         }
@@ -1244,6 +1265,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     let admission;
     let recoveryModule;
     let recoverySettled = false;
+    // #2915 review 5 (finding 2b, "leaked capacity"): distinguishes PROVEN
+    // pre-spawn exceptions (nothing ever ran -- the registry run-slot must
+    // be released) from post-spawn uncertainty (a worker process/call
+    // genuinely started and may still be running -- the slot correctly
+    // stays live per M2). Set true only once a shell launch or MCP call is
+    // confirmed to have actually started (past every "never launched"/
+    // "blocked" refusal below), never merely attempted.
+    let spawnAttempted = false;
     const settleRecovery = (outcome) => {
       if (recoverySettled || !admission?.gated) return;
       recoverySettled = true;
@@ -1385,6 +1414,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       let observation;
       let rawOutput;
       if (invocation.transport === 'shell') {
+        // #2915 review 5 (finding 2b): set BEFORE calling, not after
+        // inspecting the result -- `launchShellWorkerImpl` itself may
+        // already have side effects (dispatch gate sampling, resource
+        // checks, or a genuine spawn) before it returns or throws, so a
+        // throw from WITHIN it can never be proven to be pre-spawn. From
+        // here on, any exception reaching the outer catch-all is post-spawn
+        // uncertainty.
+        spawnAttempted = true;
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
@@ -1437,35 +1474,50 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // worker claim — independent of `termination`/`descendants` above.
         // `termination === 'confirmed'` here already reflects THIS bridge's
         // own trusted observation (systemd-unit query, or this process's own
-        // `child.close` event), so a clean confirmed exit is a genuine
-        // success; anything else is either a definite bad exit (`failed`) or
-        // genuinely unresolved (`uncertain`) — failures record
-        // invocation-scoped (no `cli`/`inferenceProvider` evidence is
-        // available at this wait-status layer).
-        settleRecovery({
-          kind: outcome.termination === 'confirmed' ? (outcome.exitCode === 0 ? 'succeeded' : 'failed') : 'uncertain',
-          evidenceSource: outcome.termination === 'confirmed' && outcome.exitCode !== 0 ? 'launcher' : undefined,
-        });
+        // `child.close` event).
+        //
+        // #2915 review 5 (finding 1a, "false recovery"): a definite BAD exit
+        // is trustworthy failure evidence regardless of what happens
+        // downstream, so it settles immediately. A confirmed CLEAN exit
+        // (`exitCode === 0`) is only a CANDIDATE success -- settlement is
+        // deferred past strict final-claims validation, brief-evidence
+        // matching and the cancellation check below (common code, shared
+        // with the MCP branch), so a worker that exits 0 but never produces
+        // a valid, matching, uncancelled completed claim can never close a
+        // scope through this path. Uncertain termination never implicates
+        // anything either way.
         if (outcome.termination !== 'confirmed') {
+          settleRecovery({ kind: 'uncertain' });
           // M2: stays LIVE — capacity is held until a stop is proven or the
           // conductor disposes of it explicitly, never freed on a mere
           // unconfirmed-termination timeout.
           return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: ['worker termination could not be confirmed before the deadline'] });
         }
+        if (outcome.exitCode !== 0) {
+          settleRecovery({ kind: 'failed', evidenceSource: 'launcher' });
+        }
         await Promise.resolve().then(() => launch.cleanup?.()).catch(() => {
           console.error('[worker-invoke] stdin cleanup failed after confirmed termination');
         });
         if (!launch.launched) {
+          settleRecovery({ kind: 'uncertain' });
           mayHaveLaunched = false;
           return markTerminal({ control: null, status: 'failed', termination: 'confirmed',
             diagnostics: [launch.diagnostic ?? 'worker launch failed; termination confirmed'] });
         }
         if (outcome.timedOut || outcome.stopped) {
+          settleRecovery({ kind: registry.get(entry.invocationId)?.cancelRequested ? 'uncertain' : 'failed' });
           return registry.markTerminal(entry.invocationId, { control: null, termination: 'confirmed',
             status: registry.get(entry.invocationId)?.cancelRequested ? 'cancelled' : 'failed',
             diagnostics: [outcome.timedOut ? 'worker deadline exceeded; termination confirmed' : 'worker stopped; termination confirmed'] });
         }
         try { rawOutput = await readBoundedFile(invocation.finalPath, invocation.maxOutputBytes, root); } catch {
+          // #2915 review 5 (finding 1a): a confirmed clean exit that never
+          // produced a readable final output is not a success -- settle
+          // failed now rather than leaving it candidate-success forever
+          // (the bad-exit branch above already settled; this is a no-op
+          // there).
+          settleRecovery({ kind: 'failed' });
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker final output was not written'] });
         }
       } else {
@@ -1481,6 +1533,13 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // admission, so a queued launch can detect a registry edit that
         // happened while it was waiting (see `serverDefinitionDigest`).
         const qualifiedServerDigest = serverDefinitionDigest(mcpServer);
+        // #2915 review 5 (finding 2b): set BEFORE calling, not after
+        // inspecting `result.outcome` -- `callMcpWorkerImpl` itself may
+        // already have launched a real MCP server process and sent bytes
+        // before it returns or throws (#2892 F2's own "thrown MCP transport
+        // error stays LIVE" case is exactly this), so a throw from WITHIN
+        // it can never be proven to be pre-spawn.
+        spawnAttempted = true;
         mayHaveLaunched = true;
         const result = await callMcpWorkerImpl(invocation.mcp, mcpServer, {
           sessionIsolation: invocation.mcp.sessionIsolation, mcpRegistry, allowDegraded, config: snapshot.config,
@@ -1524,16 +1583,23 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         rawOutput = result.response;
         observation = { transport: 'mcp', status: result.response.isError ? 'failed' : 'completed', termination: 'confirmed', exitCode: result.response.isError ? 1 : null, isError: !!result.response.isError };
         // #2915 final (evidence contract): a transport-correlated response
-        // that is not `isError` is a SUCCESSFUL attempt even though
-        // `exitCode` is legitimately `null` for MCP (#2915 final review,
-        // finding 4: "successful responses produce exitCode:null... recorded
-        // one invocation failure and left the shared canary active" — the
-        // former exitCode-based classification treated every successful MCP
-        // response as a failure). Descendant-stop evidence is a separate,
-        // independent fact this bridge never claims here.
-        settleRecovery({ kind: result.response.isError ? 'failed' : 'succeeded',
-          evidenceSource: result.response.isError ? 'launcher' : undefined });
+        // that is not `isError` is a CANDIDATE successful attempt even
+        // though `exitCode` is legitimately `null` for MCP (#2915 final
+        // review, finding 4: "successful responses produce exitCode:null...
+        // recorded one invocation failure and left the shared canary
+        // active" — the former exitCode-based classification treated every
+        // successful MCP response as a failure). Descendant-stop evidence is
+        // a separate, independent fact this bridge never claims here.
+        //
+        // #2915 review 5 (finding 1a): an `isError` response IS trustworthy
+        // failure evidence and settles immediately, exactly like a
+        // confirmed bad exit above. A non-error response is only a
+        // CANDIDATE -- settlement is deferred to the common code below,
+        // past strict final-claims validation, brief-evidence matching and
+        // the cancellation check, so a transport-correlated response alone
+        // can never close a scope.
         if (result.response.isError) {
+          settleRecovery({ kind: 'failed', evidenceSource: 'launcher' });
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }
       }
@@ -1544,6 +1610,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           format: invocation.transport === 'shell' ? 'jsonl' : 'mcp', observation, maxOutputBytes: invocation.maxOutputBytes,
         });
       } catch (error) {
+        // #2915 review 5 (finding 1a): the strict parse itself rejected the
+        // claims -- the candidate success from above is settled failed
+        // here, never left to default to an earlier premature success.
+        settleRecovery({ kind: 'failed' });
         // M5: bounded, fixed-vocabulary diagnostic only — never the raw
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
@@ -1553,9 +1623,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
         briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });
       if (assembled?.conflict) {
-        // M5: the brief changed between launch and result assembly — never
-        // silently assemble a result against a different brief than the one
-        // the worker was actually launched against.
+        // #2915 review 5 (finding 1a): the brief changed between launch and
+        // result assembly -- a candidate success settles failed here, never
+        // silently assembled (or recorded recovered) against a different
+        // brief than the one the worker was actually launched against.
+        settleRecovery({ kind: 'failed' });
         return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['OG_BRIEF_EVIDENCE_CONFLICT'] });
       }
       // M2: a cancel requested at ANY point during this run's lifetime —
@@ -1563,8 +1635,18 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // this result is never trusted as `completed`, regardless of what the
       // worker itself claims.
       const liveEntry = registry.get(entry.invocationId);
+      const cancelled = !!liveEntry?.cancelRequested;
+      const strictlyCompleted = claims.status === 'completed';
+      // #2915 review 5 (finding 1a): this is the ONE place a candidate
+      // success (deferred above) is finally settled -- only after strict
+      // completed claims, matching brief evidence (no conflict, checked
+      // above) and the cancellation check all agree. A cancelled run never
+      // settles 'succeeded' even with valid claims (the operator asked to
+      // stop it); an invalid/non-completed claim settles 'failed', exactly
+      // like every other claim-rejection path above.
+      settleRecovery({ kind: cancelled ? 'uncertain' : strictlyCompleted ? 'succeeded' : 'failed' });
       return registry.markTerminal(entry.invocationId, {
-        status: liveEntry?.cancelRequested ? 'cancelled' : (claims.status === 'completed' ? 'completed' : 'failed'),
+        status: cancelled ? 'cancelled' : (strictlyCompleted ? 'completed' : 'failed'),
         termination: 'confirmed',
         result: assembled?.result ?? { claims },
       });
@@ -1572,7 +1654,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // Settle recovery separately from the registry's retained live run slot.
       settleRecovery({ kind: 'uncertain' });
       if (error.workerNotLaunched) mayHaveLaunched = false;
-      if (!mayHaveLaunched) {
+      if (!spawnAttempted || !mayHaveLaunched) {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
       }
       if (registry.get(entry.invocationId)?.termination === 'confirmed') {

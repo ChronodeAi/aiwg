@@ -374,6 +374,10 @@ describe('production registration path pins the served root at registration time
       // against the stubbed `process.cwd()` (what a lazy resolution at first
       // request would have used) — resolution proceeds all the way to the
       // injected stop point instead of failing on path containment.
+      //
+      // #2915 review 5 (finding 2b): `loadWorkerInputs` throwing here is a
+      // PROVEN pre-spawn failure -- nothing launched, so capacity is freed
+      // (`blocked`), never left LIVE as `uncertain` forever.
       expect(body.status).toBe('blocked');
       expect(body.termination).toBe('confirmed');
       expect(body.diagnostics).toContain('stop-before-real-project-load');
@@ -633,6 +637,42 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(true);
   });
 
+  // #2915 review 5 (finding 2b, "leaked capacity"): an exception from
+  // ANYWHERE before a shell launch or MCP call is actually attempted --
+  // not merely from the admission path above -- is equally a PROVEN
+  // pre-spawn failure. The outer catch-all previously used `update`
+  // (stays-LIVE) unconditionally for every exception reaching it, which
+  // left `canStart(): false` forever for a request that never launched
+  // anything.
+  it('a pre-spawn exception before any launch attempt frees capacity through the generic catch-all, never staying LIVE forever', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work,
+      // Throws well before admission or any launch attempt -- the data
+      // this run() needs is never even loaded.
+      loadWorkerInputs: async () => { throw new Error('synthetic: pre-admission data load failure'); },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'p2b-prespawn-throw', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.termination).toBe('confirmed');
+    // Capacity was FREED, not leaked as a live "uncertain" slot forever.
+    expect(registry.canStart()).toBe(true);
+  });
+
   // #2915 final (step 6, disabled-dispatch-is-inert): with
   // `parallelism.worker_dispatch` off (or absent), `admitDirectWorker` must
   // be completely inert — byte-for-byte what dispatch looked like before
@@ -697,12 +737,20 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(true); // no capacity was ever reserved
   });
 
-  // #2915 review 4 (finding 9): the transport byte bound must be enforced
-  // BEFORE parsing -- an unterminated frame past the bound must refuse,
-  // never grow the buffer without limit.
-  it('ChildProcessTransport refuses an unterminated frame past the MCP transport byte bound', async () => {
+  // #2915 review 4 (finding 9), review 5 (finding 1c): the transport byte
+  // bound must be enforced BEFORE parsing -- an unterminated frame past the
+  // bound must refuse, never grow the buffer without limit -- AND the
+  // design's literal 10 MiB value, not merely "some bound". Review 5 found
+  // the prior bound was 11 MiB (one full MiB unbounded) and that overflow
+  // was not terminal: a later well-formed frame on the same connection still
+  // drained and reached `onmessage` normally.
+  it('ChildProcessTransport refuses an unterminated frame past the MCP transport byte bound, at the literal 10 MiB design value, terminally', async () => {
     const { __testOnlyChildProcessTransport: ChildProcessTransport, __testOnlyMcpTransportMaxBufferBytes: maxBytes } =
       await import('../../../src/mcp/tools/worker-invoke.mjs');
+    // The design value is 10 MiB exactly -- not "whatever the constant
+    // currently says". A regression back to 11 MiB (or any other value)
+    // must fail this assertion, not just whatever `maxBytes` happens to be.
+    expect(maxBytes).toBe(10 * 1024 * 1024);
     const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
     const fakeChild: any = {
       stdout: new EventEmitter(), stderr: fakeStderr, stdin: new EventEmitter(),
@@ -710,13 +758,23 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     };
     const transport = new (ChildProcessTransport as any)(fakeChild);
     const errors: Error[] = [];
+    const messages: any[] = [];
     transport.onerror = (error: Error) => errors.push(error);
+    transport.onmessage = (message: any) => messages.push(message);
     await transport.start();
     // One unterminated chunk already past the bound -- never newline-framed.
     fakeChild.stdout.emit('data', Buffer.alloc(maxBytes + 1, 0x41));
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toMatch(/bound/);
     expect(transport._buffer).toBeUndefined(); // never retained past the bound
+    // Terminal, not transient: a SUBSEQUENT, perfectly well-formed
+    // newline-terminated JSON-RPC response arriving on the SAME connection
+    // must never reach `onmessage` -- the overflow refusal must outlive the
+    // one oversized chunk, closing off this transport for good rather than
+    // silently resuming on the next clean frame.
+    fakeChild.stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })}\n`));
+    expect(messages).toHaveLength(0);
+    expect(errors.length).toBeGreaterThan(1);
   });
 
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
