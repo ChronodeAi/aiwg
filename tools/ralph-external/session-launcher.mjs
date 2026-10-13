@@ -2548,6 +2548,67 @@ function retireInProcessChainIfEmpty(_taskChainDigest) {
   // Intentionally does nothing -- see doc comment above.
 }
 
+// #2915 round 8 review 8 (C5, "ledger handles do not enforce creator-only
+// mutation authority"): the REAL mutable state (`state`, `debited`,
+// `correction`, `correctionChargeDiagnostic`, `correctionRefundDiagnostic`)
+// for every ledger handle lives here, keyed by the EXACT handle object
+// `reserveDirectWorkerAllowance`/`reserveLedgerCorrection` minted -- never
+// as a caller-writable own-property on the handle itself. A `{...handle}`
+// shallow copy is a DIFFERENT object with no entry here: debit/refund/
+// correction-reserve on it refuse outright ("unknown handle"), regardless
+// of whatever snapshot values the copy's own properties happen to carry.
+const _ledgerHandleState = new WeakMap();
+
+/** Build one opaque, creator-bound ledger handle. The identity fields
+ * (`mode`/`captureRoot`/`taskChainDigest`/`invocationId`/`kind`/`n`/`dir`/
+ * `maxAttempts`) are plain, non-writable, non-configurable OWN properties
+ * -- they never change after creation, so exposing them directly is safe.
+ * `state`/`debited`/`correction`/`correctionChargeDiagnostic`/
+ * `correctionRefundDiagnostic` are READ-ONLY getters delegating to the
+ * private state record below; there is no setter, so `ledger.state = ...`
+ * from outside this module throws (strict ESM) rather than silently
+ * mutating a copy of the truth. The handle itself is frozen on top of
+ * that for full encapsulation (no new properties, no redefinition). */
+function _createLedgerHandle(identity) {
+  const state = { state: 'reserved', debited: false, correction: null,
+    correctionChargeDiagnostic: null, correctionRefundDiagnostic: null };
+  const handle = Object.defineProperties({}, {
+    mode: { value: identity.mode, enumerable: true },
+    captureRoot: { value: identity.captureRoot, enumerable: true },
+    taskChainDigest: { value: identity.taskChainDigest, enumerable: true },
+    invocationId: { value: identity.invocationId, enumerable: true },
+    kind: { value: identity.kind, enumerable: true },
+    n: { value: identity.n, enumerable: true },
+    dir: { value: identity.dir, enumerable: true },
+    maxAttempts: { value: identity.maxAttempts, enumerable: true },
+    state: { get() { return state.state; }, enumerable: true },
+    debited: { get() { return state.debited; }, enumerable: true },
+    correction: { get() { return state.correction; }, enumerable: true },
+    correctionChargeDiagnostic: { get() { return state.correctionChargeDiagnostic; }, enumerable: true },
+    correctionRefundDiagnostic: { get() { return state.correctionRefundDiagnostic; }, enumerable: true },
+  });
+  Object.freeze(handle);
+  _ledgerHandleState.set(handle, state);
+  return handle;
+}
+
+/** Look up the private mutable state for a handle `reserveDirectWorkerAllowance`/
+ * `reserveLedgerCorrection` actually minted. `null`/`undefined` (the
+ * documented "no ledger in effect" case every caller already checks for
+ * before calling debit/refund) pass through untouched by every caller of
+ * THIS function -- they check that first. Anything else that is not a
+ * recognized handle (a copy, a fabrication, a value from a different
+ * process boundary) refuses outright rather than silently treating it as
+ * a fresh or already-settled handle. */
+function _requireLedgerHandleState(handle) {
+  const state = _ledgerHandleState.get(handle);
+  if (!state) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE,
+      'Allowance ledger handle is not a value this module minted (a copy, fabrication or unknown handle is refused, never silently accepted)');
+  }
+  return state;
+}
+
 /**
  * D1.1-D1.4: reserves one allowance slot for `invocationId` against
  * `taskChainDigest`. With `captureRoot`, this is the real, cross-process
@@ -2557,12 +2618,16 @@ function retireInProcessChainIfEmpty(_taskChainDigest) {
  * the SAME digest refuses (`ALLOWANCE_POLICY_MISMATCH_CODE`), never widens
  * or narrows the budget already in effect.
  *
- * Returns a handle -- `{ mode, captureRoot, taskChainDigest, invocationId,
- * kind: 'attempt', n, dir, state, debited, correction }` -- that is the
- * ONLY thing authorized to debit or refund this slot (D1.5): `debited`
- * starts `false`; `state` starts `'reserved'`. Pass this handle, and only
- * this handle, to `debitDirectWorkerAllowance`/`refundDirectWorkerAllowance`/
- * `reserveLedgerCorrection`.
+ * Returns an OPAQUE handle -- readable fields `mode`, `captureRoot`,
+ * `taskChainDigest`, `invocationId`, `kind: 'attempt'`, `n`, `dir`,
+ * `maxAttempts`, `state`, `debited`, `correction` -- that is the ONLY
+ * thing authorized to debit or refund this slot (D1.5): `debited` starts
+ * `false`; `state` starts `'reserved'`. Pass this handle, and only this
+ * EXACT handle (#2915 round 8 review 8, C5: never a copy of it), to
+ * `debitDirectWorkerAllowance`/`refundDirectWorkerAllowance`/
+ * `reserveLedgerCorrection` -- its mutable fields are read-only from
+ * outside this module; only this module's own functions, looking up the
+ * handle's identity in a private map, can ever change them.
  */
 export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId, maxAttempts,
   // Test-only passthrough to the bounded rescan between the two scan passes
@@ -2589,8 +2654,8 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
     const chain = inProcessChain(taskChainDigest, maxAttempts);
     const n = reserveLedgerSlotInProcess(chain.attempts, chain.maxAttempts, invocationId);
     if (n == null) ledgerFail(ALLOWANCE_EXHAUSTED_CODE, `Task-chain allowance exhausted (${chain.maxAttempts} attempt(s), in-process ledger)`);
-    return { mode: 'in-process', captureRoot: null, taskChainDigest, invocationId, kind: 'attempt', n,
-      dir: null, maxAttempts: chain.maxAttempts, state: 'reserved', debited: false, correction: null };
+    return _createLedgerHandle({ mode: 'in-process', captureRoot: null, taskChainDigest, invocationId, kind: 'attempt', n,
+      dir: null, maxAttempts: chain.maxAttempts });
   }
   const { dir, policy } = await ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, afterPolicyWrite });
   const n = await reserveLedgerSlotFile(dir, 'attempt', policy.maxAttempts, invocationId, { beforeRescan: rescan });
@@ -2598,8 +2663,8 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
     const occupied = await describeOccupiedLedgerSlots(dir, 'attempt', policy.maxAttempts);
     ledgerFail(ALLOWANCE_EXHAUSTED_CODE, `Task-chain allowance exhausted (${policy.maxAttempts} attempt(s)); occupied: ${occupied}`);
   }
-  return { mode: 'file', captureRoot, taskChainDigest, invocationId, kind: 'attempt', n,
-    dir, maxAttempts: policy.maxAttempts, state: 'reserved', debited: false, correction: null };
+  return _createLedgerHandle({ mode: 'file', captureRoot, taskChainDigest, invocationId, kind: 'attempt', n,
+    dir, maxAttempts: policy.maxAttempts });
 }
 
 /**
@@ -2620,35 +2685,48 @@ export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDiges
  *
  * When this handle has a bound correction (`reserveLedgerCorrection`
  * reserved one against it), that correction is charged too, immediately
- * after -- best-effort: a correction-charge failure is recorded on
- * `ledger.correctionChargeDiagnostic` and never fails or unwinds the
- * attempt's own already-committed charge, which is what actually governs
- * dispatch.
+ * after -- best-effort: a correction-charge failure is recorded on the
+ * handle's private state (surfaced through `correctionChargeDiagnostic`,
+ * and from there into `settleDirectWorker`'s own returned diagnostic) and
+ * never fails or unwinds the attempt's own already-committed charge, which
+ * is what actually governs dispatch.
+ *
+ * #2915 round 8 review 8 (C5): `ledger` must be a handle THIS module
+ * minted -- looked up by its own identity in a private map, never trusted
+ * for its own field values. A copy, fabrication or unknown handle refuses
+ * outright (never silently treated as fresh or already-settled).
  */
 export async function debitDirectWorkerAllowance(ledger) {
   if (!ledger) return;
-  if (ledger.state === 'charged') return;
-  if (ledger.state !== 'reserved') {
-    ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger handle cannot be debited from state '${ledger.state}'`);
+  const state = _requireLedgerHandleState(ledger);
+  if (state.state === 'charged') return;
+  if (state.state !== 'reserved') {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger handle cannot be debited from state '${state.state}'`);
   }
-  ledger.state = 'debiting';
+  state.state = 'debiting';
   try {
     if (ledger.mode === 'file') await chargeLedgerSlotFile(ledger.dir, ledger.kind, ledger.n, ledger.invocationId);
     else {
       const chain = _inProcessLedgerChains.get(ledger.taskChainDigest);
       const map = chain && (ledger.kind === 'attempt' ? chain.attempts : chain.corrections);
       const slot = map && map.get(ledger.n);
-      if (slot) slot.charged = true;
+      // #2915 round 8 review 8 (C5): "in in-process mode a missing slot is
+      // an error, never a silent success" -- a handle whose backing
+      // in-process slot has vanished (the chain was torn down, or this is
+      // somehow a foreign slot number) must fail the debit loudly.
+      if (!slot) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'In-process allowance ledger slot for this handle is missing; cannot debit');
+      slot.charged = true;
     }
   } catch (error) {
-    ledger.state = 'debit-failed';
+    state.state = 'debit-failed';
     throw error;
   }
-  ledger.state = 'charged';
-  ledger.debited = true;
-  if (ledger.correction && ledger.correction.state === 'reserved') {
-    try { await debitDirectWorkerAllowance(ledger.correction); }
-    catch (error) { ledger.correctionChargeDiagnostic = `correction charge failed: ${error?.message ?? String(error)}`; }
+  state.state = 'charged';
+  state.debited = true;
+  const correctionState = state.correction && _ledgerHandleState.get(state.correction);
+  if (correctionState && correctionState.state === 'reserved') {
+    try { await debitDirectWorkerAllowance(state.correction); }
+    catch (error) { state.correctionChargeDiagnostic = `correction charge failed: ${error?.message ?? String(error)}`; }
   }
 }
 
@@ -2662,13 +2740,18 @@ export async function debitDirectWorkerAllowance(ledger) {
  * two operations serialize on one handle without any lock.
  *
  * A bound correction that is still `reserved` is refunded too, the same
- * best-effort way debit charges it (`ledger.correctionRefundDiagnostic` on
+ * best-effort way debit charges it (`correctionRefundDiagnostic`, surfaced
+ * from there into `settleDirectWorker`'s own returned diagnostic, on
  * failure, never failing the attempt's own refund).
+ *
+ * #2915 round 8 review 8 (C5): same creator-only lookup as `debitDirectWorkerAllowance`
+ * -- a copy, fabrication or unknown handle refuses outright.
  */
 export async function refundDirectWorkerAllowance(ledger) {
   if (!ledger) return;
-  if (ledger.state !== 'reserved') return;
-  ledger.state = 'refunding';
+  const state = _requireLedgerHandleState(ledger);
+  if (state.state !== 'reserved') return;
+  state.state = 'refunding';
   try {
     if (ledger.mode === 'file') await refundLedgerSlotFile(ledger.dir, ledger.kind, ledger.n);
     else {
@@ -2679,13 +2762,14 @@ export async function refundDirectWorkerAllowance(ledger) {
       }
     }
   } catch (error) {
-    ledger.state = 'refund-failed';
+    state.state = 'refund-failed';
     throw error;
   }
-  ledger.state = 'refunded';
-  if (ledger.correction && ledger.correction.state === 'reserved') {
-    try { await refundDirectWorkerAllowance(ledger.correction); }
-    catch (error) { ledger.correctionRefundDiagnostic = `correction refund failed: ${error?.message ?? String(error)}`; }
+  state.state = 'refunded';
+  const correctionState = state.correction && _ledgerHandleState.get(state.correction);
+  if (correctionState && correctionState.state === 'reserved') {
+    try { await refundDirectWorkerAllowance(state.correction); }
+    catch (error) { state.correctionRefundDiagnostic = `correction refund failed: ${error?.message ?? String(error)}`; }
   }
 }
 
@@ -2713,10 +2797,34 @@ export async function refundDirectWorkerAllowance(ledger) {
  * SAME chain directory in the gap between an attempt being reserved and its
  * correction being reserved, and "validated moments earlier" is not
  * sufficient once that is possible.
+ *
+ * #2915 round 8 review 8 (C9, "correction acquisition can finish after its
+ * attempt's terminal transition"): the attempt handle's eligibility is
+ * checked HERE, before any of this function's own (possibly awaited) work
+ * begins, AND AGAIN immediately before the correction is actually bound --
+ * closing the race where `debitDirectWorkerAllowance`/
+ * `refundDirectWorkerAllowance` (whose own state transition is always
+ * synchronous) ran to completion on the SAME handle while this call was
+ * paused on its own `await`. A parent that has started refunding, or has
+ * refunded, by either checkpoint is never bound to -- a correction slot
+ * this call already reserved in that window is refunded again immediately
+ * (never left stranded, uncharged and parentless) and the refusal reports
+ * why.
  */
-export async function reserveLedgerCorrection({ ledger, reasonCode } = {}) {
+const _LEDGER_CORRECTION_INELIGIBLE_STATES = new Set(['refunding', 'refunded', 'refund-failed']);
+export async function reserveLedgerCorrection({ ledger, reasonCode,
+  // Test-only: awaited immediately after the correction slot is reserved
+  // but BEFORE the re-check/bind below -- production never passes this.
+  // Lets a test deterministically interleave a concurrent debit/refund of
+  // the PARENT attempt handle into exactly the window the re-check exists
+  // to close, instead of depending on real scheduling to land there.
+  afterCorrectionReserved } = {}) {
   if (!ledger) return { ok: false, reason: 'No task chain to correct' };
-  if (ledger.correction) return startupCorrectionGate({ correctionsUsed: MAX_STARTUP_CORRECTIONS, reasonCode });
+  const state = _requireLedgerHandleState(ledger);
+  if (_LEDGER_CORRECTION_INELIGIBLE_STATES.has(state.state)) {
+    return { ok: false, reason: `Startup correction refused: attempt reservation is '${state.state}'` };
+  }
+  if (state.correction) return startupCorrectionGate({ correctionsUsed: MAX_STARTUP_CORRECTIONS, reasonCode });
   const gateCheck = startupCorrectionGate({ correctionsUsed: 0, reasonCode });
   if (!gateCheck.ok) return gateCheck;
   const ceiling = MAX_STARTUP_CORRECTIONS;
@@ -2729,9 +2837,24 @@ export async function reserveLedgerCorrection({ ledger, reasonCode } = {}) {
     n = await reserveLedgerSlotFile(ledger.dir, 'correction', ceiling, ledger.invocationId);
   }
   if (n == null) return startupCorrectionGate({ correctionsUsed: ceiling, reasonCode });
-  ledger.correction = { mode: ledger.mode, captureRoot: ledger.captureRoot, taskChainDigest: ledger.taskChainDigest,
-    invocationId: ledger.invocationId, kind: 'correction', n, dir: ledger.dir, maxAttempts: ledger.maxAttempts,
-    state: 'reserved', debited: false, correction: null };
+  if (afterCorrectionReserved) await afterCorrectionReserved();
+  const correctionHandle = _createLedgerHandle({ mode: ledger.mode, captureRoot: ledger.captureRoot,
+    taskChainDigest: ledger.taskChainDigest, invocationId: ledger.invocationId, kind: 'correction', n,
+    dir: ledger.dir, maxAttempts: ledger.maxAttempts });
+  // Re-check immediately before binding (see doc comment above): the
+  // attempt-eligibility work above (`validateLedgerChainDirectory`/
+  // `reserveLedgerSlotFile`, both async) is exactly the window the review
+  // probe paused in. `state.correction` is also re-checked -- a second
+  // concurrent `reserveLedgerCorrection` call could have bound one first.
+  if (_LEDGER_CORRECTION_INELIGIBLE_STATES.has(state.state) || state.correction) {
+    const reason = state.correction
+      ? 'Startup correction refused: another correction was already bound while this one was being reserved'
+      : `Startup correction refused: attempt reservation became '${state.state}' while this correction was being reserved`;
+    try { await refundDirectWorkerAllowance(correctionHandle); }
+    catch { /* best-effort: the slot is at worst a stranded-uncharged entry releaseLedgerSlot can still free */ }
+    return { ok: false, reason };
+  }
+  state.correction = correctionHandle;
   return { ok: true, correctionsRemaining: ceiling - n };
 }
 
@@ -3321,6 +3444,16 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
   // concludes).
   const refund = admission?.ledger
     ? refundDirectWorkerAllowance(admission.ledger).then(() => null, (error) => `allowance refund failed: ${error?.message ?? String(error)}`)
+      // #2915 round 8 review 8 (C9): a correction's own charge/refund
+      // failure was previously visible ONLY by inspecting the handle's own
+      // `correctionChargeDiagnostic`/`correctionRefundDiagnostic` fields --
+      // nothing read them. Fold them into the SAME settlement diagnostic
+      // `launchOneWorker`/`planDirectWorkerLaunch` already thread onto the
+      // thrown error or returned result as `ledgerDiagnostics`.
+      .then((diagnostic) => {
+        const correctionDiagnostics = [admission.ledger.correctionChargeDiagnostic, admission.ledger.correctionRefundDiagnostic].filter(Boolean);
+        return correctionDiagnostics.length ? [diagnostic, ...correctionDiagnostics].filter(Boolean).join('; ') : diagnostic;
+      })
     : Promise.resolve(null);
   if (!admission?.gated || !admission.token) return refund;
   // #2915 round 8: callers that construct and consume the D2 dispatch-commit

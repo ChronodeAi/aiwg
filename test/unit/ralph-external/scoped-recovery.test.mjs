@@ -4150,6 +4150,109 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     }
   });
 
+  // #2915 round 8 review 8 (C5, "ledger handles do not enforce
+  // creator-only mutation authority"): the review's own probe -- reserve
+  // an in-process one-attempt chain, shallow-copy its handle, debit the
+  // ORIGINAL, refund the COPY, then reserve again. Before this fix, the
+  // copy's own `state: 'reserved'` snapshot (captured before the debit)
+  // let the refund proceed and unlink the already-committed charge,
+  // regranting it to a second reservation.
+  it('a shallow copy of a ledger handle cannot refund a committed charge or regrant its slot', async () => {
+    try {
+      const taskChainDigest = 'opaque-handle-copy-chain';
+      const ledger = await reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-1', maxAttempts: 1 });
+      const copy = { ...ledger }; // fresh object; own properties snapshot the getters' CURRENT values
+      await debitDirectWorkerAllowance(ledger);
+      expect(ledger.state).toBe('charged');
+      // The copy is not a handle this module minted -- refund on it refuses
+      // outright, never silently treating it as a fresh or stale handle.
+      await expect(refundDirectWorkerAllowance(copy)).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      // Debit on the copy refuses identically.
+      await expect(debitDirectWorkerAllowance(copy)).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      // The committed charge survives: a second reservation for the SAME
+      // (one-attempt) chain is still exhausted, never regranted.
+      await expect(reserveDirectWorkerAllowance({ taskChainDigest, invocationId: 'inv-2', maxAttempts: 1 }))
+        .rejects.toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+    } finally {
+      resetInProcessAllowanceLedger();
+    }
+  });
+
+  it('a fabricated ledger-shaped object is refused by debit and refund, never silently accepted', async () => {
+    const fabricated = { mode: 'in-process', captureRoot: null, taskChainDigest: 'fabricated-chain',
+      invocationId: 'fab-1', kind: 'attempt', n: 1, dir: null, maxAttempts: 1, state: 'reserved', debited: false, correction: null };
+    await expect(debitDirectWorkerAllowance(fabricated)).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+    await expect(refundDirectWorkerAllowance(fabricated)).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+    await expect(reserveLedgerCorrection({ ledger: fabricated, reasonCode: 'STDIN_WAIT' })).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+  });
+
+  it('ledger handle mutable fields cannot be reassigned from outside this module (frozen, getter-only)', async () => {
+    try {
+      const ledger = await reserveDirectWorkerAllowance({ taskChainDigest: 'frozen-handle-chain', invocationId: 'inv-1', maxAttempts: 1 });
+      expect(() => { ledger.state = 'charged'; }).toThrow(TypeError);
+      expect(() => { ledger.correction = {}; }).toThrow(TypeError);
+      expect(() => { ledger.n = 999; }).toThrow(TypeError); // identity fields too
+      expect(ledger.state).toBe('reserved'); // unchanged
+    } finally {
+      resetInProcessAllowanceLedger();
+    }
+  });
+
+  // #2915 round 8 review 8 (C9, "correction acquisition can finish after
+  // its attempt's terminal transition"): the review's own probe -- pause
+  // correction creation after its slot is reserved, refund the attempt,
+  // then resume. The re-check before binding must catch the now-refunded
+  // parent, refund the just-reserved correction slot back out immediately
+  // (never stranding it, uncharged, on a refunded attempt) and refuse.
+  it('a correction reservation that resolves after its attempt refunds is refused and leaves no stranded slot', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-correction-after-refund-'));
+    try {
+      const taskChainDigest = 'correction-after-refund-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'corr-race-inv', maxAttempts: 1 });
+      const gate = await reserveLedgerCorrection({
+        ledger, reasonCode: 'STDIN_WAIT',
+        afterCorrectionReserved: () => refundDirectWorkerAllowance(ledger),
+      });
+      expect(gate.ok).toBe(false);
+      expect(gate.reason).toMatch(/became 'refunded'/);
+      expect(ledger.correction).toBeNull(); // never bound to the refunded attempt
+      // No stranded correction slot: the operator release reports it as
+      // never reserved (it was reserved then refunded again by the
+      // re-check itself), and the chain's attempt slot is genuinely free.
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir))[0]);
+      await expect(lstat(path.join(chainDir, 'correction-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+      const fresh = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'corr-race-inv-2', maxAttempts: 1 });
+      expect(fresh.n).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a correction already acquired participates in its attempt\'s final debit/refund, and failures surface in settlement diagnostics', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-correction-diagnostics-'));
+    try {
+      const taskChainDigest = 'correction-diagnostics-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'corr-diag-inv', maxAttempts: 1 });
+      const gate = await reserveLedgerCorrection({ ledger, reasonCode: 'STDIN_WAIT' });
+      expect(gate.ok).toBe(true);
+      // Make the correction's OWN charge fail, without touching the
+      // attempt's slot at all: pre-create its `.charged` marker so
+      // `chargeLedgerSlotFile`'s exclusive-create integrity check refuses.
+      const ledgerDir = path.join(root, 'ledger');
+      const chainDir = path.join(ledgerDir, (await readdir(ledgerDir))[0]);
+      await writeFile(path.join(chainDir, 'correction-1.charged'), 'already-there', { mode: 0o600 });
+      await debitDirectWorkerAllowance(ledger); // the ATTEMPT's own charge still succeeds
+      expect(ledger.state).toBe('charged');
+      expect(ledger.correctionChargeDiagnostic).toMatch(/correction charge failed/);
+      // Surfaced into settlement diagnostics, not only the handle's own field.
+      const diagnostic = await settleDirectWorker({ gated: false, ledger }, { kind: 'uncertain', confirmedStop: true });
+      expect(diagnostic).toMatch(/correction charge failed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   // #2915 round 8 (D1.4): "existence is occupancy" holds for a crashed,
   // empty slot exactly as it does for a healthy one -- it is never free,
   // never a reason to refuse the rest of the chain.
