@@ -611,6 +611,10 @@ function describeGateFailures(failures) {
   return `worker dispatch gate blocked: ${failures.map(f => `${f.signal} (${f.reason})`).join('; ')}`;
 }
 
+// Audited observer; refresh the historical baseline graph after rebase.
+const waitForUnitTerminationBaseline = waitForUnitTermination;
+export { waitForUnitTerminationBaseline as __testOnlyWaitForUnitTerminationBaseline };
+
 // Recovery-disabled dispatch uses the audited preparation path and direct
 // gate/isolation primitives, without entering the current planner's admission.
 // The historical baseline pin/fixture graph must be refreshed after rebase.
@@ -1043,87 +1047,40 @@ function canonicalSchemaDigest(schema) {
   return `sha256:${createHash('sha256').update(JSON.stringify(canonical(schema))).digest('hex')}`;
 }
 
-async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
+/** #2915 round 8 (D6): literal reimplementation of a4085b86a's own
+ * `defaultCallMcpWorker` — no admission, no absolute deadline, no
+ * transport byte bound, no requalification try/catch (a thrown/rejected
+ * `mcpRegistry.get` propagates exactly as it always did on origin/main,
+ * reaching this bridge's own outer catch-all and settling the SAME
+ * `uncertain`/`uncertain` every other non-gated exception gets — never the
+ * fail-closed `blocked` conversion the gated implementation below applies).
+ * Calls `defaultLaunchMcpWorkerProcessBaseline`, never the admission-aware
+ * `defaultLaunchMcpWorkerProcess`.
+ *
+ * ===========================================================================
+ * FROZEN TO a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main). Do not
+ * modify this function to "fix" or "improve" anything — see
+ * `continueBaseline`'s doc comment below for the re-pinning procedure.
+ * ===========================================================================
+ */
+async function defaultCallMcpWorkerBaseline(mcpBinding, server, options = {}) {
   const {
     sessionIsolation, mcpRegistry, allowDegraded = false, config, name = 'mcp-worker', registerControl,
-    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd, admission,
-    // #2915 round 8 (D5): the ONE absolute deadline `run()` computed once,
-    // unchanged — only ever present when gated (see `defaultCallMcpWorker`'s
-    // caller). Never re-derived here from `mcpBinding.timeoutSeconds` or
-    // `admission.token.mintedAtMs` (that double-subtracted preparation
-    // time — round 8 critique, D5/review 7 finding 4's last bullet).
-    deadlineAtMs = null,
+    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd,
     // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
     // always undefined for production registrations.
     live, readers, thresholdOverlay,
   } = options;
   const run = async () => {
-    if (admission?.gated) {
-      try {
-        // D2/F5: recheck the server's own registry qualification immediately
-        // before THIS launch — a serialized/per-instance queue may have held
-        // this call for a while before its turn came up. Checking `enabled`
-        // alone is not requalification: an operator can edit a registry entry's
-        // command/args/env while leaving `enabled: true`, and the ORIGINAL
-        // (admission-time) `server` object passed into this function would
-        // still be the one that gets launched below unless the FRESH
-        // definition is also compared against what was qualified.
-        if (mcpRegistry) {
-          const requalified = await mcpRegistry.get(mcpBinding.serverRef);
-          if (!requalified || requalified.enabled === false) {
-            return { outcome: 'blocked', diagnostic: 'worker MCP server is no longer registered/enabled' };
-          }
-          if (qualifiedServerDigest && serverDefinitionDigest(requalified) !== qualifiedServerDigest) {
-            return { outcome: 'blocked', diagnostic: 'worker MCP server definition changed since qualification; resolve again' };
-          }
-        }
-        // #2915 review 5 ("a second worker over unresolved execution") /
-        // round 8 (D5): a serialized/per-instance queue (D2, below) may have
-        // held this call long enough that the admitted attempt's deadline —
-        // the ONE absolute `deadlineAtMs` `run()` computed once, which
-        // already folds in the canary's own bounded window (min(task
-        // deadline, admission+300s)) when applicable — has since passed. For
-        // a canary, the breaker's own sweep reopens the scope and installs a
-        // blocking marker the moment anything next calls `admit()`/`settle()`
-        // on it (possibly a sibling request), regardless of whether THIS
-        // queued call ever actually launches. Revalidate immediately before
-        // launch, matching the registry-qualification recheck just above:
-        // an expired admission must never launch. Falls back to the
-        // canary-only `admission.token.deadlineMs` check when no caller
-        // supplies `deadlineAtMs` (back-compat for any caller that does
-        // not thread it through) — review 7 finding 4: "an ordinary request
-        // queued beyond its 900-second budget still spawned and completed"
-        // is exactly the plain (non-canary) task-deadline case this widens
-        // to cover.
-        const nowForExpiry = admission.breaker?.nowMs?.() ?? Date.now();
-        const admissionExpired = deadlineAtMs !== null
-          ? nowForExpiry >= deadlineAtMs
-          : !!(admission.token && nowForExpiry > admission.token.deadlineMs);
-        if (admissionExpired) {
-          return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
-        }
-      } catch (error) {
-        // #2915 review 6 (finding 2, "leaked capacity"): a thrown pre-spawn
-        // requalification/expiry check — nothing has been dispatched yet — must
-        // settle the same way an ordinary blocked requalification does, never
-        // propagate as an exception. `run()`'s own caller sets `spawnAttempted`
-        // BEFORE invoking this function (it cannot know in advance whether a
-        // real spawn is about to happen), so letting this throw escape would be
-        // treated as genuinely post-spawn uncertainty and leak the registry's
-        // run-slot forever — the exact gap a native-MCP requalification error
-        // (`mcpRegistry.get` throwing rather than returning falsy/disabled)
-        // left open.
-        return { outcome: 'blocked', diagnostic: `worker MCP pre-spawn requalification failed: ${error?.message ?? String(error)}` };
-      }
-    } else if (mcpRegistry) {
-      // #2915 round 8 (D6, review 7 finding 13 third bullet, M:1079): literal
-      // baseline (a4085b86a) requalification — no try/catch, no admission-
-      // expiry check (there is no admission at all when not gated). A thrown/
-      // rejected `mcpRegistry.get` here must propagate out of `run()` exactly
-      // as it always did on origin/main, reaching this bridge's own
-      // outer catch-all and settling the SAME `uncertain`/`uncertain` every
-      // other non-gated exception gets — never the fail-closed `blocked`
-      // conversion the gated branch above applies.
+    // D2/F5: recheck the server's own registry qualification immediately
+    // before THIS launch — a serialized/per-instance queue may have held
+    // this call for a while before its turn came up. Checking `enabled`
+    // alone is not requalification: an operator can edit a registry entry's
+    // command/args/env while leaving `enabled: true`, and the ORIGINAL
+    // (admission-time) `server` object passed into this function would
+    // still be the one that gets launched below unless the FRESH
+    // definition is also compared against what was qualified.
+    if (mcpRegistry) {
       const requalified = await mcpRegistry.get(mcpBinding.serverRef);
       if (!requalified || requalified.enabled === false) {
         return { outcome: 'blocked', diagnostic: 'worker MCP server is no longer registered/enabled' };
@@ -1149,17 +1106,16 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     }
     // B2: gate + launch the MCP worker SERVER process through the same
     // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
-    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, admission, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
+    const launch = await defaultLaunchMcpWorkerProcessBaseline(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
     if (!launch.launched) {
       return { outcome: 'blocked', diagnostic: launch.diagnostic ?? 'worker MCP process launch was refused' };
     }
     const child = launch.child;
-    // Use the caller's one deadline unchanged, including at the write boundary.
-    const nowMsFn = () => admission?.breaker?.nowMs?.() ?? Date.now();
-    const absoluteDeadlineMs = admission?.gated ? deadlineAtMs : null;
-    // The audited frame bound and owned stop authority apply to every call.
+    var admission; // baseline has no recovery admission; legacy setup check is inert
+    const nowMsFn = () => Date.now();
+    const absoluteDeadlineMs = null;
     const transport = new ChildProcessTransport(child, { terminate: () => stopOverflowWorker(launch),
-      enforceTransportBound: !!admission?.gated, deadlineAtMs: absoluteDeadlineMs, now: nowMsFn });
+      enforceTransportBound: false });
     let disconnected = false;
     let retainOverflowControl = false;
     transport.onclose = () => { disconnected = true; };
@@ -1183,19 +1139,6 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
         }
       },
     };
-    // #2915 review 6 (finding 3, "one absolute deadline"): gated only —
-    // derive EVERY stage's timeout (connect/initialize, list, call) from ONE
-    // fixed absolute wall-clock deadline, recomputed fresh immediately
-    // before each stage from the time ACTUALLY remaining — never a
-    // per-stage default (the SDK's own 60s `DEFAULT_REQUEST_TIMEOUT_MSEC`)
-    // and never a budget computed once before a serialized/per-instance
-    // queue wait that can itself consume most of it. Reproduced: a native
-    // request queued 250s into a 300s canary window still received a fresh
-    // 300-SECOND SDK call timeout with only 50s actually remaining, while
-    // connect/list each separately spent up to another 60s on top of that —
-    // vastly overrunning the breaker's own canary window. Not gated:
-    // origin/main exactly — connect/listTools get no timeout option at all
-    // (SDK default), callTool gets the unclipped `mcpBinding.timeoutSeconds`.
     //
     // #2915 round 8 (D5): `remaining <= 0` REFUSES outright (client-side)
     // rather than merely passing `timeout: 0` through to the SDK and
@@ -1288,6 +1231,258 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     }
   };
   return sessionIsolation === 'per-call' ? run() : withServerQueue(mcpBinding.serverRef, run);
+}
+
+/** #2915 round 8 (D6): the GATED implementation — reached only through the
+ * router below when `options.admission` is present (never omitted-but-falsy;
+ * `run()`'s own `continueGated` always supplies a truthily-gated admission).
+ * No branch here needs to re-check `admission.gated`; by construction it is
+ * always true for the duration of this function. */
+async function defaultCallMcpWorkerGated(mcpBinding, server, options = {}) {
+  const {
+    sessionIsolation, mcpRegistry, allowDegraded = false, config, name = 'mcp-worker', registerControl,
+    memoryMaxGb, mcpSchemas, qualifiedServerDigest, cwd, admission,
+    // #2915 round 8 (D5): the ONE absolute deadline `run()` computed once,
+    // unchanged. Never re-derived here from `mcpBinding.timeoutSeconds` or
+    // `admission.token.mintedAtMs` (that double-subtracted preparation
+    // time — round 8 critique, D5/review 7 finding 4's last bullet).
+    deadlineAtMs = null,
+    // See `defaultLaunchShellWorker`: test-only dispatch-gate passthroughs,
+    // always undefined for production registrations.
+    live, readers, thresholdOverlay,
+  } = options;
+  const run = async () => {
+    try {
+      // D2/F5: recheck the server's own registry qualification immediately
+      // before THIS launch — a serialized/per-instance queue may have held
+      // this call for a while before its turn came up. Checking `enabled`
+      // alone is not requalification: an operator can edit a registry entry's
+      // command/args/env while leaving `enabled: true`, and the ORIGINAL
+      // (admission-time) `server` object passed into this function would
+      // still be the one that gets launched below unless the FRESH
+      // definition is also compared against what was qualified.
+      if (mcpRegistry) {
+        const requalified = await mcpRegistry.get(mcpBinding.serverRef);
+        if (!requalified || requalified.enabled === false) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP server is no longer registered/enabled' };
+        }
+        if (qualifiedServerDigest && serverDefinitionDigest(requalified) !== qualifiedServerDigest) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP server definition changed since qualification; resolve again' };
+        }
+      }
+      // #2915 review 5 ("a second worker over unresolved execution") /
+      // round 8 (D5): a serialized/per-instance queue (D2, below) may have
+      // held this call long enough that the admitted attempt's deadline —
+      // the ONE absolute `deadlineAtMs` `run()` computed once, which
+      // already folds in the canary's own bounded window (min(task
+      // deadline, admission+300s)) when applicable — has since passed. For
+      // a canary, the breaker's own sweep reopens the scope and installs a
+      // blocking marker the moment anything next calls `admit()`/`settle()`
+      // on it (possibly a sibling request), regardless of whether THIS
+      // queued call ever actually launches. Revalidate immediately before
+      // launch, matching the registry-qualification recheck just above:
+      // an expired admission must never launch. Falls back to the
+      // canary-only `admission.token.deadlineMs` check when no caller
+      // supplies `deadlineAtMs` (back-compat for any caller that does
+      // not thread it through) — review 7 finding 4: "an ordinary request
+      // queued beyond its 900-second budget still spawned and completed"
+      // is exactly the plain (non-canary) task-deadline case this widens
+      // to cover.
+      const nowForExpiry = admission.breaker?.nowMs?.() ?? Date.now();
+      const admissionExpired = deadlineAtMs !== null
+        ? nowForExpiry >= deadlineAtMs
+        : !!(admission.token && nowForExpiry > admission.token.deadlineMs);
+      if (admissionExpired) {
+        return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
+      }
+    } catch (error) {
+      // #2915 review 6 (finding 2, "leaked capacity"): a thrown pre-spawn
+      // requalification/expiry check — nothing has been dispatched yet — must
+      // settle the same way an ordinary blocked requalification does, never
+      // propagate as an exception. `continueGated`'s own caller sets
+      // `spawnAttempted` BEFORE invoking this function (it cannot know in
+      // advance whether a real spawn is about to happen), so letting this
+      // throw escape would be treated as genuinely post-spawn uncertainty
+      // and leak the registry's run-slot forever — the exact gap a
+      // native-MCP requalification error (`mcpRegistry.get` throwing rather
+      // than returning falsy/disabled) left open.
+      return { outcome: 'blocked', diagnostic: `worker MCP pre-spawn requalification failed: ${error?.message ?? String(error)}` };
+    }
+    let stopOverflowWorker;
+    let client;
+    try {
+      // Resolve fallible dependencies and construct the client before spawning.
+      ({ stopOverflowWorker } = await loadRalphExternal('lib/worker-overflow.mjs'));
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      client = new Client({ name: 'aiwg-mcp-worker-invoke', version: '1.0.0' }, { capabilities: {} });
+      // Async setup may consume the remaining admitted canary budget.
+      if (admission?.gated && admission.token
+        && (admission.breaker?.nowMs?.() ?? Date.now()) > admission.token.deadlineMs) {
+        return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
+      }
+    } catch (error) {
+      return { outcome: 'blocked', diagnostic: `worker MCP pre-spawn setup failed: ${error?.message ?? String(error)}` };
+    }
+    // B2: gate + launch the MCP worker SERVER process through the same
+    // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
+    const launch = await defaultLaunchMcpWorkerProcess(server, { allowDegraded, config, name, cwd, live, readers, thresholdOverlay, admission, ...(memoryMaxGb !== undefined ? { memoryMaxGb } : {}) });
+    if (!launch.launched) {
+      return { outcome: 'blocked', diagnostic: launch.diagnostic ?? 'worker MCP process launch was refused' };
+    }
+    const child = launch.child;
+    // #2915 review 6 (finding 3, "one absolute deadline") / round 8 (D5):
+    // `deadlineAtMs` is the ONE fixed absolute wall-clock deadline `run()`
+    // computed once at admission — never re-derived here. `nowMsFn` is
+    // needed before constructing the transport below, so it moves up from
+    // its former position just before the `connect()` call.
+    const nowMsFn = () => admission.breaker?.nowMs?.() ?? Date.now();
+    const absoluteDeadlineMs = deadlineAtMs;
+    // #2915 review 6 (finding 6b, "changed disabled behavior"): the 10 MiB
+    // unterminated-frame transport bound AND the deadline write-boundary
+    // check (D5) are both enforced unconditionally here — this function is
+    // reached only when gated (see `ChildProcessTransport`'s own doc
+    // comment).
+    const transport = new ChildProcessTransport(child, { terminate: () => stopOverflowWorker(launch),
+      enforceTransportBound: true, deadlineAtMs: absoluteDeadlineMs, now: nowMsFn });
+    let disconnected = false;
+    let retainOverflowControl = false;
+    transport.onclose = () => { disconnected = true; };
+    const control = {
+      stop: async () => {
+        if (transport._failure) {
+          // The connection is closed after overflow. Reuse the owned launch's
+          // stop authority, including its termination proof, on explicit cancel.
+          await transport._termination;
+          return stopOverflowWorker(launch);
+        }
+        try {
+          // F2: the ACTUAL in-flight JSON-RPC request id (captured at the
+          // transport layer — see `ChildProcessTransport.send`), never the
+          // caller's own opaque `mcpBinding.requestId`, which the worker has
+          // no way to relate to anything it is actually processing.
+          await client.notification({ method: 'notifications/cancelled', params: { requestId: transport.lastRequestId, reason: 'operator-cancel' } });
+          return true;
+        } catch {
+          try { child.kill('SIGTERM'); return true; } catch { return false; }
+        }
+      },
+    };
+    // #2915 review 6 (finding 3, "one absolute deadline"): derive EVERY
+    // stage's timeout (connect/initialize, list, call) from ONE fixed
+    // absolute wall-clock deadline, recomputed fresh immediately before
+    // each stage from the time ACTUALLY remaining — never a per-stage
+    // default (the SDK's own 60s `DEFAULT_REQUEST_TIMEOUT_MSEC`) and never a
+    // budget computed once before a serialized/per-instance queue wait that
+    // can itself consume most of it. Reproduced: a native request queued
+    // 250s into a 300s canary window still received a fresh 300-SECOND SDK
+    // call timeout with only 50s actually remaining, while connect/list each
+    // separately spent up to another 60s on top of that — vastly overrunning
+    // the breaker's own canary window.
+    //
+    // #2915 round 8 (D5): `remaining <= 0` REFUSES outright (client-side)
+    // rather than merely passing `timeout: 0` through to the SDK and
+    // trusting its own timer delivery — review 7 finding 4: "at exactly the
+    // canary deadline, connect/list/call all received timeout 0, sent
+    // requests, and completed successfully."
+    try {
+      registerControl?.(control);
+      if (absoluteDeadlineMs !== null) {
+        if (nowMsFn() >= absoluteDeadlineMs) throw Object.assign(new Error('worker MCP deadline already passed before connect'), { code: -32001 });
+        await client.connect(transport, { timeout: Math.max(0, absoluteDeadlineMs - nowMsFn()) });
+      } else {
+        await client.connect(transport);
+      }
+      // M3: refuse before any brief is sent if the live tool schema has
+      // drifted from what was qualified. Compared CANONICALLY (sorted
+      // keys) on both sides, not via the raw `#2887 mcpToolSchemaDigest`
+      // pin directly — the SDK's own `listTools()` round-trips the wire
+      // JSON through its zod validators, which can legitimately reorder
+      // object keys without changing meaning; a byte-exact digest of the
+      // POST-validation object against a PRE-validation pin would false-
+      // positive on every call. `mcpSchemas` (the #2887 installation-
+      // owner-trusted schema objects, not a client-supplied digest) is the
+      // comparison's source of truth here.
+      if (absoluteDeadlineMs !== null && nowMsFn() >= absoluteDeadlineMs) {
+        throw Object.assign(new Error('worker MCP deadline already passed before listTools'), { code: -32001 });
+      }
+      const listed = absoluteDeadlineMs !== null
+        ? await client.listTools(undefined, { timeout: Math.max(0, absoluteDeadlineMs - nowMsFn()) })
+        : await client.listTools();
+      const tool = listed?.tools?.find(t => t.name === mcpBinding.tool);
+      if (!tool) {
+        return { outcome: 'blocked', diagnostic: 'qualified MCP tool is no longer advertised by the server' };
+      }
+      // F3 (fix-2892-r2): digest the RAW wire response (plain `JSON.parse`,
+      // retained by the transport — see `ChildProcessTransport`'s doc
+      // comment), never `tool.inputSchema`/`tool.outputSchema` from the
+      // zod-validated `listed` object above — zod's own `z.record()`
+      // reconstruction of `properties` silently drops a member literally
+      // named `__proto__`, so two schemas differing only in that member
+      // would otherwise digest identically and the brief would still be
+      // sent. A raw response this transport cannot account for at all
+      // (should be unreachable — `listed` only resolved because SOME
+      // response arrived) fails closed rather than falling back to the
+      // lossy object.
+      const rawToolsList = transport._rawResponses.get(transport.lastRequestId);
+      const rawTool = rawToolsList?.result?.tools?.find(t => t && t.name === mcpBinding.tool);
+      if (!rawTool) {
+        return { outcome: 'blocked', diagnostic: 'worker MCP tool schema could not be verified against the raw wire response' };
+      }
+      if (mcpSchemas?.input && canonicalSchemaDigest(rawTool.inputSchema) !== canonicalSchemaDigest(mcpSchemas.input)) {
+        return { outcome: 'blocked', diagnostic: 'worker MCP tool input schema digest drifted from the qualified pin' };
+      }
+      if (mcpSchemas?.output) {
+        // A qualified descriptor that requires an output schema is never
+        // satisfied by a worker that stopped advertising one at all —
+        // missing is drift, not "nothing to compare".
+        if (!rawTool.outputSchema) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP tool no longer advertises an output schema the qualified descriptor requires' };
+        }
+        if (canonicalSchemaDigest(rawTool.outputSchema) !== canonicalSchemaDigest(mcpSchemas.output)) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP tool output schema digest drifted from the qualified pin' };
+        }
+      }
+      if (absoluteDeadlineMs !== null && nowMsFn() >= absoluteDeadlineMs) {
+        throw Object.assign(new Error('worker MCP deadline already passed before callTool'), { code: -32001 });
+      }
+      const callTimeoutMs = absoluteDeadlineMs !== null
+        ? Math.max(0, absoluteDeadlineMs - nowMsFn())
+        : mcpBinding.timeoutSeconds * 1000;
+      const response = await client.callTool({ name: mcpBinding.tool, arguments: mcpBinding.arguments }, undefined, { timeout: callTimeoutMs });
+      // #2915 round 8 (D5): "a response arriving after deadlineAt is a
+      // timeout regardless of SDK timer delivery" — review 7 finding 4: "a
+      // response arriving after the deadline could still return completed."
+      if (absoluteDeadlineMs !== null && nowMsFn() >= absoluteDeadlineMs) {
+        return { outcome: 'timeout', error: new Error('worker MCP response arrived after the deadline') };
+      }
+      return { outcome: 'responded', response };
+    } catch (error) {
+      const isTimeout = error?.code === -32001 || /timeout/i.test(String(error?.message ?? ''));
+      try { await client.notification({ method: 'notifications/cancelled', params: { requestId: transport.lastRequestId, reason: isTimeout ? 'timeout' : 'error' } }); } catch { /* delivery only, never stop proof */ }
+      const termination = transport._failure ? await transport._termination : await stopOverflowWorker(launch);
+      retainOverflowControl = !!transport._failure && termination?.termination !== 'confirmed';
+      return { outcome: disconnected ? 'disconnected' : isTimeout ? 'timeout' : 'error', error: transport._failure ?? error,
+        ...(transport._failure ? { termination: termination?.termination ?? 'uncertain',
+          diagnostic: [transport._failure.code, termination?.diagnostic].filter(Boolean).join('; ') } : {}) };
+    } finally {
+      try { if (!retainOverflowControl) registerControl?.(null); }
+      finally { try { await client.close(); } catch { /* already closed */ } }
+    }
+  };
+  return sessionIsolation === 'per-call' ? run() : withServerQueue(mcpBinding.serverRef, run);
+}
+
+/** #2915 round 8 (D6): thin router, mirroring
+ * `defaultLaunchShellWorker`/`defaultLaunchMcpWorkerProcess`'s identical
+ * pattern — `options.admission` is only ever present when this call is
+ * actually gated (`continueGated` always supplies one; `continueBaseline`
+ * never includes the key at all). Absent routes to the literal baseline
+ * reimplementation; present routes to the gated implementation. */
+async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
+  if (options.admission === undefined) {
+    return defaultCallMcpWorkerBaseline(mcpBinding, server, options);
+  }
+  return defaultCallMcpWorkerGated(mcpBinding, server, options);
 }
 
 // ===========================================================================
@@ -1385,7 +1580,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
   const loadWorkerInputsImpl = options.loadWorkerInputs ?? defaultLoadWorkerInputs;
   const launchShellWorkerImpl = options.launchShellWorker ?? defaultLaunchShellWorker;
   const callMcpWorkerImpl = options.callMcpWorker ?? defaultCallMcpWorker;
-  const waitForUnitImpl = options.waitForUnitTermination ?? waitForUnitTermination;
+  // #2915 round 8 (D6): the injection point is shared (one `options.
+  // waitForUnitTermination` double, if supplied, serves BOTH continuations
+  // below), but the DEFAULT when nothing is injected differs: `continueGated`
+  // falls back to the enhanced, escalation-capable `waitForUnitTermination`;
+  // `continueBaseline` falls back to the literal a4085b86a reimplementation
+  // `waitForUnitTerminationBaseline`, which has no escalation concept at all
+  // (review 7 finding 6a/14).
+  const waitForUnitTerminationOverride = options.waitForUnitTermination;
   // #2915 review 5 ("a second worker over unresolved execution"): the
   // degraded-isolation shell wait path below shares the launcher's own
   // bounded SIGTERM-then-SIGKILL escalation (`terminateChildWithGrace`)
@@ -1459,7 +1661,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     // configuration to verify a predecessor against on this bridge yet
     // (see the schema comment above) — refuse explicitly, before any
     // capacity is reserved, rather than silently accepting and ignoring a
-    // conductor's retry declaration.
+    // conductor's retry declaration. Predates round 8 and applies
+    // unconditionally (not a gating concern): `retry_of` support is simply
+    // not implemented on this bridge yet, for gated or not-gated callers
+    // alike, so origin/main's own schema (which has no `retry_of` field at
+    // all) never had an equivalent case to diverge from.
     if (input.retry_of !== undefined) throw new Error('retry_of is not yet supported on the MCP worker-invoke bridge (OG_RETRY_UNSUPPORTED_MCP)');
     if (!registry.canStart()) throw new Error('Worker invocation capacity is reserved; no live run slot is available');
     const existing = registry.claimRequestId(input.request_id);
@@ -1496,36 +1702,22 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
       throw error;
     }
-    // #2915 final: declared here (function scope), not inside the try block
-    // below, so the generic catch-all at the end of this function can also
-    // settle this run's admission (#2915 final review, finding 2: a thrown
-    // error reaching that catch previously left the reservation live with
-    // zero capacity recovered — the exact "slot leak" the final review
-    // named).
-    let admission;
-    let recoveryModule;
-    let recoverySettled = false;
-    // #2915 review 5 (finding 2b, "leaked capacity"): distinguishes PROVEN
-    // pre-spawn exceptions (nothing ever ran -- the registry run-slot must
-    // be released) from post-spawn uncertainty (a worker process/call
-    // genuinely started and may still be running -- the slot correctly
-    // stays live per M2). Set true only once a shell launch or MCP call is
-    // confirmed to have actually started (past every "never launched"/
-    // "blocked" refusal below), never merely attempted.
-    let spawnAttempted = false;
-    const settleRecovery = (outcome) => {
-      if (recoverySettled || !admission?.gated) return;
-      recoverySettled = true;
-      try {
-        // #2915 round 8 (D5, review 7 finding 9): `settleDirectWorker`
-        // RETURNS a promise (resolving to a bounded refund-failure
-        // diagnostic string, or `null`) — capture it instead of discarding
-        // it, so `run()`'s wrapper above can await it and surface the
-        // diagnostic in the result.
-        const promise = recoveryModule.settleDirectWorker(admission, outcome);
-        captureSettlementPromise?.(promise);
-      } catch { /* recovery accounting must never fail a run */ }
-    };
+
+    // =========================================================================
+    // #2915 round 8 (D6): shared PREFIX, carrying a4085b86a's own `run()`
+    // semantics up to the decision point below — output reservation, input
+    // loading, resolution, and the launchable check, with base's OWN single
+    // catch-all. Gating has not been decided anywhere in this block, so
+    // there is nothing to diverge about yet: EVERY exception or early return
+    // here is either one of the two named proven-pre-spawn refusals (which
+    // free capacity, exactly like base), or lands in the one catch below
+    // (`uncertain`/`uncertain`, capacity retained) — exactly what
+    // `loadWorkerInputsImpl`/`resolveWorkerInvocation` throwing produced on
+    // origin/main (round 8 critique, D6: "the early input/resolver exception
+    // the previous worker left divergent" — this restructuring removes the
+    // divergence by construction rather than special-casing it).
+    // =========================================================================
+    let prefix;
     try {
       try {
         outputReservation = await reserveFinalOutput(request.final_output);
@@ -1539,61 +1731,48 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       if (plan.invocation?.readiness !== 'launchable') {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: plan.diagnostics ?? [] });
       }
-      const invocation = plan.invocation;
-      // #2915A: scoped-recovery gate for this dispatch. Consults the
-      // process-shared direct-recovery breaker (or `options.scopedBreaker`;
-      // `null` disables; `parallelism.worker_dispatch` off also disables,
-      // see `resolveRunRecovery`) using only trusted resolved identities,
-      // BEFORE either transport launches. Refused launches never spawn;
-      // launched attempts note cohort membership and record their
-      // launcher-observed outcome below (process health only — claim-level
-      // failures are task-local by definition and record invocation-scoped).
-      //
-      // #2915 P0 (fail closed, no leaked slot): this admission block runs
-      // AFTER `registry.create()` already reserved this run's capacity/
-      // identity slot. Any exception here (bad breaker state, a thrown
-      // import, a malformed gate result) must refuse the launch the same
-      // way an ordinary recovery-scope refusal does — `markTerminal`,
-      // freeing the reservation — and must NEVER fall through to the
-      // generic outer `catch`, which keeps the entry LIVE for genuinely
-      // uncertain POST-spawn outcomes. A pre-spawn breaker error is not an
-      // uncertain worker outcome: no worker ever ran, so there is nothing
-      // to stay uncertain about (#2915 review: a thrown admission error
-      // left `canStart:false` with one live slot retained and no worker
-      // launched).
-      // #2915 final (one admission, step 3): ONE top-level admission for
-      // this whole run(), shared with the shell/MCP branches below — never
-      // re-gated inside `defaultLaunchShellWorker`/`planDirectWorkerLaunch`,
-      // which now BORROW this exact admission instead of re-admitting and
-      // potentially rejecting their own already-admitted canary (#2915
-      // final review, finding 4). `recoverySettled` makes settlement
-      // idempotent across every return path below, including the generic
-      // catch-all at the end of this function (#2915 final review, finding
-      // 2: a thrown error reaching that catch previously left the
-      // reservation live with zero capacity recovered).
-      // #2915 review 4 (finding 7): the global switch is checked FIRST,
-      // before any import — disabled dispatch must behave exactly as
-      // origin/main, including when the recovery module itself cannot even
-      // be imported (a probe with dispatch off and a throwing import still
-      // completed on origin/main; the former code imported unconditionally
-      // and refused before launch even though recovery was never in effect).
-      // #2915 review 5 (finding 6, disabled-dispatch equivalence): a
-      // per-CLI-disabled CLI (`config.parallelism.clis[cli].enabled ===
-      // false`) is checked HERE too, before any import -- mirroring the
-      // exact same condition `admitDirectWorker` itself re-checks, so a
-      // per-CLI-disabled CLI never even imports the recovery module,
-      // exactly like the global switch being off already guaranteed.
-      // Previously only the global switch was checked at this point; a
-      // per-CLI-disabled CLI with the global switch on still imported
-      // `session-launcher.mjs` and constructed a task-chain digest for a
-      // CLI recovery was never going to gate.
-      const recoveryGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch
-        && snapshot.config?.parallelism?.clis?.[invocation.selected?.cli]?.enabled !== false;
-      if (!recoveryGateEnabled) {
-        admission = { gated: false };
-      } else {
-        try {
-          recoveryModule = await loadRalphExternal('session-launcher.mjs');
+      prefix = { root, snapshot, drivers, invocation: plan.invocation };
+    } catch (error) {
+      return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [error.message] });
+    }
+    const { root, snapshot, drivers, invocation } = prefix;
+
+    // =========================================================================
+    // #2915 round 8 (D6): ONE decision, immediately after the prefix, from
+    // the launcher's own pure eligibility predicate,
+    // `directRecoveryEligibility` (session-launcher.mjs) — the SAME
+    // function `launchOneWorker`'s own not-gated/gated split and
+    // `admitDirectWorker` itself both call, so this decision cannot drift
+    // out of sync with either (round 8 critique, D6; the decision is
+    // structurally one function, not three matching conditions). It
+    // consults, in order, the global switch, the per-CLI switch,
+    // `canVerifyAttempt`, and an explicit breaker override, and reserves
+    // nothing — every ineligible answer returns `{ gated: false }` before
+    // ever touching the breaker or the ledger. The only check made BEFORE
+    // even importing the recovery module is the global switch
+    // (`config.parallelism.worker_dispatch`) — matching the SAME field
+    // `session-launcher.mjs`'s own call sites resolve as `gate.enabled`
+    // (`checkWorkerDispatch`) — so a globally disabled deployment never
+    // imports the recovery module at all (#2915 review 4 finding 7),
+    // exactly like origin/main never having this feature.
+    // =========================================================================
+    const dispatchGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch;
+    let admission;
+    let recoveryModule;
+    if (!dispatchGateEnabled) {
+      admission = { gated: false };
+    } else {
+      try {
+        recoveryModule = await loadRalphExternal('session-launcher.mjs');
+        const eligibility = recoveryModule.directRecoveryEligibility({
+          gateEnabled: dispatchGateEnabled, config: snapshot.config, invocation, drivers, scopedBreaker: options.scopedBreaker,
+        });
+        if (!eligibility.gated) {
+          // Not eligible (per-CLI switch, `canVerifyAttempt`, or an
+          // explicit breaker override) — nothing was reserved; `admission`
+          // is exactly the predicate's own `{ gated: false, reason? }`.
+          admission = eligibility;
+        } else {
           // #2915 review 4 (finding 8): consult the same per-task-chain
           // allowance ledger the launcher path uses, keyed off the SAME
           // stable digest and the SAME resolved `invocation.limits.
@@ -1611,41 +1790,269 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // of this one, starts the count over for the same task chain.
           const taskChainDigest = await recoveryModule.stableTaskChainDigest(request, invocation.briefDigest ?? null);
           admission = await recoveryModule.admitDirectWorker({
-            gateEnabled: recoveryGateEnabled, config: snapshot.config,
+            gateEnabled: dispatchGateEnabled, config: snapshot.config,
             invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
             taskChainDigest, maxAttempts: invocation.limits?.maxAttempts,
           });
+        }
+      } catch (error) {
+        // #2915 P0 (fail closed, no leaked slot): this admission call runs
+        // AFTER `registry.create()` already reserved this run's capacity/
+        // identity slot. Any exception here (bad breaker state, a thrown
+        // import, a malformed gate result) must refuse the launch the same
+        // way an ordinary recovery-scope refusal does — `markTerminal`,
+        // freeing the reservation. A pre-spawn breaker error is not an
+        // uncertain worker outcome: no worker ever ran.
+        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+          diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
+      }
+    }
+    if (admission.refused) {
+      // #2915 review 4 (finding 8): a ledger-exhaustion refusal has no
+      // covering scope (`blockedBy` is empty) -- fall back to the
+      // refusal's own code/reason so the diagnostic is never an empty
+      // "recovery scope open: " for that case.
+      const blockedBy = admission.refused.blockedBy?.length ? admission.refused.blockedBy.join(', ')
+        : (admission.refused.code ?? admission.refused.reason ?? 'unknown');
+      // #2915 round 8 (D4, C4): a `blocking-markers:<N>` component names
+      // genuinely unresolved execution occupying reservation slots (never
+      // mere backoff) — point at the exact reachable reconciliation route
+      // for it, this tool's own `reconcile_stopped` operation, rather than
+      // leaving the operator to go looking for one.
+      const markerNote = admission.refused.blockedBy?.some(b => b.startsWith('blocking-markers:'))
+        ? "; unresolved reservations can be reconciled via this tool's 'reconcile_stopped' operation (see 'status' with no invocation_id for the pending list)"
+        : '';
+      return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+        diagnostics: [`recovery scope open: ${blockedBy}${markerNote}`] });
+    }
+    // #2915 round 8 (D4): track which breaker instance actually owns this
+    // invocation's reservation (when gated) — the `reconcile_stopped`
+    // operation and the no-id `status` listing both need to reach the
+    // SAME breaker a later `admitDirectWorker` call used, not a fresh
+    // default. Internal bookkeeping only — never surfaced by `publicStatus`.
+    if (admission.breaker) {
+      registry.update(entry.invocationId, { recoveryBreaker: admission.breaker });
+    }
+
+    // #2915 round 8 (D6): the prefix runs exactly once, and we never re-enter
+    // `run()`/`runInner()` — execution continues directly into whichever
+    // continuation the decision above selected, with the SAME prepared
+    // context (`ctx`). `continueBaseline` is a literal reimplementation of
+    // a4085b86a's own `run()` remainder (and calls only `*Baseline` helpers
+    // for every changed dependency); `continueGated` is the full
+    // recovery-aware remainder, reached only when `admission.gated` is true.
+    const ctx = { entry, request, root, snapshot, drivers, invocation };
+    if (admission.gated) {
+      return continueGated(ctx, { admission, recoveryModule, captureSettlementPromise });
+    }
+    return continueBaseline(ctx);
+  }
+
+  /**
+   * #2915 round 8 (D6): the NOT-GATED continuation. Literal reimplementation
+   * of a4085b86a's own `run()` body from exactly this point onward (brief
+   * validation through the final `markTerminal`/`update` returns, and its
+   * own single catch-all) — no admission, no settlement, no confirmedStop
+   * threading, no deadline beyond the single base `deadlineMs`. Calls ONLY
+   * the `*Baseline` helper implementations (`waitForUnitTerminationBaseline`,
+   * `defaultLaunchShellWorkerBaseline`/`defaultLaunchMcpWorkerProcessBaseline`
+   * via the shared routers, `defaultCallMcpWorkerBaseline` via the shared
+   * router), so every changed dependency — not merely this function's own
+   * body — is also pinned to base behavior (round 8 critique, D6: "verbatim
+   * run() plus current helpers still fails").
+   *
+   * ===========================================================================
+   * FROZEN TO a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main). DO NOT
+   * MODIFY THIS FUNCTION, OR ANY `*Baseline` HELPER IT CALLS (directly or
+   * through `launchShellWorkerImpl`/`callMcpWorkerImpl`'s routers), to "fix"
+   * or "improve" anything — their entire purpose is to stay byte-for-byte
+   * what dispatch looked like before #2915 existed. If base behavior itself
+   * ever needs to change, re-pin to a new base SHA everywhere this comment
+   * block and the frozen fixture (`test/fixtures/ralph-recovery-baseline/`)
+   * cite `a4085b86a`, and update both together.
+   * ===========================================================================
+   */
+  async function continueBaseline(ctx) {
+    const { entry, request, root, snapshot, drivers, invocation } = ctx;
+    try {
+      let mcpBriefDigest;
+      if (invocation.transport === 'mcp') {
+        let briefBytes;
+        try {
+          briefBytes = await readBoundedFile(request.brief, 262144, root);
+        } catch {
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: ['OG_BRIEF_UNREADABLE'] });
+        }
+        try {
+          const { assertValidWorkerPayload } = await loadMissionProtocol();
+          assertValidWorkerPayload('workerDirectBrief', JSON.parse(briefBytes.toString('utf8')));
         } catch (error) {
-          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-            diagnostics: [`recovery admission failed closed: ${error?.message ?? String(error)}`] });
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
+        }
+        mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
+      }
+      const deadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
+      let observation;
+      let rawOutput;
+      if (invocation.transport === 'shell') {
+        const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config, name: `mcp-${entry.invocationId.slice(0, 8)}`, ...gateInputs });
+        registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
+        if (!launch.launched) {
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
+        }
+        // M2: a live stop handle for the duration of this call, so an
+        // explicit `cancel` can actually stop the isolated unit / kill the
+        // child, not just record that cancellation was requested.
+        registry.update(entry.invocationId, { control: buildShellStopControl(launch) });
+        // #2915 round 8 (D6, review 7 finding 14): exactly two positional
+        // arguments — no `{ stopOnTimeout }` object at all — matching
+        // a4085b86a's own call site and the literal baseline helper's
+        // signature.
+        const waitForUnitBaselineImpl = waitForUnitTerminationOverride ?? waitForUnitTerminationBaseline;
+        let outcome;
+        if (launch.mode === 'systemd-unit') outcome = await waitForUnitBaselineImpl(launch.unit, deadlineMs);
+        else {
+          outcome = await new Promise(resolve => {
+            launch.child.once('close', code => resolve({ termination: 'confirmed', exitCode: code }));
+            launch.child.once('error', () => resolve({ termination: 'uncertain', exitCode: null }));
+            setTimeout(() => {
+              try { launch.child.kill('SIGTERM'); } catch { /* already gone */ }
+              resolve({ termination: 'uncertain', exitCode: null, timedOut: true });
+            }, deadlineMs);
+          });
+        }
+        registry.update(entry.invocationId, { control: null });
+        observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode };
+        if (outcome.termination !== 'confirmed') {
+          // M2: stays LIVE — capacity is held until a stop is proven or the
+          // conductor disposes of it explicitly, never freed on a mere
+          // unconfirmed-termination timeout.
+          return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: ['worker termination could not be confirmed before the deadline'] });
+        }
+        try { rawOutput = await readBoundedFile(invocation.finalPath, invocation.maxOutputBytes, root); } catch {
+          return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker final output was not written'] });
+        }
+      } else {
+        const { mcpRegistry, qualification } = drivers[invocation.selected.cli];
+        const mcpServer = await mcpRegistry.get(invocation.mcp.serverRef);
+        if (!mcpServer) return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: ['worker MCP server is not registered'] });
+        // F5: pin the qualified server's definition digest NOW, at
+        // admission, so a queued launch can detect a registry edit that
+        // happened while it was waiting (see `serverDefinitionDigest`).
+        const qualifiedServerDigest = serverDefinitionDigest(mcpServer);
+        const result = await callMcpWorkerImpl(invocation.mcp, mcpServer, {
+          sessionIsolation: invocation.mcp.sessionIsolation, mcpRegistry, allowDegraded, config: snapshot.config,
+          // #2892 (CI fix): the resolved invocation's own worktree
+          // (`invocation.cwd`, #2887's `request.workdir`) — without it the
+          // dispatch gate's free-disk sample has no filesystem to read and
+          // fails closed on every host, never reaching isolation at all.
+          // See `defaultLaunchMcpWorkerProcess`'s doc comment.
+          cwd: invocation.cwd,
+          name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: mcpWorkerMemoryMaxGb, mcpSchemas: qualification?.mcpSchemas,
+          qualifiedServerDigest, registerControl: control => registry.update(entry.invocationId, { control }),
+          ...gateInputs,
+        });
+        if (result.outcome === 'blocked') {
+          return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
+        }
+        if (result.outcome !== 'responded') {
+          // M2: stays LIVE for the same reason as the shell timeout path above.
+          return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [`worker ${result.outcome}; cancellation delivered, not confirmed stopped`] });
+        }
+        rawOutput = result.response;
+        observation = { transport: 'mcp', status: result.response.isError ? 'failed' : 'completed', termination: 'confirmed', exitCode: result.response.isError ? 1 : null, isError: !!result.response.isError };
+        if (result.response.isError) {
+          return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }
       }
-      if (admission.refused) {
-        // #2915 review 4 (finding 8): a ledger-exhaustion refusal has no
-        // covering scope (`blockedBy` is empty) -- fall back to the
-        // refusal's own code/reason so the diagnostic is never an empty
-        // "recovery scope open: " for that case.
-        const blockedBy = admission.refused.blockedBy?.length ? admission.refused.blockedBy.join(', ')
-          : (admission.refused.code ?? admission.refused.reason ?? 'unknown');
-        // #2915 round 8 (D4, C4): a `blocking-markers:<N>` component names
-        // genuinely unresolved execution occupying reservation slots (never
-        // mere backoff) — point at the exact reachable reconciliation route
-        // for it, this tool's own `reconcile_stopped` operation, rather than
-        // leaving the operator to go looking for one.
-        const markerNote = admission.refused.blockedBy?.some(b => b.startsWith('blocking-markers:'))
-          ? "; unresolved reservations can be reconciled via this tool's 'reconcile_stopped' operation (see 'status' with no invocation_id for the pending list)"
-          : '';
-        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-          diagnostics: [`recovery scope open: ${blockedBy}${markerNote}`] });
+      const { ProviderAdapter } = await loadRalphExternal('lib/provider-adapter.mjs');
+      let claims;
+      try {
+        claims = await new (class extends ProviderAdapter {})().parseWorkerFinal(rawOutput, {
+          format: invocation.transport === 'shell' ? 'jsonl' : 'mcp', observation, maxOutputBytes: invocation.maxOutputBytes,
+        });
+      } catch (error) {
+        // M5: bounded, fixed-vocabulary diagnostic only — never the raw
+        // parser error message, which can echo attacker/worker-controlled
+        // input text back out (a duplicate-key probe reflected a planted
+        // marker through this exact path before the fix).
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_WORKER_FINAL_INVALID'] });
       }
-      // #2915 round 8 (D4): track which breaker instance actually owns this
-      // invocation's reservation (when gated) — the `reconcile_stopped`
-      // operation and the no-id `status` listing both need to reach the
-      // SAME breaker a later `admitDirectWorker` call used, not a fresh
-      // default. Internal bookkeeping only — never surfaced by `publicStatus`.
-      if (admission.breaker) {
-        registry.update(entry.invocationId, { recoveryBreaker: admission.breaker });
+      const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
+        briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });
+      if (assembled?.conflict) {
+        // M5: the brief changed between launch and result assembly — never
+        // silently assemble a result against a different brief than the one
+        // the worker was actually launched against.
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['OG_BRIEF_EVIDENCE_CONFLICT'] });
       }
+      // M2: a cancel requested at ANY point during this run's lifetime —
+      // even before a live `control` handle existed to deliver it to — means
+      // this result is never trusted as `completed`, regardless of what the
+      // worker itself claims.
+      const liveEntry = registry.get(entry.invocationId);
+      return registry.markTerminal(entry.invocationId, {
+        status: liveEntry?.cancelRequested ? 'cancelled' : (claims.status === 'completed' ? 'completed' : 'failed'),
+        termination: 'confirmed',
+        result: assembled?.result ?? { claims },
+      });
+    } catch (error) {
+      // #2892 F2 (fix-2892-r2, formerly part of M2): a thrown error from
+      // anywhere in the launch/observe/parse pipeline used to call
+      // `markTerminal` here — freeing the capacity reservation with ZERO
+      // stop proof, the exact hole M2 closed for the timeout/disconnect
+      // paths. `update` keeps the entry LIVE (reservation held) for the same
+      // reason as every other uncertain-termination path in this function.
+      // No gating concept exists on this path at all — every exception
+      // reaching here settles `uncertain`/`uncertain` with capacity
+      // retained, byte-for-byte what a4085b86a's own single catch-all did.
+      return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [error.message] });
+    }
+    // No `finally`-cleanup block: see the module doc's defect-5 note — this
+    // bridge never creates a scratch/plan directory in the first place
+    // (it calls the launcher in-process rather than through a relay
+    // subprocess), so there is nothing left behind on any exit path.
+  }
+
+  /**
+   * #2915 round 8 (D6): the GATED continuation — reached only when the
+   * decision point in `runInner` already admitted (or is borrowing) a
+   * breaker reservation. `admission.gated` is therefore always true for the
+   * duration of this function; no branch here needs to re-check it (the
+   * previous worker's scattered `admission?.gated` conditionals are gone by
+   * construction, not by review).
+   */
+  async function continueGated(ctx, { admission, recoveryModule, captureSettlementPromise }) {
+    const { entry, request, root, snapshot, drivers, invocation } = ctx;
+    // #2915 final: `recoverySettled`/`spawnAttempted` are function-scoped
+    // (not inside the try block below) so the catch-all at the end of this
+    // function can also settle this run's admission (#2915 final review,
+    // finding 2: a thrown error reaching that catch previously left the
+    // reservation live with zero capacity recovered — the exact "slot leak"
+    // the final review named).
+    let recoverySettled = false;
+    // #2915 review 5 (finding 2b, "leaked capacity"): distinguishes PROVEN
+    // pre-spawn exceptions (nothing ever ran -- the registry run-slot must
+    // be released) from post-spawn uncertainty (a worker process/call
+    // genuinely started and may still be running -- the slot correctly
+    // stays live per M2). Set true only once a shell launch or MCP call is
+    // confirmed to have actually started (past every "never launched"/
+    // "blocked" refusal below), never merely attempted.
+    let spawnAttempted = false;
+    const settleRecovery = (outcome) => {
+      if (recoverySettled) return;
+      recoverySettled = true;
+      try {
+        // #2915 round 8 (D5, review 7 finding 9): `settleDirectWorker`
+        // RETURNS a promise (resolving to a bounded refund-failure
+        // diagnostic string, or `null`) — capture it instead of discarding
+        // it, so `run()`'s wrapper above can await it and surface the
+        // diagnostic in the result.
+        const promise = recoveryModule.settleDirectWorker(admission, outcome);
+        captureSettlementPromise?.(promise);
+      } catch { /* recovery accounting must never fail a run */ }
+    };
+    try {
       // F4 (fix-2892-r2, formerly part of M5): per operator decision, the
       // MCP path REQUIRES the structured WorkerDirectBrief — a probe showed
       // a plaintext brief (or a JSON brief swapped to plaintext between
@@ -1701,17 +2108,16 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // budget just derived above, the transport (mcp per-call) budget when
       // this is an mcp-transport attempt, and the canary's own bounded
       // window when this admission is the breaker's canary — on the
-      // admission's own monotonic clock when gated, `Date.now()` otherwise.
-      // Passed down UNCHANGED from here on; NEVER re-derived from an
-      // already-shortened duration (#2915 round 8 critique, D5; review 7
-      // finding 4's last bullet: "run() clips the duration to remaining
-      // canary time, then defaultCallMcpWorker() adds that shortened
-      // duration to the original mint time, subtracting preparation time
-      // twice").
-      const deadlineClockNow = () => admission?.breaker?.nowMs?.() ?? Date.now();
+      // admission's own monotonic clock. Passed down UNCHANGED from here on;
+      // NEVER re-derived from an already-shortened duration (#2915 round 8
+      // critique, D5; review 7 finding 4's last bullet: "run() clips the
+      // duration to remaining canary time, then defaultCallMcpWorker() adds
+      // that shortened duration to the original mint time, subtracting
+      // preparation time twice").
+      const deadlineClockNow = () => admission.breaker?.nowMs?.() ?? Date.now();
       const deadlineCandidatesMs = [deadlineClockNow() + taskDeadlineMs];
       if (invocation.transport === 'mcp') deadlineCandidatesMs.push(deadlineClockNow() + invocation.mcp.timeoutSeconds * 1000);
-      if (admission?.gated && admission.token?.canaryKeys?.length > 0) deadlineCandidatesMs.push(admission.token.deadlineMs);
+      if (admission.token?.canaryKeys?.length > 0) deadlineCandidatesMs.push(admission.token.deadlineMs);
       const deadlineAtMs = Math.min(...deadlineCandidatesMs);
       let observation;
       let rawOutput;
@@ -1734,11 +2140,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // refusals" gap (#2915 round 8 critique, D2): a resource-gate
         // refusal below now spends nothing.
         //
-        // #2915 round 8 (D5): checked before spawn — gated only (baseline
-        // never had this concept at all). A deadline already passed before
-        // this bridge even attempted to spawn is a proven zero-dispatch
-        // refusal, exactly like any other pre-spawn gate refusal.
-        if (admission?.gated && deadlineClockNow() >= deadlineAtMs) {
+        // #2915 round 8 (D5): checked before spawn. A deadline already
+        // passed before this bridge even attempted to spawn is a proven
+        // zero-dispatch refusal, exactly like any other pre-spawn gate
+        // refusal.
+        if (deadlineClockNow() >= deadlineAtMs) {
           settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: ['worker dispatch deadline already passed before spawn'] });
         }
@@ -1749,10 +2155,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // never be proven to be pre-spawn. From here on, any exception
         // reaching the outer catch-all is post-spawn uncertainty.
         spawnAttempted = true;
-        mayHaveLaunched = true;
+        var mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
-          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, ...(admission?.gated ? { admission } : {}), ...gateInputs });
+          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, admission, ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched && !launch.launchAttempted) {
           mayHaveLaunched = false;
@@ -1770,7 +2176,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // never double-counted.
         let deadlineMs = Math.max(0, deadlineAtMs - deadlineClockNow());
         const control = buildShellStopControl(launch, {
-          waitForUnit: waitForUnitImpl,
+          waitForUnit: waitForUnitTerminationOverride ?? waitForUnitTermination,
           stopUnit: options.stopWorkerUnit,
           killUnit: options.killWorkerUnit,
           graceMs: options.shellStopGraceMs ?? (invocation.health?.terminateGraceSeconds ?? 1) * 1000,
@@ -1883,10 +2289,8 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // threaded `deadlineAtMs` below, never re-adding onto
         // `admission.token.mintedAtMs`.
         let mcpBinding = invocation.mcp;
-        if (admission?.gated) {
-          const remainingSeconds = Math.max(0, (deadlineAtMs - deadlineClockNow()) / 1000);
-          if (remainingSeconds < mcpBinding.timeoutSeconds) mcpBinding = { ...mcpBinding, timeoutSeconds: remainingSeconds };
-        }
+        const remainingSeconds = Math.max(0, (deadlineAtMs - deadlineClockNow()) / 1000);
+        if (remainingSeconds < mcpBinding.timeoutSeconds) mcpBinding = { ...mcpBinding, timeoutSeconds: remainingSeconds };
         // #2915 round 8 (D2, replaces the former `await debitRecovery()`
         // call here): same reasoning as the shell path above — the ledger
         // debit now happens inside the dispatch-commit hook, deep inside
@@ -1904,11 +2308,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         mayHaveLaunched = true;
         const result = await callMcpWorkerImpl(mcpBinding, mcpServer, {
           sessionIsolation: invocation.mcp.sessionIsolation, mcpRegistry, allowDegraded, config: snapshot.config,
-          // #2915 round 8 (D5): the ONE absolute deadline for this call —
-          // only meaningful (non-null) when gated; `defaultCallMcpWorker`
-          // treats `undefined` exactly like the pre-#2915 "no deadline"
-          // posture (SDK defaults / unclipped `mcpBinding.timeoutSeconds`).
-          ...(admission?.gated ? { deadlineAtMs } : {}),
+          // #2915 round 8 (D5): the ONE absolute deadline for this call,
+          // computed once above.
+          deadlineAtMs,
           // #2892 (CI fix): the resolved invocation's own worktree
           // (`invocation.cwd`, #2887's `request.workdir`) — without it the
           // dispatch gate's free-disk sample has no filesystem to read and
@@ -1921,11 +2323,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // run() already holds, borrowed through to the native-MCP launch
           // path — never a second, independent planner reservation. See
           // `defaultLaunchMcpWorkerProcess`.
-          //
-          // #2915 review 6 (finding 6d, "changed disabled behavior"): omit
-          // this property entirely when not gated — origin/main's own
-          // options object never had it.
-          ...(admission?.gated ? { admission } : {}),
+          admission,
           ...gateInputs,
         });
         if (result.outcome === 'blocked') {
