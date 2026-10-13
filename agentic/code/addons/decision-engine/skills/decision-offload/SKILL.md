@@ -85,6 +85,39 @@ Jev output is advisory data; it is never authorization.
 The question and context are sent to Jev. Never send secrets — no tokens,
 passwords, private keys, or credentials in `--question` or `--context`.
 
+## Ledger, history and stats
+
+Every **completed** `ask` call (CLI and MCP) appends exactly one record —
+including `fallback` and `not-configured` outcomes, never a usage error —
+to `.aiwg/decision/ledger.jsonl` (resolved like `aiwg artifacts path`):
+provider, session id, decision kind, choice ids (at most 10; `choiceCount`/
+`choiceIdsTruncated` say how many there really were), `answerIndex` (the
+selected option's position, surviving redaction), question/context SHA-256
+digests, outcome, model, Jev usage, latency, and an
+estimated-LLM-tokens-avoided figure with its method. A digest is a
+correlation key, not a confidentiality guarantee — a short/guessable
+question can still be matched by hashing candidates. Question and context
+text are recorded only with `--record-text`, and then only redacted and
+truncated to a documented cap. `--caller <tag>` attributes a call to a
+decision point (e.g. `address-issues:worker-pick`); it and `--session` must
+match `^[A-Za-z0-9_.:/@-]{1,96}$` (CLI: exit 2 if not; MCP: dropped). Every
+persisted field — including `model` — is redacted, not only opt-in text.
+Recording is bounded by a short deadline and never changes the `ask` result
+or exit code; on timeout the warning says "completion unknown", not
+"abandoned". The ledger's trust boundary is the local filesystem under the
+project artifact root, owned by the same user running `aiwg` — not a
+hostile-process defense — and it has no built-in retention.
+
+```bash
+aiwg decision history --since 2026-10-01 --status fallback --json
+aiwg decision stats --provider claude --group-by caller --json
+```
+
+`history` and `stats` read the ledger offline — no network, no Jev call.
+`stats` accepts the same filters as `history`. Retention is a documented
+follow-up: delete or truncate the ledger file yourself if it grows too
+large; both commands tolerate a missing file.
+
 ## Examples
 
 ```bash

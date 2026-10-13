@@ -202,18 +202,36 @@ export function registerDecisionToolset(server) {
       context: z.string().optional(),
       threshold: z.number().min(0).max(1).default(0.8),
       timeout_ms: z.number().int().positive().default(15000),
+      caller: z.string().optional().describe('Optional decision-point attribution tag, recorded in the decision ledger (#2946)'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  }, async ({ question, yes_no, choices, scale, context, threshold, timeout_ms }) => {
+  }, async ({ question, yes_no, choices, scale, context, threshold, timeout_ms, caller }) => {
     const modeCount = (yes_no ? 1 : 0) + (choices ? 1 : 0) + (scale ? 1 : 0);
     if (modeCount !== 1) throw new Error('Select exactly one of yes_no, choices, or scale');
-    return (await driver()).askDecision({
+    const driverModule = await driver();
+    const opts = options();
+    const input = {
       question,
       mode: yes_no ? { kind: 'yes-no' } : choices ? { kind: 'choices', choices } : { kind: 'scale', low: scale.low, high: scale.high },
       ...(context === undefined ? {} : { context }),
       threshold,
       timeoutMs: timeout_ms,
-    }, options());
+    };
+    const result = await driverModule.askDecision(input, opts);
+    // Every decision-ask call records through the same ledger function the CLI
+    // `ask` handler uses, tagged with this tool's transport (#2946). Attribution
+    // resolution and the write both happen inside recordDecisionAsk's own
+    // bounded, never-throwing step (review r1 findings 3 and 4): a provider-
+    // detection failure, a slow/failed write, or an invalid caller tag can
+    // never replace `result` with an error or hold up this tool call.
+    const sanitizedCaller = typeof caller === 'string' && driverModule.ATTRIBUTION_FIELD_PATTERN.test(caller) ? caller : null;
+    await driverModule.recordDecisionAsk(input, result, {
+      transport: 'mcp',
+      projectRoot: opts.cwd,
+      env: opts.env,
+      caller: sanitizedCaller,
+    });
+    return result;
   }, ASK);
 
   registerJsonTool(server, 'decision-setup-synthetic-classification', {

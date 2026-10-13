@@ -9,6 +9,30 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
+  including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
+  (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
+  the local filesystem under the project artifact root, owned by the same user running `aiwg` — not a
+  defense against a hostile process already running as that user. The writer uses only portable Node
+  primitives (`mkdir`/`lstat` for the directory, `open`+`fstat` for the file, `O_NOFOLLOW` where the
+  platform defines it): a symlinked directory or file, or a file with more than one hard link, is
+  skipped with one warning and never modified (no chmod, no truncation — an existing file/directory
+  that fails a safety check is left exactly as it was). Records carry provider, session id, decision
+  kind, choice ids (at most 10; `choiceCount`/`choiceIdsTruncated` report how many there really were),
+  `answerIndex` (the selected option's position, surviving redaction), question/context SHA-256
+  digests, outcome, model, Jev usage, latency, and an estimated-LLM-tokens-avoided figure with its
+  method. Every persisted field — including `model` — is redacted; `--record-text` additionally stores
+  redacted, length-capped question/context text. `--session`/`--caller` must match
+  `^[A-Za-z0-9_.:/@-]{1,96}$` (CLI: exit 2; MCP: dropped), covering documented forms like
+  `address-issues:worker-pick`. Recording — including attribution/provider resolution — is bounded by
+  a 250ms deadline and warns at most once; on timeout the warning says "completion unknown" (the
+  in-flight attempt cannot be cancelled, but no later stage of it starts), and it never changes the
+  `ask` result or exit code. `aiwg decision history` and `aiwg decision stats` read the ledger offline,
+  strictly validating each record (calendar timestamps, confidence/threshold ranges, non-negative token
+  counts), streaming line-by-line and reporting a `skipped` count, with `--json`, the same filters on
+  both commands, and `--group-by provider|session|kind|caller` (an absent caller groups under a
+  distinct `null`, not the literal string `"unattributed"`). The ledger has no built-in retention —
+  both commands tolerate a missing file; archiving/rotation is a documented follow-up, not shipped yet.
 - `AIWG_CONFIG_LAYERS` reads MCP servers and profiles from several configuration directories, lowest
   precedence first, so an organisation base and a per-identity overlay can be kept apart. Writes go to
   the last directory only. Profiles gain `extends` (`aiwg mcp profile add --extends`), resolved across
