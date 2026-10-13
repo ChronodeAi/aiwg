@@ -479,8 +479,8 @@ export class ScopedFailureBreaker extends EventEmitter {
     this._scopes = new Map();
     this._outstanding = new Map();
     this._canarySeq = 0;
-    this._chargedAttempts = new Set();
-    this.canariesCharged = 0;
+    this._observedInvocations = new Set();
+    this.canariesObserved = 0;
     // Reservation registry (#2915 final review): every admission mints an
     // opaque, breaker-owned token here. A reservation is removed the moment
     // it settles (`settle`) or expires past its own deadline (swept by
@@ -597,8 +597,8 @@ export class ScopedFailureBreaker extends EventEmitter {
     for (const scopeKey of canaryKeys) {
       const rec = this._scopes.get(scopeKey);
       rec.activeCanary = { id, scopeKey, invocationId, reservedAtMs: now, deadlineMs };
-      rec.canariesCharged += 1;
-      this.canariesCharged += 1;
+      rec.canariesObserved += 1;
+      this.canariesObserved += 1;
       this._touch(rec);
     }
     return { ok: true, token };
@@ -678,17 +678,21 @@ export class ScopedFailureBreaker extends EventEmitter {
     }
     if (kind === 'succeeded') {
       for (const scopeKey of coveringKeys) {
-        this._chargeAttempt(scopeKey, invocationId);
+        this._recordObservedAttempt(scopeKey, invocationId);
         if (canaryKeys.includes(scopeKey)) continue; // already resolved above
         const rec = this._scopes.get(scopeKey);
         if (rec && rec.status === 'closed') rec.breaker.recordSuccess();
       }
-      if (coveringKeys.length === 0) this._chargeAttempt(null, invocationId);
+      if (coveringKeys.length === 0) this._recordObservedAttempt(null, invocationId);
     } else if (kind === 'failed') {
       this._settleFailure(token, outcome ?? {}, now);
-    } else {
-      this._chargeAttempt(coveringKeys[0] ?? null, invocationId);
     }
+    // #2915 review 4 (finding 8): an 'uncertain' settlement is NEVER
+    // recorded as an observed attempt — it is the kind every pre-spawn
+    // refusal settles as (see `settleDirectWorker`), and this diagnostic
+    // counter must not read as if something dispatched when it did not.
+    // The allowance LEDGER (`debited`), not this counter, is what actually
+    // enforces attempt consumption.
     this.noteSettled({ scopeKeys: coveringKeys, invocationId });
     return { ok: true };
   }
@@ -731,13 +735,13 @@ export class ScopedFailureBreaker extends EventEmitter {
       scope = supported.scope;
       scopeKey = supported.scopeKey;
     }
-    if (canaryKeys.includes(scopeKey)) { this._chargeAttempt(scopeKey, invocationId); return; } // already reopened as this token's canary failure, above
+    if (canaryKeys.includes(scopeKey)) { this._recordObservedAttempt(scopeKey, invocationId); return; } // already reopened as this token's canary failure, above
     const rec = this._scopeRecordBounded(scope, scopeKey);
     // Charge AFTER the scope record exists (or is confirmed unattainable at
-    // the hard cap) so `rec.attemptsCharged` reflects this attempt whenever
+    // the hard cap) so `rec.attemptsObserved` reflects this attempt whenever
     // a record is created for it, rather than undercounting the very failure
     // that first creates the scope.
-    this._chargeAttempt(scopeKey, invocationId);
+    this._recordObservedAttempt(scopeKey, invocationId);
     if (!rec) return; // at hard capacity with nothing evictable: bookkeeping-only, never exceeds the bound
     this._touch(rec);
     this._removeOutstanding(scopeKey, invocationId);
@@ -785,15 +789,25 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.breaker.reset();
   }
 
-  _chargeAttempt(scopeKey, invocationId) {
-    if (invocationId == null || this._chargedAttempts.has(invocationId)) return false;
-    this._chargedAttempts.add(invocationId);
-    if (this._chargedAttempts.size > this.policy.maxChargedAttempts) {
-      const oldest = this._chargedAttempts.values().next().value;
-      this._chargedAttempts.delete(oldest);
+  /**
+   * #2915 review 4 (finding 8): DIAGNOSTIC only — `attemptsObserved`/
+   * `canariesObserved` (renamed from `attemptsCharged`/`canariesCharged`)
+   * report what this breaker has seen, never what it enforces. Nothing in
+   * `admit()` reads either counter; the allowance LEDGER
+   * (`reserveDirectWorkerAllowance`/`debitDirectWorkerAllowance` in
+   * session-launcher.mjs) is the actual enforcement. `settle()` only calls
+   * this for `'succeeded'`/`'failed'` kinds — an `'uncertain'` settlement
+   * (every pre-spawn refusal settles this way) is never recorded here.
+   */
+  _recordObservedAttempt(scopeKey, invocationId) {
+    if (invocationId == null || this._observedInvocations.has(invocationId)) return false;
+    this._observedInvocations.add(invocationId);
+    if (this._observedInvocations.size > this.policy.maxChargedAttempts) {
+      const oldest = this._observedInvocations.values().next().value;
+      this._observedInvocations.delete(oldest);
     }
     const rec = scopeKey ? this._scopes.get(scopeKey) : null;
-    if (rec) rec.attemptsCharged += 1;
+    if (rec) rec.attemptsObserved += 1;
     return true;
   }
 
@@ -871,8 +885,8 @@ export class ScopedFailureBreaker extends EventEmitter {
       episodeCooldownMs: rec.episodeCooldownMs,
       nextProbeAtMs: rec.nextProbeAtMs,
       resetAtMs: rec.resetAtMs,
-      attemptsCharged: rec.attemptsCharged,
-      canariesCharged: rec.canariesCharged,
+      attemptsObserved: rec.attemptsObserved,
+      canariesObserved: rec.canariesObserved,
       cooldownRemainingMs: inner.cooldownRemainingMs,
     };
   }
@@ -880,8 +894,8 @@ export class ScopedFailureBreaker extends EventEmitter {
   snapshot() {
     return {
       scopes: [...this._scopes.keys()].map((key) => this.getState(key)),
-      attemptsCharged: this._chargedAttempts.size,
-      canariesCharged: this.canariesCharged,
+      attemptsObserved: this._observedInvocations.size,
+      canariesObserved: this.canariesObserved,
       reservationsOutstanding: this._reservations.size,
     };
   }
@@ -965,8 +979,8 @@ export class ScopedFailureBreaker extends EventEmitter {
       episodeCooldownMs: this.policy.cooldownMs,
       activeCanary: null,
       reopens: 0,
-      attemptsCharged: 0,
-      canariesCharged: 0,
+      attemptsObserved: 0,
+      canariesObserved: 0,
       lastTouchedMs: this.nowMs(),
     };
     this._scopes.set(scopeKey, rec);

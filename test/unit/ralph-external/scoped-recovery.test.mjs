@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, rm, lstat, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
@@ -46,6 +46,9 @@ import {
   classifyAttemptForSettlement,
   planDirectWorkerLaunch,
   verifyRetryPredecessor,
+  stableTaskChainDigest,
+  ALLOWANCE_EXHAUSTED_CODE,
+  LEDGER_RECORD_INVALID_CODE,
 } from '../../../tools/ralph-external/session-launcher.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
 
@@ -464,7 +467,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     expect(breaker.settle(admitted.token, { kind: 'succeeded' })).toEqual({ ok: true });
     expect(breaker.getState(INSTALL).state).toBe('closed');
     expect(probe(breaker, [INSTALL]).ok).toBe(true);
-    expect(breaker.snapshot().canariesCharged).toBe(1);
+    expect(breaker.snapshot().canariesObserved).toBe(1);
   });
 
   it('a failed canary reopens immediately with doubled backoff, never waiting on the distinct-failure threshold', () => {
@@ -520,19 +523,23 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('charges every launched attempt and the canary attempt once, keeping unknown cost unknown', () => {
     fail(breaker, [INSTALL], 'same', installFailure('same'));
     fail(breaker, [INSTALL], 'same', installFailure('same'));
-    expect(breaker.snapshot().attemptsCharged).toBe(1);
+    expect(breaker.snapshot().attemptsObserved).toBe(1);
     // A successful launched attempt is charged too (review: successes
     // charged 0), exactly once even across repeated reports.
     const res = succeed(breaker, [INSTALL], 'ok-1');
     expect(res.admitted).toBe(true);
-    expect(breaker.snapshot().attemptsCharged).toBe(2);
+    expect(breaker.snapshot().attemptsObserved).toBe(2);
     // Settling the SAME reservation twice is refused (idempotent) — charging
     // happens once per admitted attempt, not per settle() call.
     expect(breaker.settle(res.token, { kind: 'succeeded' }).ok).toBe(false);
-    expect(breaker.snapshot().attemptsCharged).toBe(2);
-    // An uncertain termination is charged but opens nothing.
+    expect(breaker.snapshot().attemptsObserved).toBe(2);
+    // #2915 review 4 (finding 8): an uncertain termination opens nothing
+    // AND is never recorded as an observed attempt — this diagnostic
+    // counter must never read as enforcement that did not happen (every
+    // pre-spawn refusal settles 'uncertain' too; the allowance LEDGER is
+    // what actually enforces attempt consumption now).
     uncertain(breaker, [INSTALL], 'u-1');
-    expect(breaker.snapshot().attemptsCharged).toBe(3);
+    expect(breaker.snapshot().attemptsObserved).toBe(2);
     expect(breaker.getState(INSTALL).state).toBe('closed');
   });
 
@@ -1071,13 +1078,16 @@ describe('admitDirectWorker / settleDirectWorker (replaces recordDirectWorkerOut
       settleDirectWorker(a1, { kind: 'failed' }); // wait-status alone never implicates a shared scope
       expect(breaker.getState('installation:codex').tracked).toBe(false);
       expect(breaker.getState('provider:openai').tracked).toBe(false);
-      expect(breaker.snapshot().attemptsCharged).toBe(1);
+      expect(breaker.snapshot().attemptsObserved).toBe(1);
       const a2 = await admit('r-2');
       settleDirectWorker(a2, { kind: 'succeeded' });
-      expect(breaker.snapshot().attemptsCharged).toBe(2);
+      expect(breaker.snapshot().attemptsObserved).toBe(2);
       const a3 = await admit('r-3');
       settleDirectWorker(a3, { kind: 'uncertain' });
-      expect(breaker.snapshot().attemptsCharged).toBe(3);
+      // #2915 review 4 (finding 8): 'uncertain' is never recorded as an
+      // observed attempt (diagnostic-only counter; see consecutive-failure-
+      // circuit-breaker.mjs `_recordObservedAttempt`'s doc comment).
+      expect(breaker.snapshot().attemptsObserved).toBe(2);
     } finally {
       breaker.destroy();
     }
@@ -1128,7 +1138,7 @@ describe('classifyAttemptForSettlement / admitDirectWorker (replaces recordRecov
       const outcome = classifyAttemptForSettlement(invocation, result);
       expect(outcome).toEqual({ kind: 'succeeded' });
       settleDirectWorker(admission, outcome);
-      expect(breaker.snapshot().attemptsCharged).toBe(1);
+      expect(breaker.snapshot().attemptsObserved).toBe(1);
     } finally {
       breaker.destroy();
     }
@@ -1187,7 +1197,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
     try {
       for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
       expect(breaker.getState(INSTALL).state).toBe('open');
-      const attemptsChargedBefore = breaker.snapshot().attemptsCharged;
+      const attemptsObservedBefore = breaker.snapshot().attemptsObserved;
       const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
       const out = await planDirectWorkerLaunch({ invocation, scopedBreaker: breaker,
         config: { parallelism: { worker_dispatch: false } }, live: healthyLive,
@@ -1197,7 +1207,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       // The breaker itself is untouched: no launch was ever noted against
       // the open scope, confirming the gate was never even consulted, not
       // merely that it happened to pass.
-      expect(breaker.snapshot().attemptsCharged).toBe(attemptsChargedBefore);
+      expect(breaker.snapshot().attemptsObserved).toBe(attemptsObservedBefore);
     } finally {
       breaker.destroy();
     }
@@ -1256,7 +1266,7 @@ describe('bounded retained state (#2915 P3: scopes, cohorts and dedup sets never
       for (let n = 0; n < 50; n += 1) {
         succeed(breaker, ['installation:codex'], `ok-${n}`);
       }
-      expect(breaker.snapshot().attemptsCharged).toBeLessThanOrEqual(5);
+      expect(breaker.snapshot().attemptsObserved).toBeLessThanOrEqual(5);
     } finally {
       breaker.destroy();
     }
@@ -1305,6 +1315,15 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot',
       qualifiedAt: f.request.now, statusOperation: null, cancelOperation: null };
     f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+    // #2915 review 4 (finding 8): this fixture deliberately retries the
+    // exact SAME task (role/task/group/brief content, so the same stable
+    // task-chain digest) across many real attempts to exercise the
+    // BREAKER's own canary/backoff cycle -- that is a distinct concern
+    // from the per-task-chain allowance ledger's attempt budget. Raise the
+    // resolved ceiling well past this suite's attempt counts so the
+    // breaker scenarios below are not incidentally capped by the ledger;
+    // the ledger's own exhaustion behavior is covered separately.
+    f.snapshot.config.parallelism.retry = { maxAttempts: 20 };
     const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
       boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
       buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
@@ -1375,7 +1394,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         launchIsolated: () => { throw new Error('must never spawn while the scope is open'); },
       })).rejects.toMatchObject({ code: RECOVERY_SCOPE_OPEN_CODE });
       await expect(lstat(refusedRunDir)).rejects.toMatchObject({ code: 'ENOENT' });
-      expect(breaker.snapshot().attemptsCharged).toBe(3);
+      expect(breaker.snapshot().attemptsObserved).toBe(3);
       // #2915D2: once due, the breaker admits the NEXT REAL launch through
       // this exact `launchWorker` path as the half-open canary — there is
       // no separate probe runner. The fixture binary still does not exist,
@@ -1385,7 +1404,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       now += 121_000;
       const canaryAttempt = await launchOnce();
       expect(canaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
-      expect(breaker.snapshot().attemptsCharged).toBe(4);
+      expect(breaker.snapshot().attemptsObserved).toBe(4);
       expect(breaker.getState(INSTALL).state).toBe('open');
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
       // Not due yet at +120s (doubled backoff): still refused, no spawn --
@@ -1417,7 +1436,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       expect(secondCanaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
       expect(breaker.getState(INSTALL).state).toBe('open');
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(480_000);
-      expect(breaker.snapshot().attemptsCharged).toBe(5);
+      expect(breaker.snapshot().attemptsObserved).toBe(5);
     } finally {
       resetDirectRecoveryBreaker();
       vi.unstubAllEnvs();
@@ -1521,4 +1540,422 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       await rm(fx.root, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe('allowance ledger (#2915 review 4, finding 8)', () => {
+  // Same offline ENOENT fake-CLI setup as the S1 suite above, parameterized
+  // by `maxAttempts` (via the already-existing `parallelism.retry` ceiling —
+  // no new configuration) and returning a FILE-backed `captureRoot`, so
+  // these tests prove the real per-task-chain allowance through the
+  // production `launchWorker` path with an injected clock and filesystem —
+  // not just the breaker's own in-memory scope bookkeeping.
+  async function ledgerFixtureRoot(maxAttempts) {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const f = workerResolutionFixture();
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-'));
+    const cwd = path.join(root, 'work');
+    await mkdir(cwd);
+    const brief = path.join(root, 'brief.json');
+    await writeFile(brief, 'synthetic brief');
+    const captureRoot = path.join(root, 'capture');
+    const adapter = f.snapshot.registry.providers.codex.workerAdapter;
+    const profile = adapter.invocationProfiles['fixture-shell'];
+    profile.envAllowlist = [];
+    profile.health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl', signalParser: 'fixture:jsonl',
+      sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only', fixtureRef: 'fixture:one-shot',
+      qualifiedAt: f.request.now, statusOperation: null, cancelOperation: null };
+    f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+    f.snapshot.config.parallelism.retry = { maxAttempts };
+    const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
+      boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
+      buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
+        '--model', input.selected.model, '--final-output', input.finalPath, '--', 'synthetic'],
+        stdin: 'closed', envNames: [] }),
+      extractFinal: () => null,
+    };
+    const drivers = { codex: driver };
+    f.snapshot.installations.codex.boundary = driver.qualification.boundary;
+    let planSeq = 0;
+    // `briefText` (not `group`, which the snapshot's parallelism policy
+    // must already recognize) is what varies the resolved `briefDigest`,
+    // and therefore `stableTaskChainDigest` -- role/task/group stay fixed
+    // at their fixture-recognized values ('coding'/'implementation'/
+    // 'workers') for every call; only distinct brief CONTENT yields a
+    // distinct task chain.
+    const buildPlan = async (briefText = 'synthetic brief') => {
+      planSeq += 1;
+      const briefPath = path.join(root, `brief-${planSeq}.json`);
+      await writeFile(briefPath, briefText);
+      const attemptFinal = path.join(root, `final-${planSeq}.json`);
+      const request = { role: 'coding', task: 'implementation', group: 'workers', brief: briefPath, workdir: cwd, final_output: attemptFinal };
+      const plan = await resolveWorkerInvocation(f.snapshot, request, drivers, f.request.now);
+      expect(plan.invocation).toBeDefined();
+      const invocationPath = path.join(root, `plan-${planSeq}.json`);
+      await writeFile(invocationPath, JSON.stringify(plan));
+      return { invocationPath, plan };
+    };
+    // Every call shares the SAME role/task/group/brief by default, so it
+    // resolves to the SAME `stableTaskChainDigest` -- exactly the "same
+    // task, retried" shape the allowance ledger governs.
+    const freshPlan = () => buildPlan('synthetic brief');
+    return { f, root, cwd, brief, captureRoot, freshPlan, buildPlan, drivers };
+  }
+
+  // Spawns the real nonexistent-binary fixture -- the same trusted
+  // installation evidence the S1 suite uses -- while counting how many
+  // times dispatch actually happened, so refused attempts are provably
+  // never spawned.
+  function enoentLaunchIsolated(counter) {
+    return () => { counter.count += 1; return { mode: 'degraded',
+      child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }; };
+  }
+
+  it('exhausted allowance refuses the next attempt', async () => {
+    const fx = await ledgerFixtureRoot(1);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    let attempt = 0;
+    const launchOnce = async () => {
+      attempt += 1;
+      const { invocationPath } = await fx.freshPlan();
+      return launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+    };
+    try {
+      const first = await launchOnce();
+      expect(first).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(spawns.count).toBe(1);
+      // maxAttempts is 1 and the one allowed attempt is already charged:
+      // the next attempt for this exact task chain is refused by the
+      // ledger -- never reaching dispatch.
+      await expect(launchOnce()).rejects.toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+      expect(spawns.count).toBe(1);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('five fresh requests with maxAttempts 1 dispatch exactly one', async () => {
+    const fx = await ledgerFixtureRoot(1);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    let attempt = 0;
+    const launchOnce = async () => {
+      attempt += 1;
+      const { invocationPath } = await fx.freshPlan();
+      return launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+    };
+    try {
+      // Five SEPARATE, sequential fresh requests for the same task chain --
+      // only the first ever reaches dispatch.
+      const results = [];
+      for (let n = 0; n < 5; n += 1) {
+        try { results.push({ status: 'fulfilled', value: await launchOnce() }); }
+        catch (error) { results.push({ status: 'rejected', reason: error }); }
+      }
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(4);
+      for (const r of rejected) expect(r.reason).toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+      expect(spawns.count).toBe(1);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('two concurrent sibling retries with one remaining attempt dispatch exactly one', async () => {
+    const fx = await ledgerFixtureRoot(2);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const spawns = { count: 0 };
+    let attempt = 0;
+    // Each "sibling retry" is its OWN launcher instance -- exactly like two
+    // independent conductor processes/retries would be in production. A
+    // single `SessionLauncher` instance refuses a second concurrent
+    // `launchWorker` call outright ("a worker is already attached to this
+    // launcher"); that per-instance invariant is unrelated to the ledger
+    // and must not be what this test observes.
+    const launchOnce = async (launcher = new SessionLauncher()) => {
+      attempt += 1;
+      const { invocationPath } = await fx.freshPlan();
+      return launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+    };
+    try {
+      // Consume one of two allowed attempts up front, leaving exactly one
+      // remaining for the concurrent pair below.
+      const setup = await launchOnce();
+      expect(setup).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(spawns.count).toBe(1);
+      // Two sibling retries race for the SAME task chain's one remaining
+      // slot. The exclusive-create lock (`acquireLedgerLock` in
+      // session-launcher.mjs, the same primitive process-monitor.mjs's
+      // `createStatusObservationOwner` uses) must serialize their reserve
+      // calls so exactly one wins and the other is refused -- never both
+      // admitted against a single remaining attempt.
+      const results = await Promise.allSettled([launchOnce(), launchOnce()]);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+      expect(spawns.count).toBe(2);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('spawn failure is charged', async () => {
+    const fx = await ledgerFixtureRoot(1);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    try {
+      const { invocationPath, plan } = await fx.freshPlan();
+      const taskChainDigest = await stableTaskChainDigest(plan.request, plan.invocation.briefDigest);
+      const result = await launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+      expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(spawns.count).toBe(1);
+      // The spawn-failed attempt is CHARGED, not merely reserved: it
+      // appears in `chargedIds`, never left behind in `pendingIds`, proving
+      // the debit-before-dispatch point in launchOneWorker actually ran.
+      const recordPath = path.join(fx.captureRoot, 'ledger', `${taskChainDigest}.json`);
+      const record = JSON.parse(await readFile(recordPath, 'utf8'));
+      expect(record.pendingIds).toEqual([]);
+      expect(record.chargedIds).toHaveLength(1);
+      // Charged means permanently consumed: a second attempt for the same
+      // task chain (maxAttempts: 1) is refused, never dispatched.
+      await expect(launcher.launchWorker({
+        invocationPath: (await fx.freshPlan()).invocationPath, runDir: path.join(fx.root, 'run-2'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      })).rejects.toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+      expect(spawns.count).toBe(1);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('preparation refusal is refunded', async () => {
+    const fx = await ledgerFixtureRoot(1);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    try {
+      const { invocationPath: badPath } = await fx.freshPlan();
+      // A pre-spawn preparation failure that happens AFTER admission (the
+      // run directory's parent is missing, so `mkdir(runDir)` throws) must
+      // refund the reservation. This is a plain preparation error, never
+      // the allowance refusal.
+      let prepError;
+      try {
+        await launcher.launchWorker({
+          invocationPath: badPath, runDir: path.join(fx.root, 'missing-parent', 'run-bad'), captureRoot: fx.captureRoot,
+          inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+          checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+          isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          launchIsolated: enoentLaunchIsolated(spawns),
+        });
+      } catch (error) { prepError = error; }
+      expect(prepError).toBeDefined();
+      expect(prepError.code).not.toBe(ALLOWANCE_EXHAUSTED_CODE);
+      // Preparation failed before the debit point: no dispatch happened.
+      expect(spawns.count).toBe(0);
+      // A fresh, properly-prepared attempt for the SAME task chain is
+      // still admitted and reaches dispatch -- proving the failed
+      // preparation's reservation was refunded, not left charged.
+      const { invocationPath: goodPath } = await fx.freshPlan();
+      const second = await launcher.launchWorker({
+        invocationPath: goodPath, runDir: path.join(fx.root, 'run-good'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+      expect(second).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(spawns.count).toBe(1);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('canary is charged', async () => {
+    const fx = await ledgerFixtureRoot(4);
+    let now = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    let attempt = 0;
+    const launchOnce = async () => {
+      attempt += 1;
+      const { invocationPath } = await fx.freshPlan();
+      return launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+    };
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const result = await launchOnce();
+        expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      }
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      expect(spawns.count).toBe(3);
+      // Due: the next real launch is admitted as the half-open canary --
+      // and CHARGED by the ledger exactly like any other dispatched
+      // attempt. With maxAttempts: 4, this is the 4th and last allowed
+      // attempt for this task chain.
+      now += 121_000;
+      const canary = await launchOnce();
+      expect(canary).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(spawns.count).toBe(4);
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      // The allowance is now exhausted. Even once the breaker's own
+      // doubled backoff elapses and it would otherwise admit a second
+      // canary, the LEDGER refuses first -- proving the canary attempt
+      // really did consume allowance, not just breaker bookkeeping.
+      now += breaker.getState(INSTALL).episodeCooldownMs;
+      await expect(launchOnce()).rejects.toMatchObject({ code: ALLOWANCE_EXHAUSTED_CODE });
+      expect(spawns.count).toBe(4);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('disabled dispatch touches no ledger', async () => {
+    const fx = await ledgerFixtureRoot(1);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    try {
+      const { invocationPath } = await fx.freshPlan();
+      const result = await launcher.launchWorker({
+        invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        // The global dispatch switch is off: `admitDirectWorker` returns
+        // `{ gated: false }` before it ever constructs/consults the
+        // breaker OR the allowance ledger (#2915 review 4, finding 7's
+        // ordering, now extended to the ledger too).
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      });
+      expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
+      // #2915 review 4 (finding 7): `attemptOutcome` is published only when
+      // recovery is gated -- disabled dispatch must add no new field versus
+      // origin/main's own result shape.
+      expect(result.attemptOutcome).toBeUndefined();
+      expect(spawns.count).toBe(1);
+      // No ledger directory was ever created under captureRoot.
+      await expect(lstat(path.join(fx.captureRoot, 'ledger'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('a tampered or insecure-mode ledger record refuses rather than resets', async () => {
+    const fx = await ledgerFixtureRoot(5);
+    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    const spawns = { count: 0 };
+    const ledgerDir = path.join(fx.captureRoot, 'ledger');
+    try {
+      // --- Tampered: a well-formed, correctly-moded record whose identity
+      // does not match this task chain -- must refuse, never silently
+      // reset to a fresh record (that would quietly regrant allowance to
+      // a forged/corrupted record).
+      const tampered = await fx.buildPlan('tampered-workers');
+      const tamperedDigest = await stableTaskChainDigest(tampered.plan.request, tampered.plan.invocation.briefDigest);
+      await mkdir(ledgerDir, { recursive: true, mode: 0o700 });
+      const tamperedRecordPath = path.join(ledgerDir, `${tamperedDigest}.json`);
+      await writeFile(tamperedRecordPath, JSON.stringify({ version: 1, taskChainDigest: 'not-the-real-digest',
+        maxAttempts: 5, pendingIds: [], chargedIds: [], corrections: 0 }), { mode: 0o600 });
+      await chmod(tamperedRecordPath, 0o600);
+      const tamperedBefore = await readFile(tamperedRecordPath, 'utf8');
+      await expect(launcher.launchWorker({
+        invocationPath: tampered.invocationPath, runDir: path.join(fx.root, 'tamper-run'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      })).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      expect(spawns.count).toBe(0);
+      expect(await readFile(tamperedRecordPath, 'utf8')).toBe(tamperedBefore);
+
+      // --- Insecure mode: a correctly-identified record that is not
+      // exactly 0600 -- must refuse exactly like `verifyRetryPredecessor`
+      // already refuses insecure predecessor metadata, never chmod-repair
+      // and proceed.
+      const insecure = await fx.buildPlan('insecure-workers');
+      const insecureDigest = await stableTaskChainDigest(insecure.plan.request, insecure.plan.invocation.briefDigest);
+      const insecureRecordPath = path.join(ledgerDir, `${insecureDigest}.json`);
+      await writeFile(insecureRecordPath, JSON.stringify({ version: 1, taskChainDigest: insecureDigest,
+        maxAttempts: 5, pendingIds: [], chargedIds: [], corrections: 0 }));
+      await chmod(insecureRecordPath, 0o666);
+      await expect(launcher.launchWorker({
+        invocationPath: insecure.invocationPath, runDir: path.join(fx.root, 'insecure-run'), captureRoot: fx.captureRoot,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: enoentLaunchIsolated(spawns),
+      })).rejects.toMatchObject({ code: LEDGER_RECORD_INVALID_CODE });
+      expect(spawns.count).toBe(0);
+      expect((await lstat(insecureRecordPath)).mode & 0o777).toBe(0o666);
+    } finally {
+      resetDirectRecoveryBreaker();
+      vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
 });

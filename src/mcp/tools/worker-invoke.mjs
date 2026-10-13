@@ -1306,9 +1306,26 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       } else {
         try {
           recoveryModule = await loadRalphExternal('session-launcher.mjs');
+          // #2915 review 4 (finding 8): consult the same per-task-chain
+          // allowance ledger the launcher path uses, keyed off the SAME
+          // stable digest and the SAME resolved `invocation.limits.
+          // maxAttempts` -- no new configuration, just the existing
+          // ceiling already resolved above by `resolveWorkerInvocation`.
+          // MCP has no server-owned capture root to persist a
+          // cross-process ledger file under, so `captureRoot` is
+          // intentionally omitted: the ledger falls back to this
+          // process's own in-memory map (see `reserveDirectWorkerAllowance`
+          // in session-launcher.mjs). That still enforces the allowance
+          // correctly WITHIN this server process -- including across
+          // concurrent sibling retries, which serialize on the same
+          // in-process reservation check -- but it is explicitly NOT
+          // cross-process-safe: a second MCP server process, or a restart
+          // of this one, starts the count over for the same task chain.
+          const taskChainDigest = await recoveryModule.stableTaskChainDigest(request, invocation.briefDigest ?? null);
           admission = await recoveryModule.admitDirectWorker({
             gateEnabled: recoveryGateEnabled, config: snapshot.config,
             invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
+            taskChainDigest, maxAttempts: invocation.limits?.maxAttempts,
           });
         } catch (error) {
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
@@ -1316,8 +1333,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         }
       }
       if (admission.refused) {
+        // #2915 review 4 (finding 8): a ledger-exhaustion refusal has no
+        // covering scope (`blockedBy` is empty) -- fall back to the
+        // refusal's own code/reason so the diagnostic is never an empty
+        // "recovery scope open: " for that case.
+        const blockedBy = admission.refused.blockedBy?.length ? admission.refused.blockedBy.join(', ')
+          : (admission.refused.code ?? admission.refused.reason ?? 'unknown');
         return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
-          diagnostics: [`recovery scope open: ${admission.refused.blockedBy.join(', ')}`] });
+          diagnostics: [`recovery scope open: ${blockedBy}`] });
       }
       // F4 (fix-2892-r2, formerly part of M5): per operator decision, the
       // MCP path REQUIRES the structured WorkerDirectBrief — a probe showed
