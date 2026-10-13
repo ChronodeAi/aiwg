@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { resolveWorkerPlan } from '../../../src/models/resolver.js';
+import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from '../../../src/models/worker-dispatch-offer.js';
 import { assertWorkerSelectionAllowed, validateWorkerPolicyRoute, workerModelKey, mergeWorkerSelection, DEFAULT_WORKER_SELECTION } from '../../../src/models/provider-policy.js';
 import { workerConfigDigest, workerActivationDigests } from '../../../src/config/aiwg-config.js';
 import { buildWrapperRouteEnvelope } from '../../../src/models/wrapper-route.js';
@@ -144,6 +145,20 @@ describe('Consolidated review regressions for #2883', () => {
 });
 
 describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => {
+  it.each([false, undefined])('explains dispatch off (%s) with shared enable and readiness commands (#3070)', workerDispatch => {
+    const f = workerResolutionFixture();
+    f.snapshot.config.parallelism!.worker_dispatch = workerDispatch;
+    const plan = resolve(f);
+    expect(plan.status).toBe('disabled');
+    expect(plan.selected).toBeNull();
+    expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'OG_CONFIG_REFERENCE', pointer: '/parallelism/worker_dispatch',
+      message: expect.stringContaining('parallelism.worker_dispatch'),
+    }));
+    expect(plan.diagnostics[0].message).toContain(WORKER_DISPATCH_ENABLE_COMMAND);
+    expect(plan.diagnostics[0].message).toContain(WORKER_DISPATCH_READINESS_COMMAND);
+  });
+
   it('R01 reproduces eligibility/order, canonical identities, origins and context terms', () => {
     const f = workerResolutionFixture();
     const before = structuredClone(f);

@@ -7,8 +7,8 @@
  * command, and a configured worker executable (a fake CLI that would
  * append to a sentinel file if invoked) is never run.
  *
- * The negative evidence (no sentinel file) and the exit code both hold
- * today. The diagnostic-content half does not: see the FINDING below.
+ * Regression coverage for #3070: dispatch off is explained before requiring
+ * a qualified installation, including on a fresh project.
  *
  * Run on demand (included in npm run uat):
  *   npm run uat
@@ -94,36 +94,8 @@ describe.skipIf(missingBuiltCli())('UAT: WD-002 — worker_dispatch: false block
     expect(parsed.status).toBe('blocked');
   });
 
-  // FINDING, tracked in #3070: the plan's
-  // WD-002 pass criterion requires the blocked diagnostic to name
-  // `parallelism.worker_dispatch` and the enable command
-  // (`aiwg config set --project parallelism.worker_dispatch true`). Verified
-  // against source, neither holds on a fresh/never-qualified project, for
-  // two independent reasons:
-  //
-  //   1. `loadRecordedWorkerInstallations` (src/models/worker-installation.mjs,
-  //      `if (!Object.keys(installations).length) throw fail();`) requires at
-  //      least one already-qualified worker installation to exist in the
-  //      resolved `AIWG_CONFIG`'s installation store *before* the
-  //      `worker_dispatch` gate is ever reached. On an isolated/scratch
-  //      project (the plan's own prescribed setup) that store is empty, so
-  //      `aiwg models resolve` fails with `OG_ADAPTER_UNQUALIFIED` ("Trusted
-  //      installation qualification is required") — a diagnostic about
-  //      installation qualification, not about `worker_dispatch`.
-  //   2. Independent of (1): `resolveWorkerPlan`'s disabled-state branch
-  //      (src/models/resolver.ts:473,
-  //      `if (!parallelism.worker_dispatch) { plan.status = 'disabled'; return plan; }`)
-  //      returns with `diagnostics: []` — empty. The plan cites this exact
-  //      line as verification that the enable-command string renders here;
-  //      it does not push any diagnostic at all. The enable-command string
-  //      (`WORKER_DISPATCH_ENABLE_COMMAND`, src/models/worker-dispatch-offer.ts)
-  //      is only ever rendered by `regenerate`/`refresh`/`doctor --probe-workers`
-  //      hints (see IN-002), never by `models resolve`'s own blocked path.
-  //
-  // This `it.fails` encodes the plan's literal criterion so a future fix to
-  // either (1) or (2) turns this red, which is the signal to flip it back
-  // to a normal passing `it(...)`.
-  it.fails('blocked diagnostic names parallelism.worker_dispatch and the enable command (plan criterion, not current behavior)', async () => {
+  // #3070: fresh projects get the dispatch-off reason before installation qualification.
+  it('blocked diagnostic names parallelism.worker_dispatch and the enable command', async () => {
     const { WORKER_DISPATCH_ENABLE_COMMAND } = await import('../../src/models/worker-dispatch-offer.js');
     const env = await buildHermeticEnv({ aiwgConfig: configDir, extra: { AIWG_HOME: REPO_ROOT } });
     const result = runAiwgCli(resolveArgs(), { cwd: projectDir, env });

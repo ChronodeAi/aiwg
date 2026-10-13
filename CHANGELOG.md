@@ -103,6 +103,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
 - `aiwg team run`/`list` and the legacy `tools/cli/runtime-info.mjs` script behind `aiwg sync` now
   detect Claude Code through the same shared `resolveActiveProvider` path `runtime-info` and `steward
   capabilities` already used, instead of an ad-hoc `CLAUDE_CODE_VERSION`/`ANTHROPIC_API_KEY` check:
