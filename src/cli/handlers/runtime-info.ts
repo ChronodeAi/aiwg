@@ -14,7 +14,7 @@ import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import { getPackageRoot } from '../../channel/manager.mjs';
 import { inspectInstallation } from '../../installation/manager.mjs';
-import { resolveActiveProvider } from '../provider-resolution.js';
+import { isSessionProviderResolution, resolveActiveProvider } from '../provider-resolution.js';
 
 function isMissingRuntimeCatalogError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('No catalog found');
@@ -341,7 +341,10 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       // and `ANTHROPIC_API_KEY` was a false positive for any non-Claude
       // session with that key set.
       const activeProviderResolution = await resolveActiveProvider({ cwd });
-      const isClaudeCodeContext = activeProviderResolution.provider === 'claude';
+      // Only a session signal counts: a project merely configured or deployed
+      // for Claude is not a Claude Code agent context.
+      const isClaudeCodeContext =
+        activeProviderResolution.provider === 'claude' && isSessionProviderResolution(activeProviderResolution);
 
       if (isClaudeCodeContext) {
         schedulerBackend = 'native-cron (CronCreate); external trigger outside agent sessions';

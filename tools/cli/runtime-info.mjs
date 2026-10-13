@@ -31,9 +31,10 @@ const CLAUDE_CODE_ENV_MARKERS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE
  */
 export async function isClaudeCodeSession() {
   try {
-    const { resolveActiveProvider } = await importImpl(import.meta.url, 'cli/provider-resolution.js');
+    const { resolveActiveProvider, isSessionProviderResolution } = await importImpl(import.meta.url, 'cli/provider-resolution.js');
     const resolution = await resolveActiveProvider({ cwd: process.cwd(), detectProcess: false });
-    return resolution.provider === 'claude';
+    // Project configuration or a deployed provider directory is not a session signal.
+    return resolution.provider === 'claude' && isSessionProviderResolution(resolution);
   } catch {
     // No build output to resolve the shared path through (e.g. running from
     // a source checkout without `npm run build`): fall back to the same

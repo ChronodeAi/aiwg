@@ -18,7 +18,7 @@ import { join, basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
-import { resolveActiveProvider } from '../provider-resolution.js';
+import { isSessionProviderResolution, resolveActiveProvider } from '../provider-resolution.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -62,8 +62,11 @@ async function detectProvider(args: string[], cwd: string): Promise<string> {
   // `ANTHROPIC_API_KEY` check this replaced was stale (neither is set by
   // current Claude Code) and `ANTHROPIC_API_KEY` was a false positive for
   // any non-Claude session with that key set.
+  // Only a session signal counts. Native team dispatch needs the command to
+  // be running inside that harness; project configuration alone does not
+  // establish that.
   const resolution = await resolveActiveProvider({ cwd });
-  return resolution.provider ?? 'unknown';
+  return isSessionProviderResolution(resolution) ? (resolution.provider ?? 'unknown') : 'unknown';
 }
 
 function isNativeTeamsProvider(provider: string): boolean {
