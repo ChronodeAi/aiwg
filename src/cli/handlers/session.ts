@@ -57,7 +57,7 @@ import {
 import { useHandler as useFrameworkHandler } from './use.js';
 import { debug } from '../log.js';
 import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
-import { requireFlagValue, MissingFlagValueError } from '../flag-parsing.js';
+import { requireFlagValue, MissingFlagValueError, hasPositionalOrSwitch } from '../flag-parsing.js';
 import { exitCodeForSpawnResult } from '../child-process-result.js';
 
 // ── Provider resolution ──────────────────────────────────────────────────────
@@ -123,12 +123,24 @@ interface SessionArgs {
  * never be meaningful, and silently accepting one would let a mistake
  * reach either the interactive launch path or a headless launch with
  * nothing to say.
+ *
+ * The `mcp` positional and every boolean switch below go through
+ * {@link hasPositionalOrSwitch} rather than `args.includes(...)` (#3062
+ * go/no-go review, blocker 4): a plain `args.includes('mcp')` matches the
+ * literal word `mcp` *anywhere* in `args`, including inside a free-text
+ * `--prompt`/`--prompt-file` value (`aiwg session --prompt mcp` used to
+ * set `mcp: true` and reach MCP config injection) or after a bare `--`
+ * (`aiwg session -- --persist` used to still set `persist: true`).
+ * {@link hasPositionalOrSwitch} excludes both: anything consumed as the
+ * value of `VALUE_FLAGS` below, and anything at or after `--`.
  */
+const VALUE_FLAGS = ['--provider', '--profile', '--prompt', '--prompt-file'];
+
 function parseSessionArgs(args: string[]): SessionArgs {
-  const mcp = args.includes('mcp');
-  const noRepair = args.includes('--no-repair');
-  const persist = args.includes('--persist');
-  const nonInteractive = args.includes('--non-interactive');
+  const mcp = hasPositionalOrSwitch(args, 'mcp', VALUE_FLAGS);
+  const noRepair = hasPositionalOrSwitch(args, '--no-repair', VALUE_FLAGS);
+  const persist = hasPositionalOrSwitch(args, '--persist', VALUE_FLAGS);
+  const nonInteractive = hasPositionalOrSwitch(args, '--non-interactive', VALUE_FLAGS);
   const provider = requireFlagValue(args, { precedence: 'last' }, '--provider');
   const profile = requireFlagValue(args, { precedence: 'last' }, '--profile');
   const prompt = requireFlagValue(args, { precedence: 'last', rejectEmpty: true }, '--prompt');

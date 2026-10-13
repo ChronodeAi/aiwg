@@ -203,3 +203,67 @@ export function parseKeyValueEntry(entry: string, flagName: string): [name: stri
   }
   return [entry.slice(0, eq).trim(), entry.slice(eq + 1).trim()];
 }
+
+/**
+ * The index of the first bare `--` terminator in `args`, or `args.length`
+ * when there is none — a loop bounded by this never looks at anything
+ * after the terminator, which per POSIX convention is never a flag or a
+ * command word again (#3062 go/no-go review, blocker 4).
+ */
+export function argsTerminatorIndex(args: readonly string[]): number {
+  const index = args.indexOf('--');
+  return index === -1 ? args.length : index;
+}
+
+/**
+ * The set of array indexes in `args` consumed as the *value* of a
+ * `--flag value` (two-token) occurrence of any name in `valueFlagNames`
+ * (#3062 go/no-go review, blocker 4). A `--flag=value` (one-token) form
+ * has no separate value index to report — the value is part of the same
+ * token, so it can never coincidentally equal a bare positional word or a
+ * different flag's own name the way a space-separated value can.
+ *
+ * This does not validate occurrences (a missing/malformed value is the
+ * paired value-flag parser's own job — e.g. {@link requireFlagValue} on
+ * the same `args` and `valueFlagNames`, called separately); it exists
+ * purely so a positional/switch scan knows which indexes are already
+ * spoken for and must not be reinterpreted as something else.
+ */
+export function valueTokenIndexes(args: readonly string[], valueFlagNames: readonly string[]): ReadonlySet<number> {
+  const consumed = new Set<number>();
+  const limit = args.length;
+  for (let i = 0; i < limit; i += 1) {
+    const token = args[i];
+    if (token === undefined) continue;
+    if (token === '--') break;
+    if (token.startsWith('--') && token.includes('=')) continue; // value is part of this same token
+    if (valueFlagNames.includes(token) && i + 1 < limit) {
+      consumed.add(i + 1);
+      i += 1; // the value token itself is spoken for; do not also treat it as a flag name
+    }
+  }
+  return consumed;
+}
+
+/**
+ * True iff `name` appears as a bare positional token or an exact-match
+ * boolean switch anywhere in `args` *before* the `--` terminator, and is
+ * not itself the already-consumed value of one of `valueFlagNames` (#3062
+ * go/no-go review, blocker 4).
+ *
+ * Use this instead of `args.includes(name)` (or an equivalent hand-rolled
+ * loop) for any boolean switch or positional command word that a value-
+ * taking flag's own value could coincidentally equal — e.g. a free-text
+ * `--prompt` argument that happens to contain the literal word a command
+ * also uses as a switch, or a value that collides with another flag's own
+ * name.
+ */
+export function hasPositionalOrSwitch(args: readonly string[], name: string, valueFlagNames: readonly string[]): boolean {
+  const consumed = valueTokenIndexes(args, valueFlagNames);
+  const limit = argsTerminatorIndex(args);
+  for (let i = 0; i < limit; i += 1) {
+    if (consumed.has(i)) continue;
+    if (args[i] === name) return true;
+  }
+  return false;
+}

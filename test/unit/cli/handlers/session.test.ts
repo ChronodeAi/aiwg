@@ -795,6 +795,71 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     expect(existsSync(dirname(promptPath))).toBe(false);
   });
 
+  // Go/no-go review blocker 4: `args.includes('mcp')` matched the literal
+  // word `mcp` anywhere in argv, including a free-text `--prompt`/
+  // `--prompt-file` value or anything after a bare `--` terminator — see
+  // `hasPositionalOrSwitch()`'s own doc comment (src/cli/flag-parsing.ts).
+  it('a --prompt whose text is literally "mcp" does not trigger MCP injection', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['--prompt', 'mcp']));
+    expect(result.exitCode).toBe(0);
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+    expect(launch![2]).toMatchObject({ input: 'mcp' });
+    const mcpInjectCall = mockSpawnSync.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+    );
+    expect(mcpInjectCall).toBeUndefined();
+  });
+
+  // Confirmatory, not itself a regression pin: `mcp`/`persist`/etc. are
+  // decided from argv in `parseSessionArgs()` before the prompt file is
+  // even read, so the file's *content* was never reachable from
+  // `args.includes(...)` in the first place, old code or new. Kept to
+  // pin that this stays true as the implementation evolves.
+  it('a --prompt-file whose entire content is "mcp" does not trigger MCP injection', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const dir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
+    const file = join(dir, 'prompt.txt');
+    writeFileSync(file, 'mcp\n');
+    try {
+      const result = await sessionHandler.execute(makeCtx(['--prompt-file', file]));
+      expect(result.exitCode).toBe(0);
+      const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'claude');
+      expect(launch![2]).toMatchObject({ input: 'mcp' });
+      const mcpInjectCall = mockSpawnSync.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+      );
+      expect(mcpInjectCall).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--persist after a bare -- terminator is positional data, not honored as a flag', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockResolveServers.mockResolvedValue([{ name: 'git', type: 'stdio', command: 'git-mcp' }]);
+    mockResolveProfile.mockResolvedValue({ providerOverrides: {} });
+    // `persist`'s one observable effect is whether the self-invoked `mcp
+    // inject` call carries `--ephemeral`: present when NOT persisting
+    // (the normal, correct outcome here, since `--persist` is after `--`),
+    // absent when persisting (the bug this pins against).
+    const result = await sessionHandler.execute(makeCtx(['--profile', 'safe', '--prompt', 'hello', '--', '--persist']));
+    expect(result.exitCode).toBe(0);
+    const injection = mockSpawnSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes('inject'));
+    expect(injection).toBeDefined();
+    expect(injection![1]).toContain('--ephemeral');
+  });
+
+  it('the legitimate positional "mcp" subcommand still triggers MCP injection alongside --prompt', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const result = await sessionHandler.execute(makeCtx(['mcp', '--prompt', 'hello there']));
+    expect(result.exitCode).toBe(0);
+    const mcpInjectCall = mockSpawnSync.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args.includes('mcp') && args.includes('inject'),
+    );
+    expect(mcpInjectCall).toBeDefined();
+  });
+
   it('rejects --prompt and --prompt-file together, spawning nothing', async () => {
     const result = await sessionHandler.execute(makeCtx(['--prompt', 'a', '--prompt-file', '/tmp/aiwg-3062-unused']));
     expect(result.exitCode).toBe(2);

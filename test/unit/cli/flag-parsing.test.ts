@@ -9,9 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectFlagValues,
+  hasPositionalOrSwitch,
   MissingFlagValueError,
   requireFlagValue,
   scanFlagOccurrences,
+  valueTokenIndexes,
 } from '../../../src/cli/flag-parsing.js';
 
 describe('scanFlagOccurrences / requireFlagValue (#3062 second review, finding 4)', () => {
@@ -122,5 +124,40 @@ describe('scanFlagOccurrences (low-level)', () => {
   it('reports the matched index, flag, and value for each occurrence', () => {
     const occurrences = scanFlagOccurrences(['x', '--provider', 'claude', 'y'], ['--provider']);
     expect(occurrences).toEqual([{ index: 1, flag: '--provider', value: 'claude' }]);
+  });
+});
+
+// Go/no-go review blocker 4: `args.includes(name)` (or an equivalent
+// hand-rolled loop) matches `name` anywhere in `args`, including as the
+// value of a value-taking flag, or after a bare `--` terminator.
+describe('hasPositionalOrSwitch / valueTokenIndexes (#3062 go/no-go review, blocker 4)', () => {
+  const VALUE_FLAGS = ['--provider', '--prompt'];
+
+  it('a value-taking flag\'s own value is never also treated as the positional/switch', () => {
+    expect(hasPositionalOrSwitch(['--prompt', 'mcp'], 'mcp', VALUE_FLAGS)).toBe(false);
+    expect(hasPositionalOrSwitch(['--provider', '--persist'], '--persist', VALUE_FLAGS)).toBe(false);
+  });
+
+  it('finds a real positional/switch that is not any value-taking flag\'s value', () => {
+    expect(hasPositionalOrSwitch(['mcp', '--prompt', 'hi'], 'mcp', VALUE_FLAGS)).toBe(true);
+    expect(hasPositionalOrSwitch(['--prompt', 'hi', '--persist'], '--persist', VALUE_FLAGS)).toBe(true);
+  });
+
+  it('nothing at or after a bare -- terminator is a positional/switch', () => {
+    expect(hasPositionalOrSwitch(['--prompt', 'hi', '--', 'mcp'], 'mcp', VALUE_FLAGS)).toBe(false);
+    expect(hasPositionalOrSwitch(['--prompt', 'hi', '--', '--persist'], '--persist', VALUE_FLAGS)).toBe(false);
+  });
+
+  it('a --flag=value form has no separate value index to exclude, and cannot itself equal the bare name', () => {
+    // The whole token is `--provider=mcp`; it is not the string `mcp`.
+    expect(hasPositionalOrSwitch(['--provider=mcp'], 'mcp', VALUE_FLAGS)).toBe(false);
+  });
+
+  it('every occurrence of a repeated value-taking flag has its value excluded, not just the winning one', () => {
+    expect(valueTokenIndexes(['--provider', 'mcp', '--provider', 'claude'], VALUE_FLAGS)).toEqual(new Set([1, 3]));
+  });
+
+  it('a value-taking flag with no following token at all consumes nothing', () => {
+    expect(valueTokenIndexes(['x', '--provider'], VALUE_FLAGS)).toEqual(new Set());
   });
 });
