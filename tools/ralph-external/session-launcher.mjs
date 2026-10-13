@@ -2046,6 +2046,32 @@ async function assertExactLedgerChainMode(target) {
   }
 }
 
+/** Whether `target` exists at all (ENOENT -> false), through the SAME
+ * plain, unanchored `lstat` `assertPrivateLedgerDirectory`/
+ * `assertExactLedgerChainMode` already use for these top-level,
+ * caller-trusted paths (never a worker-controlled path component). Any
+ * other error (permission, I/O) propagates -- this never silently reports
+ * "missing" for a path that is merely unreadable. */
+async function ledgerPathExists(target) {
+  try { await lstat(target); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+/** fsync ONE directory's own entry table (#2915 round 8 review 8, C8):
+ * shared by `chargeLedgerSlotFile` (the chain directory's own entries, an
+ * existing durability guarantee) and `ensureLedgerChain` (the newly
+ * created chain/`ledger/` ancestry itself, below) -- fsyncing a FILE never
+ * durably publishes the directory ENTRY that names it; the containing
+ * directory's own fd must be fsynced too for the name itself to survive a
+ * host crash. Propagates any failure: a directory that cannot be durably
+ * published must refuse dispatch, never proceed as if it had been. */
+async function syncLedgerDirectory(target) {
+  await withWorkerPath(target, async anchored => {
+    const dirHandle = await open(anchored, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+  });
+}
+
 /** C7: the pre-round-8 flat layout stored one record at
  * `<captureRoot>/ledger/<digest>.json`. Creating the new per-chain
  * DIRECTORY alongside an old record of the same name would silently grant
@@ -2318,7 +2344,24 @@ async function validateLedgerChainDirectory(dir, policy) {
  * deliberately left in place rather than opportunistically swept by age --
  * an age-based heuristic is exactly the kind of inference this design
  * otherwise refuses to make (C1), and a crash in this one-write window is
- * rare enough that unbounded accumulation is not a practical concern. */
+ * rare enough that unbounded accumulation is not a practical concern.
+ *
+ * #2915 round 8 review 8 (C8, durability): `mkdir(dir, { recursive: true
+ * })` can create BOTH `ledger/` itself and the chain directory inside it
+ * in one call. Creating a directory makes its own `.`/entries durable once
+ * ITS contents are later fsynced (`chargeLedgerSlotFile` already does
+ * this for the chain directory), but the directory's NAME is an entry in
+ * its PARENT's own entry table -- fsyncing the new directory alone never
+ * publishes that. Without also fsyncing each newly created directory's
+ * PARENT, a host crash can lose the namespace entry naming it even though
+ * a later charge inside it is otherwise durably committed, letting a
+ * subsequent process recreate the "same" chain with no memory of what it
+ * already consumed -- exactly what C2's durability claim exists to rule
+ * out. Both ancestor syncs below run (and must succeed) BEFORE this
+ * function returns, so no slot in either newly created directory can ever
+ * be charged without its own containing namespace already durably
+ * published; either sync failing propagates and refuses this reservation
+ * entirely, never silently proceeding as if it had succeeded. */
 async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, afterPolicyWrite }) {
   if (process.platform === 'win32') {
     ledgerFail(LEDGER_RECORD_INVALID_CODE,
@@ -2328,9 +2371,17 @@ async function ensureLedgerChain({ captureRoot, taskChainDigest, maxAttempts, af
   const ledgerRoot = join(captureRoot, 'ledger');
   const dir = ledgerChainDir(captureRoot, taskChainDigest);
   await assertPrivateLedgerDirectory(captureRoot);
+  const ledgerRootExisted = await ledgerPathExists(ledgerRoot);
   await assertPrivateLedgerDirectory(ledgerRoot);
+  const chainDirExisted = await ledgerPathExists(dir);
   await mkdir(dir, { mode: 0o700, recursive: true });
   await assertExactLedgerChainMode(dir);
+  // Durably publish newly created ancestry (C8) before any slot inside
+  // either directory can be reserved, let alone charged. Order matters
+  // only for clarity here (both must succeed before this function
+  // returns, regardless of order) -- publish the OUTER name first.
+  if (!ledgerRootExisted) await syncLedgerDirectory(captureRoot); // publishes `ledger`'s own entry in captureRoot
+  if (!chainDirExisted) await syncLedgerDirectory(ledgerRoot); // publishes the chain directory's own entry in ledger/
   const policy = await ensureLedgerPolicy(dir, ledgerRoot, taskChainDigest, maxAttempts, afterPolicyWrite);
   await validateLedgerChainDirectory(dir, policy);
   return { dir, policy };
@@ -2381,10 +2432,7 @@ async function chargeLedgerSlotFile(dir, prefix, n, invocationId) {
   }
   try { await handle.writeFile(invocationId); await handle.sync(); }
   finally { await handle.close(); }
-  await withWorkerPath(dir, async target => {
-    const dirHandle = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try { await dirHandle.sync(); } finally { await dirHandle.close(); }
-  });
+  await syncLedgerDirectory(dir);
 }
 
 /** D1.7: unlinks `<prefix>-<n>` -- reachable only while the caller's handle

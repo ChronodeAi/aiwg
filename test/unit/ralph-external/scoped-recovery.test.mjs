@@ -13,7 +13,33 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod, readdir, truncate, link, unlink } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+
+// #2915 round 8 review 8 (C8): a mostly-transparent passthrough mock of
+// `node:fs/promises` so ONE test below can record the exact sequence of
+// `.sync()` (fsync) calls `open()` returns, by target path, in call order
+// -- an injected-filesystem seam this module has no other way to observe.
+// Every method except `open` is forwarded unchanged; `open` itself
+// forwards to the real implementation and returns the REAL handle, merely
+// wrapping that handle's own `.sync` to additionally push its target path
+// into `__aiwgSyncTrace.current` when one is installed (`null` by default,
+// so every other test in this file -- which also exercises real
+// `node:fs/promises` calls throughout -- observes byte-identical behavior).
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  const state = { trace: null };
+  const open = async (targetPath, ...rest) => {
+    const handle = await actual.open(targetPath, ...rest);
+    const originalSync = handle.sync.bind(handle);
+    handle.sync = async (...syncArgs) => {
+      if (state.trace) state.trace.push(targetPath);
+      return originalSync(...syncArgs);
+    };
+    return handle;
+  };
+  return { ...actual, open, __aiwgSyncTrace: state };
+});
 import os from 'node:os';
 import path from 'node:path';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
@@ -4338,6 +4364,49 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       const alreadyGone = await releaseLedgerPolicy({ captureRoot: root, taskChainDigest: 'never-reserved-chain' });
       expect(alreadyGone).toEqual({ released: false, reason: 'chain directory does not exist' });
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // #2915 round 8 review 8 (C8): a fresh reservation (new captureRoot, so
+  // BOTH `ledger/` and the chain directory are newly created in the SAME
+  // `mkdir(..., { recursive: true })` call) must durably publish each
+  // newly created directory's own entry in ITS parent -- fsyncing a file
+  // inside a directory never publishes the directory's NAME in its own
+  // parent's entry table. Proven with the injected filesystem: wraps every
+  // `fsPromises.open()` call so the returned handle's own `.sync()` is
+  // recorded, by basename, in call order -- the captureRoot and `ledger/`
+  // directory syncs must both appear, before the chain directory's own
+  // sync (already-tested durability) and ahead of any slot file ever being
+  // charged.
+  it('a fresh reservation syncs the newly created captureRoot and ledger/ directory entries before any slot can be charged', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-durability-'));
+    const trace = [];
+    fsPromises.__aiwgSyncTrace.trace = trace;
+    try {
+      const taskChainDigest = 'durability-chain';
+      const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'durability-inv', maxAttempts: 1 });
+      await debitDirectWorkerAllowance(ledger);
+      const basenames = trace.map((target) => path.basename(String(target)));
+      const rootBasename = path.basename(root);
+      const chainDirBasename = Buffer.from(taskChainDigest, 'utf8').toString('hex');
+      const rootSyncIndex = basenames.indexOf(rootBasename);
+      const ledgerSyncIndex = basenames.indexOf('ledger');
+      const chainDirSyncIndex = basenames.indexOf(chainDirBasename);
+      const chargedFileSyncIndex = basenames.indexOf('attempt-1.charged');
+      // Both newly created ancestors were actually synced at all (the
+      // defect this closes: neither appeared in the trace before the fix).
+      expect(rootSyncIndex).toBeGreaterThanOrEqual(0);
+      expect(ledgerSyncIndex).toBeGreaterThanOrEqual(0);
+      expect(chainDirSyncIndex).toBeGreaterThanOrEqual(0);
+      expect(chargedFileSyncIndex).toBeGreaterThanOrEqual(0);
+      // Namespace ancestry is published before dispatch could ever charge a
+      // slot inside it: both ancestor syncs precede the `.charged` file's
+      // own sync.
+      expect(rootSyncIndex).toBeLessThan(chargedFileSyncIndex);
+      expect(ledgerSyncIndex).toBeLessThan(chargedFileSyncIndex);
+    } finally {
+      fsPromises.__aiwgSyncTrace.trace = null;
       await rm(root, { recursive: true, force: true });
     }
   });
