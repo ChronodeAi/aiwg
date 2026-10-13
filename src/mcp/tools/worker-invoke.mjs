@@ -1329,7 +1329,18 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // be imported (a probe with dispatch off and a throwing import still
       // completed on origin/main; the former code imported unconditionally
       // and refused before launch even though recovery was never in effect).
-      const recoveryGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch;
+      // #2915 review 5 (finding 6, disabled-dispatch equivalence): a
+      // per-CLI-disabled CLI (`config.parallelism.clis[cli].enabled ===
+      // false`) is checked HERE too, before any import -- mirroring the
+      // exact same condition `admitDirectWorker` itself re-checks, so a
+      // per-CLI-disabled CLI never even imports the recovery module,
+      // exactly like the global switch being off already guaranteed.
+      // Previously only the global switch was checked at this point; a
+      // per-CLI-disabled CLI with the global switch on still imported
+      // `session-launcher.mjs` and constructed a task-chain digest for a
+      // CLI recovery was never going to gate.
+      const recoveryGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch
+        && snapshot.config?.parallelism?.clis?.[invocation.selected?.cli]?.enabled !== false;
       if (!recoveryGateEnabled) {
         admission = { gated: false };
       } else {
