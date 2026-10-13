@@ -450,8 +450,24 @@ export function createInvocationRegistry({
   const entries = new Map();
   const seenRequestIds = new Map(); // request_id -> { invocationId, recordedAt }
 
+  // #2915 round 8 review 8 (C7): an entry whose actual breaker still holds
+  // a `dispatched` reservation with `stop: 'unresolved'` for this exact
+  // invocation is retained INDEPENDENTLY of the ordinary terminal TTL/
+  // over-capacity sweep below — pruning it away would make `status`/
+  // `reconcile_stopped` answer "Unknown invocation_id" for a marker that
+  // demonstrably still exists on the breaker (review 8, C section finding
+  // 7: "pruning a terminal registry entry left its breaker marker intact
+  // but made reconciliation return Unknown invocation_id"). This is a
+  // bounded exemption, not an unbounded one: the breaker's own
+  // `maxOutstandingReservations` cap (independent of this registry) is
+  // what ultimately bounds how many such entries can ever accumulate.
+  function hasUnresolvedStopMarker(entry) {
+    return typeof entry.recoveryBreaker?.hasUnresolvedStop === 'function'
+      && entry.recoveryBreaker.hasUnresolvedStop(entry.invocationId);
+  }
   function terminalEntries() {
-    return [...entries.values()].filter(entry => entry.terminalAt !== null).sort((a, b) => a.terminalAt - b.terminalAt);
+    return [...entries.values()].filter(entry => entry.terminalAt !== null && !hasUnresolvedStopMarker(entry))
+      .sort((a, b) => a.terminalAt - b.terminalAt);
   }
   function pruneSeenRequestIds() {
     const cutoff = now() - ttlMs;
@@ -2701,8 +2717,19 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     }
     const result = breaker.reconcileStopEvidence({ invocationId: entry.invocationId, confirmedStop: true });
     const applied = (result?.released ?? 0) > 0;
+    // #2915 round 8 review 8 (C7): applying a confirmed stop must ALSO
+    // finalize this invocation's registry capacity -- a dispatched
+    // reservation with unresolved stop kept this entry's run-slot
+    // effectively pinned (the registry's own `hasUnresolvedStopMarker`
+    // exemption, above, retains it past the ordinary terminal sweep for
+    // exactly this reason). `markTerminal({})` sets `terminalAt` without
+    // touching `status` -- a truthful terminal state that never invents
+    // task success for an attempt whose own outcome this bridge still
+    // never confirmed. Idempotent: a no-op if the entry was already
+    // terminal.
+    if (applied) registry.markTerminal(entry.invocationId, {});
     return {
-      ...base,
+      ...publicStatus(entry, healthHook),
       reconciled: applied,
       ...(applied ? {} : { reconcileReason: 'reservation was already reconciled or no longer exists' }),
     };

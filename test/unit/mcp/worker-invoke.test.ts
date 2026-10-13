@@ -1055,6 +1055,47 @@ describe('invocation registry (#2892 defect 3)', () => {
     expect(registry.get(entry.invocationId)).toBeUndefined();
   });
 
+  // #2915 round 8 review 8 (C7): "reconciliation neither completes
+  // capacity cleanup nor survives registry eviction" -- the mapping from
+  // invocation id to its breaker must be retained while the breaker still
+  // reports an unresolved stop for it, independent of the ordinary
+  // terminal TTL/over-capacity sweep, so `status`/`reconcile_stopped`
+  // never answer "Unknown invocation_id" for a marker that demonstrably
+  // still exists.
+  it('retains a terminal entry past its TTL while its breaker still reports an unresolved stop, and evicts it once resolved', () => {
+    let clock = 0;
+    const registry = createInvocationRegistry({ maxActive: 10, maxRetained: 128, ttlMs: 1000, now: () => clock });
+    let unresolved = true;
+    const fakeBreaker = { hasUnresolvedStop: (_id: string) => unresolved };
+    const entry = registry.create({ requestId: 'unresolved-ttl-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: fakeBreaker });
+    registry.markTerminal(entry.invocationId, { status: 'uncertain', termination: 'uncertain' });
+    clock = 1500; // past the TTL
+    expect(registry.get(entry.invocationId), 'retained while unresolved, past its own TTL').toBeDefined();
+    unresolved = false; // reconciled
+    expect(registry.get(entry.invocationId), 'evicted once resolved and past TTL').toBeUndefined();
+  });
+
+  it('retains an unresolved entry even when it would otherwise be the oldest evicted under maxRetained pressure', () => {
+    let clock = 0;
+    const registry = createInvocationRegistry({ maxActive: 50, maxRetained: 3, ttlMs: Number.MAX_SAFE_INTEGER, now: () => clock });
+    const fakeBreaker = { hasUnresolvedStop: () => true };
+    const unresolvedEntry = registry.create({ requestId: 'unresolved-capacity-1' });
+    registry.update(unresolvedEntry.invocationId, { recoveryBreaker: fakeBreaker });
+    registry.markTerminal(unresolvedEntry.invocationId, { status: 'uncertain', termination: 'uncertain' });
+    clock += 1;
+    // Fill past maxRetained with ordinary (resolved) terminal entries --
+    // the unresolved entry above is strictly the OLDEST, so it would be
+    // the very first evicted by the ordinary oldest-terminal-first sweep.
+    for (let i = 0; i < 10; i++) {
+      const entry = registry.create({ requestId: `ordinary-${i}` });
+      registry.markTerminal(entry.invocationId, { status: 'completed', termination: 'confirmed' });
+      clock += 1;
+    }
+    expect(registry.get(unresolvedEntry.invocationId), 'the unresolved entry survives despite being the oldest').toBeDefined();
+    expect(registry.size).toBeLessThanOrEqual(3 + 1); // the exemption is bounded to the one unresolved entry
+  });
+
   it('refuses to start when live concurrency is at maxActive, independent of history', () => {
     const registry = createInvocationRegistry({ maxActive: 1 });
     registry.create({ requestId: 'live-only' });
@@ -3550,10 +3591,22 @@ describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => 
     registry.update(entry.invocationId, { recoveryBreaker: breaker });
 
     const handler = toolHandler(tools);
+    // #2915 round 8 review 8 (C7): before reconciliation, this invocation
+    // still occupies a LIVE registry capacity slot (never marked
+    // terminal) -- applying the confirmed stop must finalize that
+    // capacity too, not just the breaker's own reservation table.
+    expect(registry.get('inv-reconcile-1')?.terminalAt).toBeNull();
     const first = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
     const firstBody = JSON.parse(first.content[0].text);
     expect(firstBody.reconciled).toBe(true);
     expect(breaker.hasUnresolvedStop('inv-reconcile-1')).toBe(false);
+    // Capacity is finalized with a TRUTHFUL terminal state: `terminalAt`
+    // is now set, but `status` is never flipped to an invented success --
+    // it stays exactly the 'uncertain' this bridge actually observed.
+    const finalized = registry.get('inv-reconcile-1');
+    expect(finalized?.terminalAt).not.toBeNull();
+    expect(finalized?.status).toBe('uncertain');
+    expect(firstBody.status).toBe('uncertain');
 
     const second = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
     const secondBody = JSON.parse(second.content[0].text);
