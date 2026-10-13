@@ -25,9 +25,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   SIGTERM-ignoring child), and enriches the resulting `ETIMEDOUT` error/result with the command, tier
   and bound while leaving `code`/`signal`/`status` exactly as Node set them. `tools/testing/
   check-sync-child-process-timeouts.mjs` now scans `src/`, `tools/` and `bin/` in addition to the
-  pre-existing `test/` scan; product-code findings are report-only (`npm run
-  lint:test-process-timeouts` prints counts by directory, never fails) until
-  `--enforce-product`/`npm run lint:test-process-timeouts:enforce-product` turns enforcement on.
+  pre-existing `test/` scan and fails on any unbounded call there (`npm run
+  lint:test-process-timeouts`; `npm run lint:test-process-timeouts:report` prints counts by directory
+  without failing).
   Interactive-by-design calls (an editor, a login flow, handing the terminal to a harness binary) are
   exempted via a `// sync-spawn: interactive <anchor>` comment at the call site paired with an entry
   in `tools/testing/sync-spawn-allowlist.json`; the gate fails (even in report mode) on a stale

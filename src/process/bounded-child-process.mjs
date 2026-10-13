@@ -206,6 +206,7 @@ function enrichTimeoutError(error, { description, tier, boundMs }) {
   if (!error || error.code !== 'ETIMEDOUT') return error;
   error.message =
     `\`${description}\` exceeded the '${tier}' tier bound of ${boundMs}ms and was killed (SIGKILL). ` +
+    (tier === 'long' ? `Set ${AIWG_SYNC_LONG_TIMEOUT_MS_ENV} to a larger number of milliseconds, or 0 to remove the bound. ` : '') +
     error.message;
   return error;
 }
