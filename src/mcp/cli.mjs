@@ -11,7 +11,8 @@ import { assertConfigDestination, assertConfigObject, assertProjectCredentials, 
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'url';
+import { existsSync as nodeExistsSync, readFileSync as nodeReadFileSync } from 'fs';
+import { fileURLToPath, pathToFileURL } from 'url';
 import {
   McpServerRegistry,
   buildServerConfig,
@@ -31,6 +32,71 @@ import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { unmanageGrokBuildMcp } from './grok-build-config.mjs';
+
+/**
+ * Thrown when a recognized flag is present but has no usable value
+ * following it (#3062 review item 11). Mirrors `src/cli/flag-parsing.ts`'s
+ * `MissingFlagValueError`/`requireFlagValue`, duplicated in plain JS rather
+ * than imported: this file is exercised both compiled (`dist/src/mcp/
+ * cli.mjs`, where a `../cli/flag-parsing.js` sibling import would resolve)
+ * and directly from source in tests (`src/mcp/cli.mjs`, where it would
+ * not — there is no compiled `.js` sibling under `src/` itself).
+ */
+class MissingFlagValueError extends Error {
+  constructor(flagName) {
+    super(`${flagName} requires a value`);
+    this.name = 'MissingFlagValueError';
+    this.flagName = flagName;
+  }
+}
+
+function requireFlagValue(args, ...names) {
+  for (let i = 0; i < args.length; i += 1) {
+    if (names.includes(args[i])) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new MissingFlagValueError(args[i]);
+      }
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find the AIWG package root by walking up from THIS file's own location
+ * (never from `AIWG_ROOT`/`process.cwd()`, which name the *served project*,
+ * not necessarily where this module's own package lives). Depth-independent
+ * on purpose: this file ships at `src/mcp/cli.mjs` in a dev checkout and at
+ * `dist/src/mcp/cli.mjs` in the published package. Mirrors
+ * `src/mcp/tools/worker-invoke.mjs`'s own `findOwnPackageRoot` (and
+ * `tools/_resolve-impl.mjs`'s `findPackageRoot`) — the same reuse pattern,
+ * for the same reason (#3062 review item 10: `loginInProfile` is TS-authored
+ * and this file must reach it correctly whether it is itself running from
+ * `src/` or `dist/src/`).
+ */
+function findOwnPackageRoot() {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 12; i += 1) {
+    const pkgPath = path.join(dir, 'package.json');
+    if (nodeExistsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(nodeReadFileSync(pkgPath, 'utf8'));
+        if (pkg.name === 'aiwg' || pkg.name === '@aiwg/cli') return dir;
+      } catch { /* keep walking */ }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error('Could not locate the AIWG package root from mcp/cli.mjs');
+}
+
+async function importImpl(relativeFromSrc) {
+  const root = findOwnPackageRoot();
+  const { importImpl: delegate } = await import(pathToFileURL(path.join(root, 'tools/_resolve-impl.mjs')).href);
+  return delegate(import.meta.url, relativeFromSrc);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1013,6 +1079,7 @@ Usage:
   aiwg mcp profile import <file>
   aiwg mcp profile export <name> [--out <file>]
   aiwg mcp profile init-presets
+  aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]
 
 Profiles let you define named subsets of your registered MCP servers:
   aiwg mcp profile add dev --servers git-gitea,memory-fortemi --description "Dev work"
@@ -1036,6 +1103,16 @@ provider's own setting and warns about any filter the provider cannot express:
 
 Preset profiles (minimal, dev, ops, research, incident, full):
   aiwg mcp profile init-presets
+
+Logging in to a Codex profile's isolated runtime home (#3062):
+  aiwg mcp profile login ops                           interactive (requires a terminal)
+  aiwg mcp profile login ops --api-key-env OPENAI_KEY   headless — reads the key from
+                                                         $OPENAI_KEY over stdin only; it
+                                                         never appears on argv, in logs,
+                                                         or in error messages. Without a
+                                                         terminal and without
+                                                         --api-key-env, this errors
+                                                         naming the argument.
 `);
 }
 
@@ -1285,6 +1362,57 @@ async function handleProfileInitPresets() {
 }
 
 /**
+ * Handle `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]`
+ * (#3062, #3069).
+ *
+ * Wires `loginInProfile()` (src/mcp/adapters/codex-runtime.ts), which
+ * already implements the full headless-safe behavior this command needs:
+ * with a terminal attached and no `--api-key-env`, it runs the interactive
+ * `codex login` OAuth flow; with `--api-key-env`, it reads the key from
+ * that named environment variable and feeds it to `codex login
+ * --with-api-key` over stdin only — the key itself never appears on argv,
+ * in logs, or in error messages, only the variable *name* does. Without a
+ * terminal and without `--api-key-env`, it refuses, naming the argument.
+ * If the named variable is unset, it errors naming the variable (never its
+ * value, since it was never set).
+ */
+async function handleProfileLogin(args) {
+  let apiKeyEnv;
+  try {
+    apiKeyEnv = requireFlagValue(args, '--api-key-env');
+  } catch (err) {
+    if (err instanceof MissingFlagValueError) {
+      console.error(`${err.message}.`);
+      process.exit(2);
+    }
+    throw err;
+  }
+
+  // Skip --api-key-env's own value when hunting for the positional profile
+  // name, so `login --api-key-env FOO` (missing name) never misreads FOO as
+  // the name (mirrors this file's own `serverName()` helper).
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--api-key-env') { i += 1; continue; }
+    if (!args[i].startsWith('--')) positional.push(args[i]);
+  }
+  const name = positional[0];
+  if (!name) {
+    console.error('Usage: aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME>]');
+    process.exit(1);
+  }
+
+  const { loginInProfile } = await importImpl('mcp/adapters/codex-runtime.js');
+  try {
+    await loginInProfile(name, apiKeyEnv ? { apiKeyEnv } : {});
+    console.log(`\nLogged in to profile "${name}".`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
+/**
  * Route `aiwg mcp profile <subcommand>`
  */
 async function handleProfile(args) {
@@ -1308,6 +1436,9 @@ async function handleProfile(args) {
     case 'remove':
     case 'rm':
       await handleProfileRemove(subArgs);
+      break;
+    case 'login':
+      await handleProfileLogin(subArgs);
       break;
     case 'import':
       await handleProfileImport(subArgs);

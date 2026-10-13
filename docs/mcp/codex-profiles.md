@@ -84,28 +84,36 @@ other profiles.
 Run OAuth login for a profile without starting a full session:
 
 ```bash
-aiwg mcp profile login ops --provider codex
+aiwg mcp profile login ops
 ```
 
-This calls `codex login` with `HOME` set to the profile runtime home. Useful for
-pre-authenticating profiles before starting a session.
+This calls `codex login` with `HOME`/`CODEX_HOME` set to the profile runtime home.
+Useful for pre-authenticating profiles before starting a session. With a terminal
+attached, this runs the normal interactive OAuth flow — the same one a first
+`aiwg session --provider codex --profile ops` would trigger.
 
-> **Implementation status:** the `loginInProfile()` function this calls through
-> (`src/mcp/adapters/codex-runtime.ts`) exists and is headless-safe (#3062) — pass
-> an environment-variable name holding an API key and it runs `codex login
-> --with-api-key` non-interactively — but there is currently no `aiwg mcp profile
-> login` CLI subcommand wired to it (`src/mcp/cli.mjs`'s `handleProfile` switch does
-> not have a `login` case). Until that command exists, pre-authenticate a profile by
-> running `codex login` yourself with `CODEX_HOME` set to the profile's runtime home
-> (`~/.codex/roles-runtime/<profile>/`), or by starting a session with that profile
-> (`aiwg session --provider codex --profile <profile>`), which triggers the same
-> interactive OAuth flow on first use.
+**Running headless (#3062):** without a terminal, pass `--api-key-env` naming an
+environment variable that holds an API key:
 
-**Running headless (#3062):** without a terminal, launching a codex session with a
-profile and no `--prompt`/`--prompt-file` refuses instead of hanging waiting for a
-terminal (same rule as the plain, non-profile launch). Pass `--prompt`/`--prompt-file`
-to run `codex exec <prompt>` inside the profile's runtime home instead, bounded and
-with stdin ignored.
+```bash
+aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
+```
+
+This reads the key from `$OPENAI_API_KEY` and feeds it to `codex login
+--with-api-key` over stdin only — the key itself never appears on argv, in logs, or
+in any error message; only the variable *name* does. If the named variable is
+unset, the error names the variable (never a value, since there was none). Without
+a terminal and without `--api-key-env`, the command errors naming the argument
+instead of hanging waiting for input nobody can supply.
+
+## Running A Profile Session Headless
+
+Without a terminal, launching a codex session with a profile and no
+`--prompt`/`--prompt-file` refuses instead of hanging waiting for a terminal (same
+rule as the plain, non-profile launch). Pass `--prompt`/`--prompt-file` to run the
+profile's runtime home headless instead — the prompt travels on stdin via `codex
+exec -` (see [the headless-running reference](../getting-started/worker-dispatch.md)
+and `docs/providers/codex-direct.md` for the evidence), never on argv.
 
 ## Shared State Policy
 
