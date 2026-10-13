@@ -22,7 +22,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
-import { boundedSpawnSync } from '../../process/bounded-child-process.mjs';
+import { boundedSpawnSync, positiveTimeoutMs } from '../../process/bounded-child-process.mjs';
 
 export interface TranscribeResult {
   ok: boolean;
@@ -68,7 +68,11 @@ const codexAdapter: VisionAdapter = {
     try {
       const r = spawnSync(process.env.AIWG_CODEX_BIN || 'codex', args, {
         input: prompt,
-        timeout: ctx.timeoutSec * 1000,
+        // ctx.timeoutSec is caller-controlled (a CLI flag); clamp it so a
+        // configured 0 (or anything else non-positive) can't disable the
+        // bound entirely (#3062 B/C finding 8). 240s matches this
+        // function's own documented default (see extractPages() below).
+        timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000),
         encoding: 'utf8',
       });
       if (r.status === 0 && fs.existsSync(tmp)) {
@@ -106,7 +110,8 @@ function commandAdapter(template: string): VisionAdapter {
         .replaceAll('{prompt_file}', JSON.stringify(promptFile))
         .replaceAll('{out}', JSON.stringify(out));
       try {
-        const r = spawnSync('sh', ['-c', cmd], { timeout: ctx.timeoutSec * 1000, encoding: 'utf8' });
+        // Same caller-controlled-timeout clamp as the codex adapter above.
+        const r = spawnSync('sh', ['-c', cmd], { timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000), encoding: 'utf8' });
         let text: string | undefined;
         if (fs.existsSync(out)) text = fs.readFileSync(out, 'utf8');
         else if (r.status === 0 && r.stdout) text = r.stdout; // command wrote to stdout
@@ -164,7 +169,13 @@ export function rasterizePdf(pdfPath: string, outDir: string, dpi = 200): number
   const prefix = path.join(outDir, 'page');
   // Rasterizing a multi-page PDF can take a while; long tier (#3062).
   const r = boundedSpawnSync('pdftoppm', ['-png', '-r', String(dpi), pdfPath, prefix], 'long', { encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`pdftoppm failed: ${r.stderr || r.status}`);
+  if (r.status !== 0) {
+    // #3062 finding 14: r.error.message (when present) carries the
+    // enriched timeout explanation (tier/bound/override) that stderr/
+    // status alone do not — put it first, captured stderr after.
+    const detail = r.error ? r.error.message : `pdftoppm failed: ${r.stderr || r.status}`;
+    throw new Error(r.error && r.stderr ? `${detail} (stderr: ${r.stderr})` : detail);
+  }
   // Normalize names to page-NNN.png (3-digit zero-pad).
   let count = 0;
   for (const f of fs.readdirSync(outDir)) {
