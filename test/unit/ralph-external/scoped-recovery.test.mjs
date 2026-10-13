@@ -30,6 +30,7 @@ import {
   scopeKeyFor,
   scopeRank,
 } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+import * as breakerModule from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import {
   SessionLauncher,
   STOP_BEFORE_RETRY_CODE,
@@ -4711,6 +4712,37 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
       drivers: { codex: { canVerifyAttempt: false } } }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: null }).gated).toBe(false);
     expect(directRecoveryEligibility({ gateEnabled: true }).gated).toBe(true);
+  });
+
+  // #2915 round 8 review 8 (A/D6): `directRecoveryEligibility` must decide
+  // from its OWN inputs only -- it must never construct (or otherwise
+  // touch) the shared process-global breaker singleton as a side effect of
+  // merely checking eligibility. Proven here by spying on the breaker
+  // CLASS itself (imported into session-launcher.mjs, which is what
+  // `getDirectRecoveryBreaker()` would `new` if it were called) rather than
+  // on the accessor function, since the accessor is called as a same-module
+  // local reference that a spy on the re-exported binding cannot intercept.
+  it('directRecoveryEligibility never constructs the shared breaker singleton (pure decision)', () => {
+    resetDirectRecoveryBreaker();
+    // Constructed BEFORE the spy is installed, so the explicit-override
+    // assertion below exercises a real, fully-functional instance -- only
+    // calls made AFTER this point (by `directRecoveryEligibility` itself)
+    // are what the spy must prove never happened.
+    const explicitBreaker = new ScopedFailureBreaker();
+    const ctorSpy = vi.spyOn(breakerModule, 'ScopedFailureBreaker');
+    try {
+      // Default (`scopedBreaker` omitted): the only path that used to reach
+      // for the lazily-constructed singleton.
+      expect(directRecoveryEligibility({ gateEnabled: true, invocation: { selected: { cli: 'codex' } } }).gated).toBe(true);
+      // Explicit override, both branches: neither ever needs the singleton.
+      expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: null }).gated).toBe(false);
+      expect(directRecoveryEligibility({ gateEnabled: true, scopedBreaker: explicitBreaker }).gated).toBe(true);
+      expect(ctorSpy).not.toHaveBeenCalled();
+    } finally {
+      ctorSpy.mockRestore();
+      explicitBreaker.destroy();
+      resetDirectRecoveryBreaker();
+    }
   });
 });
 

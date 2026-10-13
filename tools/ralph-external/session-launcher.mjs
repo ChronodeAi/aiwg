@@ -3006,8 +3006,17 @@ export function directRecoveryEligibility({ gateEnabled, config, invocation, dri
   // this CLI is never eligible for recovery-breaker gating at all, exactly
   // like the global/per-CLI dispatch switch being off.
   if (cli && drivers?.[cli]?.canVerifyAttempt === false) return { gated: false, reason: 'cli-cannot-verify-final' };
-  const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
-  if (!breaker) return { gated: false };
+  // #2915 round 8 review 8 (A/D6, "directRecoveryEligibility constructs/
+  // reads shared breaker state"): this must decide from its OWN inputs
+  // only — never call the `getDirectRecoveryBreaker()` accessor, which
+  // lazily CONSTRUCTS (a side effect) and caches the shared singleton the
+  // first time anything calls it. The only way the resolved breaker could
+  // ever be falsy is the caller's own explicit `scopedBreaker: null`
+  // override (documented as "disables the gate"); the default
+  // (`scopedBreaker` omitted/`undefined`) always resolves to a truthy
+  // breaker via that accessor, so checking for the override directly is
+  // exactly equivalent — without ever touching module-level state.
+  if (scopedBreaker === null) return { gated: false };
   return { gated: true };
 }
 
