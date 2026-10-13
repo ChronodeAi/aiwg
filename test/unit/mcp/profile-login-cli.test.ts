@@ -103,6 +103,30 @@ describe('aiwg mcp profile login (#3062, #3069)', () => {
     expect(existsSync(argvLogPath)).toBe(false);
   });
 
+  it('accepts --api-key-env=NAME (equals form)', () => {
+    const result = run(['ci-profile', '--api-key-env=AIWG_TEST_PROFILE_LOGIN_KEY'], {
+      AIWG_TEST_PROFILE_LOGIN_KEY: 'sk-test-not-a-real-secret-eq',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(stdinLogPath, 'utf-8')).toBe('sk-test-not-a-real-secret-eq');
+  });
+
+  it('--api-key-env= (empty value) is a usage error, not a silently-unset lookup', () => {
+    const result = run(['ci-profile', '--api-key-env=']);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--api-key-env requires a value');
+    expect(existsSync(argvLogPath)).toBe(false);
+  });
+
+  it('a malformed second --api-key-env occurrence is still an error, even though the first was valid', () => {
+    const result = run(['ci-profile', '--api-key-env', 'AIWG_TEST_PROFILE_LOGIN_KEY', '--api-key-env'], {
+      AIWG_TEST_PROFILE_LOGIN_KEY: 'sk-test-not-a-real-secret',
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--api-key-env requires a value');
+    expect(existsSync(argvLogPath)).toBe(false);
+  });
+
   it('--api-key-env naming an unset variable errors naming the variable, never spawning codex', () => {
     const result = run(['ci-profile', '--api-key-env', 'AIWG_TEST_PROFILE_LOGIN_UNSET']);
     expect(result.exitCode).not.toBe(0);

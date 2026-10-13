@@ -50,17 +50,49 @@ class MissingFlagValueError extends Error {
   }
 }
 
-function requireFlagValue(args, ...names) {
+/**
+ * Single-pass, every-occurrence-validated flag lookup (#3062 second
+ * review, finding 4 — mirrors `src/cli/flag-parsing.ts`'s
+ * `scanFlagOccurrences`/`requireFlagValue`, duplicated here for the same
+ * source/dist reason as the class above): stops at a bare `--`
+ * terminator; accepts `--flag value` and `--flag=value`; a space-
+ * separated value starting with `--` is treated as missing (use `=` for a
+ * value that must start with `--`); every occurrence is checked, not just
+ * the first; `options.rejectEmpty` additionally rejects an empty-string
+ * value. `options.precedence` picks which occurrence wins when the flag
+ * repeats — `'first'` (default) here matches this file's own pre-existing
+ * `parseFlag()` convention (first match wins).
+ */
+function requireFlagValue(args, options, ...names) {
+  const occurrences = [];
   for (let i = 0; i < args.length; i += 1) {
-    if (names.includes(args[i])) {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith('--')) {
-        throw new MissingFlagValueError(args[i]);
+    const token = args[i];
+    if (token === undefined) continue;
+    if (token === '--') break;
+
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      if (eq !== -1) {
+        const flag = token.slice(0, eq);
+        const value = token.slice(eq + 1);
+        if (names.includes(flag)) {
+          if (options.rejectEmpty && value === '') throw new MissingFlagValueError(flag);
+          occurrences.push(value);
+          continue;
+        }
       }
-      return value;
+    }
+
+    if (names.includes(token)) {
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith('--')) throw new MissingFlagValueError(token);
+      if (options.rejectEmpty && next === '') throw new MissingFlagValueError(token);
+      occurrences.push(next);
+      i += 1;
     }
   }
-  return undefined;
+  if (occurrences.length === 0) return undefined;
+  return options.precedence === 'last' ? occurrences[occurrences.length - 1] : occurrences[0];
 }
 
 /**
@@ -70,10 +102,7 @@ function requireFlagValue(args, ...names) {
  * on purpose: this file ships at `src/mcp/cli.mjs` in a dev checkout and at
  * `dist/src/mcp/cli.mjs` in the published package. Mirrors
  * `src/mcp/tools/worker-invoke.mjs`'s own `findOwnPackageRoot` (and
- * `tools/_resolve-impl.mjs`'s `findPackageRoot`) — the same reuse pattern,
- * for the same reason (#3062 review item 10: `loginInProfile` is TS-authored
- * and this file must reach it correctly whether it is itself running from
- * `src/` or `dist/src/`).
+ * `tools/_resolve-impl.mjs`'s `findPackageRoot`).
  */
 function findOwnPackageRoot() {
   let dir = path.dirname(fileURLToPath(import.meta.url));
@@ -92,10 +121,29 @@ function findOwnPackageRoot() {
   throw new Error('Could not locate the AIWG package root from mcp/cli.mjs');
 }
 
-async function importImpl(relativeFromSrc) {
+/**
+ * Load the compiled `loginInProfile()` adapter (#3062 second review,
+ * finding 3). The first round routed this through `tools/_resolve-impl.mjs`,
+ * which falls back to importing the TypeScript *source* when no compiled
+ * `dist/src/` exists — but that source module's own internal imports
+ * (e.g. `../../cli/env.js`) have no `.js` sibling under `src/` either, so
+ * the fallback itself fails deep inside the adapter with an unrelated-
+ * looking `ERR_MODULE_NOT_FOUND`, on every Node version, not just ones
+ * without native TypeScript support. This loads the compiled module
+ * directly — never TypeScript source — and fails fast with one actionable
+ * line when it is missing, instead of attempting (and failing inside) a
+ * source fallback.
+ */
+async function loadCodexRuntimeAdapter() {
   const root = findOwnPackageRoot();
-  const { importImpl: delegate } = await import(pathToFileURL(path.join(root, 'tools/_resolve-impl.mjs')).href);
-  return delegate(import.meta.url, relativeFromSrc);
+  const compiledPath = path.join(root, 'dist', 'src', 'mcp', 'adapters', 'codex-runtime.js');
+  if (!nodeExistsSync(compiledPath)) {
+    throw new Error(
+      'aiwg mcp profile login requires the built CLI (missing dist/src/mcp/adapters/codex-runtime.js). ' +
+      'Run `npm run build:cli` in this checkout, or use an installed `aiwg` (`npm install -g aiwg`).',
+    );
+  }
+  return import(pathToFileURL(compiledPath).href);
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1379,7 +1427,9 @@ async function handleProfileInitPresets() {
 async function handleProfileLogin(args) {
   let apiKeyEnv;
   try {
-    apiKeyEnv = requireFlagValue(args, '--api-key-env');
+    // rejectEmpty: an explicitly-given-but-empty variable name can never
+    // name a real environment variable (#3062 second review, finding 4).
+    apiKeyEnv = requireFlagValue(args, { rejectEmpty: true }, '--api-key-env');
   } catch (err) {
     if (err instanceof MissingFlagValueError) {
       console.error(`${err.message}.`);
@@ -1390,11 +1440,14 @@ async function handleProfileLogin(args) {
 
   // Skip --api-key-env's own value when hunting for the positional profile
   // name, so `login --api-key-env FOO` (missing name) never misreads FOO as
-  // the name (mirrors this file's own `serverName()` helper).
+  // the name (mirrors this file's own `serverName()` helper). Stops at a
+  // bare `--` the same way requireFlagValue() does.
   const positional = [];
   for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === '--api-key-env') { i += 1; continue; }
-    if (!args[i].startsWith('--')) positional.push(args[i]);
+    const token = args[i];
+    if (token === '--') break;
+    if (token === '--api-key-env') { i += 1; continue; }
+    if (!token.startsWith('--')) positional.push(token);
   }
   const name = positional[0];
   if (!name) {
@@ -1402,8 +1455,8 @@ async function handleProfileLogin(args) {
     process.exit(1);
   }
 
-  const { loginInProfile } = await importImpl('mcp/adapters/codex-runtime.js');
   try {
+    const { loginInProfile } = await loadCodexRuntimeAdapter();
     await loginInProfile(name, apiKeyEnv ? { apiKeyEnv } : {});
     console.log(`\nLogged in to profile "${name}".`);
   } catch (err) {

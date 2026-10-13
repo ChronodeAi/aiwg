@@ -109,6 +109,21 @@ describe('sync-upstream.mjs headless conflict handling (#3062)', () => {
     expect(existsSync(join(root, '.git', 'MERGE_HEAD'))).toBe(true);
   });
 
+  it('--on-conflict=3 (equals form) aborts the merge headlessly', () => {
+    const result = runScript(['feature', '--on-conflict=3'], root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toContain('merge aborted');
+    expect(existsSync(join(root, '.git', 'MERGE_HEAD'))).toBe(false);
+  });
+
+  it('a malformed second --on-conflict occurrence is still an error, even though the first was valid', () => {
+    const result = runScript(['feature', '--on-conflict', '3', '--on-conflict'], root);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--on-conflict requires a value');
+    // Never reached the first (otherwise valid) occurrence's action.
+    expect(existsSync(join(root, '.git', 'MERGE_HEAD'))).toBe(true);
+  });
+
   it('without a terminal and without --on-conflict, prints resolution options and changes nothing', () => {
     const result = runScript(['feature'], root);
     expect(result.exitCode).not.toBe(0);

@@ -113,11 +113,14 @@ const TRACKER_VIA: TrackerVia[] = ['tea', 'gh', 'mcp', 'api'];
  * A value-taking flag present without a usable value is a usage error, not
  * "not given" (#3062 review item 11) — delegates to the shared strict
  * parser, translating its `MissingFlagValueError` into this file's own
- * `AiwgError`/`EXIT_CODES.USAGE` convention.
+ * `AiwgError`/`EXIT_CODES.USAGE` convention. `precedence: 'first'` matches
+ * this command's own pre-#3062 behavior (a hand-rolled loop that returned
+ * on the first match) — unchanged by the shared parser's second-round fix
+ * (#3062 second review, finding 4).
  */
 function flagValue(args: readonly string[], ...names: string[]): string | undefined {
   try {
-    return strictFlagValue(args, ...names);
+    return strictFlagValue(args, {}, ...names);
   } catch (err) {
     if (err instanceof MissingFlagValueError) {
       throw new AiwgError({
@@ -604,13 +607,29 @@ export const setupHandler: CommandHandler = {
 
     const args = subcommand === 'project' ? ctx.args.slice(1) : ctx.args;
     const options = parseSetupProjectOptions({ ...ctx, args });
-    let plan = await buildSetupProjectPlan(options);
 
     // #3062 review item 12: the one shared interactive decision (TTY, TERM,
     // CI, DEBIAN_FRONTEND) — this used to check only `process.stdin.isTTY &&
     // process.stdout.isTTY`, so a CI job with a pseudo-terminal could still
     // reach these prompts.
     const canPrompt = isInteractive(options.nonInteractive);
+
+    // #3062 second review, finding 6: refuse before any child process runs
+    // — `buildSetupProjectPlan()` below makes four `git` calls on its own,
+    // and this exact refusal used to happen only after building (and
+    // printing) the full plan. A write that can never be confirmed (no
+    // `--yes`, no terminal, not a dry run) is known from `options` alone.
+    if (!options.dryRun && !options.yes && !canPrompt) {
+      throw new AiwgError({
+        code: 'ERR_NON_INTERACTIVE_CONFIRMATION_REQUIRED',
+        message: 'Refusing to write project setup in a non-interactive context without --yes.',
+        hint: 'Re-run with `aiwg setup project --yes` or use `--dry-run` to preview only.',
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+
+    let plan = await buildSetupProjectPlan(options);
+
     if (!options.yes && canPrompt) {
       const rl = createPromptInterface();
       try {
@@ -675,14 +694,8 @@ export const setupHandler: CommandHandler = {
 
     if (options.dryRun) return { exitCode: 0 };
 
-    if (!options.yes && !canPrompt) {
-      throw new AiwgError({
-        code: 'ERR_NON_INTERACTIVE_CONFIRMATION_REQUIRED',
-        message: 'Refusing to write project setup in a non-interactive context without --yes.',
-        hint: 'Re-run with `aiwg setup project --yes` or use `--dry-run` to preview only.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-    }
+    // The `!options.yes && !canPrompt` refusal above (review finding 6)
+    // already covers this exact condition before any git call ran.
 
     if (!options.yes && canPrompt) {
       const rl = createPromptInterface();

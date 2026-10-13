@@ -12,6 +12,7 @@ import type { ArtifactVerificationResult } from '../../security/artifact-verifie
 import { artifactVerifyHandler } from './artifact-verify.js';
 import { requireFlagValue, MissingFlagValueError } from '../flag-parsing.js';
 import { exitCodeForSpawnResult } from '../child-process-result.js';
+import { askString, createPromptInterface } from '../prompt-utils.js';
 
 type Severity = 'error' | 'warning';
 
@@ -212,9 +213,12 @@ Headless input steps (#3062):
  * "not given" (#3062 review item 11) — delegates to the shared strict
  * parser. Callers (the three handlers below) catch `MissingFlagValueError`
  * and report it before any preflight check, spawn, or write.
+ * `precedence: 'first'` matches this command's own pre-#3062 behavior (a
+ * hand-rolled loop that returned on the first match), unchanged by the
+ * shared parser's second-round fix (#3062 second review, finding 4).
  */
 function flagValue(args: readonly string[], name: string): string | undefined {
-  return requireFlagValue(args, name);
+  return requireFlagValue(args, {}, name);
 }
 
 function hasFlag(args: readonly string[], ...names: string[]): boolean {
@@ -808,28 +812,41 @@ function missingAskParams(step: SetupStep, params: Record<string, string>): stri
 
 /**
  * Preflight every selected step (recursively into `platform-route` nested
- * steps) for conditions that would block it from running at all, and
+ * steps, and into the recovery sequence any selected step's `on_fail`
+ * names) for conditions that would block it from running at all, and
  * return one message per blocker — never a partial list halted at the
- * first step (#3062 review item 13: refusal must happen before ANY step
- * executes, not inside the per-step sequential loop).
+ * first step (#3062 review item 13, and the second review's finding 7:
+ * refusal must happen before ANY step executes, including before a
+ * recovery sequence a *later* failing step would trigger, not inside the
+ * per-step sequential loop).
  *
- *   - `interactive: true` without a terminal: its prompts cannot be
- *     enumerated or supplied via `--param` at all (review item 10) — an
- *     arbitrary script's questions are not statically knowable.
- *   - `type: ask` with no declared `params`, or with declared params not
- *     all resolved: this CLI has no interactive capture mechanism for
- *     `ask` steps (none exists in this codebase to reuse, so refusing is
- *     the documented behavior rather than a guess — see the module doc on
- *     `runStep`'s `ask` branch) — missing names are reported so `--param`
- *     can supply them.
- *
- * Recovery steps are deliberately not preflighted here: which recovery
- * procedure (if any) runs is only known after a step fails, so `runStep`
- * re-checks the same two conditions for them individually, immediately
- * before each recovery step actually executes.
+ *   - `interactive: true` without a terminal AND without every declared
+ *     `params` entry resolved: with every declared param supplied, the
+ *     step runs headless instead (review item 10; second review finding
+ *     5b — the step itself is trusted not to need to prompt once its
+ *     declared inputs are present). With no declared params at all
+ *     ("undeclared interaction" — the step's questions cannot be
+ *     enumerated or supplied via `--param`) this always requires a
+ *     terminal.
+ *   - `type: ask` with no declared `params`: always refused — unlike
+ *     `interactive: true`, this CLI itself owns the prompting for `ask`
+ *     steps (there is no separate script to hand a terminal to), and
+ *     with nothing declared there is no destination to store an answer
+ *     in. This is one of the two agreed, permanent exceptions (the other
+ *     is the contributor sync-upstream strategy choice).
+ *   - `type: ask` with declared params not all resolved, and no
+ *     terminal: refused, naming the missing names so `--param` can
+ *     supply them. With a terminal, this is *not* a blocker — the
+ *     missing ones are prompted for when the step actually runs (second
+ *     review finding 5b).
+ *   - `type: agentic`/`type: chain`: `runStep()` refuses both
+ *     unconditionally; preflighted the same way so an earlier, unrelated
+ *     step is never executed ahead of this unconditional refusal (second
+ *     review finding 7).
  */
 function collectPreflightBlockers(
   steps: SetupStep[],
+  manifest: SetupManifest,
   targetOs: string,
   params: Record<string, string>,
   terminalPresent: boolean,
@@ -837,12 +854,20 @@ function collectPreflightBlockers(
   const blockers: string[] = [];
   for (const step of steps) {
     if (!stepPlatformMatches(targetOs, step)) continue;
-    if (step.interactive && !terminalPresent) {
-      blockers.push(
-        `step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied via --param) ` +
-        'and requires a terminal',
-      );
+
+    if (step.interactive) {
+      const names = askStepParams(step);
+      const missing = missingAskParams(step, params);
+      const fullySupplied = names.length > 0 && missing.length === 0;
+      if (!fullySupplied && !terminalPresent) {
+        blockers.push(
+          names.length === 0
+            ? `step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied via --param) and requires a terminal`
+            : `step '${step.id}' is marked interactive and is missing required param(s): ${missing.join(', ')} (supply with --param <name>=<value>, or run with a terminal attached)`,
+        );
+      }
     }
+
     if (step.type === 'ask') {
       const names = askStepParams(step);
       if (names.length === 0) {
@@ -852,36 +877,85 @@ function collectPreflightBlockers(
         );
       } else {
         const missing = missingAskParams(step, params);
-        if (missing.length > 0) {
+        if (missing.length > 0 && !terminalPresent) {
           blockers.push(
             `ask step '${step.id}' is missing required param(s): ${missing.join(', ')} (supply with --param ` +
-            '<name>=<value>; interactive capture for ask steps is not implemented)',
+            '<name>=<value>, or run with a terminal attached to be prompted for them)',
           );
         }
       }
     }
+
+    if (step.type === 'agentic' || step.type === 'chain') {
+      blockers.push(
+        `${step.type} step '${step.id}' is not supported by deterministic CLI execution and is always refused`,
+      );
+    }
+
     if (step.type === 'platform-route') {
       const route = step.routes?.find((item) => item.platform === targetOs);
-      if (route) blockers.push(...collectPreflightBlockers(route.steps, targetOs, params, terminalPresent));
+      if (route) blockers.push(...collectPreflightBlockers(route.steps, manifest, targetOs, params, terminalPresent));
+    }
+
+    if (step.on_fail) {
+      const recoveryProcedure = manifest.spec.recovery?.find((item) => item.id === step.on_fail);
+      if (recoveryProcedure) {
+        const recoveryBlockers = collectPreflightBlockers(recoveryProcedure.steps, manifest, targetOs, params, terminalPresent);
+        blockers.push(...recoveryBlockers.map((b) => `[recovery '${recoveryProcedure.id}' for step '${step.id}'] ${b}`));
+      }
     }
   }
   return blockers;
 }
 
-function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, params: Record<string, string>, targetOs: string, confirmed: boolean, recovery = false): { ok: boolean; status: number; failedStep?: string } {
+/**
+ * Prompt interactively for each of `missingNames`, one per declared `ask`-
+ * step param still unresolved (#3062 second review, finding 5b: declared
+ * ask inputs missing AT a terminal are prompted for, not refused — this
+ * is reachable only when `isInteractive()` is true, so it is always safe
+ * to open a prompt interface here).
+ */
+async function promptForAskStep(step: SetupStep, missingNames: string[]): Promise<Record<string, string>> {
+  const rl = createPromptInterface();
+  const answers: Record<string, string> = {};
+  try {
+    if (step.message) console.log(`[setup] ${step.message}`);
+    for (const name of missingNames) {
+      const answer = await askString(rl, `  ${name}: `, '', undefined);
+      if (answer) answers[name] = answer;
+    }
+  } finally {
+    rl.close();
+  }
+  return answers;
+}
+
+async function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, params: Record<string, string>, targetOs: string, confirmed: boolean, recovery = false): Promise<{ ok: boolean; status: number; failedStep?: string }> {
   if (!stepPlatformMatches(targetOs, step)) return { ok: true, status: 0 };
   // A step marked `interactive: true` (#3062) declares that it prompts
-  // directly; refuse it up front without a terminal instead of letting it
-  // run and fail at an arbitrary bounded timeout. For a top-level selected
-  // step this is already caught by `collectPreflightBlockers` before any
-  // step runs (review item 13); this remains the only gate for a recovery
-  // step, which isn't known until a step actually fails.
-  if (step.interactive && !isInteractive()) {
-    console.error(
-      `setup-run: step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied via ` +
-      '--param) and requires a terminal; re-run from an interactive shell.',
-    );
-    return { ok: false, status: 2, failedStep: step.id };
+  // directly. For a top-level selected step this condition is already
+  // preflighted before any step runs (review item 13; second review
+  // finding 7); this remains the only gate for a recovery step, which
+  // isn't known until a step actually fails. With every declared `params`
+  // entry resolved, the step is trusted not to need to prompt and runs
+  // headless below like any other step (second review finding 5b — the
+  // bug this fixes: it used to be refused here even when fully supplied).
+  // With no declared params at all ("undeclared interaction") or some
+  // still missing, a terminal is required.
+  if (step.interactive) {
+    const names = askStepParams(step);
+    const missing = missingAskParams(step, params);
+    const fullySupplied = names.length > 0 && missing.length === 0;
+    if (!fullySupplied && !isInteractive()) {
+      console.error(
+        names.length === 0
+          ? `setup-run: step '${step.id}' is marked interactive (its prompts cannot be enumerated or supplied ` +
+            'via --param) and requires a terminal; re-run from an interactive shell.'
+          : `setup-run: step '${step.id}' is marked interactive and is missing required param(s): ` +
+            `${missing.join(', ')}; supply with --param <name>=<value>, or re-run from an interactive shell.`,
+      );
+      return { ok: false, status: 2, failedStep: step.id };
+    }
   }
   const env = { ...process.env, ...params };
   console.log(`[setup] Step ${step.id} (${step.type})`);
@@ -950,6 +1024,11 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
     // gate for a recovery-path `ask` step, which isn't preflighted.
     const names = askStepParams(step);
     if (names.length === 0) {
+      // Agreed, permanent exception (second review finding 5b): this CLI
+      // owns the prompting for `ask` steps directly (there is no separate
+      // script to hand a terminal to), and with nothing declared there is
+      // no destination to store an answer in — always refused, with or
+      // without a terminal.
       console.error(
         `setup-run: ask step '${step.id}' declares no params to resolve via --param; interactive capture ` +
         "for ask steps is not implemented — declare 'params' on the step and supply them with --param " +
@@ -958,20 +1037,36 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
       return { ok: false, status: 2, failedStep: step.id };
     }
     const missing = missingAskParams(step, params);
-    if (missing.length > 0) {
+    if (missing.length === 0) {
+      console.log(`  ask: ${step.message ?? step.id} -> answered via --param (${names.join(', ')})`);
+      return { ok: true, status: 0 };
+    }
+    if (!isInteractive()) {
       console.error(
         `setup-run: ask step '${step.id}' is missing required param(s): ${missing.join(', ')}; supply with ` +
-        '--param <name>=<value> (interactive capture for ask steps is not implemented).',
+        '--param <name>=<value>, or re-run from an interactive shell to be prompted for them.',
       );
       return { ok: false, status: 2, failedStep: step.id };
     }
-    console.log(`  ask: ${step.message ?? step.id} -> answered via --param (${names.join(', ')})`);
+    // #3062 second review, finding 5b: declared ask inputs missing AT a
+    // terminal are prompted for, not refused.
+    const answers = await promptForAskStep(step, missing);
+    const stillMissing = missing.filter((name) => !answers[name]);
+    if (stillMissing.length > 0) {
+      console.error(`setup-run: ask step '${step.id}' did not receive a value for: ${stillMissing.join(', ')}.`);
+      return { ok: false, status: 2, failedStep: step.id };
+    }
+    // Merged into the same object reference the caller's loop (and every
+    // later step) reads from, so a later step sees the interactively-
+    // captured answer exactly like a `--param`-supplied one.
+    Object.assign(params, answers);
+    console.log(`  ask: ${step.message ?? step.id} -> answered interactively (${missing.join(', ')})`);
     return { ok: true, status: 0 };
   }
   if (step.type === 'platform-route') {
     const route = step.routes?.find((item) => item.platform === targetOs);
     for (const nested of route?.steps ?? []) {
-      const result = runStep(nested, manifest, manifestDir, params, targetOs, confirmed);
+      const result = await runStep(nested, manifest, manifestDir, params, targetOs, confirmed);
       if (!result.ok) return result;
     }
     return { ok: true, status: 0 };
@@ -979,7 +1074,7 @@ function runStep(step: SetupStep, manifest: SetupManifest, manifestDir: string, 
   return { ok: true, status: 0 };
 }
 
-export function runSetupManifest(options: RunOptions): HandlerResult {
+export async function runSetupManifest(options: RunOptions): Promise<HandlerResult> {
   const validation = validateSetupManifest({
     cwd: options.cwd,
     frameworkRoot: options.frameworkRoot,
@@ -1027,7 +1122,7 @@ export function runSetupManifest(options: RunOptions): HandlerResult {
   // behavior checked `interactive`/`ask` conditions inside the per-step
   // loop below, so an earlier normal step could already perform work
   // before a later step's refusal fired.
-  const blockers = collectPreflightBlockers(steps, target.os, params.values, isInteractive());
+  const blockers = collectPreflightBlockers(steps, manifest, target.os, params.values, isInteractive());
   if (blockers.length > 0) {
     for (const blocker of blockers) console.error(`setup-run: ${blocker}.`);
     return {
@@ -1036,14 +1131,14 @@ export function runSetupManifest(options: RunOptions): HandlerResult {
     };
   }
   for (const step of steps) {
-    const result = runStep(step, manifest, validation.manifestDir, params.values, target.os, options.yes);
+    const result = await runStep(step, manifest, validation.manifestDir, params.values, target.os, options.yes);
     if (!result.ok) {
       if (result.failedStep && step.on_fail) {
         const recovery = manifest.spec.recovery?.find((item) => item.id === step.on_fail);
         if (recovery) {
           console.error(`[setup] recovery '${recovery.id}' available for failed step '${result.failedStep}'`);
           for (const recoveryStep of recovery.steps) {
-            const recoveryResult = runStep(recoveryStep, manifest, validation.manifestDir, params.values, target.os, options.yes, true);
+            const recoveryResult = await runStep(recoveryStep, manifest, validation.manifestDir, params.values, target.os, options.yes, true);
             if (!recoveryResult.ok) return { exitCode: recoveryResult.status || 1, message: `setup-run: recovery '${recovery.id}' failed` };
           }
         }

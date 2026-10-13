@@ -5,6 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify } from 'yaml';
+
+// Defaults to `false` (no terminal), matching the real `isInteractive()`
+// under Vitest (no TTY attached) that every pre-existing test in this file
+// already implicitly relies on. The dedicated `interactive: true`/`ask`
+// terminal-present tests below (#3062 second review, finding 5b) override
+// this per test.
+const mockIsInteractive = vi.fn(() => false);
+vi.mock('../../../../src/cli/env.js', () => ({ isInteractive: (...callArgs: unknown[]) => mockIsInteractive(...callArgs) }));
+
+// A queue-based fake for the `ask`-step interactive-prompt path: each
+// `askString` call shifts the next queued answer (or '' once exhausted).
+const promptAnswerQueue: string[] = [];
+const mockAskString = vi.fn(async () => (promptAnswerQueue.length > 0 ? promptAnswerQueue.shift()! : ''));
+vi.mock('../../../../src/cli/prompt-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/cli/prompt-utils.js')>();
+  return {
+    ...actual,
+    askString: (...callArgs: unknown[]) => mockAskString(...callArgs),
+    createPromptInterface: () => ({ close: () => {} }),
+  };
+});
+
 import {
   generateSetupManifest,
   runSetupManifest,
@@ -17,6 +39,22 @@ import { allHandlers } from '../../../../src/cli/handlers/index.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
+
+// `config/vitest.config.js` sets `mockReset: true`, which wipes a mock's
+// implementation (including the one passed to `vi.fn(impl)` at creation)
+// before every test — re-establish both explicitly rather than relying on
+// the module-level factory surviving that reset.
+beforeEach(() => {
+  mockIsInteractive.mockReturnValue(false);
+  promptAnswerQueue.length = 0;
+  mockAskString.mockClear();
+  mockAskString.mockImplementation(async () => (promptAnswerQueue.length > 0 ? promptAnswerQueue.shift()! : ''));
+});
+
+afterEach(() => {
+  mockIsInteractive.mockReturnValue(false);
+  promptAnswerQueue.length = 0;
+});
 
 function ctx(tmpDir: string, args: string[] = []): HandlerContext {
   return {
@@ -169,12 +207,12 @@ describe('setup manifest CLI handlers', () => {
     }
   });
 
-  it('dry-runs a valid manifest without executing steps', () => {
+  it('dry-runs a valid manifest without executing steps', async () => {
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, baseManifest());
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       dryRun: true,
@@ -188,14 +226,14 @@ describe('setup manifest CLI handlers', () => {
     expect(stdoutSpy.mock.calls.map(([chunk]) => String(chunk)).join('\n')).toContain('[setup:dry-run]');
   });
 
-  it('blocks provider-orchestrated handoff until the exact manifest bytes are verified', () => {
+  it('blocks provider-orchestrated handoff until the exact manifest bytes are verified', async () => {
     const manifest = baseManifest({ id: 'inspect', type: 'agentic', instruction: 'Inspect the project safely.' });
     manifest.metadata.execution_mode = 'provider-orchestrated';
     writeManifest(tmpDir, manifest);
 
     const validation = validateSetupManifest({ cwd: tmpDir, frameworkRoot: REPO_ROOT });
     expect(validation.findings.filter((finding) => finding.rule === 'agenticStep')).toEqual([]);
-    expect(runSetupManifest({
+    expect(await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
@@ -209,7 +247,7 @@ describe('setup manifest CLI handlers', () => {
 
     const manifestPath = path.join(tmpDir, 'setup.manifest.yaml');
     const bytes = fs.readFileSync(manifestPath);
-    expect(runSetupManifest({
+    expect(await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
@@ -230,60 +268,60 @@ describe('setup manifest CLI handlers', () => {
     });
   });
 
-  it('fails invalid manifests and missing params before execution', () => {
+  it('fails invalid manifests and missing params before execution', async () => {
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, { ...baseManifest(), kind: 'Other' });
-    expect(runSetupManifest({
+    expect((await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
       paramValues: { INSTALL_DIR: tmpDir },
       skip: new Set(),
       yes: true,
-    }).exitCode).toBe(1);
+    })).exitCode).toBe(1);
     expect(fs.existsSync(marker)).toBe(false);
 
     writeManifest(tmpDir, baseManifest());
-    expect(runSetupManifest({
+    expect((await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
       paramValues: {},
       skip: new Set(),
       yes: true,
-    }).exitCode).toBe(1);
+    })).exitCode).toBe(1);
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('refuses mutating execution without confirmation and runs successfully with confirmation', () => {
+  it('refuses mutating execution without confirmation and runs successfully with confirmation', async () => {
     const installDir = path.join(tmpDir, 'install-target');
     const marker = path.join(installDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), '#!/usr/bin/env sh\nmkdir -p "$INSTALL_DIR"\nprintf ran > "$INSTALL_DIR/marker"\n');
     writeManifest(tmpDir, baseManifest());
 
-    expect(runSetupManifest({
+    expect((await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
       paramValues: { INSTALL_DIR: installDir },
       skip: new Set(),
       yes: false,
-    }).exitCode).toBe(2);
+    })).exitCode).toBe(2);
     expect(fs.existsSync(marker)).toBe(false);
 
-    expect(runSetupManifest({
+    expect((await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
       paramValues: { INSTALL_DIR: installDir },
       skip: new Set(),
       yes: true,
-    }).exitCode).toBe(0);
+    })).exitCode).toBe(0);
     expect(fs.readFileSync(marker, 'utf8')).toBe('ran');
   });
 
-  it('runs recovery deterministically and preserves nonzero status after failed step', () => {
+  it('runs recovery deterministically and preserves nonzero status after failed step', async () => {
     const recoveryMarker = path.join(tmpDir, 'recovered');
     writeExecutable(path.join(tmpDir, 'scripts/fail.sh'), '#!/usr/bin/env sh\nexit 7\n');
     writeExecutable(path.join(tmpDir, 'scripts/recover.sh'), `#!/usr/bin/env sh\nprintf recovered > ${recoveryMarker}\n`);
@@ -296,7 +334,7 @@ describe('setup manifest CLI handlers', () => {
       },
     });
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir,
       frameworkRoot: REPO_ROOT,
       platform: 'linux',
@@ -333,7 +371,7 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function runManifest(spec: Record<string, unknown>, paramValues: Record<string, string> = {}) {
+  async function runManifest(spec: Record<string, unknown>, paramValues: Record<string, string> = {}) {
     writeManifest(tmpDir, {
       apiVersion: 'setup.aiwg.io/v1',
       kind: 'SetupManifest',
@@ -345,20 +383,22 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     });
   }
 
-  it('an ask step with every declared param already supplied runs headless, logging which params answered it', () => {
-    const result = runManifest({
+  it('an ask step with every declared param already supplied runs headless, logging which params answered it', async () => {
+    const result = await runManifest({
       params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
       steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] }],
     }, { DEPLOY_TARGET: 'staging' });
 
     expect(result.exitCode).toBe(0);
     expect(consoleLogSpy.mock.calls.flat().join(' ')).toContain('DEPLOY_TARGET');
+    expect(mockAskString).not.toHaveBeenCalled();
   });
 
-  it('an ask step with a missing declared param refuses, naming the missing param, before the next step runs', () => {
+  it('an ask step with a missing declared param, without a terminal, refuses before the next step runs', async () => {
+    mockIsInteractive.mockReturnValue(false);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
-    const result = runManifest({
+    const result = await runManifest({
       params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
       steps: [
         { id: 'install', type: 'script', script: 'scripts/install.sh' },
@@ -374,20 +414,47 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('an ask step declaring no params at all is always refused — there is no interactive-capture mechanism for it', () => {
-    const result = runManifest({
-      steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?' }],
+  // #3062 second review, finding 5b: a declared ask input missing AT a
+  // terminal is prompted for, not refused.
+  it('an ask step with a missing declared param, at a terminal, is prompted for it and the answer reaches later steps', async () => {
+    mockIsInteractive.mockReturnValue(true);
+    promptAnswerQueue.push('staging');
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), '#!/usr/bin/env sh\nprintf "$DEPLOY_TARGET" > ' + marker + '\n');
+    const result = await runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [
+        { id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] },
+        { id: 'install', type: 'script', script: 'scripts/install.sh' },
+      ],
     }, {});
 
-    expect(result.exitCode).not.toBe(0);
-    expect(result.message).toContain("ask step 'confirm-target'");
-    expect(result.message).toContain('declares no params');
+    expect(result.exitCode).toBe(0);
+    expect(mockAskString).toHaveBeenCalledTimes(1);
+    // The interactively-captured answer is threaded into the later step's
+    // env, same as a `--param`-supplied one would be.
+    expect(fs.readFileSync(marker, 'utf8')).toBe('staging');
   });
 
-  it('preflights an ask step nested inside a platform-route step before any step runs', () => {
+  it('an ask step declaring no params at all is always refused — there is no interactive-capture mechanism for it, even at a terminal', async () => {
+    for (const interactive of [false, true]) {
+      mockIsInteractive.mockReturnValue(interactive);
+      const result = await runManifest({
+        steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?' }],
+      }, {});
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.message).toContain("ask step 'confirm-target'");
+      expect(result.message).toContain('declares no params');
+      expect(mockAskString).not.toHaveBeenCalled();
+    }
+  });
+
+  it('preflights an ask step nested inside a platform-route step before any step runs', async () => {
+    mockIsInteractive.mockReturnValue(false);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
-    const result = runManifest({
+    const result = await runManifest({
       params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
       steps: [
         { id: 'install', type: 'script', script: 'scripts/install.sh' },
@@ -404,11 +471,12 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('a step marked interactive: true is preflighted before an earlier normal step runs', () => {
+  it('a step marked interactive: true with no declared params is preflighted before an earlier normal step runs, without a terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeExecutable(path.join(tmpDir, 'scripts', 'ui.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
-    const result = runManifest({
+    const result = await runManifest({
       steps: [
         { id: 'install', type: 'script', script: 'scripts/install.sh' },
         { id: 'open-ui', type: 'script', script: 'scripts/ui.sh', interactive: true },
@@ -419,6 +487,83 @@ describe('setup manifest: ask steps and preflight ordering (#3062)', () => {
     expect(result.message).toContain("step 'open-ui'");
     // Neither step ran — the first (harmless) step is never executed ahead
     // of the second step's refusal.
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  // #3062 second review, finding 5b: an `interactive: true` step whose
+  // declared params are ALL supplied runs headless instead of being
+  // refused — the bug the review found ("still refuses supplied
+  // interactive steps headlessly").
+  it('a step marked interactive: true with every declared param supplied runs headless, without a terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'ui.sh'), '#!/usr/bin/env sh\nprintf "$DEPLOY_TARGET" > ' + marker + '\n');
+    const result = await runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [{ id: 'open-ui', type: 'script', script: 'scripts/ui.sh', interactive: true, params: ['DEPLOY_TARGET'] }],
+    }, { DEPLOY_TARGET: 'staging' });
+
+    expect(result.exitCode).toBe(0);
+    expect(fs.readFileSync(marker, 'utf8')).toBe('staging');
+  });
+
+  it('a step marked interactive: true with a declared param still missing refuses, naming it, without a terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'ui.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    const result = await runManifest({
+      params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+      steps: [{ id: 'open-ui', type: 'script', script: 'scripts/ui.sh', interactive: true, params: ['DEPLOY_TARGET'] }],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain('DEPLOY_TARGET');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  // #3062 second review, finding 7: `agentic`/`chain` steps are refused
+  // unconditionally by runStep(); the preflight must reject them up front
+  // too, before any earlier step runs.
+  it.each(['agentic', 'chain'] as const)('rejects a selected %s step up front, before an earlier normal step runs', async (type) => {
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
+    // A `chain` step's referenced manifest must exist on disk to pass
+    // schema validation before preflight is even reached; its content is
+    // irrelevant since `chain` is always refused regardless.
+    fs.mkdirSync(path.join(tmpDir, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'nested', 'setup.manifest.yaml'), 'placeholder: true\n');
+    const extra = type === 'agentic' ? { instruction: 'do a thing' } : { manifest: './nested/setup.manifest.yaml' };
+    const result = await runManifest({
+      steps: [
+        { id: 'install', type: 'script', script: 'scripts/install.sh' },
+        { id: 'unsupported', type, ...extra },
+      ],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain("'unsupported'");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  // #3062 second review, finding 7: preflight must cover the recovery
+  // sequence a failing step would run, before the failing step itself
+  // executes — an early recovery-blocking condition must not let the
+  // selected steps mutate state first.
+  it('rejects an unresolved recovery sequence up front, before the step it would recover ever runs', async () => {
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts', 'fail.sh'), '#!/usr/bin/env sh\nprintf ran > ' + marker + '\nexit 7\n');
+    const result = await runManifest({
+      params: [{ name: 'RECOVERY_TARGET', type: 'string' }],
+      steps: [{ id: 'install', type: 'script', script: 'scripts/fail.sh', on_fail: 'recover-install' }],
+      recovery: [{
+        id: 'recover-install',
+        steps: [{ id: 'confirm-recovery', type: 'ask', message: 'Recover how?', params: ['RECOVERY_TARGET'] }],
+      }],
+    }, {});
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.message).toContain('RECOVERY_TARGET');
+    // The step the (blocked) recovery would have applied to never ran.
     expect(fs.existsSync(marker)).toBe(false);
   });
 });

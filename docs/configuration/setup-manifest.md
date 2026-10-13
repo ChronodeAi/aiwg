@@ -186,7 +186,7 @@ modes.
 | `depends_on`  | string[]           | Step IDs that must complete successfully before this step runs.                        |
 | `when`        | string             | Condition expression; step skipped if false. References params by name.                |
 | `on_fail`     | string             | Recovery procedure ID to invoke on failure. The literal `recover` invokes the default. |
-| `interactive` | bool, default `false` | This step itself prompts directly and requires a terminal. `aiwg setup-run` refuses a marked step up front (naming it) instead of running it when no terminal is attached (#3062). |
+| `interactive` | bool, default `false` | This step itself prompts directly. With every name in this step's own `params` resolved, it runs headless instead (no terminal needed); otherwise it requires a terminal, and `aiwg setup-run` refuses a marked step up front (naming it) instead of running it when none is attached (#3062; second review finding 5b). |
 
 ### Running headless (#3062)
 
@@ -196,27 +196,47 @@ ignored: a step whose command tries to prompt fails fast instead of hanging `aiw
 setup-run` forever. With a terminal attached, behavior is unchanged — a step's
 command/script gets inherited stdio so a person can actually answer a prompt it issues.
 
-Mark a step `interactive: true` when it is known to prompt directly; `aiwg setup-run`
-then refuses it up front, before running anything, whenever no terminal is attached —
-clearer than waiting for the bounded timeout, and its questions cannot be enumerated
-or supplied via `--param` at all (it runs an arbitrary script). `interactive` is for
-`script`/`verify`/`detect`/`os-config` steps whose underlying command/script may
-prompt on its own.
+Mark a step `interactive: true` when it is known to prompt directly. It can
+*optionally* declare which inputs would let it skip that prompt via the same
+`params` field a `script` step uses to pass param names as env vars (#3062 second
+review, finding 5b): with every declared param already resolved
+(`--param`/`--params-file`/env/`default`), the step is trusted not to need to prompt
+and runs headless (bounded) exactly like any other step in that same environment —
+no terminal required. With no `params` declared at all ("undeclared interaction" —
+its questions cannot be enumerated or supplied via `--param`, since it runs an
+arbitrary script), or with a declared param still missing, a terminal is required;
+`aiwg setup-run` refuses up front, before running anything, instead of waiting out
+the bounded timeout. With a terminal attached and nothing resolved, behavior is
+unchanged from before `params` existed on this field: the step's underlying
+command/script runs with inherited stdio and may prompt on its own.
 
-`type: ask` steps declare which inputs they need via `params` — the same field a
-`script` step uses to pass param names as env vars. An `ask` step with every declared
-param already resolved (`--param`/`--params-file`/env/`default`) runs headless, logging
-which params answered it; one with a declared param still unresolved, or with no
-`params` declared at all, is refused — there is no interactive-capture mechanism for
-`ask` steps in this CLI, with or without a terminal, so a missing value is always a
-`--param`/`--params-file` gap to fill, never something to wait for at a prompt.
+`type: ask` steps declare which inputs they need via `params` the same way. An `ask`
+step with every declared param already resolved runs headless, logging which params
+answered it. One with a declared param still unresolved is refused *only* when no
+terminal is attached, naming the missing name(s) so `--param`/`--params-file` can
+supply them instead; **with a terminal attached, it is prompted for the missing
+ones** (#3062 second review, finding 5b — this is the one behavioral difference from
+`interactive: true`: this CLI itself owns the prompting for `ask` steps, since there
+is no separate script to hand a terminal to, so it can actually ask instead of just
+letting a script do its own thing). A declared answer threads into every later step's
+env exactly like a `--param`-supplied one. An `ask` step with **no** `params`
+declared at all is always refused, with or without a terminal — this is one of only
+two permanent exceptions to "an input with a terminal gets prompted for" (the other
+is `tools/contrib/sync-upstream.mjs`'s contributor sync-strategy choice): with
+nothing declared, there is no destination to store an answer in at all.
 
-Every selected step (including nested `platform-route` steps) is checked for both the
-`interactive: true` and `type: ask` conditions **before any step runs** — not inside the
-per-step loop — so an earlier step is never partially executed ahead of a later step's
-refusal. A step only reachable through `on_fail` recovery is checked individually,
-right before it would run, since which recovery procedure (if any) applies is only
-known after a step actually fails.
+`type: agentic` and `type: chain` steps are always refused — deterministic CLI
+execution does not support either, regardless of terminal or supplied params.
+
+Every selected step (including nested `platform-route` steps, and the entire
+recovery sequence any selected step's `on_fail` names) is checked for all of the
+above conditions **before any step runs** — not inside the per-step loop, and not
+only for the step about to execute — so an earlier step can never run ahead of a
+*later* step's refusal, nor can a normal step run ahead of a refusal inside the
+recovery sequence it would trigger on failure (#3062 second review, finding 7). A
+step only reachable through `on_fail` recovery and not already covered that way
+(i.e. a manifest with no selected step actually naming it) is checked individually,
+right before it would run.
 
 ### Type-specific fields
 

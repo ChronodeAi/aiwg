@@ -34,6 +34,33 @@ vi.mock('readline', () => ({
   },
 }));
 
+// #3062 second review, finding 5a: the `--custom-scripts` flag only matters
+// on the interactive-wizard branch (`isInteractive()` true), which every
+// test above this point never reaches — vitest has no real TTY, so the
+// unmocked `isInteractive()` always returns `false`. Default to `false`
+// here too (matching that real behavior, so every pre-existing test above
+// is unaffected) and flip it to `true` only inside the dedicated describe
+// block below that exercises the wizard branch itself.
+const mockIsInteractive = vi.fn(() => false);
+vi.mock('../../../../src/cli/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/cli/env.js')>();
+  return { ...actual, isInteractive: (...callArgs: unknown[]) => mockIsInteractive(...(callArgs as [boolean?])) };
+});
+
+// Tracks whether the wizard asked anything at all. `askConsent` is passed
+// through untouched (real implementation) since every new test below
+// bypasses it entirely via an explicit `--worker-dispatch decline`.
+const mockAskString = vi.fn(async () => '');
+const mockAskYesNo = vi.fn(async (..._callArgs: unknown[]) => false);
+vi.mock('../../../../src/cli/prompt-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/cli/prompt-utils.js')>();
+  return {
+    ...actual,
+    askString: (...callArgs: unknown[]) => mockAskString(...(callArgs as Parameters<typeof actual.askString>)),
+    askYesNo: (...callArgs: unknown[]) => mockAskYesNo(...(callArgs as Parameters<typeof actual.askYesNo>)),
+  };
+});
+
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-init-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
@@ -180,6 +207,109 @@ describe('initHandler', () => {
       const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
       const cfg = await readAiwgConfig(tmpDir);
       expect(cfg).not.toBeNull();
+    });
+
+    // #3062 second review, finding 4: `aiwg init`'s flags have no
+    // pre-#3062 baseline (they were introduced by #3062 itself), so there
+    // is no regression to restore — this locks in the shared parser's
+    // default ('first' occurrence wins), matching this command's own
+    // other flag-parsing convention (`indexOf`-style, first match).
+    it('--providers repeated resolves to the first occurrence', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--providers', 'codex', '--providers', 'claude']));
+      expect(result.exitCode).toBe(0);
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.providers).toEqual(['codex']);
+    });
+  });
+
+  // #3062 second review, finding 5a: `--custom-scripts true|false` answers
+  // "add a custom script?" directly, independent of `--script`, and fully
+  // supplied input (providers + default-scripts + custom-scripts, or a
+  // `--script` pair) must ask nothing at all on the interactive wizard
+  // branch — the ONLY branch that ever consults `customScriptsArg` (the
+  // `--non-interactive` branch above never reaches it). Every test here
+  // forces `isInteractive()` true and also passes `--worker-dispatch
+  // decline` so the unrelated worker-dispatch offer (which depends on
+  // real-machine CLI detection) never fires and never asks anything either.
+  describe('interactive wizard (terminal present): fully-supplied input asks nothing (#3062 second review, finding 5a)', () => {
+    beforeEach(() => {
+      mockIsInteractive.mockReturnValue(true);
+      mockAskString.mockClear();
+      mockAskYesNo.mockClear();
+    });
+
+    afterEach(() => {
+      mockIsInteractive.mockReturnValue(false);
+    });
+
+    it('providers + default-scripts + custom-scripts all supplied: asks nothing', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, [
+        '--worker-dispatch', 'decline',
+        '--providers', 'codex',
+        '--default-scripts', 'true',
+        '--custom-scripts', 'false',
+      ]));
+      expect(result.exitCode).toBe(0);
+      expect(mockAskString).not.toHaveBeenCalled();
+      expect(mockAskYesNo).not.toHaveBeenCalled();
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.providers).toEqual(['codex']);
+      expect(Object.keys(cfg!.scripts).sort()).toEqual(['deploy', 'doctor', 'sync']);
+    });
+
+    it('--script implies "add a custom script?" yes without asking it, or its name/command sub-prompts', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, [
+        '--worker-dispatch', 'decline',
+        '--providers', 'codex',
+        '--default-scripts', 'false',
+        '--script', 'lint=npm run lint',
+      ]));
+      expect(result.exitCode).toBe(0);
+      expect(mockAskString).not.toHaveBeenCalled();
+      expect(mockAskYesNo).not.toHaveBeenCalled();
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(cfg!.scripts).toEqual({ lint: 'npm run lint' });
+    });
+
+    it('--custom-scripts false (no --script) declines the question without ever asking it', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, [
+        '--worker-dispatch', 'decline',
+        '--providers', 'codex',
+        '--default-scripts', 'true',
+        '--custom-scripts', 'false',
+      ]));
+      expect(result.exitCode).toBe(0);
+      expect(mockAskYesNo).not.toHaveBeenCalled();
+
+      const { readAiwgConfig } = await import('../../../../src/config/aiwg-config.js');
+      const cfg = await readAiwgConfig(tmpDir);
+      expect(Object.keys(cfg!.scripts).sort()).toEqual(['deploy', 'doctor', 'sync']);
+    });
+
+    it('--custom-scripts true (no --script) still asks for the name/command — only the yes/no is answered', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      mockAskString.mockImplementation(async (..._callArgs: unknown[]) => '');
+      const result = await initHandler.execute(makeCtx(tmpDir, [
+        '--worker-dispatch', 'decline',
+        '--providers', 'codex',
+        '--default-scripts', 'true',
+        '--custom-scripts', 'true',
+      ]));
+      expect(result.exitCode).toBe(0);
+      // The yes/no question itself is answered by the flag, not asked —
+      // only the two follow-up sub-prompts (name, command) are asked.
+      expect(mockAskYesNo).not.toHaveBeenCalled();
+      expect(mockAskString).toHaveBeenCalledTimes(2);
     });
   });
 

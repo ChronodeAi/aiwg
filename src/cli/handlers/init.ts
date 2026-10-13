@@ -7,7 +7,9 @@
  * Prompts, and the argument that answers each one directly (#3062):
  *   1. Which AI provider toolchains does this project target? → `--providers <list>`
  *   2. Would you like to add default scripts (deploy/doctor/sync)? → `--default-scripts true|false`
- *   3. Add a custom script (name + command)? → `--script <name>=<command>` (repeatable)
+ *   3. Add a custom script (name + command)? → `--script <name>=<command>` (repeatable;
+ *      implies yes) or `--custom-scripts true|false` (answers the question directly
+ *      without supplying a script; `false` declines it outright)
  *   4. Enable direct worker dispatch? → `--worker-dispatch enable|decline`
  *
  * With a terminal attached, any of these given directly skips that
@@ -153,14 +155,30 @@ interface InitArgInputs {
   providersArg: string[] | undefined;
   /** `--default-scripts true|false` — undefined means "ask or default". */
   defaultScriptsArg: boolean | undefined;
-  /** `--script <name>=<command>` (repeatable) — always honored regardless of `defaultScriptsArg`. */
+  /**
+   * `--custom-scripts true|false` (#3062 second review, finding 5a) —
+   * explicit answer to "add a custom script?", independent of
+   * `--script`. `undefined` means "ask, or infer from whether `--script`
+   * was given". Supplying `--script` always means yes regardless of this
+   * flag; this flag exists for the case where the answer is *no* (or an
+   * explicit yes with the name/command still to be asked for) and
+   * `--script` itself was not given.
+   */
+  customScriptsArg: boolean | undefined;
+  /** `--script <name>=<command>` (repeatable) — always honored regardless of `defaultScriptsArg`/`customScriptsArg`; supplying it at all answers "add a custom script?" as yes. */
   scriptPairs: Record<string, string>;
 }
 
 function parseInitArgInputs(args: string[]): InitArgInputs {
-  const workerDispatchArg = parseWorkerDispatchArg(requireFlagValue(args, '--worker-dispatch'));
+  // #3062 second review, finding 4: `precedence: 'first'` matches this
+  // command's pre-existing (and, for `--providers`/`--default-scripts`/
+  // `--script`/`--custom-scripts`, only) convention — see
+  // `parseInitArgInputs`'s module-level callers for why `--worker-dispatch`
+  // specifically needs `rejectEmpty` (an explicit empty choice is never
+  // meaningful and must not silently fall through to "not given").
+  const workerDispatchArg = parseWorkerDispatchArg(requireFlagValue(args, { rejectEmpty: true }, '--worker-dispatch'));
 
-  const rawProviders = parseListFlagValue(requireFlagValue(args, '--providers'));
+  const rawProviders = parseListFlagValue(requireFlagValue(args, {}, '--providers'));
   const providersArg = rawProviders?.map((entry) => {
     const canonical = normalizeProviderDefinitionId(entry);
     if (!canonical || canonical === 'generic' || !VALID_PROVIDERS.includes(canonical as typeof VALID_PROVIDERS[number])) {
@@ -172,15 +190,16 @@ function parseInitArgInputs(args: string[]): InitArgInputs {
     throw new Error('--providers requires at least one provider name');
   }
 
-  const defaultScriptsArg = parseBooleanFlagValue(requireFlagValue(args, '--default-scripts'), '--default-scripts');
+  const defaultScriptsArg = parseBooleanFlagValue(requireFlagValue(args, {}, '--default-scripts'), '--default-scripts');
+  const customScriptsArg = parseBooleanFlagValue(requireFlagValue(args, {}, '--custom-scripts'), '--custom-scripts');
 
   const scriptPairs: Record<string, string> = {};
-  for (const entry of collectFlagValues(args, '--script')) {
+  for (const entry of collectFlagValues(args, {}, '--script')) {
     const [name, command] = parseKeyValueEntry(entry, '--script');
     scriptPairs[name] = command;
   }
 
-  return { workerDispatchArg, providersArg, defaultScriptsArg, scriptPairs };
+  return { workerDispatchArg, providersArg, defaultScriptsArg, customScriptsArg, scriptPairs };
 }
 
 /** One-line description of what an explicit `--worker-dispatch` choice would write. */
@@ -267,9 +286,10 @@ export const initHandler: CommandHandler = {
     let workerDispatchArg: WorkerDispatchArgValue | undefined;
     let providersArg: string[] | undefined;
     let defaultScriptsArg: boolean | undefined;
+    let customScriptsArg: boolean | undefined;
     let scriptPairs: Record<string, string>;
     try {
-      ({ workerDispatchArg, providersArg, defaultScriptsArg, scriptPairs } = parseInitArgInputs(ctx.args));
+      ({ workerDispatchArg, providersArg, defaultScriptsArg, customScriptsArg, scriptPairs } = parseInitArgInputs(ctx.args));
     } catch (err) {
       const message = err instanceof MissingFlagValueError ? `${err.message}.` : err instanceof Error ? err.message : String(err);
       return { exitCode: EXIT_CODES.USAGE, message };
@@ -371,11 +391,21 @@ export const initHandler: CommandHandler = {
         scripts = includeDefaultScripts ? { ...DEFAULT_SCRIPTS } : {};
 
         if (Object.keys(scriptPairs).length > 0) {
-          // `--script` already answered "add a custom script?" and its
-          // name/command sub-prompts — never ask any of the three.
+          // `--script` already answered "add a custom script?" (implicit
+          // yes) and its name/command sub-prompts — never ask any of the
+          // three (#3062 second review, finding 5a).
           scripts = { ...scripts, ...scriptPairs };
-        } else if (includeDefaultScripts) {
-          const addCustom = await askYesNo(rl, '  Add a custom script? [y/N]: ', false, ctx.signal);
+        } else {
+          // `--custom-scripts true|false` answers "add a custom script?"
+          // directly when `--script` itself was not given — an explicit
+          // decline (`false`) skips the question entirely, same as every
+          // other already-supplied input; `true` still asks for the
+          // name/command, since those were not supplied either.
+          const addCustom = customScriptsArg !== undefined
+            ? customScriptsArg
+            : includeDefaultScripts
+              ? await askYesNo(rl, '  Add a custom script? [y/N]: ', false, ctx.signal)
+              : false;
           if (addCustom) {
             const name = await askString(rl, '  Script name: ', '', ctx.signal);
             const cmd = await askString(rl, '  Command: ', '', ctx.signal);

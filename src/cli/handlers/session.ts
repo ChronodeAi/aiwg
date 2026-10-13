@@ -114,17 +114,25 @@ interface SessionArgs {
  * (#3062 review item 11): a flag present with no value, or immediately
  * followed by another flag, throws {@link MissingFlagValueError} rather
  * than silently resolving to "not given" — callers MUST catch it before
- * any preflight check, spawn, or write.
+ * any preflight check, spawn, or write. `precedence: 'last'` matches this
+ * command's own pre-#3062 behavior (a hand-rolled loop that kept scanning
+ * and overwrote on every match, so a later `--provider`/`--profile` always
+ * won) — the first-round shared parser silently flipped that to
+ * first-wins; this restores it (#3062 second review, finding 4).
+ * `--prompt`/`--prompt-file` reject an empty string: an empty prompt can
+ * never be meaningful, and silently accepting one would let a mistake
+ * reach either the interactive launch path or a headless launch with
+ * nothing to say.
  */
 function parseSessionArgs(args: string[]): SessionArgs {
   const mcp = args.includes('mcp');
   const noRepair = args.includes('--no-repair');
   const persist = args.includes('--persist');
   const nonInteractive = args.includes('--non-interactive');
-  const provider = requireFlagValue(args, '--provider');
-  const profile = requireFlagValue(args, '--profile');
-  const prompt = requireFlagValue(args, '--prompt');
-  const promptFile = requireFlagValue(args, '--prompt-file');
+  const provider = requireFlagValue(args, { precedence: 'last' }, '--provider');
+  const profile = requireFlagValue(args, { precedence: 'last' }, '--profile');
+  const prompt = requireFlagValue(args, { precedence: 'last', rejectEmpty: true }, '--prompt');
+  const promptFile = requireFlagValue(args, { precedence: 'last', rejectEmpty: true }, '--prompt-file');
 
   return { mcp, provider, noRepair, profile, persist, prompt, promptFile, nonInteractive };
 }
@@ -458,12 +466,34 @@ function buildHeadlessLaunch(provider: string, binaryArgs: string[], prompt: str
 
   // File transport (opencode): the prompt never touches argv or stdin — it
   // is written to a private temp file only this process can read, passed
-  // by path.
+  // by path. `mkdtemp()` under the system temp directory (never a custom
+  // location — #3062 second review, finding 10) already gives the
+  // directory itself a private, unpredictable name owned by this process;
+  // the file within it additionally gets an explicit `0600` mode via an
+  // exclusive create (`flag: 'wx'` — fails rather than silently
+  // overwriting if a file with that exact name already existed, which it
+  // never should in a fresh `mkdtemp()` directory).
+  //
+  // Cleanup ownership starts the moment `mkdtemp()` returns, *before* the
+  // write: a failed write must not leave the directory behind any more
+  // than a failed launch would. The caller's own `finally` (in
+  // `launchProvider()`, keyed off `plan.tempDir`) handles the ordinary
+  // "launch ran, now clean up" path; this one exists only for the write
+  // itself failing before a `plan` is ever returned to that caller.
   const tempDir = mkdtempSync(join(tmpdir(), 'aiwg-session-prompt-'));
-  const promptPath = join(tempDir, 'prompt.txt');
-  writeFileSync(promptPath, prompt, 'utf-8');
-  const args = [...binaryArgs, ...transport.flags, transport.fileFlag, promptPath, transport.fixedPositional];
-  return { args, tempDir };
+  try {
+    const promptPath = join(tempDir, 'prompt.txt');
+    writeFileSync(promptPath, prompt, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+    const args = [...binaryArgs, ...transport.flags, transport.fileFlag, promptPath, transport.fixedPositional];
+    return { args, tempDir };
+  } catch (err) {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup only; the original write failure is what matters.
+    }
+    throw err;
+  }
 }
 
 /**
@@ -673,6 +703,26 @@ export const sessionHandler: CommandHandler = {
           `Provider '${unsupportedCfg.name}' has no CLI binary to spawn; --prompt/--prompt-file ` +
           'requires a spawnable provider. Run `aiwg session --provider ' + provider +
           '` from a terminal for IDE-integrated usage instead.',
+      };
+    }
+
+    // A spawnable provider with no evidenced non-interactive CLI form
+    // (e.g. antigravity) can never run a supplied prompt either — check
+    // this in the same early spot as the non-spawnable case above (#3062
+    // second review, finding 6): the old behavior deferred this to
+    // `buildHeadlessLaunch()` inside `launchProvider()`, reached only
+    // after the version-check/doctor/deployment/mcp-inject pre-flight
+    // already ran. The codex-profile launch path is exempt — it always
+    // uses `codex exec -`, never `HEADLESS_SESSION_TRANSPORTS`.
+    if (prompt && isSpawnableProvider(provider) && !HEADLESS_SESSION_TRANSPORTS[provider]
+      && !((provider === 'codex' || provider === 'openai') && profile)) {
+      const unsupportedTransportCfg = getProviderConfig(provider);
+      return {
+        exitCode: 1,
+        message:
+          `Provider '${unsupportedTransportCfg.name}' has no evidenced non-interactive CLI form; ` +
+          `--prompt/--prompt-file is not supported for it. Run \`aiwg session --provider ${provider}\` ` +
+          'from a terminal instead.',
       };
     }
 

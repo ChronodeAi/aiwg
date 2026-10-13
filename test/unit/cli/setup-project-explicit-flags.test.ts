@@ -160,4 +160,19 @@ describe('aiwg setup project — explicit flags skip their prompts (#3062)', () 
       message: expect.stringContaining('--delivery-mode'),
     });
   });
+
+  // #3062 second review, finding 4: this command's own pre-#3062 flag
+  // parser (`flagValue()`, an early-`return` loop) already resolved a
+  // repeated flag to its first occurrence — locks that in explicitly.
+  it('--primary repeated resolves to the first occurrence (pre-#3062 precedence, unchanged)', async () => {
+    const result = await setupHandler.execute({
+      args: ['project', '--yes', '--primary', 'origin', '--primary', 'upstream', '--issue-provider', 'local'],
+      rawArgs: ['setup', 'project', '--yes', '--primary', 'origin', '--primary', 'upstream', '--issue-provider', 'local'],
+      cwd: tmp,
+      frameworkRoot: tmp,
+    } as HandlerContext);
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(getConfigPath(tmp), 'utf-8')) as { remotes?: { primary?: string } };
+    expect(config.remotes?.primary).toBe('origin');
+  });
 });

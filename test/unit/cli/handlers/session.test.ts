@@ -5,9 +5,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -32,6 +32,7 @@ const {
   mockWriteProfileConfig,
   mockLaunchWithProfile,
   mockIsInteractive,
+  writeFileSyncCalls,
 } = vi.hoisted(() => ({
   mockSpawnSync: vi.fn(),
   mockExistsSync: vi.fn(),
@@ -60,6 +61,7 @@ const {
   // original behavior. The dedicated headless/no-terminal describe block
   // below overrides this per test.
   mockIsInteractive: vi.fn().mockReturnValue(true),
+  writeFileSyncCalls: [] as Array<{ path: string; options: unknown }>,
 }));
 
 vi.mock('../../../../src/mcp/profiles.js', () => ({
@@ -91,6 +93,14 @@ vi.mock('node:fs', async importOriginal => {
   return {
     ...original,
     existsSync: (path: import('node:fs').PathLike) => mockExistsSync(path) ?? original.existsSync(path),
+    // Spy-through (#3062 second review, finding 10): records every call's
+    // path/options so tests can assert the prompt file's mode/flag, then
+    // still performs the real write so the rest of the code (including
+    // its own cleanup) behaves exactly as in production.
+    writeFileSync: (path: import('node:fs').PathOrFileDescriptor, data: unknown, options?: unknown) => {
+      writeFileSyncCalls.push({ path: String(path), options });
+      return original.writeFileSync(path as never, data as never, options as never);
+    },
   };
 });
 
@@ -607,6 +617,16 @@ describe('sessionHandler.execute — launch behavior', () => {
     mockSpawnSync.mockReturnValue({ status: 0 });
   });
 
+  // #3062 second review, finding 4: `aiwg session` historically let a
+  // *later* repeated flag win (a hand-rolled loop that kept overwriting
+  // on every match); the first-round shared parser silently flipped that
+  // to first-wins. This restores and locks in the original precedence.
+  it('--provider repeated resolves to the last occurrence (restored pre-#3062 precedence)', async () => {
+    mockGetProviderConfig.mockReturnValue({ name: 'Codex', binary: 'codex', guidanceMessage: null });
+    await sessionHandler.execute(makeCtx(['--provider', 'claude', '--provider', 'codex']));
+    expect(mockGetProviderConfig).toHaveBeenCalledWith('codex');
+  });
+
   it('spawns provider binary for spawnable providers', async () => {
     mockGetProviderConfig.mockReturnValue({ name: 'Claude Code', binary: 'claude', guidanceMessage: null });
     mockIsSpawnableProvider.mockReturnValue(true);
@@ -694,6 +714,7 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     mockGetDeploymentSummary.mockReturnValue({ agents: 1, commands: 1, skills: 1, rules: 1 });
     mockForceUpdateCheck.mockResolvedValue(undefined);
     mockReadAiwgConfig.mockResolvedValue(null);
+    writeFileSyncCalls.length = 0;
   });
 
   it('refuses a spawnable provider with no terminal and no prompt, spawning nothing', async () => {
@@ -747,6 +768,33 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     }
   });
 
+  it('opencode file-transport: writes the prompt to a private 0600 temp file under mkdtemp, and removes it after launch', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    mockGetProviderConfig.mockReturnValue({ name: 'OpenCode', binary: 'opencode', guidanceMessage: null });
+    const result = await sessionHandler.execute(makeCtx(['--provider', 'opencode', '--prompt', 'hello there']));
+    expect(result.exitCode).toBe(0);
+
+    const launch = mockSpawnSync.mock.calls.find(([command]) => command === 'opencode');
+    expect(launch).toBeDefined();
+    expect(launch![1]).toEqual(
+      expect.arrayContaining(['run', '--format', 'json', '-f', expect.stringContaining('prompt.txt'), 'Follow the instructions in the attached file exactly.']),
+    );
+    // The prompt text itself is never on argv — only the temp file path.
+    expect(launch![1].join(' ')).not.toContain('hello there');
+
+    // #3062 second review, finding 10: mkdtemp under the system temp
+    // directory (never a custom location), file written with an explicit
+    // 0600 mode via an exclusive create.
+    const promptWrite = writeFileSyncCalls.find((call) => call.path.includes('prompt.txt'));
+    expect(promptWrite).toBeDefined();
+    expect(promptWrite!.options).toMatchObject({ mode: 0o600, flag: 'wx' });
+    expect(promptWrite!.path.startsWith(tmpdir())).toBe(true);
+
+    // Removed after the launch — every exit path cleans it up.
+    const promptPath = (launch![1] as string[]).find((arg) => arg.includes('prompt.txt'))!;
+    expect(existsSync(dirname(promptPath))).toBe(false);
+  });
+
   it('rejects --prompt and --prompt-file together, spawning nothing', async () => {
     const result = await sessionHandler.execute(makeCtx(['--prompt', 'a', '--prompt-file', '/tmp/aiwg-3062-unused']));
     expect(result.exitCode).toBe(2);
@@ -761,7 +809,7 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
-  it('refuses a spawnable provider with no evidenced headless CLI form', async () => {
+  it('refuses a spawnable provider with no evidenced headless CLI form, before any pre-flight step (review items 9 and 6b)', async () => {
     // antigravity (review item 9): genuinely spawnable (binary: 'agy') but
     // absent from HEADLESS_SESSION_TRANSPORTS — unlike the fictional
     // "spawnable Factory" this test used to mock, which masked the real
@@ -770,7 +818,10 @@ describe('sessionHandler.execute — headless prompt (#3062)', () => {
     const result = await sessionHandler.execute(makeCtx(['--provider', 'antigravity', '--prompt', 'hi']));
     expect(result.exitCode).toBe(1);
     expect(result.message).toMatch(/no evidenced non-interactive/);
-    expect(mockSpawnSync.mock.calls.some(([command]) => command === 'agy')).toBe(false);
+    // #3062 second review, finding 6: checked before any pre-flight step
+    // runs — not just before the eventual `agy` launch attempt.
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(mockForceUpdateCheck).not.toHaveBeenCalled();
   });
 
   it('refuses an unsupported (non-spawnable) provider given --prompt, naming the provider, before any pre-flight spawn (review item 9)', async () => {

@@ -80,13 +80,13 @@ describe('setup-run headless safety (#3062)', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('runs a script step bounded with stdin ignored when no terminal is attached', () => {
+  it('runs a script step bounded with stdin ignored when no terminal is attached', async () => {
     mockIsInteractive.mockReturnValue(false);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, baseManifest([{ id: 'install', type: 'script', script: 'scripts/install.sh' }]));
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: {}, skip: new Set(), yes: true,
     });
 
@@ -99,13 +99,13 @@ describe('setup-run headless safety (#3062)', () => {
     expect(stdio[0]).toBe('ignore');
   });
 
-  it('runs a script step unbounded (inherited stdio) when a terminal is attached', () => {
+  it('runs a script step unbounded (inherited stdio) when a terminal is attached', async () => {
     mockIsInteractive.mockReturnValue(true);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, baseManifest([{ id: 'install', type: 'script', script: 'scripts/install.sh' }]));
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: {}, skip: new Set(), yes: true,
     });
 
@@ -116,11 +116,11 @@ describe('setup-run headless safety (#3062)', () => {
     expect(scriptCall!.options.stdio).toBe('inherit');
   });
 
-  it('runs a verify/detect shell command bounded with stdin ignored when no terminal is attached', () => {
+  it('runs a verify/detect shell command bounded with stdin ignored when no terminal is attached', async () => {
     mockIsInteractive.mockReturnValue(false);
     writeManifest(tmpDir, baseManifest([{ id: 'check', type: 'verify', commands: ['true'] }]));
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: {}, skip: new Set(), yes: true,
     });
 
@@ -132,14 +132,14 @@ describe('setup-run headless safety (#3062)', () => {
     expect(stdio[0]).toBe('ignore');
   });
 
-  it('refuses a step marked interactive: true without a terminal, before running it', () => {
+  it('refuses a step marked interactive: true (no declared params) without a terminal, before running it', async () => {
     mockIsInteractive.mockReturnValue(false);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, baseManifest([{ id: 'install', type: 'script', script: 'scripts/install.sh', interactive: true }]));
 
     spawnSyncCalls.length = 0; // discard the writeExecutable() helper's own /bin/sh call above
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: {}, skip: new Set(), yes: true,
     });
 
@@ -149,17 +149,49 @@ describe('setup-run headless safety (#3062)', () => {
     expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain("step 'install'");
   });
 
-  it('runs a step marked interactive: true normally when a terminal is attached', () => {
+  it('runs a step marked interactive: true normally when a terminal is attached', async () => {
     mockIsInteractive.mockReturnValue(true);
     const marker = path.join(tmpDir, 'marker');
     writeExecutable(path.join(tmpDir, 'scripts/install.sh'), `#!/usr/bin/env sh\nprintf ran > ${marker}\n`);
     writeManifest(tmpDir, baseManifest([{ id: 'install', type: 'script', script: 'scripts/install.sh', interactive: true }]));
 
-    const result = runSetupManifest({
+    const result = await runSetupManifest({
       cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: {}, skip: new Set(), yes: true,
     });
 
     expect(result.exitCode).toBe(0);
     expect(fs.readFileSync(marker, 'utf8')).toBe('ran');
+  });
+
+  // #3062 second review, finding 5b: a step marked `interactive: true`
+  // whose declared params are all supplied runs headless (bounded)
+  // instead of being refused, even without a terminal.
+  it('runs a step marked interactive: true with every declared param supplied, bounded, without a terminal', async () => {
+    mockIsInteractive.mockReturnValue(false);
+    const marker = path.join(tmpDir, 'marker');
+    writeExecutable(path.join(tmpDir, 'scripts/install.sh'), '#!/usr/bin/env sh\nprintf "$DEPLOY_TARGET" > ' + marker + '\n');
+    writeManifest(tmpDir, {
+      apiVersion: 'setup.aiwg.io/v1',
+      kind: 'SetupManifest',
+      metadata: { name: 'sample', description: 'no os configuration required', install_type: 'developer' },
+      spec: {
+        platforms: [{ os: 'linux' }],
+        params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+        steps: [{ id: 'install', type: 'script', script: 'scripts/install.sh', interactive: true, params: ['DEPLOY_TARGET'] }],
+      },
+    });
+
+    spawnSyncCalls.length = 0;
+    const result = await runSetupManifest({
+      cwd: tmpDir, frameworkRoot: REPO_ROOT, platform: 'linux', paramValues: { DEPLOY_TARGET: 'staging' }, skip: new Set(), yes: true,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(fs.readFileSync(marker, 'utf8')).toBe('staging');
+    const scriptCall = spawnSyncCalls.find((c) => c.command.endsWith('install.sh'));
+    expect(scriptCall).toBeDefined();
+    expect(scriptCall!.options.timeout).toBeGreaterThan(0);
+    const stdio = scriptCall!.options.stdio as unknown[];
+    expect(stdio[0]).toBe('ignore');
   });
 });

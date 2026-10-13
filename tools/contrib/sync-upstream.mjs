@@ -62,16 +62,42 @@ function isInteractiveTerminal() {
  * given".
  */
 function parseOnConflictArg(args) {
-  const idx = args.indexOf('--on-conflict');
-  if (idx === -1) return undefined;
-  const value = args[idx + 1];
-  if (value === undefined || value.startsWith('--')) {
-    throw new Error('--on-conflict requires a value (1-4)');
+  // #3062 second review, finding 4: validate every occurrence (not just
+  // the first found), stop at a bare `--` terminator, and accept
+  // `--on-conflict=value` — mirrors `src/cli/flag-parsing.ts`'s
+  // `scanFlagOccurrences()` semantics, duplicated here in plain JS for
+  // the same reason as this file's own `isInteractiveTerminal()`: this
+  // maintainer script runs directly via plain Node, with no TypeScript
+  // build step. First occurrence wins (no pre-#3062 baseline to
+  // preserve; matches this function's own prior `indexOf`-based
+  // convention).
+  let resolved;
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--') break;
+
+    let flag;
+    let value;
+    if (token.startsWith('--on-conflict=')) {
+      flag = '--on-conflict';
+      value = token.slice('--on-conflict='.length);
+    } else if (token === '--on-conflict') {
+      flag = token;
+      value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--on-conflict requires a value (1-4)');
+      }
+      i += 1;
+    } else {
+      continue;
+    }
+
+    if (!['1', '2', '3', '4'].includes(value)) {
+      throw new Error(`${flag} must be one of: 1, 2, 3, 4 (got '${value}')`);
+    }
+    if (resolved === undefined) resolved = value;
   }
-  if (!['1', '2', '3', '4'].includes(value)) {
-    throw new Error(`--on-conflict must be one of: 1, 2, 3, 4 (got '${value}')`);
-  }
-  return value;
+  return resolved;
 }
 
 // ANSI color codes

@@ -83,22 +83,31 @@ given" (review item 11).
 | `aiwg session` (any spawnable provider) | `--prompt <text>` / `--prompt-file <path>`; `--non-interactive` forces the refusal even with a terminal attached | Refuses, naming `--prompt`/`--prompt-file`. An unsupported (non-spawnable) provider given `--prompt`/`--prompt-file` refuses outright, naming the provider, instead of discarding the prompt and printing IDE guidance |
 | `aiwg session --provider codex --profile <p>` | `--prompt <text>` / `--prompt-file <path>` (maps to `codex exec -`, prompt on stdin, inside the profile's runtime home) | Refuses, naming `--prompt`/`--prompt-file` |
 | `aiwg setup-run` steps (`script`/`verify`/`detect`/`os-config`) | none needed — runs bounded with stdin ignored instead of hanging | N/A (never required; see below) |
-| `aiwg setup-run` step marked `interactive: true` | none — runs an arbitrary script whose questions cannot be enumerated; manifest authors should avoid depending on one in headless pipelines | Refuses up front (preflighted before any step runs), naming the step |
-| `aiwg setup-run` step `type: ask` | `--param <name>=<value>` (repeatable) for every name the step's `params` field declares | Refuses up front (preflighted before any step runs), naming the missing param name(s) — this CLI has no interactive-capture mechanism for `ask` steps at all, with or without a terminal, so this is a `--param` gap to fill, not something to wait for |
+| `aiwg setup-run` step marked `interactive: true` | `--param <name>=<value>` for every name the step's `params` field declares (optional — a plain interactive step with no declared `params` just runs normally with a terminal, exactly as before) | With every declared param supplied, runs headless (bounded) instead of needing a terminal at all. With none declared, or some still missing, refuses up front (preflighted before any step runs), naming the step/missing names |
+| `aiwg setup-run` step `type: ask` | `--param <name>=<value>` (repeatable) for every name the step's `params` field declares | With every declared param supplied, runs headless. With some missing **and a terminal attached**, prompts for just the missing ones. With some missing **and no terminal**, or with no `params` declared at all, refuses up front (preflighted before any step runs) — a step declaring no params has no destination to store an answer in, so that case is always refused, with or without a terminal |
+| `aiwg setup-run` step `type: agentic`/`type: chain` | none — always refused by design (deterministic CLI execution does not support either) | Refuses up front (preflighted before any step runs), naming the step, regardless of terminal |
 | `aiwg init` provider selection | `--providers <list>` (comma-separated, same form as `aiwg setup project`'s flag) | Defaults to `claude` (a safe headless default; not a refusal) |
 | `aiwg init` add default scripts | `--default-scripts true\|false` | Defaults to `true` |
-| `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable) | Skipped — no custom scripts added |
+| `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable; implies yes) or `--custom-scripts true\|false` to answer the question directly without supplying one | Skipped — no custom scripts added |
 | `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
-| `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context; with `--yes`, unsupplied fields fall back to their detected/default value |
-| `aiwg mcp profile login <name>` | `--api-key-env <ENV_VAR_NAME>` (reads the key from that named variable over stdin only — the key itself never appears on argv, in logs, or in error messages) | Refuses, naming `--api-key-env`. If the named variable is unset, the error names the variable, never a value |
+| `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context — checked before any `git` call, not just before the final write; with `--yes`, unsupplied fields fall back to their detected/default value |
+| `aiwg mcp profile login <name>` | `--api-key-env <ENV_VAR_NAME>` (reads the key from that named variable over stdin only — the key itself never appears on argv, the child's own environment, logs, or error messages) | Refuses, naming `--api-key-env`. If the named variable is unset, the error names the variable, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
 
 `aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
 argument because a manifest step's shell command/script is already bounded (stdin
 ignored) whenever no terminal is attached — see
 [the SetupManifest reference](../configuration/setup-manifest.md#running-headless-3062)
-for the `interactive: true` and `type: ask` per-step behavior, including the preflight
-that checks every selected step (recursively into `platform-route` nesting) before
-any of them run.
+for the full `interactive: true`/`type: ask`/`agentic`/`chain` per-step behavior,
+including the preflight that checks every selected step (recursively into
+`platform-route` nesting, and into the recovery sequence any selected step's
+`on_fail` names) before any of them run.
+
+A value-taking flag above that repeats keeps whichever precedence that command
+already had before this rule existed — `aiwg session`'s flags are last-occurrence-
+wins (its own pre-existing hand-rolled parser already worked that way); every other
+command listed here is first-occurrence-wins. Every occurrence is validated
+regardless of which one wins: a later malformed occurrence is still a usage error,
+not silently ignored because an earlier one was valid.
 
 ### Which Providers Expose The Prompt In The Process List
 
