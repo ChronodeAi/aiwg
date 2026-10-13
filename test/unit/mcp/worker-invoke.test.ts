@@ -1872,6 +1872,53 @@ setInterval(() => {}, 1000);
     await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // tools/call was never reached
   }, 20000);
 
+  // #2915 round 8 review 8 (C2, "stop evidence remains incorrectly
+  // classified across production paths"): the reviewer's exact probe --
+  // schema drift discovered AFTER a real MCP worker SERVER process was
+  // spawned (connect + tools/list both completed) must never be reported
+  // as a confirmed stop merely because the RESULT LABEL is 'blocked'. The
+  // process really was dispatched; `resolveStopEvidence` must be consulted
+  // for real evidence (degraded isolation: never confirmed), not a
+  // hardcoded `confirmedStop: true`. Proven two ways: (1) the settled
+  // reservation is left with an unresolved stop marker
+  // (`breaker.hasUnresolvedStop`), and (2) with the scope already open
+  // (so this attempt is the half-open canary), a SECOND canary admission
+  // over the same scope is refused rather than being let through over the
+  // still-unconfirmed first attempt's descendants.
+  it('a post-spawn schema-drift refusal never confirms stop evidence, so a second canary is refused over the unresolved execution (#2915 round 8 review 8, C2)', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'schema-change' }));
+    // Build a REAL breaker whose 'installation:codex' scope is already
+    // OPEN (one trusted failure, past its cooldown) before this attempt --
+    // exactly `openedCanaryReservation`'s own opening step, below, so the
+    // schema-drift attempt below is admitted as the half-open CANARY
+    // (`token.canaryKeys.length > 0`), not an ordinary admission. A
+    // deterministic injected clock avoids any real wall-clock wait.
+    const breaker = new ScopedFailureBreaker({ policy: { cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = 1_000_000;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: 'opener-schema-drift', scopeKeys: ['installation:codex'] });
+    expect(opening.ok).toBe(true);
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    const result = await invoke(root, config, {}, { scopedBreaker: breaker, allowDegraded: true });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/schema/i);
+    // Minimal fix proof: the reservation is retained, UNRESOLVED -- never
+    // released as a confirmed stop merely because the outcome label was
+    // 'blocked'.
+    expect(breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+    // The exact reviewer probe: a second canary admission over the SAME
+    // scope is refused by the blocking marker, never admitted over the
+    // still-unresolved first attempt's descendants.
+    const second = breaker.admit({ invocationId: 'second-canary-schema-drift', scopeKeys: ['installation:codex'] });
+    expect(second.ok).toBe(false);
+    expect((second as any).blockedBy).toContain('installation:codex');
+  }, 20000);
+
   // Proves `gateInputs` makes the gate deterministic, not absent: the REAL
   // `checkWorkerDispatch` still runs on every call above (see the
   // describe-block comment); this overrides `HEALTHY_GATE_LIVE` with one
@@ -2891,6 +2938,75 @@ describe('timeout is never treated as success, independent of exit status (#2915
     expect(body.status, JSON.stringify(body)).not.toBe('completed');
     expect(body.status, JSON.stringify(body)).toBe('failed');
   });
+
+  // #2915 round 8 review 8 (C4): `timedOut` is a LATCH, set synchronously
+  // the instant the deadline timer fires, BEFORE starting the (async) stop
+  // escalation -- every completion path (including the `close` handler,
+  // which can race the escalation it triggered) must read this latched
+  // value, never recompute `now >= deadlineAt` from the clock. Reproduces
+  // review 7 finding 3 exactly: with the timeout callback already
+  // executing (SIGTERM already sent), a BACKWARD clock movement followed
+  // by a clean child `close` must still settle `failed`, never `completed`.
+  it('a degraded-mode timeout latch is immune to a backward clock step during stop escalation (#2915 round 8 review 8, C4)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    // A short-fused canary deadline (30ms) stands in for the task deadline
+    // so the timer fires almost immediately in real wall-clock time --
+    // `admission.token.deadlineMs` is the SMALLEST deadline candidate
+    // `continueGated` folds in (see its own doc comment), so this governs
+    // `deadlineMs` regardless of the fixture's much larger default task
+    // wallSeconds.
+    const breaker = new ScopedFailureBreaker({ policy: { canaryTimeoutMs: 30, cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = 1_000_000;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: 'opener-c4-latch', scopeKeys: ['installation:codex'] });
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    // The instant SIGTERM is delivered (the stop escalation genuinely
+    // starting), simulate the backward wall-clock movement and then a
+    // clean close racing the escalation -- both happen synchronously
+    // inside this one `kill()` call, so the test needs no extra real-time
+    // wait for a 5s grace window that never actually needs to elapse.
+    const signalsSent: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signalsSent.push(sig);
+      if (sig === 'SIGTERM') {
+        clockNow -= 500_000;
+        // Matches real Node `ChildProcess` semantics: `exitCode` is set
+        // before `close` fires, so a LATER `terminateChildWithGrace` call
+        // against this same already-exited child (the descendant-stop
+        // evidence resolution below also attempts termination,
+        // best-effort) short-circuits immediately via its own `exited()`
+        // check instead of sending a real second SIGTERM/SIGKILL round.
+        queueMicrotask(() => { child.exitCode = 0; child.emit('close', 0); });
+      }
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work, scopedBreaker: breaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async (invocation: any) => {
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child };
+      },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'c4-backward-clock-latch', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const runBody = JSON.parse(result.content[0].text);
+    expect(signalsSent).toEqual(['SIGTERM']);
+    expect(runBody.status, JSON.stringify(runBody)).not.toBe('completed');
+    expect(runBody.status, JSON.stringify(runBody)).toBe('failed');
+  });
 });
 
 describe('native MCP pre-spawn requalification never leaks registry capacity (#2915 review 6, finding 2)', () => {
@@ -3011,7 +3127,16 @@ describe('one absolute MCP deadline across queue wait, connect, list and call (#
 });
 
 describe('stop evidence on every settlement — zero-dispatch and confirmed-termination settlements never leave a permanent blocking marker (#2915 review 6, finding 4)', () => {
-  it('a confirmed shell completion with an invalid final claim settles failed with confirmedStop: true, never omitting termination evidence from a rejection', async () => {
+  // #2915 round 8 review 8 (C2): degraded direct-child close is UNRESOLVED
+  // for descendants -- the shared `resolveStopEvidence` never treats a
+  // confirmed exit of this bridge's own direct child (degraded isolation
+  // has no cgroup to prove any descendant process it spawned has also
+  // stopped) as sufficient stop evidence, even though the attempt itself
+  // settles `failed` normally. This replaces the PRE-round-8 assumption
+  // (reflected in this test's own former name) that any confirmed close
+  // implied `confirmedStop: true` -- that was exactly the review 8 defect
+  // ("degraded direct-child close becomes confirmedStop:true").
+  it('a confirmed DEGRADED shell completion with an invalid final claim settles failed with confirmedStop: false (never confirms descendant stop without a cgroup)', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
     const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
@@ -3044,7 +3169,7 @@ describe('stop evidence on every settlement — zero-dispatch and confirmed-term
     const body = JSON.parse(result.content[0].text);
     expect(body.status, JSON.stringify(body)).toBe('failed');
     expect(settledOutcomes).toHaveLength(1);
-    expect(settledOutcomes[0]).toMatchObject({ kind: 'failed', confirmedStop: true });
+    expect(settledOutcomes[0]).toMatchObject({ kind: 'failed', confirmedStop: false });
   });
 });
 
