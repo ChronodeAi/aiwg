@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, relative, isAbsolute } from 'path';
 import { EventEmitter } from 'events';
 import { homedir, constants as osConstants } from 'os';
+import { parseDocument } from 'yaml';
 import { importImpl } from '../_resolve-impl.mjs';
 import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
@@ -366,7 +367,8 @@ async function launchOneWorker(owner, options) {
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
       invocation, invocationId, drivers: inputs.drivers, scopedBreaker: options?.scopedBreaker,
-      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot });
+      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot,
+      ledgerLock: options?.ledgerLock });
   } catch (error) {
     // Fail closed, never fail open or leak a slot: an admission-time
     // exception (bad breaker state, a thrown import) is a refusal, not a
@@ -386,29 +388,67 @@ async function launchOneWorker(owner, options) {
     const error = new Error(message);
     error.code = admission.refused.code;
     error.blockedBy = admission.refused.blockedBy;
+    if (admission.refused.ledgerDiagnostic) error.ledgerDiagnostics = [admission.refused.ledgerDiagnostic];
     throw error;
   }
+  // #2915 review 6 (finding 9): collects every ledger-accounting diagnostic
+  // (a refund that failed to persist) across this attempt's lifecycle so it
+  // can be surfaced on the thrown error or the returned result, instead of
+  // being silently swallowed. `admission.ledgerDiagnostic` (finding 4: a
+  // worker-writable captureRoot fell back to the in-process ledger) is
+  // folded in up front so every exit path reports it.
+  const ledgerDiagnostics = admission.ledgerDiagnostic ? [admission.ledgerDiagnostic] : [];
+  const settleLedger = async (outcome) => {
+    const diagnostic = await settleDirectWorker(admission, outcome);
+    if (diagnostic) ledgerDiagnostics.push(diagnostic);
+  };
   // #2915 review 4 (finding 8): once a real ledger exists, it — not the
   // caller-supplied `options.correctStartup.correctionsUsed` — is
   // authoritative for the one-correction budget. `SessionLauncher.
   // launchWorker`'s own early gate (using the caller's count) still runs
   // first as a fast pre-check with no plan/ledger loaded yet; this is the
   // actual enforcement whenever a task chain is resolvable.
+  //
+  // #2915 review 6 (finding 6): the read, `startupCorrectionGate`
+  // validation and the increment+write now happen inside ONE atomic
+  // `reserveLedgerCorrection` call, replacing the former peek-then-gate-
+  // then-record sequence (three independent, unlocked steps two concurrent
+  // launches could each pass).
+  //
+  // #2915 review 6 (finding 9): wrapped in try/catch so ANY exception from
+  // this block (lock contention, a corrupted record) settles the admission
+  // before re-throwing -- the former code let such an exception escape
+  // uncaught, stranding the breaker reservation AND the ledger's pending
+  // slot forever (neither settle call below this point would ever run).
   if (options?.correctStartup !== undefined && admission.ledger) {
-    const used = await peekLedgerCorrections({ captureRoot: options?.captureRoot, taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts });
-    const gate = startupCorrectionGate({ ...options.correctStartup, correctionsUsed: used });
+    let gate;
+    try {
+      // `admission.ledger.captureRoot` (never a fresh re-read of
+      // `options?.captureRoot`) so this reuses WHATEVER root admission
+      // itself actually settled on -- including the in-process fallback
+      // when `admitDirectWorker` found the caller-supplied root
+      // worker-writable (finding 4). Re-deriving independently here could
+      // otherwise disagree with admission's own decision and address a
+      // worker-writable root directly.
+      gate = await reserveLedgerCorrection({ captureRoot: admission.ledger.captureRoot, taskChainDigest: taskDigest,
+        maxAttempts: invocation.limits?.maxAttempts, reasonCode: options.correctStartup.reasonCode, lock: options?.ledgerLock });
+    } catch (error) {
+      await settleLedger({ kind: 'uncertain', confirmedStop: true });
+      if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
+      throw error;
+    }
     if (!gate.ok) {
       // #2915 review 6 (finding 3b, "blocking markers... zero spawns"): a
       // reservation that provably never dispatched must release without
       // leaving a marker, even if this settlement happens to land past its
       // own canary deadline -- PROVEN here: no worker process has been
       // started at any point before this refusal.
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
+      await settleLedger({ kind: 'uncertain', confirmedStop: true });
       const error = new Error(`Startup correction refused: ${gate.reason}`);
       error.code = 'STARTUP_CORRECTION_REFUSED';
+      if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
       throw error;
     }
-    await recordLedgerCorrection({ captureRoot: options?.captureRoot, taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts });
   }
   // #2915 review 4 (finding 2): this run-directory preparation is
   // pre-spawn work happening AFTER a successful admission above — any
@@ -426,7 +466,8 @@ async function launchOneWorker(owner, options) {
   } catch (error) {
     // #2915 review 6 (finding 3b): PROVEN zero-spawn pre-spawn failure --
     // release without leaving a marker even past the canary deadline.
-    settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
+    await settleLedger({ kind: 'uncertain', confirmedStop: true });
+    if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
     throw error;
   }
   const supervisor = sampleWorkerIdentity(process.pid);
@@ -535,7 +576,7 @@ async function launchOneWorker(owner, options) {
     // `result.attemptOutcome` — never `result.termination` — so a genuinely
     // successful degraded attempt closes its scope instead of silently
     // reopening it forever (#2915 final review, finding 4).
-    settleDirectWorker(admission, classifyAttemptForSettlement(invocation, result,
+    await settleLedger(classifyAttemptForSettlement(invocation, result,
       { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
     // #2915 review 6 (finding 6, "changed disabled behavior"): origin/main's
     // `SessionLauncher` never had `lastAttemptResult`/`lastAttemptInvocationId`
@@ -547,6 +588,10 @@ async function launchOneWorker(owner, options) {
       owner.lastAttemptResult = result ?? null;
       owner.lastAttemptInvocationId = result?.invocationId ?? owner.lastAttemptInvocationId;
     }
+    // #2915 review 6 (finding 9): surface any ledger-accounting diagnostic
+    // accumulated across this attempt's lifecycle on the returned result,
+    // mirroring `publishFailures` — never silently discarded.
+    if (ledgerDiagnostics.length && result) result.ledgerDiagnostics = ledgerDiagnostics.slice();
     return result;
   } catch (error) {
     if (!outcome?.child) {
@@ -557,7 +602,7 @@ async function launchOneWorker(owner, options) {
       // 3b): zero spawns occurred, so release without leaving a marker even
       // if this settlement happens to land past the reservation's own
       // canary deadline.
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
+      await settleLedger({ kind: 'uncertain', confirmedStop: true });
       await publish('exit.json', { invocationId, exitCode: null, signal: null,
         endedAt: new Date().toISOString(), termination: 'confirmed', descendants: 'not-started', errorCode: error.code ?? 'LAUNCH_REFUSED' });
     } else if (admission.gated) {
@@ -600,7 +645,7 @@ async function launchOneWorker(owner, options) {
         const stopped = await terminateChildWithGrace(outcome.child, { graceMs });
         confirmedStop = stopped.terminated === true;
       } catch { confirmedStop = false; }
-      settleDirectWorker(admission, { kind: 'uncertain', confirmedStop });
+      await settleLedger({ kind: 'uncertain', confirmedStop });
       // #2915 review 6 (finding 3d): when this bounded stop escalation DOES
       // confirm termination, also call the explicit reconciliation -- a
       // harmless no-op if this exact reservation's own settle() above
@@ -612,6 +657,7 @@ async function launchOneWorker(owner, options) {
         try { admission.breaker?.reconcileStopEvidence?.({ invocationId, confirmedStop: true }); } catch { /* best-effort */ }
       }
     }
+    if (ledgerDiagnostics.length) error.ledgerDiagnostics = ledgerDiagnostics;
     throw error;
   } finally {
     try { await artifacts?.cleanup(); } finally {
@@ -1247,10 +1293,11 @@ export async function stableTaskChainDigest(request, briefDigest) {
 }
 
 // ===========================================================================
-// Minimal per-task allowance ledger (#2915 review 4, finding 8)
+// Minimal per-task allowance ledger (#2915 review 4, finding 8; hardened by
+// #2915 review 6, findings 3-10)
 // ===========================================================================
 //
-// Design, in five lines:
+// Design, in six lines:
 //  1. One small record per task chain (`stableTaskChainDigest`), under
 //     `<captureRoot>/ledger/<digest>.json` (0600, launcher-owned), holding
 //     bounded arrays of pending/charged invocation ids against the already-
@@ -1258,18 +1305,29 @@ export async function stableTaskChainDigest(request, briefDigest) {
 //  2. Every read/modify/write is guarded by an exclusive-create lock file
 //     (`<digest>.lock`, O_CREAT|O_EXCL|O_NOFOLLOW — the same mutual-exclusion
 //     primitive `process-monitor.mjs`'s `createStatusObservationOwner`
-//     already uses) with a bounded wait; exhausting the wait refuses rather
-//     than proceeding unlocked.
-//  3. `reserveDirectWorkerAllowance` atomically checks `pending+charged <
-//     maxAttempts` and appends the invocation id to `pending` (idempotent if
-//     already present); `debitDirectWorkerAllowance` moves it pending ->
-//     charged; `refundDirectWorkerAllowance` removes a NOT-yet-charged id
-//     from `pending` — all three are no-ops once an id is already charged.
+//     already uses) with a bounded wait; the lock records its own owner's
+//     identity so a later acquirer can distinguish a crashed owner (whose
+//     orphaned lock is reclaimed) from a genuinely busy one (which still
+//     refuses, rather than proceeding unlocked, once the wait is exhausted).
+//  3. `reserveDirectWorkerAllowance` atomically checks `pending + a durable
+//     cumulative charge COUNT < maxAttempts` and appends the invocation id to
+//     `pending` (idempotent if already present); `debitDirectWorkerAllowance`
+//     moves it pending -> charged and increments the cumulative count;
+//     `refundDirectWorkerAllowance` removes a NOT-yet-charged id from
+//     `pending` — all three are no-ops once an id is already charged. The
+//     cumulative count, never the bounded recent-id cache, is the budget.
 //  4. When no `captureRoot` is supplied (MCP has no server-owned capture
-//     root today), the SAME three operations run against an in-process-only
-//     Map keyed by task-chain digest — real within one process, but it
-//     grants NO cross-process guarantee; callers on that path must say so.
-//  5. `admitDirectWorker` reserves (only when gated); `launchOneWorker`
+//     root today), OR the caller-supplied `captureRoot` resolves inside any
+//     worker-writable location, the SAME three operations run against an
+//     in-process-only Map keyed by task-chain digest — real within one
+//     process, but it grants NO cross-process guarantee; callers on that
+//     path must say so (`admitDirectWorker`'s returned `ledgerDiagnostic`).
+//  5. Every pending reservation records the reserving process's own
+//     forgery-resistant identity (pid+bootId+startTicks); every lock
+//     acquisition opportunistically reconciles (refunds) any pending
+//     reservation whose owner is now provably dead — charged history is
+//     never touched by reconciliation.
+//  6. `admitDirectWorker` reserves (only when gated); `launchOneWorker`
 //     debits immediately before calling `launchIsolatedWorker`;
 //     `settleDirectWorker` refunds automatically whenever the reservation
 //     was never debited — no separate refund call site is needed.
@@ -1280,7 +1338,18 @@ export const LEDGER_RECORD_INVALID_CODE = 'LEDGER_RECORD_INVALID';
 
 const LEDGER_LOCK_RETRY_MS = 20;
 const LEDGER_LOCK_MAX_WAIT_MS = 2000;
-const LEDGER_MAX_IDS = 64; // generous relative to any real maxAttempts; bounds a corrupt/adversarial record
+// #2915 review 6 (finding 7): bounds the RECENT-dedup caches only (idempotency
+// of a debit/refund replay against an id this process has already seen
+// recently) — never the admission budget itself, which `chargedCount` (a
+// durable cumulative counter, never truncated) now enforces independently.
+const LEDGER_MAX_IDS = 64;
+// #2915 review 6 (finding 10), matching the design's own stated global
+// bound ("5,000 retained charged IDs"): the hard cap on how many DISTINCT
+// task-chain digests the in-process fallback will ever track in this
+// process. Existing chains are never evicted to make room (see
+// `retireInProcessRecordIfEmpty`); a brand-new digest beyond this bound
+// fails closed instead.
+const IN_PROCESS_LEDGER_MAX_RECORDS = 5000;
 
 function ledgerFail(code, message) {
   const error = new Error(message);
@@ -1293,18 +1362,109 @@ function ledgerPaths(captureRoot, taskChainDigest) {
   return { dir, name: `${taskChainDigest}.json`, recordPath: join(dir, `${taskChainDigest}.json`), lockPath: join(dir, `${taskChainDigest}.lock`) };
 }
 
+/** The bounded size of the RECENT charged-id dedup cache for one record —
+ * generous relative to `maxAttempts` so no id legitimately charged within
+ * this task's own attempt budget is ever evicted during that budget's
+ * lifetime (#2915 review 6, finding 7). */
+function chargedCacheCap(maxAttempts) { return Math.max(LEDGER_MAX_IDS, Number.isInteger(maxAttempts) ? maxAttempts : 0); }
+
+/** #2915 review 6 (finding 4): the SAME private-ownership bar
+ * `launchOneWorker` already applies to a fresh worker run directory
+ * (`stat.uid !== process.getuid() || (stat.mode & 0o077)`) extended to the
+ * ledger's own directory (and the caller-supplied root it lives under) — an
+ * EXISTING directory with the wrong owner or any group/other bit REFUSES;
+ * it is never chmod-repaired, the same "refuse, don't reset" policy applied
+ * to ledger record files below. A missing directory is left for the caller
+ * to create (via `mkdir(..., { mode: 0o700, recursive: true })`, which
+ * applies that mode to every newly-created path segment, not only the
+ * leaf) — so a brand-new root+ledger pair is private from its first write. */
+async function assertPrivateLedgerDirectory(target) {
+  let stat;
+  try { stat = await lstat(target); }
+  catch (error) {
+    if (error.code === 'ENOENT') return;
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger directory is not inspectable (${error.message})`);
+  }
+  if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077)) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger directory is not privately owned');
+  }
+}
+
+async function assertPrivateLedgerRoot(captureRoot, dir) {
+  await assertPrivateLedgerDirectory(captureRoot);
+  await assertPrivateLedgerDirectory(dir);
+}
+
+/** Reads this lock file's own recorded owner identity, or `null` for a
+ * missing/unreadable/oversized/malformed one — NEVER throws (a lock whose
+ * owner cannot be established is simply never eligible for stale recovery
+ * below, which is the safe direction). */
+async function readLedgerLockOwner(lockPath) {
+  try {
+    return await withWorkerPath(lockPath, async target => {
+      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size === 0 || stat.size > 4096) return null;
+        const buffer = Buffer.alloc(stat.size);
+        await handle.read(buffer, 0, buffer.length, 0);
+        return JSON.parse(buffer.toString('utf8'));
+      } finally { await handle.close(); }
+    });
+  } catch { return null; }
+}
+
+/** #2915 review 6 (finding 5): true ONLY when the lock's own recorded owner
+ * can be PROVEN dead — no pid/bootId/startTicks at all (an empty or
+ * unreadable lock, e.g. a crash in the narrow window between O_CREAT and
+ * the owner write, is treated as alive/unknown, never stale, so a
+ * genuinely busy lock in that window is never mistaken for orphaned), a pid
+ * that no longer exists, or a live pid whose identity no longer matches
+ * (PID reuse). A lock recorded by a still-live, still-matching owner is
+ * NEVER reclaimed. */
+async function isLedgerLockOwnerDead(lockPath, sampleIdentity) {
+  const owner = await readLedgerLockOwner(lockPath);
+  if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !owner.bootId || !owner.startTicks) return false;
+  const current = sampleIdentity(owner.pid);
+  return !current || !sameWorkerIdentity(owner, current);
+}
+
 /** Bounded-wait exclusive-create lock — the exact primitive
  * `process-monitor.mjs`'s `createStatusObservationOwner` already uses
- * (`O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`; `EEXIST` means busy). Never
- * proceeds unlocked: exhausting the bounded wait refuses. */
+ * (`O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`; `EEXIST` means busy). Records the
+ * acquirer's own forgery-resistant identity into the lock file so a FUTURE
+ * acquirer that finds it already held can tell a crashed owner from a live
+ * one (#2915 review 6, finding 5) instead of waiting out the bounded window
+ * on every restart forever. Still never proceeds unlocked: exhausting the
+ * bounded wait against a genuinely live (or unprovable) owner still
+ * refuses. `sleep`/`nowMs`/`sampleIdentity` are injectable so tests can
+ * drive lock contention deterministically, without depending on real
+ * elapsed wall-clock time or host scheduling. */
 async function acquireLedgerLock(lockPath, { retryMs = LEDGER_LOCK_RETRY_MS, maxWaitMs = LEDGER_LOCK_MAX_WAIT_MS,
-  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nowMs = () => Date.now() } = {}) {
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nowMs = () => Date.now(),
+  sampleIdentity = sampleWorkerIdentity } = {}) {
   const deadline = nowMs() + maxWaitMs;
+  let triedStaleRecovery = false;
   for (;;) {
     try {
-      return await withWorkerPath(lockPath, target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      const handle = await withWorkerPath(lockPath, target => open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      try {
+        const owner = sampleIdentity(process.pid);
+        if (owner) { await handle.writeFile(JSON.stringify(owner)); await handle.sync(); }
+      } catch { /* best-effort: an owner that could not be recorded is simply never recoverable as stale later, only ever busy */ }
+      return handle;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
+      if (!triedStaleRecovery && await isLedgerLockOwnerDead(lockPath, sampleIdentity)) {
+        // One stale-owner reclaim attempt per acquisition call: unlink the
+        // orphaned lock and retry immediately (no sleep). If a live process
+        // wins the re-create race in between, the next EEXIST simply falls
+        // through to the ordinary bounded wait below — never a second
+        // reclaim attempt against what is now a live lock.
+        triedStaleRecovery = true;
+        try { await unlink(lockPath); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
+        continue;
+      }
       if (nowMs() >= deadline) ledgerFail(LEDGER_LOCK_BUSY_CODE, `Allowance ledger lock '${lockPath}' is held; refusing rather than proceeding unlocked`);
       await sleep(retryMs);
     }
@@ -1315,14 +1475,91 @@ async function releaseLedgerLock(lock, lockPath) {
   try { await lock.close(); } finally { await unlink(lockPath).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
+/** #2915 review 6 (finding 5): reconciles pending reservations whose owning
+ * process is verifiably dead — removed from `pendingIds` exactly like an
+ * ordinary refund, because `pendingIds` by construction holds ONLY
+ * not-yet-debited reservations: a dead owner can never still be about to
+ * dispatch one. Charged history (`chargedIds`/`chargedCount`) is NEVER
+ * touched. Returns `true` when the record changed (caller must persist). */
+function reconcileDeadOwners(record, sampleIdentity) {
+  let changed = false;
+  record.pendingIds = record.pendingIds.filter((entry) => {
+    const owner = entry?.owner;
+    if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return true; // no recorded owner: never swept
+    const current = sampleIdentity(owner.pid);
+    const dead = !current || !sameWorkerIdentity(owner, current);
+    if (dead) changed = true;
+    return !dead;
+  });
+  return changed;
+}
+
+/** #2915 review 6 (finding 8): RFC 8259 leaves repeated object member names
+ * to the implementation; `JSON.parse` picks "last wins", which lets a
+ * forged record smuggle a second, hidden `chargedIds` (or any other member)
+ * past an earlier one. Reuses the `yaml` package's own strict-mapping-key
+ * parser (already a direct dependency, already used the same way for
+ * authored decision documents in `src/decision/entry.ts`) purely as a
+ * duplicate-key VALIDATOR — JSON is a flow-mapping subset of YAML 1.2, so
+ * every record this ledger itself ever writes (plain `JSON.stringify`
+ * output) parses identically either way; the ordinary, fast `JSON.parse`
+ * result is still what is returned. Returns `undefined` on ANY syntax or
+ * duplicate-key problem — never throws, so callers can produce one bounded
+ * diagnostic. */
+function strictLedgerJson(text) {
+  let value;
+  try { value = JSON.parse(text); } catch { return undefined; }
+  let document;
+  try { document = parseDocument(text, { uniqueKeys: true }); } catch { return undefined; }
+  if (document.errors.length) return undefined;
+  return value;
+}
+
+/** #2915 review 6 (finding 8): full schema/invariant validation — never
+ * merely "parses as JSON". Bounded, unique pending/charged ids; pending and
+ * charged disjoint (an id can never be simultaneously reserved-but-not-yet-
+ * charged AND charged); every count a non-negative integer consistent with
+ * the id sets it summarizes (`chargedCount` can never be smaller than the
+ * bounded recent cache it is a superset of). Any failure is a refusal,
+ * never a reset. */
+function validateLedgerRecordShape(record, taskChainDigest) {
+  if (!record || typeof record !== 'object' || record.version !== 1 || record.taskChainDigest !== taskChainDigest
+    || !Number.isInteger(record.maxAttempts) || record.maxAttempts < 1
+    || !Array.isArray(record.pendingIds) || !Array.isArray(record.chargedIds)
+    || !Number.isInteger(record.chargedCount) || record.chargedCount < 0
+    || !Number.isInteger(record.corrections) || record.corrections < 0) {
+    return false;
+  }
+  const cap = chargedCacheCap(record.maxAttempts);
+  if (record.pendingIds.length > cap || record.chargedIds.length > cap) return false;
+  const pendingIds = new Set();
+  for (const entry of record.pendingIds) {
+    if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string' || !entry.id || pendingIds.has(entry.id)) return false;
+    if (entry.owner !== null && entry.owner !== undefined) {
+      const owner = entry.owner;
+      if (typeof owner !== 'object' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0
+        || typeof owner.bootId !== 'string' || !owner.bootId || typeof owner.startTicks !== 'string' || !owner.startTicks) return false;
+    }
+    pendingIds.add(entry.id);
+  }
+  const chargedIds = new Set();
+  for (const id of record.chargedIds) {
+    if (typeof id !== 'string' || !id || chargedIds.has(id)) return false;
+    chargedIds.add(id);
+  }
+  for (const id of pendingIds) if (chargedIds.has(id)) return false; // pending and charged are disjoint
+  if (record.chargedCount < chargedIds.size) return false; // the cumulative count can never be smaller than its own bounded cache
+  return true;
+}
+
 /** Reads the existing record, or a fresh default for a never-seen digest.
  * Any tampering — wrong identity, insecure mode, non-launcher ownership,
- * malformed JSON, out-of-shape arrays — REFUSES; it never silently resets
- * to a fresh record (that would let a corrupted/forged record quietly
- * regrant allowance). */
+ * malformed/duplicate-keyed JSON, invalid shape or invariants — REFUSES; it
+ * never silently resets to a fresh record (that would let a
+ * corrupted/forged record quietly regrant allowance). */
 async function readLedgerRecord(recordPath, inspect, taskChainDigest, maxAttempts) {
   if (!await inspect(recordPath, 'file')) {
-    return { version: 1, taskChainDigest, maxAttempts, pendingIds: [], chargedIds: [], corrections: 0 };
+    return { version: 1, taskChainDigest, maxAttempts, pendingIds: [], chargedIds: [], chargedCount: 0, corrections: 0 };
   }
   let bytes;
   try {
@@ -1332,12 +1569,10 @@ async function readLedgerRecord(recordPath, inspect, taskChainDigest, maxAttempt
     // for retry-predecessor metadata.
     bytes = await boundedPrivateRead(recordPath, 65536, inspect, true, true);
   } catch (error) { ledgerFail(LEDGER_RECORD_INVALID_CODE, `Allowance ledger record is missing, insecurely-moded or not owned (${error.message})`); }
-  let record;
-  try { record = JSON.parse(bytes.toString('utf8')); } catch { ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger record is not valid JSON'); }
-  if (record?.version !== 1 || record?.taskChainDigest !== taskChainDigest
-    || !Array.isArray(record.pendingIds) || !Array.isArray(record.chargedIds)
-    || !Number.isInteger(record.maxAttempts) || record.maxAttempts < 1) {
-    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger record identity or shape does not match');
+  const record = strictLedgerJson(bytes.toString('utf8'));
+  if (record === undefined) ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger record is not valid JSON or has a duplicate member name');
+  if (!validateLedgerRecordShape(record, taskChainDigest)) {
+    ledgerFail(LEDGER_RECORD_INVALID_CODE, 'Allowance ledger record identity, shape or invariants do not match');
   }
   return record;
 }
@@ -1352,8 +1587,10 @@ async function writeLedgerRecord(dir, name, record, inspect) {
 // that path and the code and docs must say so"). Real mutual exclusion
 // and counting within this one process; grants NO guarantee across
 // processes sharing the same task chain. Used today by the MCP bridge,
-// which has no server-owned capture root.
-const _inProcessLedger = new Map(); // taskChainDigest -> record (same shape as the on-disk one)
+// which has no server-owned capture root, and by the launcher whenever a
+// caller-supplied `captureRoot` turns out to be worker-writable
+// (#2915 review 6, finding 4).
+const _inProcessLedger = new Map(); // taskChainDigest -> record (same shape as the on-disk one, minus owner tagging)
 
 // #2915 review 5 (finding 4, "unauthenticated or reused authority"):
 // `planDirectWorkerLaunch`'s borrowed-admission path (below) previously
@@ -1372,139 +1609,212 @@ export function resetInProcessAllowanceLedger() { _inProcessLedger.clear(); }
 function inProcessLedgerRecord(taskChainDigest, maxAttempts) {
   let record = _inProcessLedger.get(taskChainDigest);
   if (!record) {
-    record = { version: 1, taskChainDigest, maxAttempts, pendingIds: [], chargedIds: [], corrections: 0 };
+    // #2915 review 6 (finding 10): bounded GLOBAL retention — once this
+    // process has ever seen `IN_PROCESS_LEDGER_MAX_RECORDS` distinct task
+    // chains, a brand-new, never-seen digest fails closed rather than
+    // growing without bound. Existing chains are never evicted to make
+    // room — see `retireInProcessRecordIfEmpty` for why evicting a charged
+    // chain is unsafe at any size.
+    if (_inProcessLedger.size >= IN_PROCESS_LEDGER_MAX_RECORDS) {
+      ledgerFail(ALLOWANCE_EXHAUSTED_CODE, 'In-process allowance ledger is at its global task-chain bound');
+    }
+    record = { version: 1, taskChainDigest, maxAttempts, pendingIds: [], chargedIds: [], chargedCount: 0, corrections: 0 };
     _inProcessLedger.set(taskChainDigest, record);
   }
   return record;
 }
 
 /**
+ * #2915 review 6 (finding 10): a record with no charged history and
+ * nothing currently outstanding carries zero information worth keeping —
+ * remove it so a long-running process doing many reserve+refund cycles for
+ * DISTINCT task chains does not accumulate one permanent empty record per
+ * chain (the review's probe: 1,000 reserve+refund cycles left 1,000 empty
+ * records).
+ *
+ * A record with ANY charged history (`chargedCount > 0`) is kept for the
+ * remaining lifetime of THIS PROCESS, no matter how long it then stays at
+ * zero pending: that count is this process's only record of allowance
+ * already spent for this task chain, and discarding it would let a later
+ * retry for the exact same digest start over at zero — regranting spent
+ * allowance, exactly the failure this ledger exists to prevent. The
+ * in-process ledger's retention boundary is therefore the PROCESS's own
+ * lifetime, not a fixed per-chain timeout or count;
+ * `IN_PROCESS_LEDGER_MAX_RECORDS` is the separate, coarser safety valve
+ * against unbounded growth from many DISTINCT chains.
+ */
+function retireInProcessRecordIfEmpty(taskChainDigest) {
+  const record = _inProcessLedger.get(taskChainDigest);
+  if (record && record.pendingIds.length === 0 && record.chargedCount === 0 && record.corrections === 0) {
+    _inProcessLedger.delete(taskChainDigest);
+  }
+}
+
+/**
  * Atomically reserve one allowance slot for `invocationId` against
  * `taskChainDigest`. Idempotent: re-reserving the same invocation id is a
  * no-op success. Refuses with `ALLOWANCE_EXHAUSTED_CODE` when
- * `pendingIds.length + chargedIds.length >= maxAttempts`.
+ * `pendingIds.length + chargedCount >= maxAttempts` — the durable
+ * cumulative `chargedCount`, never the bounded recent-id cache (#2915
+ * review 6, finding 7).
+ *
+ * `lock` (optional) forwards `{ retryMs, maxWaitMs, sleep, nowMs,
+ * sampleIdentity }` to the underlying file lock, letting tests drive
+ * contention and crash-recovery deterministically.
  *
  * Returns a mutable handle `{ mode, captureRoot, taskChainDigest,
  * invocationId, debited }` — `debited` starts `false` and is flipped by
- * `debitDirectWorkerAllowance`; `settleDirectWorker` reads it to decide
- * whether a refund is owed.
+ * `debitDirectWorkerAllowance` ONLY once the charge is actually persisted;
+ * `settleDirectWorker` reads it to decide whether a refund is owed.
  */
-export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId, maxAttempts }) {
+export async function reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId, maxAttempts, lock } = {}) {
   if (!taskChainDigest || !invocationId || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
     ledgerFail(LEDGER_RECORD_INVALID_CODE, 'reserveDirectWorkerAllowance requires taskChainDigest, invocationId and a positive integer maxAttempts');
   }
   if (!captureRoot) {
     const record = inProcessLedgerRecord(taskChainDigest, maxAttempts);
     if (!record.pendingIds.includes(invocationId) && !record.chargedIds.includes(invocationId)) {
-      if (record.pendingIds.length + record.chargedIds.length >= record.maxAttempts) {
+      if (record.pendingIds.length + record.chargedCount >= record.maxAttempts) {
         ledgerFail(ALLOWANCE_EXHAUSTED_CODE, `Task-chain allowance exhausted (${record.maxAttempts} attempt(s), in-process ledger)`);
       }
-      record.pendingIds = [...record.pendingIds, invocationId].slice(-LEDGER_MAX_IDS);
+      record.pendingIds = [...record.pendingIds, invocationId];
     }
     return { mode: 'in-process', captureRoot: null, taskChainDigest, invocationId, debited: false };
   }
+  const sampleIdentity = lock?.sampleIdentity ?? sampleWorkerIdentity;
   const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { dir, name, recordPath, lockPath } = ledgerPaths(captureRoot, taskChainDigest);
+  await assertPrivateLedgerRoot(captureRoot, dir);
   await mkdir(dir, { mode: 0o700, recursive: true });
-  const lock = await acquireLedgerLock(lockPath);
+  const ledgerLock = await acquireLedgerLock(lockPath, lock);
   try {
     const record = await readLedgerRecord(recordPath, inspect, taskChainDigest, maxAttempts);
-    if (!record.pendingIds.includes(invocationId) && !record.chargedIds.includes(invocationId)) {
-      if (record.pendingIds.length + record.chargedIds.length >= record.maxAttempts) {
+    // #2915 review 6 (finding 5): opportunistically refund any pending
+    // reservation whose owning process is now provably dead, on every lock
+    // acquisition — not only during lock-staleness recovery — so a crash
+    // between reserve and debit/refund self-heals the next time ANY caller
+    // touches this record, not only one that happens to contend on the lock.
+    let changed = reconcileDeadOwners(record, sampleIdentity);
+    const already = record.pendingIds.some((entry) => entry.id === invocationId) || record.chargedIds.includes(invocationId);
+    if (!already) {
+      if (record.pendingIds.length + record.chargedCount >= record.maxAttempts) {
+        if (changed) await writeLedgerRecord(dir, name, record, inspect); // persist reclaimed allowance even though THIS reservation is refused
         ledgerFail(ALLOWANCE_EXHAUSTED_CODE, `Task-chain allowance exhausted (${record.maxAttempts} attempt(s))`);
       }
-      record.pendingIds = [...record.pendingIds, invocationId].slice(-LEDGER_MAX_IDS);
-      await writeLedgerRecord(dir, name, record, inspect);
+      record.pendingIds = [...record.pendingIds, { id: invocationId, owner: sampleIdentity(process.pid) }];
+      changed = true;
     }
+    if (changed) await writeLedgerRecord(dir, name, record, inspect);
     return { mode: 'file', captureRoot, taskChainDigest, invocationId, debited: false };
-  } finally { await releaseLedgerLock(lock, lockPath); }
+  } finally { await releaseLedgerLock(ledgerLock, lockPath); }
 }
 
-/** Moves `invocationId` from pending to charged (idempotent). Called
- * immediately before dispatch — so a spawn failure, once reached, is
- * already charged; it is never refunded afterward. */
-export async function debitDirectWorkerAllowance(ledger) {
+/** Moves `invocationId` from pending to charged (idempotent) and increments
+ * the durable `chargedCount`. Called immediately before dispatch — so a
+ * spawn failure, once reached, is already charged; it is never refunded
+ * afterward.
+ *
+ * #2915 review 6 (finding 9): `ledger.debited` is flipped to `true` ONLY
+ * after the charge is actually persisted (or, for the in-process mode,
+ * after the synchronous in-memory mutation that cannot partially fail) —
+ * never before. A lock-acquisition or write failure throws BEFORE that
+ * point, leaving `debited` false so `settleDirectWorker`'s refund check
+ * still runs and correctly returns the still-pending reservation, instead
+ * of permanently stranding it as "already debited" with nothing ever
+ * written. */
+export async function debitDirectWorkerAllowance(ledger, { lock } = {}) {
   if (!ledger || ledger.debited) return;
-  ledger.debited = true;
   if (ledger.mode === 'in-process') {
     const record = _inProcessLedger.get(ledger.taskChainDigest);
-    if (!record) return;
-    if (!record.chargedIds.includes(ledger.invocationId)) {
+    if (record && !record.chargedIds.includes(ledger.invocationId)) {
       record.pendingIds = record.pendingIds.filter((id) => id !== ledger.invocationId);
-      record.chargedIds = [...record.chargedIds, ledger.invocationId].slice(-LEDGER_MAX_IDS);
+      record.chargedIds = [...record.chargedIds, ledger.invocationId].slice(-chargedCacheCap(record.maxAttempts));
+      record.chargedCount += 1;
     }
+    ledger.debited = true;
+    retireInProcessRecordIfEmpty(ledger.taskChainDigest);
     return;
   }
+  const sampleIdentity = lock?.sampleIdentity ?? sampleWorkerIdentity;
   const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { dir, name, recordPath, lockPath } = ledgerPaths(ledger.captureRoot, ledger.taskChainDigest);
-  const lock = await acquireLedgerLock(lockPath);
+  await assertPrivateLedgerRoot(ledger.captureRoot, dir);
+  const ledgerLock = await acquireLedgerLock(lockPath, lock);
   try {
     const record = await readLedgerRecord(recordPath, inspect, ledger.taskChainDigest, 1);
+    let changed = reconcileDeadOwners(record, sampleIdentity);
     if (!record.chargedIds.includes(ledger.invocationId)) {
-      record.pendingIds = record.pendingIds.filter((id) => id !== ledger.invocationId);
-      record.chargedIds = [...record.chargedIds, ledger.invocationId].slice(-LEDGER_MAX_IDS);
-      await writeLedgerRecord(dir, name, record, inspect);
+      record.pendingIds = record.pendingIds.filter((entry) => entry.id !== ledger.invocationId);
+      record.chargedIds = [...record.chargedIds, ledger.invocationId].slice(-chargedCacheCap(record.maxAttempts));
+      record.chargedCount += 1;
+      changed = true;
     }
-  } finally { await releaseLedgerLock(lock, lockPath); }
+    if (changed) await writeLedgerRecord(dir, name, record, inspect);
+    ledger.debited = true; // committed only once the write above actually succeeded
+  } finally { await releaseLedgerLock(ledgerLock, lockPath); }
 }
 
 /** Removes `invocationId` from pending (idempotent; a no-op once charged —
  * a preparation refusal AFTER debit must never refund a spawn/canary
  * attempt that already counted). */
-export async function refundDirectWorkerAllowance(ledger) {
+export async function refundDirectWorkerAllowance(ledger, { lock } = {}) {
   if (!ledger || ledger.debited) return;
   if (ledger.mode === 'in-process') {
     const record = _inProcessLedger.get(ledger.taskChainDigest);
     if (record) record.pendingIds = record.pendingIds.filter((id) => id !== ledger.invocationId);
+    retireInProcessRecordIfEmpty(ledger.taskChainDigest);
     return;
   }
+  const sampleIdentity = lock?.sampleIdentity ?? sampleWorkerIdentity;
   const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { dir, name, recordPath, lockPath } = ledgerPaths(ledger.captureRoot, ledger.taskChainDigest);
-  const lock = await acquireLedgerLock(lockPath);
+  await assertPrivateLedgerRoot(ledger.captureRoot, dir);
+  const ledgerLock = await acquireLedgerLock(lockPath, lock);
   try {
     const record = await readLedgerRecord(recordPath, inspect, ledger.taskChainDigest, 1);
+    let changed = reconcileDeadOwners(record, sampleIdentity);
     if (!record.chargedIds.includes(ledger.invocationId)) {
-      record.pendingIds = record.pendingIds.filter((id) => id !== ledger.invocationId);
-      await writeLedgerRecord(dir, name, record, inspect);
+      const before = record.pendingIds.length;
+      record.pendingIds = record.pendingIds.filter((entry) => entry.id !== ledger.invocationId);
+      if (record.pendingIds.length !== before) changed = true;
     }
-  } finally { await releaseLedgerLock(lock, lockPath); }
+    if (changed) await writeLedgerRecord(dir, name, record, inspect);
+  } finally { await releaseLedgerLock(ledgerLock, lockPath); }
 }
 
 /**
- * #2915 review 4 (finding 8): "replace the caller-declared `correctionsUsed`
- * with the ledger's count." Returns the CURRENT persisted corrections count
- * for this task chain (read-only, under the same lock as every other
- * operation) — `launchOneWorker` uses this instead of trusting
- * `options.correctStartup.correctionsUsed`.
+ * #2915 review 6 (finding 6): replaces the former peek-then-gate-then-record
+ * sequence (three independent steps, no lock spanning them — two concurrent
+ * launches could each read zero corrections, both pass the one-correction
+ * gate, and leave the ledger recording two) with ONE atomic operation: the
+ * read, `startupCorrectionGate` validation and the increment+write all
+ * happen inside a single lock acquisition (file mode) or a single
+ * synchronous block (in-process mode, which cannot be preempted mid-check).
+ * A refused (unqualified reason, or budget already exhausted per the real
+ * ledger-recorded count) correction reserves/writes nothing.
  */
-export async function peekLedgerCorrections({ captureRoot, taskChainDigest, maxAttempts }) {
-  if (!taskChainDigest) return 0;
-  if (!captureRoot) return inProcessLedgerRecord(taskChainDigest, maxAttempts ?? 1).corrections;
-  const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
-  const { recordPath } = ledgerPaths(captureRoot, taskChainDigest);
-  const record = await readLedgerRecord(recordPath, inspect, taskChainDigest, maxAttempts ?? 1);
-  return record.corrections;
-}
-
-/** Persists one more used correction for this task chain (bounded by
- * `MAX_STARTUP_CORRECTIONS` at the call site, not here — this function only
- * records usage). Locked the same way as reserve/debit/refund. */
-export async function recordLedgerCorrection({ captureRoot, taskChainDigest, maxAttempts }) {
-  if (!taskChainDigest) return;
+export async function reserveLedgerCorrection({ captureRoot, taskChainDigest, maxAttempts, reasonCode, lock } = {}) {
+  if (!taskChainDigest) return { ok: false, reason: 'No task chain to correct' };
   if (!captureRoot) {
     const record = inProcessLedgerRecord(taskChainDigest, maxAttempts ?? 1);
-    record.corrections += 1;
-    return;
+    const gate = startupCorrectionGate({ correctionsUsed: record.corrections, reasonCode });
+    if (gate.ok) record.corrections += 1;
+    return gate;
   }
+  const sampleIdentity = lock?.sampleIdentity ?? sampleWorkerIdentity;
   const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { dir, name, recordPath, lockPath } = ledgerPaths(captureRoot, taskChainDigest);
+  await assertPrivateLedgerRoot(captureRoot, dir);
   await mkdir(dir, { mode: 0o700, recursive: true });
-  const lock = await acquireLedgerLock(lockPath);
+  const ledgerLock = await acquireLedgerLock(lockPath, lock);
   try {
     const record = await readLedgerRecord(recordPath, inspect, taskChainDigest, maxAttempts ?? 1);
-    record.corrections += 1;
-    await writeLedgerRecord(dir, name, record, inspect);
-  } finally { await releaseLedgerLock(lock, lockPath); }
+    let changed = reconcileDeadOwners(record, sampleIdentity);
+    const gate = startupCorrectionGate({ correctionsUsed: record.corrections, reasonCode });
+    if (gate.ok) { record.corrections += 1; changed = true; }
+    if (changed) await writeLedgerRecord(dir, name, record, inspect);
+    return gate;
+  } finally { await releaseLedgerLock(ledgerLock, lockPath); }
 }
 
 /**
@@ -1807,7 +2117,12 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // posture as the breaker itself. `taskChainDigest`/`maxAttempts` are
   // required to reserve; omitting either (a caller with no resolved task,
   // e.g. a flat-option standalone planner call) simply skips the ledger.
-  taskChainDigest = null, maxAttempts = null, captureRoot = null } = {}) {
+  // Test-only passthrough to the ledger's own file-lock contention knobs
+  // (`retryMs`/`maxWaitMs`/`sleep`/`nowMs`/`sampleIdentity`) — production
+  // omits this and gets the real bounded wait / real clock / real `/proc`
+  // identity sampling; tests can drive lock contention and crash recovery
+  // deterministically without depending on real elapsed wall-clock time.
+  taskChainDigest = null, maxAttempts = null, captureRoot = null, ledgerLock } = {}) {
   if (!gateEnabled) return { gated: false };
   const cli = invocation?.selected?.cli ?? null;
   if (cli && config?.parallelism?.clis?.[cli]?.enabled === false) return { gated: false };
@@ -1832,16 +2147,38 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
     return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt } };
   }
   let ledger = null;
+  let ledgerDiagnostic = null;
   if (taskChainDigest != null && Number.isInteger(maxAttempts) && maxAttempts >= 1) {
+    // #2915 review 6 (finding 4): the SAME worker-writable-root exclusion
+    // `launchOneWorker` already applies to the run directory, applied here
+    // to the ledger's own persistence root — a caller-supplied `captureRoot`
+    // inside any worker-writable location (including the invocation's own
+    // cwd) is never trusted as cross-process storage: a worker with write
+    // access there could delete/replace the ledger record to regrant
+    // allowance. Rather than refuse the whole admission, fall back to the
+    // in-process ledger (real within this one process) and say so in the
+    // returned diagnostics — never silently trust a worker-writable
+    // directory as the persistent root.
+    let safeCaptureRoot = captureRoot;
+    if (safeCaptureRoot != null) {
+      const candidateRoots = [invocation?.cwd, ...(drivers?.[cli]?.qualification?.installation?.workerWritableRoots ?? [])].filter(Boolean);
+      for (const root of candidateRoots) {
+        if (await realBeneath(root, safeCaptureRoot)) {
+          ledgerDiagnostic = 'ledger capture root is inside a worker-writable location; using the in-process ledger instead';
+          safeCaptureRoot = null;
+          break;
+        }
+      }
+    }
     try {
-      ledger = await reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId, maxAttempts });
+      ledger = await reserveDirectWorkerAllowance({ captureRoot: safeCaptureRoot, taskChainDigest, invocationId, maxAttempts, lock: ledgerLock });
     } catch (error) {
       // The breaker already minted a reservation above; an exhausted/busy/
       // invalid ledger must release it before refusing, exactly like any
       // other refused admission — never leak the breaker-side reservation.
       try { breaker.settle(admission.token, { kind: 'uncertain' }); } catch { /* never fail a refusal */ }
       return { gated: true, refused: { code: error.code ?? ALLOWANCE_EXHAUSTED_CODE, blockedBy: [], nextEligibleAt: null,
-        reason: error.message } };
+        reason: error.message, ledgerDiagnostic } };
     }
   }
   // `invocationId`/`selectionDigest` (#2915 review 6, finding 1): identity
@@ -1849,7 +2186,7 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // actually about to dispatch for, so a reservation minted for one
   // invocation/selection cannot authorize a launch for a different one.
   return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier,
-    ledger, invocationId, selectionDigest: selectionDigestFor(invocation) };
+    ledger, invocationId, selectionDigest: selectionDigestFor(invocation), ledgerDiagnostic };
 }
 
 /**
@@ -1861,11 +2198,19 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
 // #2915 review 4 (finding 8): returns a Promise (resolved once any owed
 // ledger refund completes, or immediately if none is owed) so a caller
 // that needs deterministic ordering (tests; `launchOneWorker`'s own
-// catch blocks) can `await settleDirectWorker(...)`. Every EXISTING
-// production call site already predates the ledger and does not await
-// this return value — harmless: the breaker settlement above still runs
-// synchronously first, and the refund (if any) still completes on its
-// own, with errors swallowed the same way breaker-settlement errors are.
+// catch blocks) can `await settleDirectWorker(...)`. Production call sites
+// in `launchOneWorker` now await it (#2915 review 6, finding 9); a caller
+// that still does not await is harmless — the breaker settlement above
+// still runs synchronously first, and the refund (if any) still completes
+// on its own.
+//
+// #2915 review 6 (finding 9): the returned promise NEVER rejects (a
+// refund failure must never fail a launch whose own outcome is already
+// decided) but now resolves to a bounded diagnostic STRING naming the
+// refund failure, or `null` when nothing went wrong, instead of silently
+// swallowing it into `undefined` — a caller that awaits can surface that
+// diagnostic (`launchOneWorker` does, into its thrown error or returned
+// result) rather than the failure being entirely invisible.
 export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
   // A reservation that was never debited is ALWAYS refunded on settlement,
   // regardless of `outcome` — a preparation refusal or proven pre-spawn
@@ -1875,8 +2220,8 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
   // ledger again (a dispatched attempt — including a spawn failure or
   // canary — stays charged no matter how it concludes).
   const refund = admission?.ledger && !admission.ledger.debited
-    ? refundDirectWorkerAllowance(admission.ledger).catch(() => { /* never fail a launch on ledger accounting */ })
-    : Promise.resolve();
+    ? refundDirectWorkerAllowance(admission.ledger).then(() => null, (error) => `allowance refund failed: ${error?.message ?? String(error)}`)
+    : Promise.resolve(null);
   if (!admission?.gated || !admission.token) return refund;
   try { admission.breaker.settle(admission.token, outcome); } catch { /* recovery accounting must never fail a launch */ }
   return refund;
@@ -2898,6 +3243,14 @@ export function planDirectWorkerLaunch({
   // OR ineligible — `admitDirectWorker` simply has nothing to check, same
   // as before.
   drivers,
+  // #2915 review 6 (finding 3, "MCP and standalone planner never debit"):
+  // forwarded to `admitDirectWorker` for the STANDALONE admission path
+  // below so a resolvable task chain gets ledger allowance identity/
+  // enforcement too — a borrowed admission already carries these from its
+  // own caller's `admitDirectWorker` call and never re-resolves them here.
+  taskChainDigest,
+  maxAttempts,
+  captureRoot,
   // #2915 review 6 (finding 5): test-only injection for the standalone
   // non-attached systemd-unit settlement observer below (production omits
   // these and polls the real `getWorkerIsolationStatus` on a real bounded
@@ -3023,7 +3376,8 @@ export function planDirectWorkerLaunch({
       // flat-option callers with no resolved invocation (never defaulted to
       // a shared scope).
       admission = await admitDirectWorker({ gateEnabled: gate.enabled, config, invocation,
-        invocationId: mintedInvocationId, scopedBreaker, drivers: drivers ?? {} });
+        invocationId: mintedInvocationId, scopedBreaker, drivers: drivers ?? {},
+        taskChainDigest, maxAttempts, captureRoot });
     } catch (error) {
       return { launched: false, blocked: true,
         diagnostic: `recovery admission failed closed: ${error?.message ?? String(error)}` };
@@ -3032,6 +3386,11 @@ export function planDirectWorkerLaunch({
       return { launched: false, blocked: true, recoveryBlocked: admission.refused.blockedBy,
         diagnostic: `recovery scope open: ${admission.refused.blockedBy.join(', ')}` };
     }
+    // #2915 review 6 (finding 3, "MCP and standalone planner never
+    // debit"): debited IMMEDIATELY before dispatch, exactly like
+    // `launchOneWorker`'s own debit point — including a spawn failure or a
+    // canary attempt below; nothing past this line can still refund.
+    if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
     let result;
     try {
       result = launch();
