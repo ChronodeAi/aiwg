@@ -653,11 +653,12 @@ async function defaultLaunchShellWorker(invocation, { memoryMaxGb = DEFAULT_MCP_
 const MCP_TRANSPORT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 export class ChildProcessTransport {
-  constructor(child, { terminate = () => child.kill('SIGKILL') } = {}) {
+  constructor(child, { terminate = () => child.kill('SIGKILL'), enforceTransportBound = true } = {}) {
     this._child = child;
     this._terminate = terminate;
     this._failure = undefined;
     this._closed = false;
+    this._enforceTransportBound = enforceTransportBound;
     this.onmessage = undefined;
     this.onerror = undefined;
     this.onclose = undefined;
@@ -733,7 +734,12 @@ export class ChildProcessTransport {
         // BEFORE parsing — an unbounded, never-newline-terminated stream
         // (observed: an 11 MiB unterminated frame retained without error)
         // must refuse rather than growing `_buffer` without limit.
-        if (this._buffer.length > MCP_TRANSPORT_MAX_BUFFER_BYTES) {
+        //
+        // #2915 review 6 (finding 6b): this bound is recovery-specific
+        // hardening (see the constructor's doc comment) — never enforced
+        // when `enforceTransportBound` is false, matching origin/main's own
+        // unbounded buffer exactly.
+        if (this._enforceTransportBound && this._buffer.length > MCP_TRANSPORT_MAX_BUFFER_BYTES) {
           this._buffer = undefined;
           this._overflowed = true;
           this.onerror?.(new Error(`worker MCP transport exceeded the ${MCP_TRANSPORT_MAX_BUFFER_BYTES}-byte unterminated-frame bound`));
@@ -967,40 +973,65 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     live, readers, thresholdOverlay,
   } = options;
   const run = async () => {
-    // D2/F5: recheck the server's own registry qualification immediately
-    // before THIS launch — a serialized/per-instance queue may have held
-    // this call for a while before its turn came up. Checking `enabled`
-    // alone is not requalification: an operator can edit a registry entry's
-    // command/args/env while leaving `enabled: true`, and the ORIGINAL
-    // (admission-time) `server` object passed into this function would
-    // still be the one that gets launched below unless the FRESH
-    // definition is also compared against what was qualified.
-    if (mcpRegistry) {
-      const requalified = await mcpRegistry.get(mcpBinding.serverRef);
-      if (!requalified || requalified.enabled === false) {
-        return { outcome: 'blocked', diagnostic: 'worker MCP server is no longer registered/enabled' };
+    try {
+      // D2/F5: recheck the server's own registry qualification immediately
+      // before THIS launch — a serialized/per-instance queue may have held
+      // this call for a while before its turn came up. Checking `enabled`
+      // alone is not requalification: an operator can edit a registry entry's
+      // command/args/env while leaving `enabled: true`, and the ORIGINAL
+      // (admission-time) `server` object passed into this function would
+      // still be the one that gets launched below unless the FRESH
+      // definition is also compared against what was qualified.
+      if (mcpRegistry) {
+        const requalified = await mcpRegistry.get(mcpBinding.serverRef);
+        if (!requalified || requalified.enabled === false) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP server is no longer registered/enabled' };
+        }
+        if (qualifiedServerDigest && serverDefinitionDigest(requalified) !== qualifiedServerDigest) {
+          return { outcome: 'blocked', diagnostic: 'worker MCP server definition changed since qualification; resolve again' };
+        }
       }
-      if (qualifiedServerDigest && serverDefinitionDigest(requalified) !== qualifiedServerDigest) {
-        return { outcome: 'blocked', diagnostic: 'worker MCP server definition changed since qualification; resolve again' };
+      // #2915 review 5 ("a second worker over unresolved execution"): a
+      // serialized/per-instance queue (D2, below) may have held this call long
+      // enough that its ALREADY-ADMITTED canary reservation's own deadline
+      // (min(task deadline, admission+300s)) has since passed — the breaker's
+      // own sweep reopens the scope and installs a blocking marker the moment
+      // anything next calls `admit()`/`settle()` on it (possibly a sibling
+      // request), regardless of whether THIS queued call ever actually
+      // launches. Revalidate immediately before launch, matching the
+      // registry-qualification recheck just above: an expired admission must
+      // never launch.
+      if (admission?.gated && admission.token
+        && (admission.breaker?.nowMs?.() ?? Date.now()) > admission.token.deadlineMs) {
+        return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
       }
+    } catch (error) {
+      // #2915 review 6 (finding 2, "leaked capacity"): a thrown pre-spawn
+      // requalification/expiry check — nothing has been dispatched yet — must
+      // settle the same way an ordinary blocked requalification does, never
+      // propagate as an exception. `run()`'s own caller sets `spawnAttempted`
+      // BEFORE invoking this function (it cannot know in advance whether a
+      // real spawn is about to happen), so letting this throw escape would be
+      // treated as genuinely post-spawn uncertainty and leak the registry's
+      // run-slot forever — the exact gap a native-MCP requalification error
+      // (`mcpRegistry.get` throwing rather than returning falsy/disabled)
+      // left open.
+      return { outcome: 'blocked', diagnostic: `worker MCP pre-spawn requalification failed: ${error?.message ?? String(error)}` };
     }
-    // Resolve fallible dependencies and construct the client before spawning.
-    const { stopOverflowWorker } = await loadRalphExternal('lib/worker-overflow.mjs');
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const client = new Client({ name: 'aiwg-mcp-worker-invoke', version: '1.0.0' }, { capabilities: {} });
-    // #2915 review 5 ("a second worker over unresolved execution"): a
-    // serialized/per-instance queue (D2, below) may have held this call long
-    // enough that its ALREADY-ADMITTED canary reservation's own deadline
-    // (min(task deadline, admission+300s)) has since passed — the breaker's
-    // own sweep reopens the scope and installs a blocking marker the moment
-    // anything next calls `admit()`/`settle()` on it (possibly a sibling
-    // request), regardless of whether THIS queued call ever actually
-    // launches. Revalidate immediately before launch, matching the
-    // registry-qualification recheck just above: an expired admission must
-    // never launch.
-    if (admission?.gated && admission.token
-      && (admission.breaker?.nowMs?.() ?? Date.now()) > admission.token.deadlineMs) {
-      return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
+    let stopOverflowWorker;
+    let client;
+    try {
+      // Resolve fallible dependencies and construct the client before spawning.
+      ({ stopOverflowWorker } = await loadRalphExternal('lib/worker-overflow.mjs'));
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      client = new Client({ name: 'aiwg-mcp-worker-invoke', version: '1.0.0' }, { capabilities: {} });
+      // Async setup may consume the remaining admitted canary budget.
+      if (admission?.gated && admission.token
+        && (admission.breaker?.nowMs?.() ?? Date.now()) > admission.token.deadlineMs) {
+        return { outcome: 'blocked', diagnostic: 'worker admission expired while queued; recovery scope may have reopened' };
+      }
+    } catch (error) {
+      return { outcome: 'blocked', diagnostic: `worker MCP pre-spawn setup failed: ${error?.message ?? String(error)}` };
     }
     // B2: gate + launch the MCP worker SERVER process through the same
     // pipeline a shell worker uses — never a bare SDK StdioClientTransport.
@@ -1009,7 +1040,9 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
       return { outcome: 'blocked', diagnostic: launch.diagnostic ?? 'worker MCP process launch was refused' };
     }
     const child = launch.child;
-    const transport = new ChildProcessTransport(child, { terminate: () => stopOverflowWorker(launch) });
+    // The audited frame bound and owned stop authority apply to every call.
+    const transport = new ChildProcessTransport(child, { terminate: () => stopOverflowWorker(launch),
+      enforceTransportBound: !!admission?.gated });
     let disconnected = false;
     let retainOverflowControl = false;
     transport.onclose = () => { disconnected = true; };
@@ -1033,9 +1066,32 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
         }
       },
     };
+    // #2915 review 6 (finding 3, "one absolute deadline"): gated only —
+    // derive EVERY stage's timeout (connect/initialize, list, call) from ONE
+    // fixed absolute wall-clock deadline (this admission's own mint time plus
+    // the task's per-call budget, further bounded by the canary's own 300s
+    // window when this admission is the breaker's canary), recomputed fresh
+    // immediately before each stage from the time ACTUALLY remaining — never
+    // a per-stage default (the SDK's own 60s `DEFAULT_REQUEST_TIMEOUT_MSEC`)
+    // and never a budget computed once before a serialized/per-instance
+    // queue wait that can itself consume most of it. Reproduced: a native
+    // request queued 250s into a 300s canary window still received a fresh
+    // 300-SECOND SDK call timeout with only 50s actually remaining, while
+    // connect/list each separately spent up to another 60s on top of that —
+    // vastly overrunning the breaker's own canary window. Not gated:
+    // origin/main exactly — connect/listTools get no timeout option at all
+    // (SDK default), callTool gets the unclipped `mcpBinding.timeoutSeconds`.
+    const nowMsFn = () => admission?.breaker?.nowMs?.() ?? Date.now();
+    const absoluteDeadlineMs = admission?.gated && admission.token
+      ? Math.min(admission.token.mintedAtMs + mcpBinding.timeoutSeconds * 1000, admission.token.deadlineMs)
+      : null;
     try {
       registerControl?.(control);
-      await client.connect(transport);
+      if (absoluteDeadlineMs !== null) {
+        await client.connect(transport, { timeout: Math.max(0, absoluteDeadlineMs - nowMsFn()) });
+      } else {
+        await client.connect(transport);
+      }
       // M3: refuse before any brief is sent if the live tool schema has
       // drifted from what was qualified. Compared CANONICALLY (sorted
       // keys) on both sides, not via the raw `#2887 mcpToolSchemaDigest`
@@ -1046,7 +1102,9 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
       // positive on every call. `mcpSchemas` (the #2887 installation-
       // owner-trusted schema objects, not a client-supplied digest) is the
       // comparison's source of truth here.
-      const listed = await client.listTools();
+      const listed = absoluteDeadlineMs !== null
+        ? await client.listTools(undefined, { timeout: Math.max(0, absoluteDeadlineMs - nowMsFn()) })
+        : await client.listTools();
       const tool = listed?.tools?.find(t => t.name === mcpBinding.tool);
       if (!tool) {
         return { outcome: 'blocked', diagnostic: 'qualified MCP tool is no longer advertised by the server' };
@@ -1081,7 +1139,10 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
           return { outcome: 'blocked', diagnostic: 'worker MCP tool output schema digest drifted from the qualified pin' };
         }
       }
-      const response = await client.callTool({ name: mcpBinding.tool, arguments: mcpBinding.arguments }, undefined, { timeout: mcpBinding.timeoutSeconds * 1000 });
+      const callTimeoutMs = absoluteDeadlineMs !== null
+        ? Math.max(0, absoluteDeadlineMs - nowMsFn())
+        : mcpBinding.timeoutSeconds * 1000;
+      const response = await client.callTool({ name: mcpBinding.tool, arguments: mcpBinding.arguments }, undefined, { timeout: callTimeoutMs });
       return { outcome: 'responded', response };
     } catch (error) {
       const isTimeout = error?.code === -32001 || /timeout/i.test(String(error?.message ?? ''));
@@ -1424,7 +1485,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // #2915 review 4 (finding 2): this pre-spawn refusal happens
           // AFTER admission (above) but was never settling it — a leaked
           // reservation on every unreadable MCP brief.
-          settleRecovery({ kind: 'uncertain' });
+          //
+          // #2915 review 6 (finding 4, "stop evidence on every settlement"):
+          // zero workers were ever dispatched for this reservation — settle
+          // with `confirmedStop: true` so a canary whose own deadline has
+          // already passed (e.g. an expired queued request) releases its
+          // reservation outright instead of leaving a permanent blocking
+          // marker behind for an attempt that never ran at all.
+          settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: ['OG_BRIEF_UNREADABLE'] });
         }
         try {
@@ -1436,7 +1504,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // diagnostic below. A duplicate-key/planted-marker probe showed
           // this exact kind of path can otherwise reflect attacker/worker-
           // controlled input text straight back out to the caller.
-          settleRecovery({ kind: 'uncertain' });
+          //
+          // #2915 review 6 (finding 4): zero workers dispatched — same
+          // proven-never-dispatched settlement as above.
+          settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
@@ -1464,11 +1535,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         mayHaveLaunched = true;
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
-          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, admission, ...gateInputs });
+          driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, ...(admission?.gated ? { admission } : {}), ...gateInputs });
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
         if (!launch.launched && !launch.launchAttempted) {
           mayHaveLaunched = false;
-          settleRecovery({ kind: 'uncertain' });
+          settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [launch.diagnostic ?? 'worker launch was refused'] });
         }
         // M2: a live stop handle for the duration of this call, so an
@@ -1509,7 +1580,16 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         if (registry.get(entry.invocationId)?.cancelRequested) await control.stop();
         const outcome = launch.launched ? await control.wait(deadlineMs) : await control.stopAndConfirm();
         confirmedStop = outcome.termination === 'confirmed';
-        observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode };
+        // #2915 review 6 (finding 1, "false recovery after timeout"): a
+        // forced stop at the attempt's own deadline is never treated as a
+        // candidate success, regardless of the exit code the forced stop
+        // happened to observe (a systemd unit whose main process had
+        // already legitimately exited 0 right before the stop escalation
+        // fired reports exactly that exit code even though the attempt
+        // itself was never allowed to run to its own completion). Preserved
+        // independently of `outcome.exitCode`/`outcome.termination` through
+        // to the candidate-success gate below (`strictlyCompleted`).
+        observation = { transport: 'shell', status: outcome.termination === 'confirmed' && outcome.exitCode === 0 && !outcome.timedOut ? 'completed' : 'failed', termination: outcome.termination, exitCode: outcome.exitCode, timedOut: !!outcome.timedOut };
         // #2915 final (evidence contract): the attempt-level fact is derived
         // from this bridge's own launcher-observed wait status — never a
         // worker claim — independent of `termination`/`descendants` above.
@@ -1567,7 +1647,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         if (!mcpServer) {
           // #2915 review 4 (finding 2): another pre-spawn refusal after
           // admission that was never settling it.
-          settleRecovery({ kind: 'uncertain' });
+          //
+          // #2915 review 6 (finding 4): proven zero dispatch.
+          settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: ['worker MCP server is not registered'] });
         }
         // F5: pin the qualified server's definition digest NOW, at
@@ -1608,13 +1690,23 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // run() already holds, borrowed through to the native-MCP launch
           // path — never a second, independent planner reservation. See
           // `defaultLaunchMcpWorkerProcess`.
-          admission,
+          //
+          // #2915 review 6 (finding 6d, "changed disabled behavior"): omit
+          // this property entirely when not gated — origin/main's own
+          // options object never had it.
+          ...(admission?.gated ? { admission } : {}),
           ...gateInputs,
         });
         if (result.outcome === 'blocked') {
           // Never launched (dispatch gate or queue refusal): settle with no
           // failure evidence.
-          settleRecovery({ kind: 'uncertain' });
+          //
+          // #2915 review 6 (finding 2 and finding 4): every pre-spawn path
+          // inside `callMcpWorkerImpl` now converts a thrown requalification/
+          // expiry failure into this exact `blocked` outcome too (never a
+          // propagated exception) — this result is therefore ALWAYS proven
+          // zero dispatch, so `confirmedStop: true` is safe and correct here.
+          settleRecovery({ kind: 'uncertain', confirmedStop: true });
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
         }
         if (result.outcome !== 'responded') {
@@ -1666,7 +1758,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // #2915 review 5 (finding 1a): the strict parse itself rejected the
         // claims -- the candidate success from above is settled failed
         // here, never left to default to an earlier premature success.
-        settleRecovery({ kind: 'failed' });
+        //
+        // #2915 review 6 (finding 4, "stop evidence on every settlement"):
+        // thread the shell path's own launcher-confirmed termination fact
+        // (`confirmedStop`) through here too — a late systemd completion
+        // with confirmed termination but invalid claims must not retain a
+        // permanent blocking marker merely because this rejection path
+        // omitted it. Stays `false` for native MCP (unaffected).
+        settleRecovery({ kind: 'failed', confirmedStop });
         // M5: bounded, fixed-vocabulary diagnostic only — never the raw
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
@@ -1680,7 +1779,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // result assembly -- a candidate success settles failed here, never
         // silently assembled (or recorded recovered) against a different
         // brief than the one the worker was actually launched against.
-        settleRecovery({ kind: 'failed' });
+        //
+        // #2915 review 6 (finding 4): same `confirmedStop` threading as the
+        // parse-failure path above.
+        settleRecovery({ kind: 'failed', confirmedStop });
         return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['OG_BRIEF_EVIDENCE_CONFLICT'] });
       }
       // M2: a cancel requested at ANY point during this run's lifetime —
@@ -1689,7 +1791,12 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // worker itself claims.
       const liveEntry = registry.get(entry.invocationId);
       const cancelled = !!liveEntry?.cancelRequested;
-      const strictlyCompleted = claims.status === 'completed';
+      // #2915 review 6 (finding 1, "false recovery after timeout"): a
+      // timed-out attempt (the shell path's own forced-stop-at-deadline
+      // observation, see `observation.timedOut` above) is never treated as
+      // strictly completed, regardless of what a worker claim says or what
+      // exit code the forced stop happened to observe.
+      const strictlyCompleted = claims.status === 'completed' && !observation?.timedOut;
       // #2915 review 5 (finding 1a): this is the ONE place a candidate
       // success (deferred above) is finally settled -- only after strict
       // completed claims, matching brief evidence (no conflict, checked
@@ -1705,8 +1812,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       });
     } catch (error) {
       // Settle recovery separately from the registry's retained live run slot.
-      settleRecovery({ kind: 'uncertain' });
       if (error.workerNotLaunched) mayHaveLaunched = false;
+      settleRecovery({ kind: 'uncertain', confirmedStop: !spawnAttempted || !mayHaveLaunched
+        || registry.get(entry.invocationId)?.termination === 'confirmed' });
       if (!spawnAttempted || !mayHaveLaunched) {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
       }
