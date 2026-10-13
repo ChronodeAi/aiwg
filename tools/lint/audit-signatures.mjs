@@ -31,7 +31,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -111,7 +111,7 @@ if (!args.quiet) {
   console.log(`Running \`npm audit signatures\` (waivers: ${activeWaivers.size} active, ${expiredWaivers.length} expired)…`);
 }
 
-const result = spawnSync('npm', ['audit', 'signatures', '--json'], {
+const result = boundedSpawnSync('npm', ['audit', 'signatures', '--json'], 'quick', {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,

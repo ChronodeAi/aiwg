@@ -9,7 +9,7 @@
  * graceful error handling in the contributor workflow.
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../../src/process/bounded-child-process.mjs';
 
 /**
  * Execute gh command and return structured result
@@ -19,7 +19,8 @@ import { execSync } from 'child_process';
  */
 function execGh(command, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'network';
+    const stdout = boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options

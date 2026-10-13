@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { SqliteGraphBackend } from '../../src/artifacts/backends/sqlite-backend.js';
 
 const nodeCount = positiveInteger(process.env.AIWG_SQLITE_GRAPH_NODES, 10_000);
@@ -210,7 +210,7 @@ function digestSources(repoRoot: string, files: readonly string[]): string {
 }
 
 function gitValue(...args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8' }).trim();
+  return boundedExecFileSync('git', args, 'quick', { encoding: 'utf8' }).trim();
 }
 
 function optionalSize(path: string): number {

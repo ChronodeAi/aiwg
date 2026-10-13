@@ -18,6 +18,7 @@
  *   8. Update workspace status
  */
 
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -49,7 +50,8 @@ const colors = {
  */
 function exec(command, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -359,6 +361,7 @@ async function handleConflicts(conflicts, strategy, cwd) {
         const editor = process.env.EDITOR || 'vi';
         console.log(`Opening ${firstFile} in ${editor}...`);
         try {
+          // sync-spawn: interactive editor-launch
           execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
         } catch (err) {
           console.log(`${colors.red}✗${colors.reset} Failed to open editor`);

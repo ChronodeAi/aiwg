@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolveProjectAiwgDir } from '../../src/config/project-artifacts-runtime.mjs';
 import { createProtocol } from '../../agentic/code/addons/testing-quality/lib/profiles.mjs';
@@ -17,7 +17,7 @@ const save = async (name, value) => fs.writeFile(path.join(destination, name), J
 
 // The ownership gate reads configured globs and imported runner APIs. Preserve
 // its failures; a lane declaration is not actual runner registration evidence.
-try { execFileSync(process.execPath, ['tools/testing/check-test-registration.mjs'], { cwd: root, stdio: 'inherit' }); }
+try { boundedExecFileSync(process.execPath, ['tools/testing/check-test-registration.mjs'], 'quick', { cwd: root, stdio: 'inherit' }); }
 catch (error) {
   await save('ownership-failure.json', { status: error.status ?? null, message: 'Runner ownership gate failed; no prior report was reused.' });
   throw new Error(`Runner ownership failed; inspect ${destination}/ownership-failure.json`);

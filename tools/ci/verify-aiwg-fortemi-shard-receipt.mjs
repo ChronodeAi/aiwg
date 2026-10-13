@@ -3,8 +3,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import Ajv2020 from 'ajv/dist/2020.js';
 
 import {
@@ -47,7 +47,8 @@ function sha256(bytes) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const tier = options.tier ?? 'quick';
+  const result = boundedSpawnSync(command, args, tier, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     encoding: 'utf8',
@@ -60,7 +61,8 @@ function run(command, args, options = {}) {
 }
 
 function runBytes(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: options.cwd ?? root, encoding: null });
+  const tier = options.tier ?? 'quick';
+  const result = boundedSpawnSync(command, args, tier, { cwd: options.cwd ?? root, encoding: null });
   if (result.status !== 0) fail(`${command} ${args.join(' ')} failed with exit ${result.status ?? 'unknown'}`);
   return result.stdout;
 }
@@ -342,6 +344,7 @@ if (serverFlag >= 0) {
     ],
     {
       cwd: checkout,
+      tier: 'long',
       env: {
         DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://matric:matric@localhost/matric',
       },

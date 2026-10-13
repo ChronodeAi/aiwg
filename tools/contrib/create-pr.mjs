@@ -14,7 +14,7 @@
  *   aiwg -contribute-pr <feature-name> [--draft]
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -90,7 +90,7 @@ async function promptYesNo(question, defaultValue = false) {
  */
 function execGit(command) {
   try {
-    return execSync(command, {
+    return boundedExecSync(command, 'quick', {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();

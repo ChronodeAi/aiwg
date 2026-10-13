@@ -16,7 +16,7 @@
  * - Missing tests: -10
  */
 
-import { execSync } from 'child_process';
+import { boundedExecSync } from '../../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 
@@ -28,7 +28,8 @@ import path from 'path';
  */
 function exec(command, options = {}) {
   try {
-    const stdout = execSync(command, {
+    const tier = options.tier ?? 'quick';
+    const stdout = boundedExecSync(command, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options

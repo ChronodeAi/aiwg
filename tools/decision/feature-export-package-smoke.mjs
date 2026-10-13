@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ const consumerDir = join(tempRoot, 'consumer');
 mkdirSync(packDir);
 mkdirSync(consumerDir);
 
-const packOutput = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir], {
+const packOutput = boundedExecFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir], 'long', {
   cwd: root,
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'inherit'],
@@ -21,7 +21,7 @@ const [packed] = JSON.parse(packOutput);
 if (!packed?.filename) throw new Error('npm pack did not produce a tarball');
 const tarball = join(packDir, packed.filename);
 writeFileSync(join(consumerDir, 'package.json'), JSON.stringify({ private: true, type: 'module', dependencies: {} }, null, 2));
-execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', tarball], {
+boundedExecFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', tarball], 'long', {
   cwd: consumerDir,
   stdio: 'inherit',
   env: { ...process.env, npm_config_prefer_offline: 'true' },
@@ -71,8 +71,8 @@ const exported = serializeDecisionFeatureJsonl(featureSet, [row], policy, { gene
 if (exported.manifest.rowCount !== 1 || exported.manifest.evalIntegrity?.qualificationRelease.integrity.release_gate.decision !== 'HOLD') throw new Error('package export failed');
 console.log(JSON.stringify({ status: 'pass', digest: exported.manifest.semanticContentDigest }));
 `);
-const probeOutput = execFileSync(process.execPath, [probe], { cwd: consumerDir, encoding: 'utf8' });
-const exampleOutput = execFileSync(process.execPath, ['node_modules/aiwg/tools/decision/feature-export-offline-smoke.mjs'], { cwd: consumerDir, encoding: 'utf8' });
+const probeOutput = boundedExecFileSync(process.execPath, [probe], 'long', { cwd: consumerDir, encoding: 'utf8' });
+const exampleOutput = boundedExecFileSync(process.execPath, ['node_modules/aiwg/tools/decision/feature-export-offline-smoke.mjs'], 'long', { cwd: consumerDir, encoding: 'utf8' });
 const probeJson = JSON.parse(probeOutput);
 const exampleJson = JSON.parse(exampleOutput);
 if (probeJson.status !== 'pass' || exampleJson.status !== 'pass') throw new Error('installed package smoke failed');
