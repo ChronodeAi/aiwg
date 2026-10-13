@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -138,7 +138,7 @@ if (missingExecutableMetadata.length > 0) {
 }
 
 try {
-  const discover = spawnSync(
+  const discover = boundedSpawnSync(
     process.execPath,
     [
       'bin/aiwg.mjs',
@@ -153,6 +153,7 @@ try {
       '3',
       '--json',
     ],
+    'quick',
     {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -174,9 +175,10 @@ try {
   const metadataMatches = [];
   for (const entry of result.results ?? []) {
     if (entry.type !== 'skill' || typeof entry.id !== 'string') continue;
-    const show = spawnSync(
+    const show = boundedSpawnSync(
       process.execPath,
       ['bin/aiwg.mjs', 'show', 'metadata', entry.id, '--graph', 'framework', '--backend', 'fortemi-core', '--json'],
+      'quick',
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -213,7 +215,7 @@ try {
   // The release-age override is scoped to this packed-install smoke so the
   // gate verifies production packaging even while the dependency is inside
   // the normal seven-day freshness window.
-  const install = spawnSync('npm', ['install', '--omit=dev', '--min-release-age=0', '--prefix', installDir, tarball], {
+  const install = boundedSpawnSync('npm', ['install', '--omit=dev', '--min-release-age=0', '--prefix', installDir, tarball], 'long', {
     cwd: tmp,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -224,9 +226,10 @@ try {
     fail(`packed production install exited with status ${install.status}`);
   }
   const installedCli = path.join(installDir, 'node_modules', 'aiwg', 'bin', 'aiwg.mjs');
-  const installedDiscover = spawnSync(
+  const installedDiscover = boundedSpawnSync(
     process.execPath,
     [installedCli, 'discover', 'test', '--limit', '1', '--json'],
+    'quick',
     {
       cwd: tmp,
       encoding: 'utf8',
@@ -263,9 +266,10 @@ try {
     const record = exported.items.find((item) => item.type === 'aiwg.skill' && item.name === executable.name);
     if (!record) fail(`prebuilt export is missing executable skill ${executable.name}`);
     for (const selector of [executable.name, record.id]) {
-      const run = spawnSync(
+      const run = boundedSpawnSync(
         process.execPath,
         [installedCli, 'run', 'skill', selector, '--', ...executable.args],
+        'long',
         {
           cwd: tmp,
           encoding: 'utf8',
@@ -286,9 +290,10 @@ try {
     }
   }
 
-  const installedDoctor = spawnSync(
+  const installedDoctor = boundedSpawnSync(
     process.execPath,
     [path.join(installedRoot, 'tools', 'cli', 'doctor.mjs'), '--no-budget-check'],
+    'quick',
     {
       cwd: tmp,
       encoding: 'utf8',

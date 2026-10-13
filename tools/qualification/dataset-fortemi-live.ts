@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { boundedExecFileSync } from "../../src/process/bounded-child-process.mjs";
 import { join } from "node:path";
 import { createDefaultMcpClient } from "../../src/storage/backends/fortemi.js";
 import {

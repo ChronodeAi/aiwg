@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from 'node:child_process';
+import { boundedExecFileSync, boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ export function validateSandboxIdentity({ tag, commit }) {
 }
 
 function git(root, ...args) {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  return boundedExecFileSync('git', ['-C', root, ...args], 'quick', { encoding: 'utf8' }).trim();
 }
 
 function argument(name, fallback) {
@@ -34,7 +34,7 @@ export function main() {
   const managementRoot = resolve(sandboxRoot, 'management');
   const binary = resolve(managementRoot, 'target/debug/agentic-mgmt');
   if (!process.argv.includes('--skip-build')) {
-    const build = spawnSync('cargo', ['build', '--bin', 'agentic-mgmt'], { cwd: managementRoot, stdio: 'inherit' });
+    const build = boundedSpawnSync('cargo', ['build', '--bin', 'agentic-mgmt'], 'long', { cwd: managementRoot, stdio: 'inherit' });
     if (build.status !== 0) process.exit(build.status ?? 1);
   }
   if (!existsSync(binary)) throw new Error(`exact-baseline management binary is missing: ${binary}`);
@@ -44,7 +44,7 @@ export function main() {
   }
 
   const aiwgCommit = git(process.cwd(), 'rev-parse', 'HEAD');
-  const result = spawnSync('npm', ['run', 'uat:fleet-sandbox-live'], {
+  const result = boundedSpawnSync('npm', ['run', 'uat:fleet-sandbox-live'], 'long', {
     cwd: process.cwd(),
     stdio: 'inherit',
     env: {

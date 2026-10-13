@@ -361,7 +361,6 @@ async function handleConflicts(conflicts, strategy, cwd) {
         const editor = process.env.EDITOR || 'vi';
         console.log(`Opening ${firstFile} in ${editor}...`);
         try {
-          // sync-spawn: interactive editor-launch
           execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
         } catch (err) {
           console.log(`${colors.red}✗${colors.reset} Failed to open editor`);

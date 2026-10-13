@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Verify that exactly one GitHub Announcements discussion exists for a stable release and links every required surface.
 
-import { execFileSync } from 'node:child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { pathToFileURL } from 'node:url';
 
 export const VERSION_PATTERN = /^v?\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
