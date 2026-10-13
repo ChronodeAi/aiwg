@@ -10,6 +10,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,6 +54,7 @@ import {
   publishWorkerRecord,
 } from '../../../tools/ralph-external/session-launcher.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
+import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
 
 const INSTALL = scopeKeyFor.installation('codex');
 const QUOTA = scopeKeyFor.quota('acct-1');
@@ -1561,8 +1564,12 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     // from the per-task-chain allowance ledger's attempt budget. Raise the
     // resolved ceiling well past this suite's attempt counts so the
     // breaker scenarios below are not incidentally capped by the ledger;
-    // the ledger's own exhaustion behavior is covered separately.
-    f.snapshot.config.parallelism.retry = { maxAttempts: 20 };
+    // the ledger's own exhaustion behavior is covered separately. No test
+    // below passes its own `captureRoot`, so every one of them shares this
+    // ONE in-process ledger record for the identical role/task/group/brief
+    // digest -- raised again (#2915 review 5) to cover the production-
+    // closure negative-twin test added for the real strict-parser fix.
+    f.snapshot.config.parallelism.retry = { maxAttempts: 40 };
     const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
       boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
       buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
@@ -1848,10 +1855,25 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     };
     const configPath = path.join(fx.root, 'success-config.json');
     const recordPath = path.join(fx.root, 'success-record.json');
-    await writeFile(configPath, JSON.stringify({ scenario: 'success', recordPath }));
+    // #2915 review 5 ("Production/ownership/fault tests"): `outputFlags: []`
+    // makes the REAL `ralph-worker-cli.mjs` child ignore `--final-output`
+    // entirely (it still writes its jsonl `{"type":"result","result":...}`
+    // line to stdout) -- the captured final file stays at `finalStat.size
+    // === 0`, so `launchOneWorker` extracts from stdout (`extracted: true`)
+    // and passes `format: 'jsonl'` to `parseWorkerAttemptFinal`, matching
+    // the real adapter's jsonl decoding path below instead of a bare-JSON
+    // final no production CLI in this fixture ever actually writes.
+    await writeFile(configPath, JSON.stringify({ scenario: 'success', recordPath, outputFlags: [] }));
     const realAdapter = fx.f.snapshot.registry.providers.codex.workerAdapter;
     const realProfile = realAdapter.invocationProfiles['fixture-shell'];
     realProfile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    // The REAL strict parser (#2915 review 5): a thin delegation to a
+    // genuine `ProviderAdapter` instance, never a stub that approves
+    // based solely on the launcher's own process-level evidence. This is
+    // the exact shape `test/unit/ralph-external/worker-single-invocation
+    // .test.ts` uses for its own real-adapter hooks (e.g. `parseWorkerFinal
+    // = (output, options) => adapter.parseWorkerFinal(output, options)`).
+    const strictAdapter = new (class extends ProviderAdapter {})();
     const successDriver = {
       qualification: fx.drivers.codex.qualification,
       buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
@@ -1859,14 +1881,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         stdin: 'closed', envNames: realProfile.envAllowlist }),
       extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
         return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
-      // Stub attempt-terminal parser (#2915 evidence contract): approves
-      // exactly when the launcher's own process-level evidence says this
-      // ATTEMPT succeeded — proving the wiring, without needing the full
-      // strict workerClaims schema machinery a production adapter runs.
-      parseWorkerAttemptFinal: async (_output, options) => {
-        if (options?.observation?.attemptOutcome !== 'succeeded') throw new Error('attempt not succeeded');
-        return { status: 'completed' };
-      },
+      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
     };
     try {
       for (let n = 0; n < 3; n += 1) {
@@ -1913,6 +1928,92 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     } finally {
       resetDirectRecoveryBreaker();
       vi.unstubAllEnvs();
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // #2915 review 5 ("Production/ownership/fault tests"): the negative twin
+  // of `launchWorker-opens-refuses-canary-closes` — a schema-VALID final
+  // (the real strict parser accepts it) whose own claimed `status` is
+  // `'failed'`, through the exact same real `parseWorkerAttemptFinal`
+  // delegation, must never close the scope. A clean process-level exit
+  // alone is insufficient; a successful PARSE alone is also insufficient.
+  it('a schema-valid final claiming status:failed never closes the scope, even on a clean process-level exit', async () => {
+    const fx = await enoentFixtureRoot();
+    let now = 4_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    setDirectRecoveryBreaker(breaker);
+    const launcher = new SessionLauncher();
+    let attempt = 0;
+    const launchEnoent = async () => {
+      attempt += 1;
+      return launcher.launchWorker({
+        invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `twin-run-${attempt}`),
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => ({ mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915', [], { stdio: ['ignore', 'pipe', 'pipe'] }) }),
+      });
+    };
+    const realAdapter = fx.f.snapshot.registry.providers.codex.workerAdapter;
+    const realProfile = realAdapter.invocationProfiles['fixture-shell'];
+    realProfile.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    const strictAdapter = new (class extends ProviderAdapter {})();
+    // Schema-valid (passes `decodeWorkerProducedPayload('workerClaims', ...)`)
+    // but the worker's own claimed outcome is `'failed'` — exactly the
+    // review-4 "a successful PARSE is not success" case, exercised here
+    // through the REAL strict parser rather than a stand-in.
+    const failedClaimsLine = `${JSON.stringify({ type: 'result', result:
+      { version: 1, status: 'failed', summary: 'synthetic claimed failure', claims: [], artifacts: [], checks: [], limitations: [] } })}\n`;
+    const successDriver = {
+      qualification: fx.drivers.codex.qualification,
+      // Same real argv shape as the positive-path test above; `launchIsolated`
+      // is overridden below to a fake child, so this process is never
+      // actually spawned.
+      buildInvocation: async (input) => ({ argv: [process.execPath, path.resolve('test/fixtures/ralph-worker-cli.mjs'),
+        '--model', input.selected.model, '--final-output', input.finalPath, '--', 'synthetic'],
+        stdin: 'closed', envNames: realProfile.envAllowlist }),
+      extractFinal: (text) => { try { const rows = text.trim().split('\n').map((line) => JSON.parse(line));
+        return rows.length === 1 && rows[0].type === 'result' ? rows[0].result : null; } catch { return null; } },
+      parseWorkerAttemptFinal: (output, options) => strictAdapter.parseWorkerAttemptFinal(output, options),
+    };
+    try {
+      for (let n = 0; n < 3; n += 1) {
+        const result = await launchEnoent();
+        expect(result).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      }
+      expect(breaker.getState(INSTALL).state).toBe('open');
+      now += 121_000;
+      attempt += 1;
+      const twinRequest = { role: 'coding', task: 'implementation', group: 'workers',
+        brief: fx.brief, workdir: fx.cwd, final_output: path.join(fx.root, `twin-final-${attempt}.json`) };
+      const twinPlan = await resolveWorkerInvocation(fx.f.snapshot, twinRequest, { codex: successDriver }, fx.f.request.now);
+      expect(twinPlan.invocation).toBeDefined();
+      const twinPlanPath = path.join(fx.root, `twin-plan-${attempt}.json`);
+      await writeFile(twinPlanPath, JSON.stringify(twinPlan));
+      const child = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+      child.pid = 2147483645;
+      const canaryResult = await launcher.launchWorker({
+        invocationPath: twinPlanPath, runDir: path.join(fx.root, `twin-run-${attempt}`),
+        inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: () => {
+          queueMicrotask(() => {
+            child.stdout.end(failedClaimsLine); child.stderr.end();
+            child.emit('exit', 0, null); child.emit('close', 0, null);
+          });
+          return { mode: 'degraded', child };
+        },
+      });
+      // Clean process-level exit (0), schema-valid final -- but the
+      // claimed status is 'failed', so the attempt never reaches
+      // 'succeeded' and the scope is never closed through this path.
+      expect(canaryResult.attemptOutcome).not.toBe('succeeded');
+      expect(breaker.getState(INSTALL).state).toBe('open');
+    } finally {
+      resetDirectRecoveryBreaker();
       await rm(fx.root, { recursive: true, force: true });
     }
   }, 30_000);
