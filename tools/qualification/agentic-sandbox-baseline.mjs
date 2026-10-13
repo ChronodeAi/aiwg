@@ -37,13 +37,17 @@ export function main() {
   const binary = resolve(managementRoot, 'target/debug/agentic-mgmt');
   if (!process.argv.includes('--skip-build')) {
     const build = boundedSpawnSync('cargo', ['build', '--bin', 'agentic-mgmt'], 'long', { cwd: managementRoot, stdio: 'inherit' });
-    if (build.status !== 0) {
+    // `build.error ||`, not just `status !== 0` (#3062 B/C finding 13): a
+    // surviving descendant holding the pipe can produce ETIMEDOUT with
+    // status 0 (direct child exited fine) — status alone would then read
+    // as success and skip this whole block.
+    if (build.error || build.status !== 0) {
       // A `long`-tier timeout (#3062 finding 17) can kill a legitimate cold
       // Cargo build after 10 minutes; without this, the process just exits
       // non-zero with no indication that it was a bound, not a build
       // failure, or how to raise/disable it via AIWG_SYNC_LONG_TIMEOUT_MS.
       if (build.error) console.error(build.error.message);
-      process.exit(build.status ?? 1);
+      process.exit(build.status || 1);
     }
   }
   if (!existsSync(binary)) throw new Error(`exact-baseline management binary is missing: ${binary}`);
@@ -65,11 +69,11 @@ export function main() {
       AIWG_QUALIFICATION_COMMIT: aiwgCommit,
     },
   });
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     // Same reasoning as the Cargo build above: a live UAT run can
     // legitimately take close to the `long`-tier bound.
     if (result.error) console.error(result.error.message);
-    process.exit(result.status ?? 1);
+    process.exit(result.status || 1);
   }
 }
 

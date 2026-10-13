@@ -166,7 +166,10 @@ try {
       },
     },
   );
-  if (discover.status !== 0) {
+  // `.error ||`, not just `status !== 0`, on every check below (#3062 B/C
+  // finding 13): a surviving descendant holding the pipe can produce
+  // ETIMEDOUT with status 0 — status alone would then read as success.
+  if (discover.error || discover.status !== 0) {
     if (discover.error) console.error(discover.error.message);
     console.error(discover.stdout);
     console.error(discover.stderr);
@@ -192,7 +195,7 @@ try {
         },
       },
     );
-    if (show.status !== 0) {
+    if (show.error || show.status !== 0) {
       if (show.error) console.error(show.error.message);
       console.error(show.stdout);
       console.error(show.stderr);
@@ -222,7 +225,7 @@ try {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (install.status !== 0) {
+  if (install.error || install.status !== 0) {
     // #3062 finding 17: install.error carries the enriched `long`-tier
     // timeout explanation that status/stdout/stderr alone do not.
     if (install.error) console.error(install.error.message);
@@ -247,7 +250,7 @@ try {
       },
     },
   );
-  if (installedDiscover.status !== 0) {
+  if (installedDiscover.error || installedDiscover.status !== 0) {
     if (installedDiscover.error) console.error(installedDiscover.error.message);
     console.error(installedDiscover.stdout);
     console.error(installedDiscover.stderr);
@@ -288,7 +291,7 @@ try {
           },
         },
       );
-      if (run.status !== 0) {
+      if (run.error || run.status !== 0) {
         if (run.error) console.error(run.error.message);
         console.error(run.stdout);
         console.error(run.stderr);

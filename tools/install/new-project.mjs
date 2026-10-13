@@ -303,7 +303,10 @@ function createOrUpdateSettings(aiwgPath, provider) {
       if (provider === 'openai') agentArgs.push('--as-agents-md');
       console.log('Deploying SDLC agents...');
       const agentRes = boundedSpawnSync('node', [deployPath, ...agentArgs], 'long', { stdio: 'inherit' });
-      if (agentRes.status !== 0) {
+      // `agentRes.error ||`, not just `status !== 0` (#3062 B/C finding 13):
+      // a surviving descendant holding the pipe can produce ETIMEDOUT with
+      // status 0 — status alone would then read as success.
+      if (agentRes.error || agentRes.status !== 0) {
         // `agentRes.error` carries the enriched timeout explanation (tier,
         // bound, AIWG_SYNC_LONG_TIMEOUT_MS override) that `status` alone
         // does not (#3062 finding 17) — print it so a `long`-tier bound
@@ -316,7 +319,7 @@ function createOrUpdateSettings(aiwgPath, provider) {
       console.log('Deploying SDLC commands...');
       const cmdArgs = ['--deploy-commands', '--provider', provider, '--mode', 'sdlc'];
       const cmdRes = boundedSpawnSync('node', [deployPath, ...cmdArgs], 'long', { stdio: 'inherit' });
-      if (cmdRes.status !== 0) {
+      if (cmdRes.error || cmdRes.status !== 0) {
         if (cmdRes.error) console.warn(cmdRes.error.message);
         console.warn('Command deployment returned non-zero status');
       }
@@ -327,7 +330,7 @@ function createOrUpdateSettings(aiwgPath, provider) {
   if (!fs.existsSync(path.resolve(process.cwd(), '.git'))) {
     try {
       let r = boundedSpawnSync('git', ['init', '-b', 'main'], 'quick', { stdio: 'inherit' });
-      if (r.status !== 0) {
+      if (r.error || r.status !== 0) {
         // fallback for older git
         boundedSpawnSync('git', ['init'], 'quick', { stdio: 'inherit' });
         boundedSpawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], 'quick', { stdio: 'inherit' });

@@ -109,12 +109,21 @@ export class EvalHarness {
         return { code: 0, stdout };
       } catch (err) {
         const captured = (err.stdout || '').toString() + (err.stderr || '').toString();
+        const timedOut = err.code === 'ETIMEDOUT';
         // A `long`-tier timeout (#3062 finding 17) would otherwise be lost
         // here: err.stdout/err.stderr do not carry the enriched bound
         // explanation (naming the tier, bound, and AIWG_SYNC_LONG_TIMEOUT_MS
         // override) — only err.message does.
-        const timeoutNote = err.code === 'ETIMEDOUT' ? `\n${err.message}` : '';
-        return { code: err.status ?? 1, stdout: captured + timeoutNote };
+        const timeoutNote = timedOut ? `\n${err.message}` : '';
+        // #3062 B/C finding 13: a surviving descendant holding the pipe
+        // open can produce ETIMEDOUT with err.status === 0 — the direct
+        // child itself exited successfully (see bounded-child-process.mjs's
+        // own doc comment). `?? 1` only replaces null/undefined, so that
+        // genuine 0 would otherwise sail through as "success" here and lint
+        // would read the timed-out run as clean. Force nonzero whenever the
+        // helper reports a timeout, regardless of what status it carries.
+        const code = timedOut ? (err.status || 1) : (err.status ?? 1);
+        return { code, stdout: captured + timeoutNote };
       }
     });
   }

@@ -597,7 +597,12 @@ function hasTrackerRemote(remotes) {
 }
 
 function childProcessSucceeded(err) {
-  return Boolean(err && err.status === 0);
+  // err.code !== 'ETIMEDOUT' guards the same pattern as #3062 B/C finding
+  // 13: a surviving descendant holding the pipe can produce ETIMEDOUT
+  // with status 0 (the direct child itself exited fine) — status alone
+  // would then read a real timeout as the sandbox-EPERM-but-really-fine
+  // case this function exists to recognize.
+  return Boolean(err && err.code !== 'ETIMEDOUT' && err.status === 0);
 }
 
 async function fileExists(filePath) {

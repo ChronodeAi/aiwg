@@ -96,7 +96,10 @@ const result = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'long', 
   maxBuffer: 32 * 1024 * 1024, // pack JSON can be large on big trees
 });
 
-if (result.status !== 0) {
+// result.error ||, not just status !== 0 (#3062 B/C finding 13): a
+// surviving descendant holding the pipe can produce ETIMEDOUT with
+// status 0 — status alone would then read as success.
+if (result.error || result.status !== 0) {
   // #3062 finding 17: result.error carries the enriched `long`-tier
   // timeout explanation that the exit code alone does not.
   if (result.error) console.error(result.error.message);

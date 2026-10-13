@@ -47,7 +47,10 @@ const pack = boundedSpawnSync('npm', ['pack', '--dry-run', '--json'], 'long', {
   maxBuffer: 32 * 1024 * 1024,
 });
 
-if (pack.status !== 0) {
+// pack.error ||, not just status !== 0 (#3062 B/C finding 13): a
+// surviving descendant holding the pipe can produce ETIMEDOUT with
+// status 0 — status alone would then read as success.
+if (pack.error || pack.status !== 0) {
   // #3062 finding 17: pack.error carries the enriched `long`-tier timeout
   // explanation that the exit code alone does not.
   const timeoutNote = pack.error ? `${pack.error.message}\n` : '';
