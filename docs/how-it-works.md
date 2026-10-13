@@ -102,7 +102,7 @@ walkthrough](getting-started/just-try-it.md) demonstrates this with a README rev
 
 The deployment step writes context and assets, then exits. Optional utilities perform additional work when invoked or configured:
 
-- [Agent loops](ralph-guide.md) repeat execution and verification toward bounded completion criteria.
+- [Agent loops](agent-loop-guide.md) repeat execution and verification toward bounded completion criteria.
 - [Automation](getting-started/daemon-and-automation.md) explains supported ways to coordinate longer-running work and
   external triggers.
 - [MCP integration](mcp/README.md) exposes tools and resources through configured servers.

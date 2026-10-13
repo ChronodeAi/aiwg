@@ -619,10 +619,10 @@ The bar for kernel-tier skills is high. Today's kernel falls into two categories
 
 - [Artifact index and manifest loading internals](../architecture/index-and-manifest-loading.md) — companion doc covering index file layout, graph configs, manifest loaders, and the search/load pipeline
 - CLI reference [Discovery section](reference.md#discovery) — full command reference
-- [`skill-discovery`](../../agentic/code/addons/aiwg-utils/rules/skill-discovery.md) — HIGH-enforcement framing rule
+- `skill-discovery` (agentic/code/addons/aiwg-utils/rules/skill-discovery.md) — HIGH-enforcement framing rule
 - Epic [#1212](https://git.integrolabs.net/roctinam/aiwg/issues/1212) — index-driven skill discovery
 - Epic [#1217](https://git.integrolabs.net/roctinam/aiwg/issues/1217) — no-copy default
 - Epic [#1218](https://git.integrolabs.net/roctinam/aiwg/issues/1218) — `aiwg show` companion to discover
-- [`aiwg-utils-quickref`](../../agentic/code/addons/aiwg-utils/skills/aiwg-utils-quickref/SKILL.md) — kernel utility quickref that surfaces this discipline
-- [Architecture audit](../../.aiwg/architecture/audit-index-subsystem-2026-05.md) — index subsystem audit that produced the 450-LOC implementation path
-- [Provider landscape research](../../.aiwg/research/findings/skill-budget-landscape-2026-05.md) — survey of skill-budget caps across the supported providers before OpenHuman was added
+- `aiwg-utils-quickref` (agentic/code/addons/aiwg-utils/skills/aiwg-utils-quickref/SKILL.md) — kernel utility quickref that surfaces this discipline
+- Architecture audit (.aiwg/architecture/audit-index-subsystem-2026-05.md) — index subsystem audit that produced the 450-LOC implementation path
+- Provider landscape research (.aiwg/research/findings/skill-budget-landscape-2026-05.md) — survey of skill-budget caps across the supported providers before OpenHuman was added

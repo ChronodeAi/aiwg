@@ -145,7 +145,7 @@ Active key for release tag signatures:
 - **Algorithm**: ed25519
 - **Created**: YYYY-MM-DD
 - **Expires**: YYYY-MM-DD
-- **Public key**: [`.gitea/keys/maintainers.asc`](.gitea/keys/maintainers.asc)
+- **Public key**: `.gitea/keys/maintainers.asc`
 ```
 
 ### Add the CI verify gate

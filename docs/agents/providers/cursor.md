@@ -142,7 +142,7 @@ Agent loops support multi-provider execution. While Cursor agents are deployed v
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation including `--provider` options.
 
 ---
 
@@ -223,13 +223,13 @@ For full unrestricted AIWG tool access (artifact management, workflow execution,
 aiwg mcp install cursor
 ```
 
-See the [Cursor MCP Sidecar Guide](cursor-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
+See the [Cursor MCP Sidecar Guide](../../integrations/cursor-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
 
 ---
 
 ## Related Resources
 
-- [Cursor MCP Sidecar Guide](cursor-mcp-sidecar.md) - Full MCP integration
-- [Cross-Platform Overview](cross-platform-overview.md) - All provider comparison
-- [Cursor Quickstart](cursor-quickstart.md)
+- [Cursor MCP Sidecar Guide](../../integrations/cursor-mcp-sidecar.md) - Full MCP integration
+- [Cross-Platform Overview](../../integrations/cross-platform-overview.md) - All provider comparison
+- [Cursor Quickstart](../../integrations/cursor-quickstart.md)
 - [Cursor Official Docs](https://cursor.com/docs) - Upstream documentation

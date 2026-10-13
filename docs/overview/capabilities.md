@@ -26,7 +26,7 @@ example that produces a saved report, use [Just Try It](../getting-started/just-
 | Need | Guide |
 |---|---|
 | Keep a consistent writing style and review contextual writing issues | [Writing and content](../getting-started/writing-and-content.md), [Voice](../addons/voice-framework/overview.md) |
-| Iterate toward explicit completion criteria | [Agent loops](../ralph-guide.md) |
+| Iterate toward explicit completion criteria | [Agent loops](../agent-loop-guide.md) |
 | Divide work across a large context | [RLM](../addons/rlm/deployment-guide.md) |
 | Strengthen a test and review process | [Testing quality](../addons/testing-quality/overview.md) |
 | Store and retrieve project artifacts | [Storage](../storage/overview.md) |

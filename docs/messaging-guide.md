@@ -463,7 +463,7 @@ If a platform rate-limits the bot, errors appear in daemon logs. The adapters ha
 ## Cross-References
 
 - [Daemon Guide](daemon-guide.md) — Daemon setup and management
-- [Al Guide](ralph-guide.md) — Agent loops with messaging notifications
+- [Al Guide](agent-loop-guide.md) — Agent loops with messaging notifications
 - `.aiwg/architecture/adrs/ADR-messaging-bot-mode.md` — Architecture decision
 - `.aiwg/architecture/adrs/ADR-2way-chat.md` — Chat architecture
 - `tools/messaging/README.md` — Developer documentation

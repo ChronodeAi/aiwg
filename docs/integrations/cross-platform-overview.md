@@ -153,7 +153,7 @@ aiwg ralph "Fix tests" --completion "npm test passes"
 aiwg ralph "Fix tests" --completion "npm test passes" --provider codex
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation.
+See [Agent Loop Guide](../agent-loop-guide.md) for full documentation.
 
 ---
 

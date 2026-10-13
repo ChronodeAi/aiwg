@@ -59,7 +59,7 @@ claude .
 /aiwg-regenerate
 ```
 
-**3. You're ready.** See the [Intake Guide](../intake-guide.md) for starting projects.
+**3. You're ready.** See the [Intake Guide](../../intake-guide.md) for starting projects.
 
 ---
 
@@ -176,7 +176,7 @@ aiwg ralph "Fix all tests" --completion "npm test passes"
 aiwg ralph "Migrate to TS" --completion "tsc passes" --provider codex
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation.
 
 ---
 
@@ -205,4 +205,4 @@ For structured AIWG tool access (artifact management, workflow execution, templa
 aiwg mcp install claude
 ```
 
-The sidecar complements `--dangerously-skip-permissions` — use both for the full AIWG experience. See the [Claude MCP Sidecar Guide](claude-mcp-sidecar.md) for details.
+The sidecar complements `--dangerously-skip-permissions` — use both for the full AIWG experience. See the [Claude MCP Sidecar Guide](../../integrations/claude-mcp-sidecar.md) for details.

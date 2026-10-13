@@ -50,7 +50,7 @@ every existing project and after upgrades so the context is re-tailored to the
 current codebase. A newly scaffolded project can defer it until project content
 exists. See the [Regenerate Guide](#regenerate-guide) for details.
 
-**5. You're ready.** See the [Intake Guide](../intake-guide.md) for starting projects.
+**5. You're ready.** See the [Intake Guide](../../intake-guide.md) for starting projects.
 
 ---
 
@@ -323,14 +323,14 @@ Agent loops support multi-provider execution. While Windsurf agents are deployed
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation including `--provider` options.
 
 ---
 
 ## Next Steps
 
-- [Cross-Platform Overview](cross-platform-overview.md) - Compare platform differences
-- [Intake Guide](../intake-guide.md) - Start your first project
+- [Cross-Platform Overview](../../integrations/cross-platform-overview.md) - Compare platform differences
+- [Intake Guide](../../intake-guide.md) - Start your first project
 - [SDLC Framework](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/README.md) - Complete framework reference
 - [Commands Reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md) - All 40 AIWG commands
 
@@ -344,7 +344,7 @@ Windsurf has no dangerous mode flag. The MCP sidecar is the only path to unrestr
 aiwg mcp install windsurf
 ```
 
-See the [Windsurf MCP Sidecar Guide](windsurf-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
+See the [Windsurf MCP Sidecar Guide](../../integrations/windsurf-mcp-sidecar.md) for complete setup including tool whitelisting and context optimization.
 
 ---
 

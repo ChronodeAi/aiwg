@@ -134,7 +134,7 @@ Factory provides a built-in MCP registry browser:
 
 Browse 40+ pre-configured servers (Sentry, Linear, Notion, Stripe, Figma, etc.), toggle servers, and manage OAuth connections.
 
-For advanced MCP patterns (HTTP transport, tunneling for remote access), see the [Factory MCP Reference](factory-mcp-sidecar.md).
+For advanced MCP patterns (HTTP transport, tunneling for remote access), see the [Factory MCP Reference](../../integrations/factory-mcp-sidecar.md).
 
 ---
 
@@ -309,7 +309,7 @@ Agent loops support multi-provider execution. While Factory droids are deployed 
 aiwg ralph "Fix all tests" --completion "npm test passes"
 ```
 
-See [Al Guide](../ralph-guide.md) for full documentation including `--provider` options.
+See [Agent Loop Guide](../../agent-loop-guide.md) for full documentation including `--provider` options.
 
 ---
 
@@ -394,7 +394,7 @@ aiwg use sdlc --provider factory --force
 ```
 
 **Testing automation?** See the dedicated guide:
-[Factory Testing Automation Hooks](factory-testing-hooks.md) — covers all 7 testing hook patterns, MD5 caching, coverage enforcement, and AIWG skill integration.
+[Factory Testing Automation Hooks](../../integrations/factory-testing-hooks.md) — covers all 7 testing hook patterns, MD5 caching, coverage enforcement, and AIWG skill integration.
 
 **Hooks not firing?** Verify settings:
 ```text
@@ -407,7 +407,7 @@ aiwg use sdlc --provider factory --force
 ## Reference
 
 - [Factory AI Documentation](https://docs.factory.ai)
-- [Factory AI Quickstart](factory-quickstart.md)
-- [Factory MCP Details](factory-mcp-sidecar.md)
-- [Cross-Platform Overview](cross-platform-overview.md)
-- [Al Guide](../ralph-guide.md)
+- [Factory AI Quickstart](../../integrations/factory-quickstart.md)
+- [Factory MCP Details](../../integrations/factory-mcp-sidecar.md)
+- [Cross-Platform Overview](../../integrations/cross-platform-overview.md)
+- [Agent Loop Guide](../../agent-loop-guide.md)
