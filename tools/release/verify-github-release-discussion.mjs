@@ -59,9 +59,9 @@ export function verifyDiscussion(nodes, { version, repo }) {
 export function fetchAnnouncementDiscussions({ repo, category }) {
   const [owner, name] = repo.split('/');
   const query = 'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){discussions(first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{title body url category{name}}}}}';
-  const output = execFileSync('gh', [
+  const output = boundedExecFileSync('gh', [
     'api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
-  ], { encoding: 'utf8' });
+  ], 'network', { encoding: 'utf8' });
   const nodes = JSON.parse(output)?.data?.repository?.discussions?.nodes;
   if (!Array.isArray(nodes)) throw new Error(`Could not read GitHub discussions for ${repo}.`);
   return nodes.filter((node) => node.category?.name === category);

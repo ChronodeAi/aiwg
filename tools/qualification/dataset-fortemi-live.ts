@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   const receipt = await qualifyFortemiDatasetLivePreflight({
     client,
     endpointUrl: url,
-    aiwgCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+    aiwgCommit: boundedExecFileSync("git", ["rev-parse", "HEAD"], "quick", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim(),
