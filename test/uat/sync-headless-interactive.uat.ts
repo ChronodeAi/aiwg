@@ -64,10 +64,30 @@ interface ProcResult {
   timedOut: boolean;
 }
 
+/** Grace window after a group kill to settle anyway if `'close'` never arrives (#3062 second review, finding 11). */
+const FORCE_SETTLE_GRACE_MS = 5_000;
+
 /**
  * Supervise one child process asynchronously with an independent hard
- * deadline, SIGKILLing its whole process group on expiry. See the module
- * doc comment above for why this must never be a synchronous `spawnSync`.
+ * deadline, SIGKILLing its whole process group on expiry *and* on the
+ * child's own normal exit, settling only once stdio has actually
+ * finished draining. See the module doc comment above for why this must
+ * never be a synchronous `spawnSync`.
+ *
+ * #3062 second review, finding 11 fixed two gaps in the first version:
+ *
+ *   - It settled on `exit` and never cleaned the remaining group at all —
+ *     an isolated probe recorded zero group kills. A descendant can
+ *     survive its parent's own ordinary exit exactly as easily as it can
+ *     survive the parent being killed, so the whole group is now killed
+ *     on *every* exit path, not only the timeout path.
+ *   - `exit` fires before stdio is necessarily fully drained; `close`
+ *     fires only after it is. Settling now waits for `close`.
+ *
+ * If the group kill itself fails for a reason other than "already gone"
+ * (`ESRCH`), or `'close'` still never arrives afterward, a short grace
+ * timer settles independently anyway rather than hanging forever waiting
+ * on an event that may never fire.
  */
 function runProcessAsync(
   command: string,
@@ -86,6 +106,9 @@ function runProcessAsync(
     let stderr = '';
     let timedOut = false;
     let settled = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    let forceSettleTimer: NodeJS.Timeout | undefined;
 
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -95,12 +118,31 @@ function runProcessAsync(
       child.stdin!.end();
     }
 
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (forceSettleTimer) clearTimeout(forceSettleTimer);
+      settle({ stdout, stderr, exitCode, signal: exitSignal, timedOut });
+    };
+
+    const armForceSettle = () => {
+      if (settled || forceSettleTimer) return;
+      forceSettleTimer = setTimeout(finish, FORCE_SETTLE_GRACE_MS);
+    };
+
     const killWholeGroup = () => {
       try {
         if (process.platform === 'win32' || !child.pid) child.kill('SIGKILL');
         else process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        // Already exited, or the group is already gone — fine either way.
+      } catch (error) {
+        // ESRCH ("no such process") means the group is already gone —
+        // fine. Anything else is a real failure to kill it; settling
+        // independently (via armForceSettle, called by every caller of
+        // this function) is what prevents that from hanging the test.
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+          stderr += `\n[runProcessAsync] group kill failed: ${(error as Error).message}`;
+        }
       }
     };
 
@@ -108,20 +150,29 @@ function runProcessAsync(
       if (settled) return;
       timedOut = true;
       killWholeGroup();
+      armForceSettle();
     }, HANG_GUARD_MS);
 
     child.on('error', (error) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      settle({ stdout, stderr: `${stderr}\n${error.message}`, exitCode: null, signal: null, timedOut });
+      stderr += `\n${error.message}`;
+      finish();
     });
 
     child.on('exit', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      settle({ stdout, stderr, exitCode: code, signal, timedOut });
+      exitCode = code;
+      exitSignal = signal;
+      // Kill any surviving descendant in the same process group even on
+      // an ordinary exit — the direct child exiting is not proof a
+      // grandchild did too.
+      killWholeGroup();
+      armForceSettle();
+    });
+
+    child.on('close', (code, signal) => {
+      if (exitCode === null && code !== null) exitCode = code;
+      if (exitSignal === null && signal !== null) exitSignal = signal;
+      finish();
     });
   });
 }
@@ -146,9 +197,21 @@ function makeTmpDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `aiwg-uat-headless-${label}-`));
 }
 
+/**
+ * Write a PATH stub executable named `name` from the body of `fixture`
+ * (#3062 second review, finding 11: stub executables must not depend on
+ * host tools beyond the Node binary actually running these tests). Each
+ * fixture file keeps a `#!/usr/bin/env node` first line only so it is
+ * itself a valid, directly-runnable script during development; that line
+ * is replaced here with an absolute shebang pointing at
+ * `process.execPath` — the exact Node binary already running this test
+ * process — so resolving the stub never depends on `env` or on PATH
+ * containing a `node` at all, let alone the right version of it.
+ */
 function makeStubBin(dir: string, name: string, fixture: string): string {
   const stubPath = join(dir, name);
-  writeFileSync(stubPath, readFileSync(join(FIXTURES, fixture), 'utf8'), { mode: 0o755 });
+  const body = readFileSync(join(FIXTURES, fixture), 'utf8').replace(/^#!.*\n/, '');
+  writeFileSync(stubPath, `#!${process.execPath}\n${body}`, { mode: 0o755 });
   chmodSync(stubPath, 0o755);
   return stubPath;
 }
@@ -511,5 +574,42 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
     expect(result.signal).toBe('SIGKILL');
     // Killed at (approximately) the deadline, not left to run past it.
     expect(elapsedMs).toBeLessThan(HANG_GUARD_MS + 10_000);
+  }, TEST_TIMEOUT_MS);
+
+  // #3062 second review, finding 11: the supervisor used to settle on
+  // `exit` and never clean the remaining process group at all — a
+  // surviving descendant could leak even when the direct child's own
+  // exit was fast and ordinary, not just on the timeout path.
+  it('hang guard: kills a surviving descendant even when the direct child exits normally and quickly', async () => {
+    const workDir = makeTmpDir('parent-exits-first');
+    const pidFile = join(workDir, 'grandchild.pid');
+    try {
+      const before = Date.now();
+      const result = await runProcessAsync(process.execPath, [join(FIXTURES, 'parent-exits-first.mjs')], {
+        env: { ...process.env, PARENT_EXITS_FIRST_PID_FILE: pidFile },
+      });
+      const elapsedMs = Date.now() - before;
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      // Settled quickly — this exercises the "ordinary exit" path, not
+      // the hang-guard deadline.
+      expect(elapsedMs).toBeLessThan(HANG_GUARD_MS);
+
+      expect(existsSync(pidFile)).toBe(true);
+      const grandchildPid = Number(readFileSync(pidFile, 'utf8'));
+      // Give the OS a brief moment to finish reaping the already-killed
+      // grandchild, then confirm it is actually gone (signal 0 is a pure
+      // liveness probe — it never actually signals the process).
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      let stillAlive = true;
+      try {
+        process.kill(grandchildPid, 0);
+      } catch {
+        stillAlive = false;
+      }
+      expect(stillAlive).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   }, TEST_TIMEOUT_MS);
 });
