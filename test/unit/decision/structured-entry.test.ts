@@ -1,14 +1,18 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { gzipSync } from 'node:zlib';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  admitEntry, artifactPin, assertDecisionWriterVersion, convertDecisionDefinitionV1Alpha1, DECISION_CHANGED_SEMANTICS, DEFAULT_ENTRY_LIMITS,
-  EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, parseDecisionYaml, readDecisionDocumentForRollback, validateDefinition, validateDecisionDocument,
+  admissionClockStart, admitEntry, artifactPin, assertDecisionWriterVersion, convertDecisionDefinitionV1Alpha1, DECISION_CHANGED_SEMANTICS, DEFAULT_ENTRY_LIMITS,
+  elapsedAdmissionMs, EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, parseDecisionYaml, readDecisionDocumentForRollback, validateDefinition, validateDecisionDocument,
   type DecisionAdapter, type DecisionBinding, type DecisionRuleset, type DecisionResult,
   type DecisionDefinition, type DecisionAdapterRequest,
 } from '../../../src/decision/index.js';
 import { parseDecisionDoc } from '../../../src/artifacts/index-builder.js';
+
+const CPU_BURN_WORKER = fileURLToPath(new URL('../../helpers/cpu-burn-worker.mjs', import.meta.url));
 
 const old = (): DecisionDefinition => JSON.parse(readFileSync('agentic/code/addons/decision-engine/examples/decision-category.json', 'utf8')) as DecisionDefinition;
 const structured = (): DecisionDefinition => {
@@ -155,6 +159,94 @@ describe('decision structured entry contract', () => {
     }
     expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, timeMs: -1 })).toThrow(/time-budget/);
     expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, memoryBytes: 1 })).toThrow(/memory-budget/);
+  });
+
+  // #3047: admission's time budget must measure per-thread CPU time, not
+  // wall-clock elapsed time. A wall-clock budget is tripped by host
+  // scheduling contention (a busy neighbor preempts this thread between
+  // visits) even though the call itself never did more than a few
+  // milliseconds of real work -- that is a false positive, not a caught
+  // attack. This test pins that contract directly, without needing real
+  // host load.
+  it('never trips the time budget from wall-clock drift alone (host-load tolerant)', () => {
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    // Every read of the wall clock leaps far past the 1000ms budget, as a
+    // preempted thread under heavy host load would observe.
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
+      expect(parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toEqual({ entry: 'safe' });
+      expect(parseDecisionYaml('entry: safe\n')).toEqual({ entry: 'safe' });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // #3047 follow-up: a process-wide CPU clock (`process.cpuUsage()`) is not
+  // a safe substitute for the wall-clock bug above -- it still charges this
+  // admission for CPU time a completely unrelated thread spent on this same
+  // process. Reproduces the review's finding with a real busy
+  // `worker_threads` worker (not a mock): while it burns CPU on its own
+  // thread, this thread is deliberately paused (`Atomics.wait`, a real
+  // blocking wait, not a CPU-consuming spin) for a window that overlaps the
+  // worker's burn. The admitting thread did essentially no work in that
+  // window, so its own per-thread CPU reading must stay near zero
+  // regardless of how busy the other thread was.
+  it('does not charge another thread\'s CPU time (real worker_threads, real threadCpuUsage)', async () => {
+    const worker = new Worker(CPU_BURN_WORKER, { workerData: { ms: 600 } });
+    const workerDone = new Promise<void>((resolve, reject) => {
+      worker.once('message', () => resolve());
+      worker.once('error', reject);
+    });
+    try {
+      // Give the worker a head start so it is actively burning CPU before
+      // this thread reads its own baseline.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const started = admissionClockStart();
+      const paused = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(paused, 0, 0, 300); // blocks this thread; burns no CPU here
+      expect(elapsedAdmissionMs(started)).toBeLessThan(50);
+      expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
+    } finally {
+      await workerDone;
+      await worker.terminate();
+    }
+  }, 10_000);
+
+  // #3047 follow-up: on a runtime without `process.threadCpuUsage()` (this
+  // project's `engines.node` floor is `>=20.0.0`; the API was added in Node
+  // v22.19.0), admission must fall back to the pre-#3047 wall-clock guard --
+  // not silently stop enforcing a budget. Simulates that runtime by
+  // stubbing the feature away, then shows the exact wall-clock leap the
+  // thread-CPU path above tolerates now defeats the fallback, same as
+  // before #3047 on an unsupported runtime.
+  it('falls back to the wall-clock guard when process.threadCpuUsage is unavailable (stubbed away)', () => {
+    const original = process.threadCpuUsage;
+    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = undefined;
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      expect(() => admitEntry({ entry: 'safe' })).toThrow(/time-budget/);
+      expect(() => parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toThrow(/time-budget/);
+      expect(() => parseDecisionYaml('entry: safe\n')).toThrow(/time-budget/);
+    } finally {
+      nowSpy.mockRestore();
+      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
+    }
+  });
+
+  // #3047 follow-up: the budget must still catch input that genuinely burns
+  // thread CPU -- CPU-time accounting is not a free pass. A tiny budget
+  // (not a long burn) keeps this fast: ~50,000 entries cost ~40-50ms of real
+  // CPU on this admission path, comfortably over a 5ms budget without the
+  // test itself running for more than a few tens of milliseconds.
+  it('still rejects admission that genuinely burns thread CPU past a tight budget', () => {
+    const many = Array.from({ length: 50_000 }, (_, i) => i);
+    const limits = { ...DEFAULT_ENTRY_LIMITS, entries: 1_000_000, arrayLength: 1_000_000,
+      serializedBytes: 100_000_000, memoryBytes: 100_000_000, timeMs: 5 };
+    expect(() => admitEntry(many, limits)).toThrow(/time-budget/);
   });
 
   it('bounds canonicalization of many small properties and ignores author insertion order', () => {

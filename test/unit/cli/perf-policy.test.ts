@@ -42,4 +42,25 @@ describe('CLI performance gate policy', () => {
     ]);
     expect(summary.overheadMedianMs).toBeGreaterThanOrEqual(750);
   });
+
+  // #3047 follow-up security review: a statistic that asserts the *minimum*
+  // paired overhead across samples is fooled by a single sample whose
+  // baseline alone (not the command) was delayed by host contention -- that
+  // delay cancels out of `max(0, command - baseline)` and reports 0ms
+  // overhead for a sample that actually paid the full regression. Reproduces
+  // the review's own numbers: 10 of 11 commands pay a genuine +500ms
+  // regression; the 11th sample's `baselineBeforeMs` alone is delayed by
+  // 1000ms, zeroing its own reported overhead. `overheadMedianMs` (what the
+  // CLI perf gate asserts, test/integration/cli-perf.test.ts) is not fooled
+  // by that one sample and still reports the regression.
+  it('still fails a fixed regression even when one sample\'s baseline alone is delayed', () => {
+    const regressed = { baselineBeforeMs: 30, commandMs: 530, baselineAfterMs: 30 };
+    const samples = Array.from({ length: 10 }, () => regressed);
+    samples.push({ baselineBeforeMs: 1030, commandMs: 530, baselineAfterMs: 30 });
+    const summary = summarizePairedTimings(samples);
+    // The minimum statistic would be fooled into reporting no regression.
+    expect(summary.overheadMinMs).toBe(0);
+    // The median statistic asserted by the CLI perf gate is not fooled.
+    expect(summary.overheadMedianMs).toBeGreaterThanOrEqual(500);
+  });
 });

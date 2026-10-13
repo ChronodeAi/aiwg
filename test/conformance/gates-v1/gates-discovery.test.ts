@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OPERATIONAL_DISCOVERY_TYPES, OPERATIONAL_SHOW_TYPES } from '../../../src/artifacts/types.js';
 import { parseGatePackDoc } from '../../../src/artifacts/index-builder.js';
 import { BundleManifestSchema } from '../../../src/extensions/manifest.js';
@@ -101,6 +101,30 @@ describe('gate-pack bundle registry', () => {
     expect(loaded).toContain('aiwg:decision-engine/integrity-ceiling');
     expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
       .toBe('aiwg:decision-engine/integrity-ceiling');
+  });
+
+  // #3047: shipped-pack loading must not fail under host load. Every shipped
+  // pack parses through `parseDecisionYaml` (entry.ts), whose admission time
+  // budget now measures CPU time, not wall-clock elapsed time -- a
+  // wall-clock budget would be tripped by scheduling contention (a busy
+  // neighbor preempts this thread mid-parse) and surface as
+  // 'shipped gate packs rejected: ... gate pack unparseable: ...: Decision
+  // entry rejected: time-budget' (driver.ts), exactly what
+  // gates-provider-isolation.test.ts observed loading these same shipped
+  // packs under load. Simulating a wall clock that leaps far past the 1s
+  // budget on every read reproduces that host-contention shape deterministically.
+  it('discovers every shipped pack even when the wall clock alone has leapt (host-load tolerant)', () => {
+    const nowSpy = vi.spyOn(performance, 'now');
+    let fakeNow = 0;
+    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
+    try {
+      const registry = new GateRegistry(createCoreProviderRegistry());
+      expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
+      expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
+        .toBe('aiwg:decision-engine/integrity-ceiling');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 
