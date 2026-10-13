@@ -35,35 +35,17 @@ The Decision Engine added an alpha contract that defines decision inputs, result
 
 ## Highlights
 
-**1. More tools can read the same project notes.**
-What it is: Pi gained coding runs and session import; Grok Bot gained native skill setup.
-How you'd use it: choose Pi for a coding session, or deploy skills into Grok Bot using its own provider name.
-Why it helps: Grok Bot can load skills through its own setup, replacing the Cursor workaround.
+**1. More tools can read the same project notes.** For a coding session in Pi, AIWG now supports coding runs and session import. If you use Grok Bot, deploy native skills under its own provider name. Grok Bot loads them through its own setup, replacing the Cursor workaround.
 
-**2. Small decisions now have a shared contract.**
-What it is: the opt-in Decision Engine defines inputs, rules, results, and saved run records across backends.
-How you'd use it: test a rule for routing a work item, then inspect the result and its record.
-Why it helps: you can switch decision backends while keeping the same inputs and result format.
+**2. Small decisions now have a shared contract.** To test a rule for routing a work item, opt into the Decision Engine and define its inputs and rules. It saves the result and run record for you to inspect. The inputs and result format stay the same when you switch backends.
 
-**3. Civic work has a source and review trail.**
-What it is: Civic Action supplies structured review workflows for work in the public interest.
-How you'd use it: compare a meeting transcript with approved minutes and flag a vote that does not match.
-Why it helps: the evidence and unresolved questions stay attached to the review packet.
+**3. Civic work has a source and review trail.** A vote in a meeting transcript may differ from the approved minutes. Civic Action's structured workflows for work in the public interest let you compare the two and flag the mismatch, with the evidence and open questions attached to the review packet.
 
-**4. Data workflows have a clearer handoff.**
-What it is: Dataset Intelligence defines sources, plans, run records, and checks.
-How you'd use it: preview a data import and inspect the record of what ran.
-Why it helps: checks connect each data plan to its run record and result.
+**4. Data workflows have a clearer handoff.** Before importing data, use Dataset Intelligence to define the sources and preview the plan. After the import, you can inspect what ran through its run record and checks, which connect the plan to that record and the result.
 
-**5. Tests can be reviewed for what they prove.**
-What it is: Testing Quality can collect test-run evidence and assess the checks inside a suite.
-How you'd use it: ask for a test inventory and a plan to repair weak checks.
-Why it helps: the review can include deliberate failures that a sound test should catch.
+**5. Tests can be reviewed for what they prove.** When reviewing a test suite, ask Testing Quality for an inventory and a plan to repair weak checks. It can collect test-run evidence and assess the checks, including through deliberate failures that a sound test should catch.
 
-**6. Session evidence can travel with its files.**
-What it is: session export creates portable Fortemi Knowledge Shards from selected sessions.
-How you'd use it: review an export plan, build the archive, then verify and unpack it.
-Why it helps: supported attachments and registered outputs can travel with the session record.
+**6. Session evidence can travel with its files.** To move selected sessions with their supported attachments and registered outputs, review a session export plan and build the archive. The export creates portable Fortemi Knowledge Shards that you can then verify and unpack.
 
 ## Features shipped
 
@@ -81,11 +63,11 @@ The later `aiwg bot-handoff` command prepares a draft for a routine, teammate, c
 
 **Grok Build gets its own path.** Grok Build is the coding CLI, separate from Grok Bot and the web Build experience. AIWG added it by 2026.9.17, with support still marked experimental. Project skills use `.grok/skills`, and the context files point back to shared project notes.
 
-Before a build, `aiwg build-verify --provider grok-build` checks that setup and tool lookup work. It also uses `grok inspect` to check what Grok Build sees. This helps catch missing context before a coding task starts. The check does not prove a model followed that context. Version 2026.9.21 added a test contract and a gate for stable status. The adapter still needed proof from the released CLI across the required platforms.
+Before a coding task starts, run `aiwg build-verify --provider grok-build` to check setup and tool lookup. It uses `grok inspect` to check what Grok Build sees, so you can spot missing context before the build. The check does not prove a model followed that context. Version 2026.9.21 added a test contract and a gate for stable status. The adapter still needed proof from the released CLI across the required platforms.
 
-**Decision Engine alpha.** Version 2026.9.19 shipped one contract for Jev and ordinary LLM subagent backends. A definition states what to ask. A ruleset combines decisions. A binding selects the backend. A receipt is a saved record of a call. It lets you check retries and replay.
+**Decision Engine alpha.** For a trial that routes work items, you can define the allowed result, try a backend, and inspect its record. Version 2026.9.19 shipped one contract for Jev and ordinary LLM subagent backends, so switching between them keeps the same AIWG contract.
 
-The contract includes instructions and criteria in a set format, pinned versions, and limits on retries and fallback paths. For a trial that routes work items, you can define the allowed result, try a backend, and inspect its record. Switching backends uses the same AIWG contract.
+A definition states what to ask, a ruleset combines decisions, and a binding selects the backend. Instructions and criteria follow a set format, with pinned versions and limits on retries and fallback paths. A receipt saves the record of a call for checking retries and replay.
 
 Version 2026.9.21 expanded the runtime with opt-in batching, human review, and an offline playground. It also requires a policy that selects which data may leave the process for a network call. The playground runs recorded examples through the real evaluator. The runtime stays off by default. Offline checks show how local code behaves. They do not prove a live model is right or grant the right to act.
 
@@ -97,11 +79,11 @@ Say a transcript and approved minutes disagree about a motion. The workflow cite
 
 Local checks reject malformed records before checking policy rules. The rules block claims with no source, unresolved vote evidence, and publication without named approval of the exact file. People still decide whether to get source material, make contact, submit, approve a correction, or publish. A passing check only covers the declared fields. It does not verify every fact or settle legal questions. The kit did not ship adapters for local laws and rules.
 
-**Data, schemas, and portable sessions.** Version 2026.9.1 added Dataset Intelligence and a catalog of data shapes with checks for changes that might break them. Later releases exposed the data runtime through `aiwg/dataset` and shipped the Fortemi capability contracts with it. Use these to check whether a planned data operation fits what the receiving tool says it can do.
+**Data, schemas, and portable sessions.** When planning a data operation, you can check whether it fits what the receiving tool says it can do. Dataset Intelligence arrived in 2026.9.1 alongside a catalog of data shapes and checks for changes that might break them. Later releases exposed the data runtime through `aiwg/dataset` and shipped the Fortemi capability contracts used to check the receiving tool's stated support.
 
 Session exports use a reviewed plan tied to the selected records. The 2026.9.16 updates added available attachment and output bytes, plus checks against changes after planning. You can check an export before you restore it. An export will not write over an archive unless you choose to do so.
 
-**Writing controls and another provider.** Version 2026.9.5 added opt-in author profiles, fact and audience briefs, protected text, and checks that edits keep the meaning. Use them to keep required terms and facts intact while reviewing edits. Choosing a profile alone does not rewrite every reply from your AI tool. Version 2026.9.21 also shipped experimental Muse Code support, including skills, a trusted context bridge, and export-first session import.
+**Writing controls and another provider.** When reviewing edits, you can protect required terms and facts with the writing controls added in 2026.9.5. These include opt-in author profiles, fact and audience briefs, protected text, and checks that edits keep the meaning. Choosing a profile alone does not rewrite every reply from your AI tool. Version 2026.9.21 also shipped experimental Muse Code support, including skills, a trusted context bridge, and export-first session import.
 
 ## Fixes
 
@@ -155,7 +137,7 @@ The shipped changes below use dates from the CHANGELOG.
 
 When it updates tool settings, AIWG keeps existing JSON and TOML values. It rejects input in the wrong shape. When a run saves receipts, the Decision Engine stops if the receipt key is missing or invalid. The decision runtime also rejects secret material in receipts and cache entries.
 
-The experimental effect ledger records planned actions and what was seen after them. Its checks distinguish present, absent, and unknown results. That helps code keep an unknown result as unknown when it cannot prove the work is done.
+When code cannot prove the work is done, the experimental effect ledger keeps the result unknown. It records planned actions and what was seen after them, with checks that distinguish present, absent, and unknown results.
 
 ## Docs & DX
 
