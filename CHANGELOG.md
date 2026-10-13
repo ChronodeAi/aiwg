@@ -16,6 +16,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   checkpoint. Every checkpoint still degrades to the prior LLM-decides-it-yourself behavior on `fallback`
   or when the decision engine isn't configured — the `--caller` tag is additive, never a hard dependency.
   The full caller-tag table is documented in the `decision-offload` skill.
+- `src/process/bounded-child-process.mjs` (#3062) provides `boundedExecSync`/`boundedExecFileSync`/
+  `boundedSpawnSync` wrappers over Node's synchronous child-process APIs, each taking a required
+  `tier` (`quick` 30s / `network` 2m / `long` 10m, the `long` bound overridable via
+  `AIWG_SYNC_LONG_TIMEOUT_MS`, `0` disables it) right before the normal options argument. A bounded
+  call never inherits stdin, kills with SIGKILL at the bound (Node's own `timeout`+`killSignal` sends
+  one signal and then keeps blocking forever if the child ignores it — confirmed with a real
+  SIGTERM-ignoring child), and enriches the resulting `ETIMEDOUT` error/result with the command, tier
+  and bound while leaving `code`/`signal`/`status` exactly as Node set them. `tools/testing/
+  check-sync-child-process-timeouts.mjs` now scans `src/`, `tools/` and `bin/` in addition to the
+  pre-existing `test/` scan; product-code findings are report-only (`npm run
+  lint:test-process-timeouts` prints counts by directory, never fails) until
+  `--enforce-product`/`npm run lint:test-process-timeouts:enforce-product` turns enforcement on.
+  Interactive-by-design calls (an editor, a login flow, handing the terminal to a harness binary) are
+  exempted via a `// sync-spawn: interactive <anchor>` comment at the call site paired with an entry
+  in `tools/testing/sync-spawn-allowlist.json`; the gate fails (even in report mode) on a stale
+  allow-list entry or one with an unsupported `kind`. The allow-list starts empty; no call sites are
+  exempted yet.
 - `aiwg decision ask` (CLI and MCP) now appends exactly one record per **completed** call —
   including `fallback` and `not-configured` outcomes, never a usage error — to a decision ledger
   (`.aiwg/decision/ledger.jsonl`, resolved like `aiwg artifacts path`). The ledger's trust boundary is
