@@ -28,6 +28,11 @@ import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../s
 // @ts-expect-error — .mjs untyped
 import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
 import { resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+// Frozen a4085b86a reference -- see that file's own header. Baseline
+// equivalence tests only; never a production import.
+// @ts-expect-error — .mjs untyped
+import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
 
 const {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
@@ -1904,6 +1909,38 @@ setInterval(() => {}, 1000);
     expect(capturedTimeoutSeconds!).toBeGreaterThanOrEqual(0);
   }, 20000);
 
+  // #2915 round 8 critique (D5) / review 7 finding 4's last bullet: "run()
+  // clips the duration to remaining canary time, then defaultCallMcpWorker()
+  // adds that shortened duration to the original mint time, subtracting
+  // preparation time twice." The ONE absolute `deadlineAtMs` threaded to
+  // `callMcpWorker` must equal the canary token's own `deadlineMs` exactly —
+  // never re-derived (and thereby shrunk again) from `mintedAtMs` plus an
+  // already-clipped duration.
+  it('the ONE absolute deadline passed to callMcpWorker equals the canary token deadline exactly -- no double subtraction of preparation time', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    let capturedDeadlineAtMs: number | undefined;
+    const fixedDeadlineMs = Date.now() + 50;
+    const fakeBreaker: any = {
+      nowMs: () => Date.now(),
+      admit: () => ({ ok: true, token: { id: 'fake-canary-nodouble', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: Date.now(), deadlineMs: fixedDeadlineMs } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, {
+      scopedBreaker: fakeBreaker,
+      callMcpWorker: async (_mcpBinding: any, _server: any, options: any) => {
+        capturedDeadlineAtMs = options.deadlineAtMs;
+        return { outcome: 'blocked', diagnostic: 'test-capture-only' };
+      },
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(capturedDeadlineAtMs).toBe(fixedDeadlineMs);
+  }, 20000);
+
   // #2915 review 5: a serialized/per-instance MCP queue may hold an
   // already-admitted call long enough that its canary reservation's own
   // deadline has since passed -- an expired admission must never launch,
@@ -3164,4 +3201,424 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
     expect(capturedMcpOptions).toBeDefined();
     expect('admission' in capturedMcpOptions).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): disabled dispatch equals main through the REAL launch
+// pipeline -- never through an injected `launchShellWorker`/`callMcpWorker`
+// test double, which would hide exactly the defect being regression-tested
+// (review 7 finding 13's second bullet names `defaultLaunchMcpWorkerProcess`
+// and `planDirectWorkerLaunch` directly: "omitting the disabled admission
+// loses CLI identity before the flat planner. It performs a new admission").
+// ---------------------------------------------------------------------------
+describe('disabled dispatch equals main through the real launch pipeline (#2915 round 8, D6)', () => {
+  it('canVerifyAttempt:false completes through the REAL defaultLaunchMcpWorkerProcess/planDirectWorkerLaunch pipeline, never consulting the recovery breaker (review 7 finding 13, second bullet)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    const configPath = path.join(root, 'fixture-config.json');
+    await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
+    const f = buildFixture(root, 'mcp');
+    f.drivers.codex.canVerifyAttempt = false;
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    // Before the fix, `planDirectWorkerLaunch`'s STANDALONE admission branch
+    // independently re-derived eligibility with no knowledge of
+    // `canVerifyAttempt`, and called `admit()` on whatever breaker is in
+    // scope -- at reservation capacity, that returned `blocked` where
+    // baseline always launched. This breaker THROWS if `admit` is ever
+    // called at all, so reaching it (even successfully) would still fail
+    // this run with a different diagnostic ("recovery admission failed
+    // closed"), proving the standalone admission path is never entered.
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached: canVerifyAttempt:false is not-gated'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      scopedBreaker: throwingBreaker,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: `d6-mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('completed');
+    expect(body.termination).toBe('confirmed');
+  }, 20000);
+
+  // #2915 round 8 critique (D6) / review 7 finding 13 third bullet, M:1079:
+  // "the new unconditional catch changes the same status/capacity behavior
+  // and diagnostic, even globally disabled." A thrown `mcpRegistry.get()`
+  // from `defaultCallMcpWorker`'s OWN pre-launch requalification recheck
+  // must propagate exactly like origin/main when this attempt is not
+  // gated -- settling `uncertain`/`uncertain` through this bridge's own
+  // outer catch-all, never converted to a fail-closed `blocked` result.
+  it('a thrown mcpRegistry.get() during the pre-launch requalification recheck propagates as a rejection when not gated, never converted to a blocked outcome', async () => {
+    const { __testOnlyDefaultCallMcpWorker: defaultCallMcpWorker } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const mcpRegistry = { get: async () => { throw new Error('synthetic: registry requalification exploded'); } };
+    // `admission` omitted entirely (matching how `run()` calls this when
+    // `!admission?.gated`) -- `defaultCallMcpWorker` must take the literal
+    // baseline branch (no try/catch around the requalification check) and
+    // let the rejection propagate, exactly like origin/main's own
+    // unconditional `if (mcpRegistry) { ... }` with no surrounding catch.
+    await expect(defaultCallMcpWorker({ serverRef: 'fixture-server', tool: 'fixture-worker', timeoutSeconds: 1, sessionIsolation: 'per-call' },
+      { type: 'stdio', command: 'unused-never-spawned' }, { mcpRegistry, sessionIsolation: 'per-call' }))
+      .rejects.toThrow(/registry requalification exploded/);
+  });
+
+  it('the SAME thrown mcpRegistry.get() is fail-closed (converted to a blocked outcome) when this call is gated', async () => {
+    const { __testOnlyDefaultCallMcpWorker: defaultCallMcpWorker } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const mcpRegistry = { get: async () => { throw new Error('synthetic: registry requalification exploded'); } };
+    const breaker: any = { nowMs: () => Date.now() };
+    const admission = { gated: true, breaker, token: { deadlineMs: Infinity } };
+    const result = await defaultCallMcpWorker({ serverRef: 'fixture-server', tool: 'fixture-worker', timeoutSeconds: 1, sessionIsolation: 'per-call' },
+      { type: 'stdio', command: 'unused-never-spawned' }, { mcpRegistry, admission, sessionIsolation: 'per-call' });
+    expect(result).toMatchObject({ outcome: 'blocked', diagnostic: expect.stringMatching(/pre-spawn requalification failed/) });
+  });
+
+  // #2915 round 8 (D5) / review 7 finding 9: "a rejected stop helper
+  // escapes as an unhandled timer rejection and leaves the run unresolved."
+  it('degradedTimeoutOutcome catches a rejecting stop helper and resolves uncertain, never throwing', async () => {
+    const child: any = { exitCode: null, kill: vi.fn() };
+    const result = await (workerInvoke as any).__testOnlyDegradedTimeoutOutcome(child, {
+      gated: true, terminateChildWithGrace: async () => { throw new Error('synthetic: stop escalation exploded'); },
+    });
+    expect(result).toEqual({ termination: 'uncertain', exitCode: null, timedOut: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D5): the absolute deadline is enforced at the transport
+// write boundary too -- AFTER the dynamic `serializeMessage` import -- with
+// stop/cancel cleanup traffic exempt.
+// ---------------------------------------------------------------------------
+describe('absolute MCP deadline enforced at the transport write boundary (#2915 round 8, D5)', () => {
+  function fakeTransportChild(writes: string[]) {
+    const fakeStdin: any = new EventEmitter();
+    fakeStdin.write = (data: string) => { writes.push(data); return true; };
+    const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
+    return { stdin: fakeStdin, stdout: new EventEmitter(), stderr: fakeStderr, once() { return this; } };
+  }
+
+  it('send() refuses once the deadline has passed', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    let now = 1000;
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 1000, now: () => now });
+    await transport.start();
+    now = 1001; // one ms past the deadline
+    await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} })).rejects.toThrow(/deadline/);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('send() exempts notifications/cancelled stop/cleanup traffic from the deadline check', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 1000, now: () => 5000 });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1, reason: 'operator-cancel' } });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('send() allows a write before the deadline', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 5000, now: () => 1000 });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('a disabled-dispatch (not gated) transport never enforces a deadline at all -- deadlineAtMs defaults to null', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { enforceTransportBound: false });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    expect(writes).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D4): the `reconcile_stopped` operation on this SAME
+// `worker-invoke` status/cancel handler. Accepted only for an invocation
+// whose stored reservation is `dispatched` with `stop: 'unresolved'`,
+// applied to that invocation's actual breaker, idempotent.
+// ---------------------------------------------------------------------------
+describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => {
+  function toolHandler(tools: Map<string, any>) {
+    return tools.get('worker-invoke').handler;
+  }
+
+  /**
+   * Build a REAL breaker with a `dispatched` reservation whose canary
+   * deadline has already passed unresolved (`stop: 'unresolved'`) — the
+   * exact precondition `reconcile_stopped`/`hasUnresolvedStop` must check.
+   * A brand-new scope's FIRST admission is never a canary (`canaryKeys: []`,
+   * `deadlineMs: Infinity`, never swept) — the scope must first be opened
+   * by a trusted (`resolver`/`launcher`) failure so the NEXT admission is
+   * admitted as the half-open canary with a real, finite deadline.
+   */
+  function openedCanaryReservation(invocationId: string, { startAtMs = 1_000_000 } = {}) {
+    const breaker = new ScopedFailureBreaker({ policy: { canaryTimeoutMs: 100, cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = startAtMs;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: `${invocationId}-opener`, scopeKeys: ['installation:codex'] });
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    const admitted = breaker.admit({ invocationId, scopeKeys: ['installation:codex'] });
+    expect(admitted.ok).toBe(true);
+    const token = (admitted as any).token;
+    expect(token.canaryKeys.length).toBeGreaterThan(0); // genuinely the canary, not an ordinary admission
+    expect(breaker.beginDispatch(token, { invocationId, selectionDigest: null }).ok).toBe(true);
+    expect(breaker.commitDispatch(token).ok).toBe(true);
+    clockNow = token.deadlineMs + 1; // past the canary's own bounded window
+    breaker.expireStaleReservations();
+    expect(breaker.hasUnresolvedStop(invocationId)).toBe(true);
+    return breaker;
+  }
+
+  it('reconciles an invocation whose dispatched reservation has an unresolved stop marker, then is idempotent on a second call', async () => {
+    const root = await tempRoot();
+    const breaker = openedCanaryReservation('inv-reconcile-1');
+
+    // Exercises the reconciliation surface against an explicit registry
+    // seeded directly, in isolation from a full run() admission (which
+    // would require a real worker dispatch) -- the registry/breaker
+    // plumbing being tested is the same either way (see `registry.update(
+    // entry.invocationId, { recoveryBreaker: admission.breaker })` in
+    // `run()` itself).
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    const entry = registry.create({ requestId: 'req-reconcile-1', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-reconcile-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: breaker });
+
+    const handler = toolHandler(tools);
+    const first = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
+    const firstBody = JSON.parse(first.content[0].text);
+    expect(firstBody.reconciled).toBe(true);
+    expect(breaker.hasUnresolvedStop('inv-reconcile-1')).toBe(false);
+
+    const second = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
+    const secondBody = JSON.parse(second.content[0].text);
+    expect(secondBody.reconciled).toBe(false);
+    expect(secondBody.reconcileReason).toMatch(/no dispatched reservation/);
+  });
+
+  it('refuses to reconcile an invocation with no tracked gated reservation', async () => {
+    const root = await tempRoot();
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    registry.create({ requestId: 'req-no-breaker', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-no-breaker' });
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-no-breaker' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.reconciled).toBe(false);
+    expect(body.reconcileReason).toMatch(/no tracked gated reservation/);
+  });
+
+  it('requires invocation_id and refuses an unknown invocation_id', async () => {
+    const root = await tempRoot();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root,
+    });
+    const handler = toolHandler(tools);
+    const missingId = await handler({ operation: 'reconcile_stopped' });
+    expect(missingId.isError).toBe(true);
+    const unknownId = await handler({ operation: 'reconcile_stopped', invocation_id: '00000000-0000-4000-8000-000000000000' });
+    expect(unknownId.isError).toBe(true);
+  });
+
+  it("ordinary status with no invocation_id lists invocations with unresolved stop evidence, and never mutates them", async () => {
+    const root = await tempRoot();
+    const breaker = openedCanaryReservation('inv-list-1', { startAtMs: 2_000_000 });
+
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    const entry = registry.create({ requestId: 'req-list-1', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-list-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: breaker });
+
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'status' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.unresolvedReservations).toHaveLength(1);
+    expect(body.unresolvedReservations[0].invocationId).toBe('inv-list-1');
+    expect(body.unresolvedReservations[0].scopes).toContain('installation:codex');
+    expect(typeof body.unresolvedReservations[0].ageMs).toBe('number');
+    // Read-only: the marker is still there after a plain status call.
+    expect(breaker.hasUnresolvedStop('inv-list-1')).toBe(true);
+  });
+
+  it("the reservation-capacity refusal names the reconcile_stopped operation when blocked by unresolved markers", async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const refusingBreaker: any = {
+      admit: () => ({ ok: false, blockedBy: ['reservation-capacity', 'blocking-markers:3'], nextEligibleAt: Date.now() }),
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      scopedBreaker: refusingBreaker,
+    });
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'run', request_id: `d4-capacity-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/blocking-markers:3/);
+    expect(body.diagnostics.join(' ')).toMatch(/reconcile_stopped/);
+  }, 20000);
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): equivalence tests. The frozen `a4085b86a` fixture
+// (`test/fixtures/ralph-recovery-baseline/worker-invoke.mjs`) has NO
+// admission/breaker/ledger concept at all; the current branch's `run()`,
+// with dispatch disabled (`canVerifyAttempt: false`), must behave the same
+// from an equivalent starting state: same result shape, same diagnostics,
+// same callMcpWorker call count and call shape (modulo the `admission` key,
+// which the current branch OMITS entirely when not gated -- proven
+// separately by the "injected launch/call callbacks receive no admission
+// property when not gated" test above).
+//
+// This covers a representative subset of the full scenario matrix the
+// design calls for (success/non-zero/timeout/cancellation/early-error/
+// resolver-error/native-throw/launch-refusal/oversized-transport/queue-
+// contention, plus gated<->disabled interleavings) -- blocked (server not
+// registered), isError, and an early resolver/validation error. The
+// remaining scenarios (timeout, cancellation, native requalification throw,
+// oversized-whitespace transport, queue contention, and gated->disabled
+// interleavings on one server instance) are NOT covered here; see the
+// final report.
+// ---------------------------------------------------------------------------
+describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs current branch with dispatch disabled', () => {
+  async function runOnce(registerFn: any, callMcpWorker: any, { throwOnLoad = false }: { throwOnLoad?: boolean } = {}) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    f.drivers.codex.canVerifyAttempt = false; // meaningless/ignored by the baseline fixture; disables gating on the branch
+    if (!throwOnLoad) {
+      // `buildFixture`'s own default `mcpRegistry.get()` (a valid stdio
+      // entry) is what the resolver PROBE below needs to succeed; swap in
+      // the "not registered" double only AFTER the brief is built.
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      f.drivers.codex.mcpRegistry = { get: async () => null };
+    } else {
+      await writeFile(briefPath, 'placeholder');
+    }
+    const calls: any[] = [];
+    const tools = new Map<string, any>();
+    await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: throwOnLoad
+        ? async () => { throw new Error('synthetic: resolver/input failure'); }
+        : async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+      callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
+    });
+    const handler = tools.get('worker-invoke').handler;
+    const result = await handler({ operation: 'run', request_id: `equiv-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    return { body, calls };
+  }
+
+  it('scenario: mcp server not registered -- blocked/confirmed, identical diagnostic text', async () => {
+    const neverCalled = async () => { throw new Error('must never be called: no server registered'); };
+    const baseline = await runOnce(workerInvokeBaseline.registerWorkerInvokeToolset, neverCalled);
+    const branch = await runOnce(registerProductionToolset, neverCalled);
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+    expect(baseline.body.status).toBe('blocked');
+    expect(baseline.calls).toHaveLength(0);
+    expect(branch.calls).toHaveLength(0);
+  }, 20000);
+
+  it('scenario: isError response -- failed/confirmed, identical diagnostic text, one call each, no admission key either side', async () => {
+    async function registerWithServer(registerFn: any) {
+      const callMcpWorker = async () => ({ outcome: 'responded', response: { isError: true, content: [{ type: 'text', text: 'Synthetic worker failure' }] } });
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'mcp');
+      f.drivers.codex.canVerifyAttempt = false;
+      f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'unused-never-spawned' }) };
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      const calls: any[] = [];
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+        callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-isError-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      return { body: JSON.parse(result.content[0].text), calls };
+    }
+    const baseline = await registerWithServer(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await registerWithServer(registerProductionToolset);
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+    expect(baseline.body.status).toBe('failed');
+    expect(baseline.calls).toHaveLength(1);
+    expect(branch.calls).toHaveLength(1);
+    // The call's own 3rd argument is the options object `callMcpWorker` receives.
+    expect('admission' in baseline.calls[0][2]).toBe(false);
+    expect('admission' in branch.calls[0][2]).toBe(false);
+  }, 20000);
+
+  // NOT byte-equivalent, deliberately: a `loadWorkerInputs` throw happens
+  // strictly BEFORE `admission` is ever assigned (there is no config yet to
+  // decide gating from) -- the pre-existing #2915 review 5 (finding 2b,
+  // "leaked capacity") contract treats ANY such pre-admission exception as
+  // a PROVEN pre-spawn failure and frees capacity (`blocked`), regardless
+  // of what gating decision a never-reached config would have produced.
+  // Baseline, having no admission concept at all, always settles this
+  // exact case `uncertain` (capacity retained forever). This is a
+  // consciously accepted, already-tested divergence -- see "a pre-spawn
+  // exception before any launch attempt frees capacity through the generic
+  // catch-all, never staying LIVE forever" above -- not a defect; it is
+  // documented here precisely so nobody "fixes" it back into agreement.
+  it('scenario: a thrown loadWorkerInputs (early resolver/input error) -- intentionally diverges from baseline (review 5, finding 2b)', async () => {
+    const neverCalled = async () => { throw new Error('must never be called: never reaches a launch'); };
+    const baseline = await runOnce(workerInvokeBaseline.registerWorkerInvokeToolset, neverCalled, { throwOnLoad: true });
+    const branch = await runOnce(registerProductionToolset, neverCalled, { throwOnLoad: true });
+    expect(baseline.body.status).toBe('uncertain');
+    expect(baseline.body.termination).toBe('uncertain');
+    expect(branch.body.status).toBe('blocked');
+    expect(branch.body.termination).toBe('confirmed');
+  }, 20000);
 });
