@@ -4909,12 +4909,34 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
     });
   });
 
-  it('a gated launch followed by a not-gated launch on the SAME instance leaves no gated-path residue in Object.keys()', async () => {
+  // #2915 round 8 review 8 (D3): the previous version of this test NAMED
+  // itself "on the SAME instance" but actually built a SECOND, independent
+  // `SessionLauncher` for the not-gated run (`runOneLauncher` always
+  // constructs a fresh one) -- so it could never have observed any
+  // gated-path residue a REUSED instance might carry into a later
+  // not-gated call. This version genuinely reuses one `launcher` for both
+  // runs, and widens what is compared beyond `Object.keys()`: the
+  // `process` SIGTERM/SIGINT listener count (added/removed by
+  // `captureOneWorker`'s own `finish()`), the instance's own transient
+  // handle fields (`currentProcess`/`workerStop`, cleared by the same
+  // `finish()`), and the full shape of the options object the launch
+  // boundary itself receives (never only the destructured subset
+  // `directSpawn` reads) -- compared against a TRUE frozen-fixture
+  // baseline run on an independent `SessionLauncherBaseline` instance.
+  it('a gated launch followed by a not-gated launch on the SAME reused instance matches the frozen baseline: listeners, handles, metadata and callback arguments', async () => {
     const fx = await equivFixtureRoot();
     try {
+      const sigtermBefore = process.listenerCount('SIGTERM');
+      const sigintBefore = process.listenerCount('SIGINT');
+      const launchCalls = [];
+      const recordingSpawn = (options) => { launchCalls.push(options); return directSpawn(options); };
+
       const launcher = new SessionLauncher();
       const keysBeforeAnyLaunch = Object.keys(launcher).sort();
+      expect(launcher.currentProcess).toBeNull(); // constructor-initialized
+      expect(launcher.workerStop).toBeUndefined(); // only ever set once a capture begins
 
+      // --- Gated run, on `launcher`. ---
       const gatedAttempt = await fx.freshPlan({ scenario: 'success' });
       vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', gatedAttempt.configPath);
       await launcher.launchWorker({
@@ -4922,30 +4944,90 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
-        launchIsolated: directSpawn,
+        launchIsolated: recordingSpawn,
       });
       expect(launcher.lastAttemptResult).not.toBeNull(); // gated: bookkeeping updated
+      // No listener or handle leaked past the gated run's own `finish()`.
+      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+      expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+      expect(launcher.currentProcess).toBeNull();
+      expect(launcher.workerStop).toBeNull();
+      const gatedCallOptions = launchCalls.at(-1);
+      expect('onDispatchCommit' in gatedCallOptions).toBe(true); // the gated call DOES carry the D2 hook
       // Gated execution can only ADD base-shaped instance fields that a
-      // single ungated launch (the independent `SessionLauncher` built
-      // fresh below) would also have added by now (e.g. `currentProcess`
-      // transiently, `workerLaunchPending` once set) — never a #2915-only
-      // key. Verified against a fresh not-gated instance below rather than
-      // against the launcher's own pre-launch snapshot, since origin/main
-      // itself grows `workerLaunchPending` as an own property on its FIRST
-      // `launchWorker()` call too (not a #2915 difference to begin with).
+      // single ungated launch (the independent frozen-baseline instance
+      // below) would also have added by now (e.g. `workerLaunchPending`
+      // once set) — never a #2915-only key. Verified against a fresh
+      // baseline instance rather than the launcher's own pre-launch
+      // snapshot, since origin/main itself grows `workerLaunchPending` as
+      // an own property on its FIRST `launchWorker()` call too (not a
+      // #2915 difference to begin with).
       const keysAfterGatedLaunch = Object.keys(launcher).sort();
 
+      // --- Not-gated run, on the SAME `launcher` instance. ---
+      launchCalls.length = 0;
       const notGatedAttempt = await fx.freshPlan({ scenario: 'success' });
-      const { launcher: notGatedLauncher } = await runOneLauncher(SessionLauncher, fx, notGatedAttempt,
-        { checkDispatch: () => ({ enabled: false, ok: true, failures: [] }) });
-      // A not-gated-only launcher's bookkeeping is the base default...
-      expect(notGatedLauncher.lastAttemptResult).toBeNull();
-      // ...and a GATED-then-NOT-GATED sequence on one instance is no
-      // different from a single not-gated launch's own key set:
-      // `lastAttemptResult`/`lastAttemptInvocationId` live in the
-      // module-private WeakMap, never as an instance's OWN enumerable key,
-      // so the earlier gated launch left nothing for `Object.keys()` to see.
-      expect(keysAfterGatedLaunch).toEqual(Object.keys(notGatedLauncher).sort());
+      vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', notGatedAttempt.configPath);
+      const notGatedResult = await launcher.launchWorker({
+        invocationPath: notGatedAttempt.invocationPath, runDir: notGatedAttempt.runDir,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: recordingSpawn,
+      });
+      // The EARLIER gated run's bookkeeping must not perturb this later
+      // not-gated one: `lastAttemptResult` is gated-only (set inside
+      // `launchOneWorker`, never `launchOneWorkerBaseline`), so it stays
+      // exactly as the gated run last left it -- `launchWorker` routing a
+      // not-gated attempt through the baseline path never touches it.
+      expect(launcher.lastAttemptResult).toBe(launcher.lastAttemptResult); // (sanity: still readable)
+      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+      expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+      expect(launcher.currentProcess).toBeNull();
+      expect(launcher.workerStop).toBeNull();
+      const notGatedCallOptionsSameInstance = launchCalls.at(-1);
+      // No gated-path residue in the callback arguments of the LATER
+      // not-gated call: the D2 hook key must be completely absent, not
+      // merely `undefined`, exactly like origin/main's own call always was.
+      expect('onDispatchCommit' in notGatedCallOptionsSameInstance).toBe(false);
+      const keysAfterNotGatedOnSameInstance = Object.keys(launcher).sort();
+
+      // --- True frozen-baseline run, on an INDEPENDENT instance. ---
+      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineCalls = [];
+      const baselineRecordingSpawn = (options) => { baselineCalls.push(options); return directSpawn(options); };
+      const baselineLauncher = new SessionLauncherBaseline();
+      const keysBeforeBaselineLaunch = Object.keys(baselineLauncher).sort();
+      vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', baselineAttempt.configPath);
+      const baselineResult = await baselineLauncher.launchWorker({
+        invocationPath: baselineAttempt.invocationPath, runDir: baselineAttempt.runDir,
+        inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+        checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+        launchIsolated: baselineRecordingSpawn,
+      });
+      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+      expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+
+      // The reused instance's not-gated result/metadata/callback-argument
+      // shape is IDENTICAL to the independent frozen baseline's --
+      // genuinely proving the earlier gated run left no residue, not just
+      // that `Object.keys()` happens to match.
+      expect(normalizeResult(notGatedResult)).toEqual(normalizeResult(baselineResult));
+      expect(baselineLauncher.lastAttemptResult).toBeUndefined(); // origin/main never had this field at all
+      expect(Object.keys(notGatedCallOptionsSameInstance).sort()).toEqual(Object.keys(baselineCalls.at(-1)).sort());
+      expect('onDispatchCommit' in baselineCalls.at(-1)).toBe(false);
+      // A not-gated-only launcher's own key set is the base default...
+      expect(keysBeforeBaselineLaunch).toEqual(keysBeforeAnyLaunch);
+      // ...and a GATED-then-NOT-GATED sequence on one REUSED instance ends
+      // up with the exact same key set as a single not-gated launch on an
+      // independent frozen-baseline instance: `lastAttemptResult`/
+      // `lastAttemptInvocationId` live in the module-private WeakMap, never
+      // as an instance's OWN enumerable key, so neither the earlier gated
+      // launch nor this later not-gated one left anything for
+      // `Object.keys()` to see beyond the base shape.
+      expect(keysAfterNotGatedOnSameInstance).toEqual(Object.keys(baselineLauncher).sort());
+      expect(keysAfterGatedLaunch).toEqual(keysAfterNotGatedOnSameInstance); // unchanged across the second (not-gated) call
       expect(keysAfterGatedLaunch).not.toEqual(keysBeforeAnyLaunch); // sanity: a launch DOES add base keys (workerLaunchPending)
     } finally {
       await rm(fx.root, { recursive: true, force: true });
@@ -5224,7 +5306,61 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         }
       }
 
-      it.skip('timeout, systemd-unit isolation: not reliably driveable under vi.useFakeTimers() in the time available — see the comment above; degraded-isolation timeout below covers the identical hard-deadline/stop/finish machinery', () => {});
+      // #2915 round 8 review 8 (D3): the comment above documents WHY the
+      // degraded-isolation harness's single 500ms-advance/one-yield step
+      // cannot drain this scenario -- `observeIdentity`'s `hasTransport`
+      // branch `await`s a REAL `transportRecord()` disk read inside a
+      // recursive, self-rescheduling `later(observeIdentity, 5)` timer, so
+      // a new fake timer is registered only after a real microtask/macrotask
+      // turn the single coarse advance does not reliably provide. Finer
+      // granularity (matching the loop's own 5ms reschedule interval) with
+      // a real yield between EVERY advance drains it deterministically.
+      async function runTimedFakeUnitScenario(LauncherClass, fx, attempt, extraOptions) {
+        vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+        try {
+          const launcher = new LauncherClass();
+          const child = makeFakeChild();
+          const launched = new Promise((resolve) => launcher.once('launched', resolve));
+          const resultPromise = launcher.launchWorker({
+            invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+            now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+            launchIsolated: () => ({ mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-timed' }),
+            stopUnit: () => ({ ok: true }), isolationStatus: () => ({ active: true }),
+            ...extraOptions,
+          });
+          await launched;
+          let settled = false;
+          resultPromise.finally(() => { settled = true; });
+          // 5ms virtual steps (matching `observeIdentity`'s own reschedule
+          // interval once started), each followed by a real event-loop
+          // turn -- bounded at 3000 steps (15s virtual, comfortably past
+          // the 1s hard-deadline + 1s grace this scenario arms).
+          for (let step = 0; step < 3000 && !settled; step += 1) {
+            await vi.advanceTimersByTimeAsync(5);
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          return { result: await resultPromise, runDir: attempt.runDir };
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+
+      it('timeout, systemd-unit isolation: hard-deadline fires, unresolved stop, identical result and run-dir content', async () => {
+        const fx = await build();
+        fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baseline = await runTimedFakeUnitScenario(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
+          const branch = await runTimedFakeUnitScenario(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ timedOut: true, termination: 'uncertain' });
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      }, 20_000);
 
       it('timeout, degraded isolation: hard-deadline fires, unresolved stop, identical result and run-dir content', async () => {
         const fx = await build();
@@ -5246,7 +5382,51 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         }
       }, 20_000);
 
-      it.skip('cancellation mid-run, systemd-unit isolation: not reliably driveable under vi.useFakeTimers() in the time available — see the comment above; degraded-isolation cancellation below covers the identical workerStop()/stop/finish machinery', () => {});
+      // #2915 round 8 review 8 (D3): same fine-grained-advance fix as the
+      // systemd-unit timeout variant above -- `observeIdentity`'s
+      // `hasTransport` branch needs a real event-loop turn between every
+      // fake-clock advance to register its next recursive reschedule.
+      it('cancellation mid-run, systemd-unit isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
+        const fx = await build();
+        try {
+          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const branchAttempt = await fx.freshPlan({ scenario: 'success' });
+          const run = async (LauncherClass, attempt) => {
+            vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+            try {
+              const launcher = new LauncherClass();
+              const child = makeFakeChild();
+              const launched = new Promise((resolve) => launcher.once('launched', resolve));
+              const resultPromise = launcher.launchWorker({
+                invocationPath: attempt.invocationPath, runDir: attempt.runDir, inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
+                now: fx.f.request.now, isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+                launchIsolated: () => ({ mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-cancel' }),
+                stopUnit: () => ({ ok: true }), isolationStatus: () => ({ active: true }),
+                ...trigger.extraOptions,
+              });
+              await launched;
+              launcher.workerStop();
+              let settled = false;
+              resultPromise.finally(() => { settled = true; });
+              for (let step = 0; step < 3000 && !settled; step += 1) {
+                await vi.advanceTimersByTimeAsync(5);
+                await new Promise((resolve) => setImmediate(resolve));
+              }
+              return { result: await resultPromise, runDir: attempt.runDir };
+            } finally {
+              vi.useRealTimers();
+            }
+          };
+          const baseline = await run(SessionLauncherBaseline, baselineAttempt);
+          const branch = await run(SessionLauncher, branchAttempt);
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(baseline.result).toMatchObject({ cancelled: true, stopReason: 'CANCELLED', timedOut: false });
+          await compareRunDirectories(baseline.runDir, branch.runDir);
+        } finally {
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      }, 20_000);
 
       it('cancellation mid-run, degraded isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
         const fx = await build();
