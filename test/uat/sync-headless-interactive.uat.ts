@@ -193,6 +193,29 @@ function runHeadless(args: string[], cwd: string, configDir: string): Promise<Pr
   });
 }
 
+/**
+ * True while `pid` is still executing. Signal 0 alone is not enough: a
+ * process that has been killed but not yet reaped (a zombie) still answers
+ * it. On Linux the process state is read to tell the two apart.
+ */
+function isExecuting(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== 'linux') return true;
+  try {
+    // Field 3 follows the parenthesised command name, which may itself
+    // contain spaces or parentheses.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+    return state !== 'Z' && state !== 'X';
+  } catch {
+    return false;
+  }
+}
+
 function makeTmpDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `aiwg-uat-headless-${label}-`));
 }
@@ -600,15 +623,16 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
 
       expect(existsSync(pidFile)).toBe(true);
       const grandchildPid = Number(readFileSync(pidFile, 'utf8'));
-      // Give the OS a brief moment to finish reaping the already-killed
-      // grandchild, then confirm it is actually gone (signal 0 is a pure
-      // liveness probe — it never actually signals the process).
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // The group was sent SIGKILL before the run settled. Delivery and
+      // reaping are asynchronous, and where nothing reaps orphans (a CI
+      // container whose first process is not an init) the killed process
+      // stays in the table as a zombie that still answers signal 0. So
+      // poll, and count a zombie as gone: it is not executing anything.
       let stillAlive = true;
-      try {
-        process.kill(grandchildPid, 0);
-      } catch {
-        stillAlive = false;
+      const deadline = Date.now() + 5_000;
+      while (stillAlive && Date.now() < deadline) {
+        stillAlive = isExecuting(grandchildPid);
+        if (stillAlive) await new Promise((resolve) => setTimeout(resolve, 50));
       }
       expect(stillAlive).toBe(false);
     } finally {
