@@ -565,7 +565,7 @@ export class ScopedFailureBreaker extends EventEmitter {
    * reservation (OPEN-scope protection always wins over admitting more
    * concurrent work).
    */
-  admit({ invocationId = null, scopeKeys = [] } = {}) {
+  admit({ invocationId = null, scopeKeys = [], selectionDigest = null } = {}) {
     const now = this.nowMs();
     this._sweepReservations(now);
     this._sweepOutstanding(now);
@@ -643,7 +643,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       // unresolved blocking markers (rather than live, settleable
       // reservations) in the refusal diagnostics, so this exact refusal is
       // distinguishable from ordinary reservation-capacity pressure.
-      const markerCount = [...this._reservations.values()].filter((entry) => entry.expiredAt !== null).length;
+      const markerCount = [...this._reservations.values()].filter((entry) => entry.stop === 'unresolved').length;
       const blockedBy = markerCount > 0 ? ['reservation-capacity', `blocking-markers:${markerCount}`] : ['reservation-capacity'];
       for (const createdKey of reservedScopeKeys) this._releaseIfInert(createdKey);
       return { ok: false, blockedBy, nextEligibleAt: now };
@@ -659,14 +659,26 @@ export class ScopedFailureBreaker extends EventEmitter {
     // (#2915 final review risk: a canary-only deadline must never leak onto
     // ordinary long-running attempts).
     const deadlineMs = canaryKeys.length > 0 ? now + this.policy.canaryTimeoutMs : Infinity;
-    const token = Object.freeze({ id, breaker: this, invocationId, coveringKeys: Object.freeze(covering),
+    // `selectionDigest` (#2915 round 8, D3): stored on the FROZEN token
+    // itself — never a separate mutable field on the outer `admitDirectWorker`
+    // result — so `beginDispatch`'s identity check below has an authoritative,
+    // breaker-owned binding to validate against. A caller-side wrapper that
+    // deletes or rewrites its own copy of this value can never change what is
+    // actually compared (#2915 round 8 critique: "stored identity is only
+    // useful if compared against the actual launch").
+    const token = Object.freeze({ id, breaker: this, invocationId, selectionDigest, coveringKeys: Object.freeze(covering),
       canaryKeys: Object.freeze(canaryKeys), mintedAtMs: now, deadlineMs });
-    // `expiredAt`/`markerTouched` (#2915 review 5/6): set only once this
-    // reservation's own canary deadline has passed unresolved (see
-    // `_sweepReservations`); `null`/`false` here for every reservation at
-    // mint time, canary or not. `launched` (#2915 review 6, finding 1):
-    // consumed exactly once by `claimLaunch`, independent of `settled`.
-    this._reservations.set(id, { token, settled: false, expiredAt: null, markerTouched: false, launched: false, reservedScopeKeys });
+    // `phase`/`stop` (#2915 round 8, D3): the reservation's own transition
+    // state, `admitted -> committing -> dispatched`, and its stop-evidence
+    // status, `none-needed -> unresolved -> confirmed`. Both start at their
+    // initial value for every reservation, canary or not. `revoked` (round 8):
+    // set by `_sweepReservations` when a `committing` reservation's deadline
+    // passes — it marks the committing attempt for `commitDispatch`/
+    // `abortDispatch` to observe, but (unlike `dispatched`-phase expiry) never
+    // itself releases or reopens anything, because nothing is yet known to
+    // have actually dispatched (see `_sweepReservations`, `abortDispatch`).
+    this._reservations.set(id, { token, settled: false, phase: 'admitted', stop: 'none-needed',
+      stopTouched: false, revoked: false, reservedScopeKeys });
     this.noteLaunched(covering, invocationId);
     for (const scopeKey of canaryKeys) {
       const rec = this._scopes.get(scopeKey);
@@ -730,16 +742,16 @@ export class ScopedFailureBreaker extends EventEmitter {
     if (!entry || entry.token !== token) {
       return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
     }
-    if (entry.expiredAt !== null) {
-      // This reservation already failed its own canary deadline (possibly
-      // via the sweep this very call just performed, above). Resolve the
-      // blocking marker it left behind instead of re-running the normal
-      // recover/reopen transition below.
+    if (entry.stop === 'unresolved') {
+      // This reservation already failed its own canary deadline while
+      // `dispatched` (possibly via the sweep this very call just performed,
+      // above). Resolve the stop-evidence marker it left behind instead of
+      // re-running the normal recover/reopen transition below.
       //
       // #2915 review 6 (finding 3a, "blocking markers become permanently
       // unresolvable"): a CONFIRMED stop always wins, regardless of how
       // many unconfirmed settlements already touched this same reservation
-      // -- the former code set `markerResolved` on the FIRST settle() call
+      // -- the former code resolved the marker on the FIRST settle() call
       // no matter its outcome, so an earlier unconfirmed report (the common
       // case: a degraded attempt can never supply confirmed-termination
       // evidence) permanently rejected every later, genuinely confirmed
@@ -751,40 +763,37 @@ export class ScopedFailureBreaker extends EventEmitter {
       // `reconcileStopEvidence` reconciliation, from succeeding at any time.
       const confirmed = outcome?.confirmedStop === true;
       if (confirmed) {
-        for (const scopeKey of entry.token.canaryKeys) {
-          const rec = this._scopes.get(scopeKey);
-          if (rec?.blockingMarker?.reservationId === token.id) rec.blockingMarker = null;
-        }
         // A confirmed stop frees this reservation's slot; an unconfirmed
         // stop deliberately keeps it occupying one of
         // `maxOutstandingReservations` — the explicit bound a persistent
-        // blocking marker counts against, rather than a separate marker cap
-        // or an invented auto-expiry.
-        this._reservations.delete(token.id);
+        // stop-evidence marker counts against, rather than a separate marker
+        // cap or an invented auto-expiry.
+        entry.stop = 'confirmed';
+        this._release(entry);
         return { ok: true };
       }
-      if (entry.markerTouched) {
+      if (entry.stopTouched) {
         return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
       }
-      entry.markerTouched = true;
+      entry.stopTouched = true;
       return { ok: true };
     }
     if (entry.settled) {
       return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
     }
     entry.settled = true;
-    this._reservations.delete(token.id);
     const { invocationId, coveringKeys, canaryKeys } = entry.token;
     const kind = outcome?.kind ?? 'uncertain';
     // Enforce the canary's own deadline even at settlement time: a reported
     // outcome that arrives after the deadline elapsed never recovers or
     // otherwise resolves the scope through this path — it was (or will be)
     // swept as expired instead (#2915 final review: "enforce deadlines on
-    // completion").
+    // completion"). `now >= deadline` (#2915 round 8, D5): one consistent
+    // comparison operator for every deadline check in this module.
     for (const scopeKey of canaryKeys) {
       const rec = this._scopes.get(scopeKey);
       if (!rec || !rec.activeCanary || rec.activeCanary.id !== token.id) continue; // already reopened/expired elsewhere
-      if (now > rec.activeCanary.deadlineMs) {
+      if (now >= rec.activeCanary.deadlineMs) {
         rec.activeCanary = null;
         this._reopen(rec, now);
         continue;
@@ -822,13 +831,12 @@ export class ScopedFailureBreaker extends EventEmitter {
     // counter must not read as if something dispatched when it did not.
     // The allowance LEDGER (`debited`), not this counter, is what actually
     // enforces attempt consumption.
-    this.noteSettled({ scopeKeys: coveringKeys, invocationId });
-    // #2915 review 6 (finding 2): release the tracking slot THIS admission
-    // reserved (`reservedScopeKeys`, set in `admit()`) back to the shared
-    // pool if the scope it covers is now inert -- never a scope this
-    // admission merely found already tracked (which may hold failure
-    // history or outstanding members belonging to other in-flight work).
-    for (const scopeKey of entry.reservedScopeKeys ?? []) this._releaseIfInert(scopeKey);
+    //
+    // #2915 round 8 (D3): deletion, outstanding-membership cleanup and the
+    // reserved-scope-slot release are now ALL performed by the one private
+    // `_release` — the only code path that ever removes a reservation table
+    // entry or clears an `activeCanary`/`blockingMarker` reference naming it.
+    this._release(entry);
     return { ok: true };
   }
 
@@ -964,21 +972,62 @@ export class ScopedFailureBreaker extends EventEmitter {
    * while the marker is set, regardless of elapsed backoff; only a later
    * `settle()` call against this exact token, carrying confirmed-
    * termination evidence (`outcome.confirmedStop`), clears it — see
-   * `settle()`. `entry.expiredAt` guards this block from re-running on a
-   * later sweep of the same still-unresolved entry.
+   * `settle()`. `entry.stop !== 'none-needed'` guards this block from
+   * re-running on a later sweep of the same still-unresolved entry.
    *
-   * Called at the top of every `admit`/`settle`, so expiry is always
-   * observed on the very next call even when the admitted attempt never
-   * reports back at all (process crash, dropped callback) — the backstop
-   * that makes the design deadlock-free once stop is eventually confirmed
+   * Called at the top of every `admit`/`settle`/`beginDispatch`/
+   * `commitDispatch`, so expiry is always observed on the very next call
+   * even when the admitted attempt never reports back at all (process
+   * crash, dropped callback) — the backstop that makes the design
+   * deadlock-free once stop is eventually confirmed
    * (`deadline-reopens-before-readmission`).
+   *
+   * #2915 round 8 (D3, "expiry during dispatch commitment"): behaviour now
+   * branches on `entry.phase`, because expiry means something different at
+   * each phase:
+   *
+   * - `admitted` (never even reached `beginDispatch`): PROVEN to have never
+   *   dispatched anything, exactly like an unreported canary always was —
+   *   reopen (if this was a canary) with doubled backoff and release
+   *   outright via `_release`. No stop-evidence marker is ever installed
+   *   here: there is nothing to confirm the stop of.
+   * - `committing` (inside the D2 hook, between `beginDispatch` and
+   *   `commitDispatch`): the reservation is marked `revoked` ONLY — never
+   *   reopened, never released. `commitDispatch` and `abortDispatch` both
+   *   observe `revoked`; only once the committing owner itself calls one of
+   *   them (acknowledging the abort) does this reservation actually resolve
+   *   — expiry alone must never classify a `committing` reservation as
+   *   unused (#2915 round 8 critique: "expiry can revoke a pending launch,
+   *   but cannot classify it as safely unused until the committing owner
+   *   acknowledges abort").
+   * - `dispatched`: unchanged from the prior design — reopen (if a canary)
+   *   with doubled backoff and install a bounded stop-evidence marker
+   *   (`stop: 'unresolved'`), because expiry alone proves nothing about
+   *   whether the dispatched attempt actually stopped. `admit()` refuses
+   *   while the marker is set, regardless of elapsed backoff; only a later
+   *   `settle()`/`reconcileStopEvidence()` call carrying confirmed-
+   *   termination evidence clears it.
    */
   _sweepReservations(now) {
     for (const [id, entry] of this._reservations) {
       if (entry.settled) { this._reservations.delete(id); continue; }
-      if (now <= entry.token.deadlineMs) continue;
-      if (entry.expiredAt !== null) continue; // already reopened + marked; awaiting settle() to resolve the marker
-      entry.expiredAt = now;
+      if (now < entry.token.deadlineMs) continue;
+      if (entry.phase === 'admitted') {
+        const { canaryKeys } = entry.token;
+        for (const scopeKey of canaryKeys) {
+          const rec = this._scopes.get(scopeKey);
+          if (rec?.activeCanary?.id === id) { rec.activeCanary = null; this._reopen(rec, now); }
+        }
+        this._release(entry);
+        continue;
+      }
+      if (entry.phase === 'committing') {
+        entry.revoked = true; // idempotent; commitDispatch/abortDispatch resolve it
+        continue;
+      }
+      // `dispatched`.
+      if (entry.stop !== 'none-needed') continue; // already marked unresolved/confirmed; awaiting settle()/reconcile
+      entry.stop = 'unresolved';
       const { invocationId, coveringKeys, canaryKeys } = entry.token;
       for (const scopeKey of canaryKeys) {
         const rec = this._scopes.get(scopeKey);
@@ -1018,35 +1067,151 @@ export class ScopedFailureBreaker extends EventEmitter {
   }
 
   /**
-   * Authenticate + consume a BORROWED admission's launch ownership, exactly
-   * ONCE (#2915 review 6, finding 1, "unauthenticated/reused authority"): a
-   * caller that borrows someone else's admission (passes `token`/`breaker`
-   * through without re-admitting) must prove the token is the EXACT object
-   * this breaker currently holds live for that reservation id -- never a
-   * copy, a fabrication, an already-launched reservation, or one past its
-   * own deadline -- before treating it as authority to dispatch.
-   *
-   * Unlike `settle()` (which finalizes the attempt's OUTCOME, exactly
-   * once), this only gates the LAUNCH itself: a reservation still settles
-   * normally afterward regardless of launch ownership, and `claimLaunch`
-   * never mutates anything but the one-time `launched` flag. Returns `true`
-   * exactly once per live reservation; every other token (unknown id,
-   * reference mismatch, already launched, already settled/expired, or past
-   * its own deadline) returns `false` and mutates nothing. A SECOND borrow
-   * of the exact same real token -- even through a freshly-constructed
-   * wrapper object a caller-local "already used" set has never seen --
-   * is refused here too.
+   * One private cleanup path (#2915 round 8, D3): the ONLY code that ever
+   * removes a `_reservations` table entry, or clears an `activeCanary`/
+   * `blockingMarker` scope reference naming it. Preconditions, enforced by
+   * every caller (not re-checked here — this method trusts its callers,
+   * all of which are other methods on this class): the reservation must
+   * never have reached `dispatched`, OR its `stop` must already be
+   * `'confirmed'`. A late callback — the stop-escalation observer, an
+   * operator's `reconcileStopEvidence` — may still race this exact call; it
+   * is idempotent only in the sense that `_reservations.delete` on an
+   * already-absent id is a no-op, matching every other settlement path's
+   * "exactly once" contract enforced by its own caller.
    */
-  claimLaunch(token) {
+  _release(entry) {
+    const { token } = entry;
+    for (const scopeKey of token.canaryKeys) {
+      const rec = this._scopes.get(scopeKey);
+      if (!rec) continue;
+      if (rec.activeCanary?.id === token.id) rec.activeCanary = null;
+      if (rec.blockingMarker?.reservationId === token.id) rec.blockingMarker = null;
+    }
+    this.noteSettled({ scopeKeys: token.coveringKeys, invocationId: token.invocationId });
+    this._reservations.delete(token.id);
+    // #2915 review 6 (finding 2): release the tracking slot THIS admission
+    // reserved (`reservedScopeKeys`, set in `admit()`) back to the shared
+    // pool if the scope it covers is now inert -- never a scope this
+    // admission merely found already tracked (which may hold failure
+    // history or outstanding members belonging to other in-flight work).
+    for (const scopeKey of entry.reservedScopeKeys ?? []) this._releaseIfInert(scopeKey);
+  }
+
+  /**
+   * Read-only phase introspection (#2915 round 8, D2/D3): lets a caller that
+   * holds an admission (e.g. `settleDirectWorker` in session-launcher.mjs)
+   * decide whether a reservation ever reached `dispatched` without
+   * reconstructing authority from anything but the breaker's own stored
+   * entry. Returns `null` for an unknown/foreign/already-released token —
+   * never throws, never mutates.
+   */
+  reservationPhase(token) {
+    if (!token || typeof token.id !== 'string' || token.breaker !== this) return null;
+    const entry = this._reservations.get(token.id);
+    if (!entry || entry.token !== token) return null;
+    return entry.phase;
+  }
+
+  /**
+   * Begin the actual dispatch of one admitted reservation, exactly ONCE
+   * (#2915 round 8, D3, replaces `claimLaunch`): `admitted -> committing`.
+   * Called once, at the leaf dispatch boundary — inside the D2
+   * `onDispatchCommit` hook, immediately before the real process-start call.
+   *
+   * `invocationId`/`selectionDigest` are REQUIRED (an omitted/`undefined`
+   * value refuses outright — #2915 round 8 critique: "omitted/null bindings
+   * must not bypass checks") and are compared against the BREAKER-OWNED,
+   * frozen `token` fields set at `admit()` time — never against a caller's
+   * own mutable wrapper object. A caller must derive these values from its
+   * own trusted, resolved launch (never trust them as given by whatever
+   * object is borrowing this reservation): a reservation minted for one
+   * invocation/selection can then never authorize dispatching a different
+   * one, independent of what any outer wrapper object claims.
+   *
+   * Refuses (mutates nothing) for: an unowned/unknown/foreign token; a
+   * second call on an already-`committing`/`dispatched` reservation; a
+   * binding mismatch; or a reservation whose own deadline has already
+   * passed (`now >= deadline`, consistent with every other deadline check
+   * in this module).
+   */
+  beginDispatch(token, { invocationId, selectionDigest } = {}) {
     const now = this.nowMs();
     this._sweepReservations(now);
-    if (!token || typeof token.id !== 'string' || token.breaker !== this) return false;
+    if (!token || typeof token.id !== 'string' || token.breaker !== this) {
+      return { ok: false, reason: 'reservation is not owned by this breaker' };
+    }
     const entry = this._reservations.get(token.id);
-    if (!entry || entry.token !== token) return false;
-    if (entry.settled || entry.expiredAt !== null || entry.launched) return false;
-    if (now > token.deadlineMs) return false;
-    entry.launched = true;
-    return true;
+    if (!entry || entry.token !== token) {
+      return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
+    }
+    if (invocationId === undefined || selectionDigest === undefined) {
+      return { ok: false, reason: 'beginDispatch requires explicit invocationId and selectionDigest bindings' };
+    }
+    if (invocationId !== entry.token.invocationId || selectionDigest !== entry.token.selectionDigest) {
+      return { ok: false, reason: 'reservation binding does not match the resolved dispatch' };
+    }
+    if (entry.phase !== 'admitted') {
+      return { ok: false, reason: `reservation is not admitted (phase: ${entry.phase})` };
+    }
+    if (now >= token.deadlineMs) {
+      return { ok: false, reason: 'reservation deadline has passed' };
+    }
+    entry.phase = 'committing';
+    return { ok: true };
+  }
+
+  /**
+   * Commit a `committing` reservation to `dispatched`, after the hook's own
+   * debit succeeded (#2915 round 8, D3): `committing -> dispatched`. Refuses
+   * (mutates nothing but `revoked`, see below) for an unowned/unknown
+   * token, one not currently `committing`, or one whose deadline passed
+   * while committing — the latter sets `revoked` (idempotent) so the
+   * caller's required `abortDispatch` call (below) applies the correct
+   * "timed out while committing" handling, rather than silently
+   * classifying a never-dispatched attempt as an ordinary clean abort.
+   */
+  commitDispatch(token) {
+    const now = this.nowMs();
+    if (!token || typeof token.id !== 'string' || token.breaker !== this) {
+      return { ok: false, reason: 'reservation is not owned by this breaker' };
+    }
+    const entry = this._reservations.get(token.id);
+    if (!entry || entry.token !== token) {
+      return { ok: false, reason: 'reservation is unknown, already settled, expired, or does not match the stored token' };
+    }
+    if (entry.phase !== 'committing') {
+      return { ok: false, reason: `reservation is not committing (phase: ${entry.phase})` };
+    }
+    if (now >= token.deadlineMs) {
+      entry.revoked = true;
+      return { ok: false, reason: 'reservation deadline passed while committing; call abortDispatch' };
+    }
+    if (entry.revoked) {
+      return { ok: false, reason: 'reservation was revoked while committing; call abortDispatch' };
+    }
+    entry.phase = 'dispatched';
+    return { ok: true };
+  }
+
+  /**
+   * Explicitly back out of a reservation that never reached `dispatched`
+   * (#2915 round 8, D2/D3): the D2 hook calls this when its own work after
+   * `beginDispatch` (the ledger debit) throws, or when `commitDispatch`
+   * itself refused. Equivalent to `settle(token, { kind: 'uncertain',
+   * confirmedStop: true })` — a PROVEN zero-dispatch exit, so a canary this
+   * reservation held is treated exactly like any other unreported/aborted
+   * probe (reopened with backoff) and is never left with a stop-evidence
+   * marker, matching every other proven pre-spawn refusal in this module.
+   * Refused once the reservation has actually reached `dispatched`: an
+   * attempt that genuinely started must settle with its real outcome
+   * through `settle()`, never a fabricated confirmed stop.
+   */
+  abortDispatch(token) {
+    const entry = this._reservations.get(token?.id);
+    if (entry && entry.token === token && entry.phase === 'dispatched') {
+      return { ok: false, reason: 'reservation already dispatched; use settle() instead' };
+    }
+    return this.settle(token, { kind: 'uncertain', confirmedStop: true });
   }
 
   /**
@@ -1065,14 +1230,10 @@ export class ScopedFailureBreaker extends EventEmitter {
   reconcileStopEvidence({ invocationId, confirmedStop = false } = {}) {
     if (!confirmedStop || invocationId == null) return { released: 0 };
     let released = 0;
-    for (const [id, entry] of [...this._reservations]) {
+    for (const [, entry] of [...this._reservations]) {
       if (entry.token.invocationId !== invocationId) continue;
-      for (const scopeKey of entry.token.canaryKeys) {
-        const rec = this._scopes.get(scopeKey);
-        if (rec?.blockingMarker?.reservationId === id) rec.blockingMarker = null;
-      }
-      this.noteSettled({ scopeKeys: entry.token.coveringKeys, invocationId });
-      this._reservations.delete(id);
+      if (entry.phase === 'dispatched') entry.stop = 'confirmed';
+      this._release(entry);
       released += 1;
     }
     return { released };
@@ -1111,35 +1272,42 @@ export class ScopedFailureBreaker extends EventEmitter {
     };
   }
 
+  /**
+   * Reset ONE scope's failure history/backoff bookkeeping (#2915 round 8,
+   * D3, replaces the prior whole-reservation-release behavior): resets
+   * failure history for that scope ONLY, and never releases a reservation
+   * with unresolved execution.
+   *
+   * #2915 round 8 critique ("whole-reservation reset can erase live
+   * protection"): the prior implementation deleted EVERY reservation
+   * covering `scopeKey` outright — including one also covering a DIFFERENT
+   * scope as a canary, so `reset(A)` could silently drop scope B's own
+   * still-relevant `activeCanary`/`blockingMarker` protection too. This
+   * version never touches `_reservations` at all: if the targeted scope
+   * currently holds an `activeCanary` or `blockingMarker` (unresolved
+   * execution — someone else's covering scopes are never even inspected,
+   * let alone released), the whole call is refused with the reconcile
+   * instruction and NOTHING is mutated; otherwise the scope record is
+   * destroyed outright (the same effect the prior "safe" case always had).
+   */
   reset(scopeKey) {
-    if (scopeKey) {
-      const rec = this._scopes.get(scopeKey);
-      if (rec) {
-        rec.breaker.destroy();
-        this._scopes.delete(scopeKey);
-        this._outstanding.delete(scopeKey);
-      }
-      // #2915 review 6 (finding 3d, "markers alone exhaust global capacity;
-      // scoped reset does not recover it"): a scoped reset used to delete
-      // only the scope RECORD, leaving every reservation that covered it --
-      // including an unresolved blocking marker -- still occupying one of
-      // `maxOutstandingReservations` forever. An operator calling
-      // `reset(scopeKey)` (the existing, documented recovery surface for a
-      // stuck scope) now also releases every reservation covering it, so
-      // the capacity it occupied is actually recoverable without a full
-      // `reset()`/`resetDirectRecoveryBreaker()` (which would also discard
-      // every OTHER scope's unrelated, still-relevant protection).
-      for (const [id, entry] of [...this._reservations]) {
-        if (!entry.token.coveringKeys.includes(scopeKey)) continue;
-        this.noteSettled({ scopeKeys: entry.token.coveringKeys, invocationId: entry.token.invocationId });
-        this._reservations.delete(id);
-      }
-      return;
+    if (!scopeKey) {
+      for (const rec of this._scopes.values()) rec.breaker.destroy();
+      this._scopes.clear();
+      this._outstanding.clear();
+      this._reservations.clear();
+      return { ok: true };
     }
-    for (const rec of this._scopes.values()) rec.breaker.destroy();
-    this._scopes.clear();
-    this._outstanding.clear();
-    this._reservations.clear();
+    const rec = this._scopes.get(scopeKey);
+    if (!rec) return { ok: true };
+    if (rec.activeCanary !== null || rec.blockingMarker !== null) {
+      return { ok: false, scopeKey,
+        reason: 'scope has unresolved execution (an active canary or an unresolved stop-evidence marker); reconcile stop evidence (reconcileStopEvidence) before resetting it' };
+    }
+    rec.breaker.destroy();
+    this._scopes.delete(scopeKey);
+    this._outstanding.delete(scopeKey);
+    return { ok: true };
   }
 
   destroy() {
