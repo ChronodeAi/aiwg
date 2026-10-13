@@ -553,7 +553,8 @@
     "addons/network-analysis/release-checklist",
     "addons/network-analysis/termshark-handoff",
     "releases/grokbot-stable-promotion-notes",
-    "releases/muse-stable-promotion-notes"
+    "releases/muse-stable-promotion-notes",
+    "blog/2026-9-aiwg-september-2026-report"
   ],
   "sections": [
     {
@@ -1245,7 +1246,7 @@
     },
     {
       "id": "soul-md-guide",
-      "title": "SOUL.md \u2014 Agent Identity",
+      "title": "SOUL.md — Agent Identity",
       "summary": "Give agents persistent character: worldview, opinions, reasoning traits. soul-create, soul-enable, soul-blend.",
       "file": "soul-md-guide.md",
       "parent": "reference"
@@ -1260,7 +1261,7 @@
     {
       "id": "behaviors-guide",
       "title": "Behaviors",
-      "summary": "Behavior bundles \u2014 directives and toolsets for daemon-governed agents",
+      "summary": "Behavior bundles — directives and toolsets for daemon-governed agents",
       "file": "behaviors-guide.md",
       "parent": "reference"
     },
@@ -1508,7 +1509,7 @@
     },
     {
       "id": "blog/2026-6-aiwg-june-2026-report",
-      "title": "AIWG \u2014 June 2026 Report",
+      "title": "AIWG — June 2026 Report",
       "summary": "A month-end report covering Cockpit, OpenHuman support, plain-words search, media research notes, and leaner startup context.",
       "file": "blog/2026-6-aiwg-june-2026-report.md",
       "parent": "blog"
@@ -1617,49 +1618,49 @@
     },
     {
       "id": "releases/v2026.5.11-announcement",
-      "title": "v2026.5.11 \u2014 Provider Detection + Local Issue Sync",
+      "title": "v2026.5.11 — Provider Detection + Local Issue Sync",
       "summary": "Codex-aware provider detection, local issue sync documentation, media transcript sidecars, and release doc-sync hygiene.",
       "file": "releases/v2026.5.11-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.10-announcement",
-      "title": "v2026.5.10 \u2014 Beginner Onboarding Wizard + Docs",
+      "title": "v2026.5.10 — Beginner Onboarding Wizard + Docs",
       "summary": "Guided onboarding wizard, deterministic workspace engagement status, and beginner docs for first-run success.",
       "file": "releases/v2026.5.10-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.9-announcement",
-      "title": "v2026.5.9 \u2014 Workspace-Aware Deploy Fix",
+      "title": "v2026.5.9 — Workspace-Aware Deploy Fix",
       "summary": "Fix workspace-aware aiwg use all to deploy selected sources directly without repeating full framework post-deploy flow.",
       "file": "releases/v2026.5.9-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.8-announcement",
-      "title": "v2026.5.8 \u2014 Fleet Discipline + Release Hygiene",
+      "title": "v2026.5.8 — Fleet Discipline + Release Hygiene",
       "summary": "Fleet behavior policies, status export, repo-access preflight, model-tier routing, serve reliability, and install hygiene.",
       "file": "releases/v2026.5.8-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.7-announcement",
-      "title": "v2026.5.7 \u2014 RLM Search Reliability + Internal Loop Routing",
+      "title": "v2026.5.7 — RLM Search Reliability + Internal Loop Routing",
       "summary": "RLM search reliability, single-chunk prep coverage, and internal agent-loop routing.",
       "file": "releases/v2026.5.7-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.6-announcement",
-      "title": "v2026.5.6 \u2014 Agent-loop Completion Inference + Auto-Compact Discipline",
+      "title": "v2026.5.6 — Agent-loop Completion Inference + Auto-Compact Discipline",
       "summary": "Agent-loop completion inference, auto-compact discipline, and publish workflow ordering fixes.",
       "file": "releases/v2026.5.6-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.5-announcement",
-      "title": "v2026.5.5 \u2014 Cross-provider Discover-first Parity",
+      "title": "v2026.5.5 — Cross-provider Discover-first Parity",
       "summary": "Discover-first deployment parity, project-isolation warning, and novice-user adoption study artifacts.",
       "file": "releases/v2026.5.5-announcement.md",
       "parent": "releases"
@@ -1701,7 +1702,7 @@
     },
     {
       "id": "releases/v2026.4.0-announcement",
-      "title": "v2026.4.0 \u2014 Autonomous Systems",
+      "title": "v2026.4.0 — Autonomous Systems",
       "summary": "Major release: corpus architecture, daemon, Mission Control, behaviors, SOUL.md, OpenClaw, Hermes, ops-complete, and more.",
       "file": "releases/v2026.4.0-announcement.md",
       "parent": "releases"
@@ -1985,7 +1986,7 @@
     {
       "id": "frameworks/sdlc-complete",
       "title": "SDLC Complete",
-      "summary": "Full lifecycle framework \u2014 internal docs and deep guides",
+      "summary": "Full lifecycle framework — internal docs and deep guides",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -2083,7 +2084,7 @@
     {
       "id": "addons/ralph",
       "title": "Ralph Addon",
-      "summary": "Iterative loop execution \u2014 quickstart, best practices, troubleshooting",
+      "summary": "Iterative loop execution — quickstart, best practices, troubleshooting",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2132,7 +2133,7 @@
     {
       "id": "addons/rlm",
       "title": "RLM Addon",
-      "summary": "Recursive Language Model \u2014 deployment, multi-provider, integration guides",
+      "summary": "Recursive Language Model — deployment, multi-provider, integration guides",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2181,7 +2182,7 @@
     {
       "id": "tools/ralph-external",
       "title": "External Ralph",
-      "summary": "Crash-resilient external loop \u2014 snapshot manager and provider API",
+      "summary": "Crash-resilient external loop — snapshot manager and provider API",
       "collapsed": true,
       "parent": "tools"
     },
@@ -2223,7 +2224,7 @@
     {
       "id": "frameworks/ops-complete",
       "title": "Ops Complete",
-      "summary": "Operational infrastructure framework \u2014 YAML-native with sys, it, dev, stream extensions",
+      "summary": "Operational infrastructure framework — YAML-native with sys, it, dev, stream extensions",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -2237,7 +2238,7 @@
     {
       "id": "frameworks/ops-complete/overview",
       "title": "Overview",
-      "summary": "ops-complete is the operational infrastructure layer for AIWG \u2014 a framework for AI agents working in",
+      "summary": "ops-complete is the operational infrastructure layer for AIWG — a framework for AI agents working in",
       "file": "frameworks/ops-complete/overview.md",
       "parent": "frameworks/ops-complete"
     },
@@ -2272,14 +2273,14 @@
     {
       "id": "addons/aiwg-dev",
       "title": "AIWG Dev",
-      "summary": "Developer toolkit \u2014 validate-component, dev-doctor, link-check, devkit scaffolding",
+      "summary": "Developer toolkit — validate-component, dev-doctor, link-check, devkit scaffolding",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/aiwg-dev/overview",
       "title": "Overview",
-      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself \u2014 adding new addons, framewo",
+      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself — adding new addons, framewo",
       "file": "addons/aiwg-dev/overview.md",
       "parent": "addons/aiwg-dev"
     },
@@ -2293,7 +2294,7 @@
     {
       "id": "addons/aiwg-utils",
       "title": "AIWG Utils",
-      "summary": "Core utility rules \u2014 subagent scoping, context budget, instruction comprehension",
+      "summary": "Core utility rules — subagent scoping, context budget, instruction comprehension",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2335,7 +2336,7 @@
     {
       "id": "addons/auto-memory",
       "title": "Auto Memory",
-      "summary": "Automatic memory management \u2014 seed templates, memory evolution, cross-session persistence",
+      "summary": "Automatic memory management — seed templates, memory evolution, cross-session persistence",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2349,7 +2350,7 @@
     {
       "id": "addons/daemon",
       "title": "Daemon Addon",
-      "summary": "Persistent background agent \u2014 web UI, YAML profiles, scheduled tasks, Telegram",
+      "summary": "Persistent background agent — web UI, YAML profiles, scheduled tasks, Telegram",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2391,14 +2392,14 @@
     {
       "id": "addons/prose-integration",
       "title": "Prose Integration",
-      "summary": "OpenProse contract-driven execution \u2014 five skills, obligation semantics",
+      "summary": "OpenProse contract-driven execution — five skills, obligation semantics",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/prose-integration/overview",
       "title": "Overview",
-      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs \u2014 Markdown files",
+      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs — Markdown files",
       "file": "addons/prose-integration/overview.md",
       "parent": "addons/prose-integration"
     },
@@ -2468,7 +2469,7 @@
     {
       "id": "addons/voice-framework",
       "title": "Voice Framework",
-      "summary": "Voice profile documentation \u2014 four built-in voices, custom profiles, blending",
+      "summary": "Voice profile documentation — four built-in voices, custom profiles, blending",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2508,7 +2509,7 @@
     {
       "id": "cockpit/architecture",
       "title": "Architecture",
-      "summary": "Shells, Bridge, executor \u2014 control vs data plane, ports, components",
+      "summary": "Shells, Bridge, executor — control vs data plane, ports, components",
       "file": "cockpit/architecture.md",
       "parent": "cockpit"
     },
@@ -2936,7 +2937,7 @@
     {
       "id": "frameworks/knowledge-base/overview",
       "title": "Overview",
-      "summary": "AIWG's existing frameworks \u2014 research-complete, media-curator, sdlc-complete \u2014 are purpose-built for",
+      "summary": "AIWG's existing frameworks — research-complete, media-curator, sdlc-complete — are purpose-built for",
       "file": "frameworks/knowledge-base/overview.md",
       "parent": "frameworks/knowledge-base"
     },
@@ -3804,7 +3805,7 @@
     {
       "id": "frameworks/media-marketing-kit/design-operations-examples",
       "title": "Design Operations Examples",
-      "summary": "These examples use the same lifecycle\u2014constraints, history, research, five comparable candidates, hu",
+      "summary": "These examples use the same lifecycle—constraints, history, research, five comparable candidates, hu",
       "file": "frameworks/media-marketing-kit/design-operations-examples.md",
       "parent": "frameworks/media-marketing-kit"
     },
@@ -3853,7 +3854,7 @@
     {
       "id": "addons/civic-action/research/aiwg-design-patterns",
       "title": "Aiwg Design Patterns",
-      "summary": "Status: implementation design input for AIWG issues #2213\u2013#2222",
+      "summary": "Status: implementation design input for AIWG issues #2213–#2222",
       "file": "addons/civic-action/research/aiwg-design-patterns.md",
       "parent": "addons/civic-action/research"
     },
@@ -3958,7 +3959,7 @@
     {
       "id": "addons/dataset-intelligence/overview",
       "title": "Overview",
-      "summary": "Dataset Intelligence gives every AIWG domain the same governed path from \u201cuse",
+      "summary": "Dataset Intelligence gives every AIWG domain the same governed path from “use",
       "file": "addons/dataset-intelligence/overview.md",
       "parent": "addons/dataset-intelligence"
     },
@@ -4182,7 +4183,7 @@
     {
       "id": "releases/grokbot-stable-promotion-notes",
       "title": "Grok Bot Stable Promotion Notes",
-      "summary": "Release notes for grokbot experimental \u2192 stable (#210)",
+      "summary": "Release notes for grokbot experimental → stable (#210)",
       "file": "releases/grokbot-stable-promotion-notes.md",
       "parent": "reference"
     },
@@ -4221,6 +4222,13 @@
       "title": "Your agent should search the toolbox before pretending it knows every tool",
       "summary": "Discovery-first agent tooling turns a giant prompt menu into a debuggable routing layer: ask by intent, inspect the match, then run the right capability.",
       "file": "blog/2026-07-aiwg-discovery-first.md",
+      "parent": "blog"
+    },
+    {
+      "id": "blog/2026-9-aiwg-september-2026-report",
+      "title": "AIWG - September 2026 Report",
+      "summary": "September brought more provider choices, a shared alpha contract for decisions, and civic workflows that keep sources and human review close to the work.",
+      "file": "blog/2026-9-aiwg-september-2026-report.md",
       "parent": "blog"
     }
   ]

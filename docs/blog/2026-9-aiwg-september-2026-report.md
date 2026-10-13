@@ -1,17 +1,15 @@
 ---
 title: "AIWG - September 2026 Report"
 slug: "2026-9-aiwg-september-2026-report"
-date: "2026-09-30"
+date: "2026-10-13"
 project: "AIWG"
 type: report
 tags: [report, "2026-09", aiwg]
 summary: "September brought more provider choices, a shared alpha contract for decisions, and civic workflows that keep sources and human review close to the work."
 hero: "https://docs.aiwg.io/assets/blog/2026-9-aiwg-september-2026-report.png"
 hero_alt: "Three blue glass supports with fitted pads carry a heavy white stone slab above calm water, beside a clear inspection prism and a small amber tile."
-status: "scheduled"
+status: "published"
 canonical: "https://aiwg.io/blog/2026-9-aiwg-september-2026-report"
-publish_at: "2026-10-13T00:00:00Z"
-scheduled_assets: ["blog/2026-9-aiwg-september-2026-report.png"]
 ---
 
 # AIWG — September 2026
