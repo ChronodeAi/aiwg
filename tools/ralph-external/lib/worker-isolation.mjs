@@ -525,7 +525,7 @@ export function launchIsolatedWorker({
         // this forward as dispatch-UNCERTAIN, never as "never began", so any
         // caller deriving stop evidence from this result (`resolveStopEvidence`'s
         // `dispatchState`) resolves to `unresolved`, never a confirmed stop.
-        dispatchState: 'submission-uncertain',
+        ...(onDispatchCommit ? { dispatchState: 'submission-uncertain' } : {}),
         diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
         gate: resolvedGate,
       };

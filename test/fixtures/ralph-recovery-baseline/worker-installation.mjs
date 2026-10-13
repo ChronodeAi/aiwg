@@ -1,37 +1,8 @@
 /**
- * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
- *
- * Literal copy of `src/models/worker-installation.mjs` as of commit
- * a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main, the #2915 round 8
- * baseline reviewers diffed against). This is a dependency fixture only,
- * reachable from this directory's `session-launcher.mjs` fixture sibling
- * whenever a test supplies a driver built from
- * `loadRecordedWorkerInstallations` (never by production code) -- needed
- * because this file changed on the branch (new attempt-parser/capability
- * fields; its existing final-parser behavior is unchanged) -- see
- * rev8-codex-2915.md section D finding 2 and
- * `.aiwg/working/s1-scratch/design-round8-2915.md` D6. The MCP
- * `worker-invoke.mjs` fixture sibling (owned separately) should import THIS
- * frozen copy too, rather than the current `src/models/worker-installation.mjs`.
- *
- * No relative imports needed rewriting: every import below is a builtin or
- * an npm package (`acorn`, `semver`), none of which changed between
- * `a4085b86a` and this branch.
- *
- * DO NOT:
- *   - import this file from any production source path;
- *   - "fix", refactor, or otherwise edit its body for any reason other than
- *     re-pinning it to a different reviewed base commit (in which case
- *     update BOTH this header and the SHA everywhere it is cited, and the
- *     sibling `session-launcher.mjs` fixture's own header);
- *   - add this file to any lint/registration surface that treats it as a
- *     test file or product module -- excluded via `test/fixtures/**`, and
- *     it contains no `*.test.*`/`*.spec.*` suffix.
- *
- * Regenerate with:
- *   git show a4085b86a:src/models/worker-installation.mjs > \
- *     test/fixtures/ralph-recovery-baseline/worker-installation.mjs
- *   (then re-apply this header)
+ * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
+ * Source: src/models/worker-installation.mjs. Only import routing and this pin header differ.
+ * Installation ownership and its importing dependencies stay within this
+ * fixture graph; unchanged dependencies use the repository source.
  */
 
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
@@ -72,12 +43,12 @@ export const workerNegativeFixtureSuite = Object.freeze({
 });
 
 export async function workerNegativeFixtureDigest() {
-  const { qualificationDigest } = await import('./qualification-digest.mjs');
+  const { qualificationDigest } = await import('../../../src/models/qualification-digest.mjs');
   return qualificationDigest(workerNegativeFixtureSuite);
 }
 
 async function workerPermissionRequirements(provider, requiredControls) {
-  const { normalizeProviderDefinitionId } = await import('../providers/provider-definitions.js');
+  const { normalizeProviderDefinitionId } = await import('../../../src/providers/provider-definitions.ts');
   const id = normalizeProviderDefinitionId(provider);
   const rows = workerNegativeFixtureSuite.providers;
   const row = id && Object.hasOwn(rows, id) ? rows[id] : null;
@@ -120,7 +91,7 @@ function assertWorkerControlArgv(profile, argv) {
 
 
 async function assertWorkerInstallationEvidence(request, scopeDigest) {
-  const { DEFAULT_WORKER_SELECTION } = await import('./provider-policy.js');
+  const { DEFAULT_WORKER_SELECTION } = await import('./src/models/provider-policy.ts');
   const { evidence, now } = request;
   if (!Number.isFinite(now) || !evidence || !/^sha256:[a-f0-9]{64}$/.test(scopeDigest) || evidence.scopeDigest !== scopeDigest
     || evidence.fixtureDigest !== await workerNegativeFixtureDigest()
@@ -140,7 +111,7 @@ async function assertWorkerInstallationEvidence(request, scopeDigest) {
 /** Read-only recheck: the version probe is bound to the unchanged binary digest. */
 async function recheckWorkerInstallation(instance, options) {
   const request = structuredClone(options);
-  const { requiredWorkerControls } = await import('./provider-policy.js');
+  const { requiredWorkerControls } = await import('./src/models/provider-policy.ts');
   request.requiredControls = requiredWorkerControls(request);
   const scope = await inspectWorkerInstallation(instance, request);
   await assertWorkerInstallationEvidence(request, scope.scopeDigest);
@@ -179,8 +150,8 @@ export async function qualifyWorkerInstallation(instance, options) {
 }
 
 export async function prepareInstalledWorkerInvocation(instance, invocation, qualification) {
-  const { prepareWorkerInvocation } = await import('../serve/worker-invocation.js');
-  const { requiredWorkerControls, WorkerPolicyError } = await import('./provider-policy.js');
+  const { prepareWorkerInvocation } = await import('./src/serve/worker-invocation.ts');
+  const { requiredWorkerControls, WorkerPolicyError } = await import('./src/models/provider-policy.ts');
   qualification = { ...qualification, requiredControls: requiredWorkerControls({
     ...qualification, effort: invocation.selected.effort.value }) };
   const result = await prepareWorkerInvocation(invocation, { ...qualification, adapterId: instance.getName() });
@@ -281,8 +252,8 @@ async function canonicalFuturePath(filename) {
 }
 
 export async function inspectWorkerInstallation(instance, request) {
-  const { inspectWorkerInvocationProfile, requiredWorkerControls } = await import('./provider-policy.js');
-  const { qualificationDigest } = await import('./qualification-digest.mjs');
+  const { inspectWorkerInvocationProfile, requiredWorkerControls } = await import('./src/models/provider-policy.ts');
+  const { qualificationDigest } = await import('../../../src/models/qualification-digest.mjs');
   const { adapter, profile: profileId, cliVersion, workerWritableRoots,
     effectiveConfigDigest, accountScope, boundary, cwd } = request;
   const requiredControls = requiredWorkerControls(request);
@@ -636,7 +607,7 @@ export function loadInstalledWorkerAdapters({ registry, modules, workerWritableR
 }
 
 async function loadQualifiedModules({ registry, modules, workerWritableRoots, platform }) {
-  const { parseProviderModelCapabilities } = await import('./provider-policy.js');
+  const { parseProviderModelCapabilities } = await import('./src/models/provider-policy.ts');
   const parsed = parseProviderModelCapabilities(registry);
   if (!Array.isArray(modules) || !Array.isArray(workerWritableRoots)) throw new Error('Trusted module bindings and worker writable roots are required');
   const allowlist = new Map();
@@ -828,8 +799,8 @@ export async function recordWorkerInstallation(instance, options) {
 /** Read recorded host authority, validate installation bytes, then load the same
  * approved factory used by Ralph. Resolution never launches a version probe. */
 export async function loadRecordedWorkerInstallations({ registry, cwd, policy, storePath, storeDigest }) {
-  const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
-  const { qualificationDigest } = await import('./qualification-digest.mjs');
+  const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./src/models/provider-policy.ts');
+  const { qualificationDigest } = await import('../../../src/models/qualification-digest.mjs');
   const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required');
   const filename = storePath ?? installationStorePath();
   let stored, digest;
@@ -861,7 +832,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
       const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
       if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) throw fail();
       // Reject expired/unbound negative observations before any factory import.
-      const { requiredWorkerControls } = await import('./provider-policy.js');
+      const { requiredWorkerControls } = await import('./src/models/provider-policy.ts');
       installation.requiredControls = requiredWorkerControls(installation);
       await assertWorkerInstallationEvidence(installation, proof.scopeDigest);
       await assertTrustedStore(filename, installation.workerWritableRoots);
@@ -882,7 +853,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
       const profile = adapter.invocationProfiles[binding.profile];
       let mcpRegistry;
       if (profile.transport === 'mcp') {
-        const { McpServerRegistry } = await import('../mcp/registry.js');
+        const { McpServerRegistry } = await import('./src/mcp/registry.ts');
         mcpRegistry = new McpServerRegistry();
         if (typeof instance.buildInvocation !== 'function' || !record.mcpProfile || !record.mcpSchemas) throw fail();
       }

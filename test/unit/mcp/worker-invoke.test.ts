@@ -3853,6 +3853,92 @@ describe('review 9 bounded recovery regressions', () => {
     return child;
   }
 
+  it('B2: native success reconciles terminal evidence after the first follow-up, with a fixed observation bound', async () => {
+    let terminal = false;
+    const timers: Array<() => Promise<void>> = [];
+    const recovery = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const observeLate = recovery.observeLateStopEvidence;
+    const observer = vi.spyOn(recovery, 'observeLateStopEvidence').mockImplementation((observe: any) => observeLate(observe, {
+      setTimer: (fn: any) => { timers.push(fn); return { unref() {} }; },
+    }));
+    const status = vi.fn(() => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }));
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'systemd-unit', unit: 'r10-native-late', child: stdioChild(true, true) };
+    });
+    let p: any;
+    try {
+      p = await probe('mcp', { isolationStatus: status });
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(timers).toHaveLength(1);
+      await timers.shift()!(); // sole old follow-up: still nonterminal
+      expect(p.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      expect(timers).toHaveLength(1);
+      terminal = true;
+      await timers.shift()!();
+      expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(p.registry.liveCount()).toBe(0);
+      expect(p.registry.get(body.invocationId).status).toBe('completed');
+      expect(timers).toHaveLength(0);
+      p.breaker.destroy();
+      resetInProcessAllowanceLedger();
+      terminal = false;
+      p = await probe('mcp', { isolationStatus: status });
+      const retained = JSON.parse((await p.call(p.input)).content[0].text);
+      const atSettlement = status.mock.calls.length;
+      for (let i = 0; i < 3; i += 1) { expect(timers).toHaveLength(1); await timers.shift()!(); }
+      expect(status.mock.calls.length - atSettlement).toBe(3);
+      expect(timers).toHaveLength(0);
+      expect(p.breaker.hasUnresolvedStop(retained.invocationId)).toBe(true);
+      const reconciled = JSON.parse((await p.call({ operation: 'reconcile_stopped', invocation_id: retained.invocationId })).content[0].text);
+      expect(reconciled.reconciled).toBe(true);
+    } finally { observer.mockRestore(); launch.mockRestore(); p?.breaker.destroy(); }
+  });
+
+  it('B3: 200 independent breakers cannot grow one maxRetained:4 registry or replace its reconciliation owner', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'owner-bound probe');
+    const f = buildFixture(root, 'shell');
+    const registry = createInvocationRegistry({ maxRetained: 4, maxActive: 8, now: () => 0 });
+    const breakers: any[] = [];
+    const launch = vi.fn(async (inv: any, options: any) => {
+      await commit(options);
+      await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+      return { launched: true, mode: 'degraded', child: closingChild(0) };
+    });
+    let firstId: string = '';
+    let lastHandler: any;
+    try {
+      for (let i = 0; i < 200; i += 1) {
+        const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+        breakers.push(breaker);
+        const tools = await captureTool(undefined, { projectRoot: root, workerWorktreesRoot: work, registry, scopedBreaker: breaker,
+          loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now), launchShellWorker: launch });
+        lastHandler = tools.get('worker-invoke').handler;
+        const body = JSON.parse((await lastHandler({ operation: 'run', request_id: `owner-${i}`, role: 'coding', task: 'implementation', group: 'workers',
+          brief, workdir: work, final_output: path.join(work, `final-${i}.json`), transport: 'shell' })).content[0].text);
+        if (i === 0) {
+          expect(body.status).toBe('completed'); firstId = body.invocationId;
+          expect(breaker.hasUnresolvedStop(firstId)).toBe(true);
+        } else {
+          expect(body).toMatchObject({ status: 'blocked', termination: 'confirmed' });
+          expect(body.diagnostics.join(' ')).toMatch(/already has a recovery breaker owner/);
+          expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+        }
+        expect(registry.size).toBeLessThanOrEqual(4);
+        expect(registry.seenCount).toBeLessThanOrEqual(4);
+      }
+      expect(launch).toHaveBeenCalledOnce();
+      expect(registry.get(firstId).recoveryBreaker).toBe(breakers[0]);
+      expect(registry.claimRequestId('owner-0')).toBe(firstId);
+      const reconciled = JSON.parse((await lastHandler({ operation: 'reconcile_stopped', invocation_id: firstId })).content[0].text);
+      expect(reconciled.reconciled).toBe(true);
+      expect(breakers[0].snapshot().reservationsOutstanding).toBe(0);
+    } finally { for (const breaker of breakers) breaker.destroy(); }
+  }, 20000);
+
   it('review 9 item 1: real native post-spawn refusal and shell submission uncertainty retain live registry capacity', async () => {
     const child = stdioChild(false, false);
     const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
@@ -4812,49 +4898,42 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
   // including when the breaker is saturated with blocking markers.
   // -------------------------------------------------------------------------
   describe('gated<->not-gated interleavings on one server instance (branch-only; baseline has no gating concept to interleave against)', () => {
-    /** A stateful fake breaker: admits normally until `saturate()` is
-     * called, after which it refuses with a `blocking-markers` reason --
-     * exactly the shape a real 128-reservation-saturated breaker reports
-     * (see "the reservation-capacity refusal names the reconcile_stopped
-     * operation" above). Tracks every `admit`/`settle` call so a not-gated
-     * request's independence from it can be asserted directly. */
+    const breakers: any[] = [];
+    afterEach(() => { for (const breaker of breakers.splice(0)) breaker.destroy(); vi.restoreAllMocks(); });
     function statefulBreaker() {
-      let saturated = false;
-      const admitCalls: unknown[] = [];
-      const settleCalls: unknown[] = [];
-      let seq = 0;
-      return {
-        saturate() { saturated = true; },
-        admitCalls, settleCalls,
-        admit(args: any) {
-          admitCalls.push(args);
-          if (saturated) return { ok: false, blockedBy: ['blocking-markers:128'], nextEligibleAt: Date.now() + 60000 };
-          seq += 1;
-          return { ok: true, token: { invocationId: args.invocationId, selectionDigest: args.selectionDigest ?? null, canaryKeys: [], deadlineMs: Date.now() + 300000, seq } };
-        },
-        settle(token: any, outcome: any) { settleCalls.push({ token, outcome }); return Promise.resolve(null); },
-        beginDispatch(token: any) { return { ok: true }; },
-        commitDispatch() { return { ok: true }; },
-        nowMs() { return Date.now(); },
-      };
+      const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0,
+        policy: { maxOutstandingReservations: 1 } });
+      breakers.push(breaker);
+      const admit = vi.spyOn(breaker, 'admit');
+      const settle = vi.spyOn(breaker, 'settle');
+      return { breaker, admit, settle };
     }
 
-    async function runOneRequest(registerFn: any, options: Record<string, unknown>, registry: any, f: any, root: string, work: string, briefPath: string, extraInput: Record<string, unknown> = {}) {
+    async function registerInterleaved(options: Record<string, unknown>, registry: any, f: any, root: string, work: string, briefPath: string) {
       const tools = new Map<string, any>();
-      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      await registerProductionToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
         ...options,
       });
       const handler = tools.get('worker-invoke').handler;
-      const finalOutput = path.join(work, `final-${Math.random()}.json`);
-      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
-      const result = await handler({ operation: 'run', request_id: `interleave-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell',
-        ...extraInput,
-      });
-      return JSON.parse(result.content[0].text);
+      return async () => {
+        const result = await handler({ operation: 'run', request_id: `interleave-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+          brief: briefPath, workdir: work, final_output: path.join(work, `final-${Math.random()}.json`), transport: 'shell' });
+        return JSON.parse(result.content[0].text);
+      };
+    }
+
+    async function commitInterleaved(options: any) {
+      if (!options.admission) {
+        expect(options).not.toHaveProperty('dispatchGuard');
+        return;
+      }
+      const a = options.admission;
+      expect(a.breaker.beginDispatch(a.token, { invocationId: a.invocationId, selectionDigest: a.selectionDigest })).toEqual({ ok: true });
+      await (await import('../../../tools/ralph-external/session-launcher.mjs')).debitDirectWorkerAllowance(a.ledger);
+      expect(a.breaker.commitDispatch(a.token)).toEqual({ ok: true });
     }
 
     it('a gated run does not change what a FOLLOWING not-gated run does, including with the breaker saturated', async () => {
@@ -4863,32 +4942,34 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
       const f = buildFixture(root, 'shell');
       const registry = createInvocationRegistry({ maxActive: 8 });
-      const breaker = statefulBreaker();
+      const { breaker, admit, settle } = statefulBreaker();
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
-      const launchSuccess = async (invocation: any) => {
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
         await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
         return { launched: true, mode: 'degraded', child: closingChild(0) };
       };
 
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
       // 1. A GATED run (canVerifyAttempt stays true; global switch stays
       // on): the breaker's `admit`/`settle` are genuinely consulted.
-      const gatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      const gatedBody = await runOneRequest();
       expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
-      expect(breaker.admitCalls.length).toBeGreaterThan(0);
-      expect(breaker.settleCalls.length).toBeGreaterThan(0);
-      const admitCallsBeforeSaturation = breaker.admitCalls.length;
+      expect(admit.mock.calls.length).toBeGreaterThan(0);
+      expect(settle.mock.calls.length).toBeGreaterThan(0);
 
-      // 2. Saturate the SAME breaker instance (simulating 128 blocking
-      // markers) -- if a not-gated run ever touched it, this would refuse.
-      breaker.saturate();
+      // 2. The real breaker is saturated by the unresolved degraded run.
+      expect(breaker.hasUnresolvedStop(gatedBody.invocationId)).toBe(true);
+      expect(breaker.admit({ invocationId: 'capacity-probe', scopeKeys: [] }).ok).toBe(false);
+      const saturatedAdmitCalls = admit.mock.calls.length;
 
       // 3. A NOT-GATED run on the SAME registration/registry/breaker.
       f.drivers.codex.canVerifyAttempt = false;
-      const notGatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      const notGatedBody = await runOneRequest();
       expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
       // The saturated breaker was NEVER consulted by the not-gated run --
       // admit()/settle() call counts are unchanged since step 1.
-      expect(breaker.admitCalls.length).toBe(admitCallsBeforeSaturation);
+      expect(admit.mock.calls.length).toBe(saturatedAdmitCalls);
     }, 20000);
 
     it('a not-gated run does not change what a FOLLOWING gated run does', async () => {
@@ -4898,27 +4979,29 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const f = buildFixture(root, 'shell');
       f.drivers.codex.canVerifyAttempt = false; // not-gated FIRST
       const registry = createInvocationRegistry({ maxActive: 8 });
-      const breaker = statefulBreaker();
+      const { breaker, admit, settle } = statefulBreaker();
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
-      const launchSuccess = async (invocation: any) => {
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
         await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
         return { launched: true, mode: 'degraded', child: closingChild(0) };
       };
 
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
       // 1. A NOT-GATED run first -- the breaker must never be consulted.
-      const notGatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      const notGatedBody = await runOneRequest();
       expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
-      expect(breaker.admitCalls).toHaveLength(0);
-      expect(breaker.settleCalls).toHaveLength(0);
+      expect(admit.mock.calls).toHaveLength(0);
+      expect(settle.mock.calls).toHaveLength(0);
 
       // 2. Flip to gated and run again on the SAME registration/registry/
       // breaker -- it must admit/settle normally, exactly as if the prior
       // not-gated run had never happened.
       f.drivers.codex.canVerifyAttempt = undefined;
-      const gatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      const gatedBody = await runOneRequest();
       expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
-      expect(breaker.admitCalls.length).toBeGreaterThan(0);
-      expect(breaker.settleCalls.length).toBeGreaterThan(0);
+      expect(admit.mock.calls.length).toBeGreaterThan(0);
+      expect(settle.mock.calls.length).toBeGreaterThan(0);
     }, 20000);
 
     // #2915 round 8 review 8 (D3): a GATED run that times out (its own
@@ -4933,20 +5016,24 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
       const f = buildFixture(root, 'shell');
       const registry = createInvocationRegistry({ maxActive: 2 });
-      const breaker = statefulBreaker();
-      // A short-fused canary deadline so the timeout fires almost
-      // immediately in real wall-clock time (same technique as the C4
-      // latch test above).
-      (breaker as any).admit = (args: any) => ({ ok: true, token: { invocationId: args.invocationId, selectionDigest: args.selectionDigest ?? null,
-        canaryKeys: ['installation:codex'], deadlineMs: Date.now() + 20, seq: 0 } });
+      const { breaker } = statefulBreaker();
+      let monotonic = 0;
+      breaker.nowMs = () => monotonic;
       // A child that never responds to any signal -- the deadline-stop
       // escalation (SIGTERM, then SIGKILL after its own bounded grace
       // window) never confirms it, so this settles genuinely `uncertain`
       // (never terminal; M2 keeps an unconfirmed-termination run LIVE).
       const neverRespondingChild = () => { const c: any = new EventEmitter(); c.exitCode = null; c.signalCode = null; c.kill = () => {}; return c; };
-      const timeoutLaunch = async () => ({ launched: true, mode: 'degraded', child: neverRespondingChild() });
+      let launch: any = async (_invocation: any, options: any) => {
+        await commitInterleaved(options);
+        monotonic = options.dispatchGuard.deadlineAtMs - 1;
+        return { launched: true, mode: 'degraded', child: neverRespondingChild() };
+      };
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker,
+        launchShellWorker: (...args: any[]) => launch(...args), terminateChildWithGrace: async () => ({ terminated: false }),
+      }, registry, f, root, work, briefPath);
 
-      const timedOutBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: timeoutLaunch }, registry, f, root, work, briefPath);
+      const timedOutBody = await runOneRequest();
       expect(timedOutBody.status, JSON.stringify(timedOutBody)).toBe('uncertain');
       const gatedEntry = registry.get(timedOutBody.invocationId);
       expect(gatedEntry, 'the timed-out run stays LIVE (M2); never silently dropped from the registry').toBeDefined();
@@ -4962,11 +5049,13 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       // timeout machinery (no crossed timers, no stolen control handle).
       f.drivers.codex.canVerifyAttempt = false;
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
-      const launchSuccess = async (invocation: any) => {
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
         await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
         return { launched: true, mode: 'degraded', child: closingChild(0) };
       };
-      const notGatedBody = await runOneRequest(registerProductionToolset, { scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      launch = launchSuccess;
+      const notGatedBody = await runOneRequest();
       expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
       // Capacity now reflects the first (still-live/uncertain) run plus the
       // second, now-terminal one -- exactly as if these two runs had never
@@ -4974,5 +5063,61 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       expect(registry.liveCount()).toBe(1);
       expect(registry.get(notGatedBody.invocationId)?.terminalAt).not.toBeNull();
     }, 20000);
+  });
+});
+
+describe('review 10 frozen fixture ownership', () => {
+  it('C1: importing the frozen adapter and running its default input loader never loads the current installation owner', async () => {
+    vi.resetModules();
+    const currentOwnerLoaded = vi.fn(() => { throw new Error('current installation owner entered the frozen graph'); });
+    vi.doMock('../../../src/models/worker-installation.mjs', currentOwnerLoaded);
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'frozen default-loading probe');
+    const f = buildFixture(root, 'shell');
+    const spies: any[] = [];
+    try {
+      const adapter = await import('../../fixtures/ralph-recovery-baseline/provider-adapter.mjs');
+      const owner = await import('../../fixtures/ralph-recovery-baseline/worker-installation.mjs');
+      expect(adapter.createProvider).toBe(owner.createProvider);
+      await adapter.ensureProvidersRegistered();
+      expect(owner.hasProvider('codex')).toBe(true);
+      expect(owner.createProvider('codex')).not.toHaveProperty('parseWorkerAttemptFinal');
+      expect(await adapter.workerNegativeFixtureDigest()).toMatch(/^sha256:[a-f0-9]{64}$/);
+      const config = await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js');
+      const { ConfigLoader } = await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js');
+      const inventory = await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js');
+      const discovery = await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js');
+      // Substitute filesystem-derived inputs only. The frozen default loader,
+      // resolver, adapter parser, and registered run() all execute normally.
+      spies.push(vi.spyOn(config, 'readAiwgConfig').mockResolvedValue(f.snapshot.config));
+      spies.push(vi.spyOn(ConfigLoader.prototype, 'load').mockResolvedValue(f.snapshot.models));
+      spies.push(vi.spyOn(ConfigLoader.prototype, 'getInputDigests').mockReturnValue(f.snapshot.modelDigests));
+      spies.push(vi.spyOn(inventory, 'collectProviderInventory').mockResolvedValue({} as any));
+      spies.push(vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockResolvedValue(f.snapshot.catalog));
+      const installed = vi.spyOn(owner, 'loadRecordedWorkerInstallations').mockResolvedValue({
+        registry: f.snapshot.registry, installations: f.snapshot.installations, drivers: f.drivers,
+      });
+      spies.push(installed);
+      const baseline = await import('../../fixtures/ralph-recovery-baseline/worker-invoke.mjs');
+      const tools = new Map<string, any>();
+      await baseline.registerWorkerInvokeToolset({ registerTool(name: string, _config: any, handler: any) { tools.set(name, handler); } }, {
+        projectRoot: root, workerWorktreesRoot: work, now: () => new Date(f.now),
+        launchShellWorker: async (inv: any) => {
+          await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: { version: 1, status: 'completed', summary: 'ok',
+            claims: [], artifacts: [], checks: [], limitations: [] } })}\n`);
+          return { launched: true, mode: 'degraded', child: closingChild(0) };
+        },
+      });
+      const body = JSON.parse((await tools.get('worker-invoke')({ operation: 'run', request_id: 'frozen-default', role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: work, final_output: path.join(work, 'final.json'), transport: 'shell' })).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(installed).toHaveBeenCalledOnce();
+      expect(currentOwnerLoaded).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+      vi.doUnmock('../../../src/models/worker-installation.mjs');
+      vi.resetModules();
+    }
   });
 });

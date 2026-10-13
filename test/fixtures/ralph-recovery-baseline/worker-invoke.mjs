@@ -1,32 +1,12 @@
 /**
  * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
- *
- * Literal copy of `src/mcp/tools/worker-invoke.mjs` as of commit
- * a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main, the #2915 round 8
- * baseline reviewers diffed against -- see
- * `.aiwg/working/s1-scratch/design-round8-2915.md` D6 and
- * `.aiwg/working/s1-scratch/crit-round8-2915.md` D6's fixture-pinning
- * requirement). Used ONLY by the equivalence tests in
- * `test/unit/mcp/worker-invoke.test.ts` ("baseline equivalence (#2915
- * round 8, D6)") to prove that disabled-dispatch execution through the
- * CURRENT branch's `run()` behaves byte-for-byte like this frozen
- * pre-#2915A body, from an equivalent starting state.
- *
- * DO NOT:
- *   - import this file from any production source path;
- *   - "fix", refactor, or otherwise edit its body for any reason other than
- *     re-pinning it to a different reviewed base commit (in which case
- *     update BOTH this header and the SHA everywhere it is cited above);
- *   - add this file to any lint/registration surface that treats it as a
- *     test file or product module -- it is excluded from
- *     `tools/testing/check-test-registration.mjs` by living under
- *     `test/fixtures/**`, which that script's own `candidates` glob
- *     explicitly ignores, and it contains no `*.test.*`/`*.spec.*` suffix.
- *
- * Regenerate with:
- *   git show a4085b86a:src/mcp/tools/worker-invoke.mjs > \
- *     test/fixtures/ralph-recovery-baseline/worker-invoke.mjs
- *   (then re-apply this header)
+ * Source: `src/mcp/tools/worker-invoke.mjs` at a4085b86a81d442e31d71bba1d9d193bbff532d6.
+ * Only import routing and this pin header differ from the baseline body.
+ * Isolation, provider adapters, installation ownership, default loading and
+ * every importing dependency that can reach installation ownership use
+ * sibling fixtures. Unchanged dependencies use the repository source.
+ * Regenerate the body with `git show a4085b86a:src/mcp/tools/worker-invoke.mjs`,
+ * then restore import routing and this header. Never import from production.
  */
 
 /**
@@ -573,10 +553,10 @@ export function createInvocationRegistry({
 // ===========================================================================
 
 async function loadServeWorkerInvocation() {
-  return importImpl('serve/worker-invocation.js');
+  return import('./src/serve/worker-invocation.ts');
 }
 async function loadModelsHandlerInternals() {
-  return importImpl('cli/handlers/models.js');
+  return import('./src/cli/handlers/models.ts');
 }
 async function loadMissionProtocol() {
   return importImpl('mission-protocol/index.js');
@@ -585,7 +565,7 @@ async function loadRepoAccessModule() {
   return importImpl('policy/repo-access.js');
 }
 async function loadAiwgConfigModule() {
-  return importImpl('config/aiwg-config.js');
+  return import('./src/config/aiwg-config.ts');
 }
 
 // #2915 round 8 review 8 (D2): every relative specifier this baseline

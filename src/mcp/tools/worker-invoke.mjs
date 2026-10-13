@@ -450,17 +450,19 @@ export function createInvocationRegistry({
   const entries = new Map();
   const seenRequestIds = new Map(); // request_id -> { invocationId, recordedAt }
 
-  // #2915 round 8 review 8 (C7): an entry whose actual breaker still holds
-  // a `dispatched` reservation with `stop: 'unresolved'` for this exact
-  // invocation is retained INDEPENDENTLY of the ordinary terminal TTL/
-  // over-capacity sweep below — pruning it away would make `status`/
-  // `reconcile_stopped` answer "Unknown invocation_id" for a marker that
-  // demonstrably still exists on the breaker (review 8, C section finding
-  // 7: "pruning a terminal registry entry left its breaker marker intact
-  // but made reconciliation return Unknown invocation_id"). This is a
-  // bounded exemption, not an unbounded one: the breaker's own
-  // `maxOutstandingReservations` cap (independent of this registry) is
-  // what ultimately bounds how many such entries can ever accumulate.
+  // Pin one bounded breaker owner for this registry's lifetime. Replacing
+  // it could accumulate protected entries across independently capped owners
+  // and orphan the original reconciliation mapping.
+  let recoveryOwner;
+  function bindRecoveryOwner(breaker) {
+    if (!breaker) return;
+    if (recoveryOwner && recoveryOwner !== breaker) {
+      throw new Error('Invocation registry already has a recovery breaker owner; reuse that owner and reconcile_stopped for unresolved reservations');
+    }
+    recoveryOwner = breaker;
+  }
+  // Unresolved entries and their replay identities survive ordinary pruning.
+  // Their aggregate bound is the single owner's reservation cap.
   function hasUnresolvedStopMarker(entry) {
     return typeof entry.recoveryBreaker?.hasUnresolvedStop === 'function'
       && entry.recoveryBreaker.hasUnresolvedStop(entry.invocationId);
@@ -515,6 +517,7 @@ export function createInvocationRegistry({
       return seenRequestIds.get(requestId)?.invocationId ?? null;
     },
     create(partial) {
+      bindRecoveryOwner(partial.recoveryBreaker);
       prune();
       const invocationId = partial.invocationId ?? randomUUID();
       const entry = { invocationId, terminalAt: null, createdAt: now(), ...partial, invocationId };
@@ -526,12 +529,14 @@ export function createInvocationRegistry({
     update(invocationId, patch) {
       const entry = entries.get(invocationId);
       if (!entry) return undefined;
+      bindRecoveryOwner(patch.recoveryBreaker);
       Object.assign(entry, patch);
       return entry;
     },
     markTerminal(invocationId, patch = {}) {
       const entry = entries.get(invocationId);
       if (!entry) return undefined;
+      bindRecoveryOwner(patch.recoveryBreaker);
       if (entry.terminalAt === null) entry.terminalAt = now();
       Object.assign(entry, patch);
       // An entry becomes eligible for over-capacity eviction the moment it
@@ -1925,7 +1930,13 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     // SAME breaker a later `admitDirectWorker` call used, not a fresh
     // default. Internal bookkeeping only — never surfaced by `publicStatus`.
     if (admission.breaker) {
-      registry.update(entry.invocationId, { recoveryBreaker: admission.breaker });
+      try {
+        registry.update(entry.invocationId, { recoveryBreaker: admission.breaker });
+      } catch (error) {
+        const diagnostic = await recoveryModule.settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: true });
+        return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed',
+          diagnostics: [error.message, diagnostic].filter(Boolean) });
+      }
     }
 
     // #2915 round 8 (D6): the prefix runs exactly once, and we never re-enter
@@ -2138,7 +2149,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     let isolationEvidence = null;
     let settlementPromise;
     let settlementStarted;
-    let followUpTimer;
+    let cancelFollowUp;
     const settlementReady = new Promise(resolve => { settlementStarted = resolve; });
     const resolveEvidence = evidence => recoveryModule.resolveStopEvidence({
       ...evidence, getStatus: options.isolationStatus, stopUnit: options.stopUnit,
@@ -2147,16 +2158,17 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     const reconcileEvidence = async evidence => {
       await settlementReady;
       await settlementPromise;
-      if (!admission.breaker?.hasUnresolvedStop?.(entry.invocationId)) return;
+      if (!admission.breaker?.hasUnresolvedStop?.(entry.invocationId)) return true;
       const resolved = await resolveEvidence({ ...evidence, stopFirst: false });
       if (resolved.confirmedStop) {
-        if (followUpTimer !== undefined) clearTimeout(followUpTimer);
+        cancelFollowUp?.();
         const reconciled = admission.breaker?.reconcileStopEvidence?.({ invocationId: entry.invocationId, confirmedStop: true });
         if ((reconciled?.released ?? 0) > 0) registry.markTerminal(entry.invocationId, {});
       }
+      return resolved.confirmedStop;
     };
     // The outward result and execution protection have independent lifetimes.
-    // Retain pending escalation, and make one bounded later unit observation.
+    // Retain pending escalation and a fixed, bounded sequence of unit observations.
     const observeStop = (stopping, evidence) => {
       Promise.resolve(stopping).then(() => reconcileEvidence(evidence)).catch(() => {});
     };
@@ -2164,8 +2176,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     const observeLater = evidence => {
       if (followUpScheduled || evidence?.isolationMode !== 'systemd-unit' || !evidence.unitName) return;
       followUpScheduled = true;
-      followUpTimer = setTimeout(() => { reconcileEvidence(evidence).catch(() => {}); }, 2000);
-      followUpTimer.unref?.();
+      cancelFollowUp = recoveryModule.observeLateStopEvidence(() => reconcileEvidence(evidence));
     };
     const settleRecovery = (outcome) => {
       if (recoverySettled) return;

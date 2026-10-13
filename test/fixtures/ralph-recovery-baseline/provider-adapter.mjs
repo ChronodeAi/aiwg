@@ -1,32 +1,8 @@
 /**
- * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
- *
- * Literal copy of `tools/ralph-external/lib/provider-adapter.mjs` as of
- * commit a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main, the #2915
- * round 8 baseline reviewers diffed against). This is a dependency fixture
- * only, reachable from this directory's `session-launcher.mjs` fixture
- * sibling whenever a test supplies a driver whose `qualification.adapter`
- * or `parseWorkerFinal` is a real `ProviderAdapter` instance (never by
- * production code) -- needed because this file changed on the branch (new
- * injectable terminal-assertion support) -- see rev8-codex-2915.md section D
- * finding 2 and `.aiwg/working/s1-scratch/design-round8-2915.md` D6. The
- * MCP `worker-invoke.mjs` fixture sibling (owned separately) should import
- * THIS frozen copy too, rather than the current `lib/provider-adapter.mjs`.
- *
- * DO NOT:
- *   - import this file from any production source path;
- *   - "fix", refactor, or otherwise edit its body for any reason other than
- *     re-pinning it to a different reviewed base commit (in which case
- *     update BOTH this header and the SHA everywhere it is cited, and the
- *     sibling `session-launcher.mjs` fixture's own header);
- *   - add this file to any lint/registration surface that treats it as a
- *     test file or product module -- excluded via `test/fixtures/**`, and
- *     it contains no `*.test.*`/`*.spec.*` suffix.
- *
- * Regenerate with:
- *   git show a4085b86a:tools/ralph-external/lib/provider-adapter.mjs > \
- *     test/fixtures/ralph-recovery-baseline/provider-adapter.mjs
- *   (then re-apply this header and re-rewrite the two relative imports below)
+ * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
+ * Source: tools/ralph-external/lib/provider-adapter.mjs. Only import routing and this pin header differ.
+ * Installation ownership and its importing dependencies stay within this
+ * fixture graph; unchanged dependencies use the repository source.
  */
 
 /**
@@ -233,7 +209,7 @@ function parseStrictWorkerJson(text, maxDepth) {
   return result;
 }
 
-const installedOwner = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+const installedOwner = await import('./worker-installation.mjs');
 export const { workerNegativeFixtureSuite, workerNegativeFixtureDigest, registerProvider, createProvider, listProviders, hasProvider } = installedOwner;
 
 /**
@@ -340,7 +316,7 @@ export class ProviderAdapter {
    * Install roots and the enforcing boundary must remain protected by the host.
    */
   async inspectWorkerInstallation(options) {
-    const owner = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+    const owner = await import('./worker-installation.mjs');
     return owner.inspectWorkerInstallation(this, structuredClone(options));
   }
 
@@ -350,12 +326,12 @@ export class ProviderAdapter {
    * login, credentials discovery, server startup or managed state is involved.
    */
   async qualifyWorkerInstallation(options) {
-    const owner = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+    const owner = await import('./worker-installation.mjs');
     return owner.qualifyWorkerInstallation(this, options);
   }
 
   async recordWorkerInstallation(options) {
-    const owner = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+    const owner = await import('./worker-installation.mjs');
     return owner.recordWorkerInstallation(this, options);
   }
 
@@ -381,7 +357,7 @@ export class ProviderAdapter {
    * @returns {Promise<Object>} A detached typed descriptor; never executes it
    */
   async prepareWorkerInvocation(invocation, qualification) {
-    const owner = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+    const owner = await import('./worker-installation.mjs');
     return owner.prepareInstalledWorkerInvocation(this, invocation, qualification);
   }
 

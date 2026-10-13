@@ -4870,6 +4870,26 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
   }
 
   describe('standalone planner (planDirectWorkerLaunch): launch and refusal', () => {
+    it.each([
+      { name: 'global off', config: { parallelism: { worker_dispatch: false } } },
+      { name: 'CLI off', config: { parallelism: { worker_dispatch: true, clis: { codex: { enabled: false } } } } },
+      { name: 'unverifiable adapter', drivers: { codex: { canVerifyAttempt: false } } },
+      { name: 'explicit breaker override', scopedBreaker: null },
+    ])('C3: disabled standalone submission failure equals baseline ($name)', ({ name, ...disabled }) => {
+      const options = { name: 'r10-disabled', command: process.execPath, args: [], cwd: process.cwd(), memoryMaxGb: 4,
+        config: dispatchOnConfig, live: healthyLive, invocation: { selected: { cli: 'codex' } },
+        isolation: { mode: 'systemd-unit' }, proposeUnit: () => 'r10-disabled-unit',
+        spawn: (command) => command === 'systemd-run' ? { status: 1, stderr: 'submission failed' } : { status: 0, stdout: '' },
+        ...disabled,
+      };
+      const baseline = planDirectWorkerLaunchBaseline(options);
+      const result = planDirectWorkerLaunch(options);
+      expect(result).not.toBeInstanceOf(Promise);
+      expect(result).toEqual(baseline);
+      expect(result).toMatchObject({ launched: false, mode: 'systemd-unit' });
+      expect(result).not.toHaveProperty('dispatchState');
+    });
+
     it('a not-gated flat-option launch matches the frozen planner, synchronously, with no admission field', () => {
       const name = `equiv-standalone-${Math.random().toString(36).slice(2)}`;
       const baselineResult = planDirectWorkerLaunchBaseline({
@@ -5883,5 +5903,91 @@ describe('review 9 bounded recovery regressions', () => {
       expect(timers).toHaveLength(1);
       expect(getStatus).toHaveBeenCalledTimes(3);
     } finally { breaker.destroy(); }
+  });
+});
+
+describe('review 10 bounded recovery regressions', () => {
+  it.each([
+    { attached: false, mode: 'systemd-unit' },
+    { attached: true, mode: 'systemd-unit' },
+    { attached: true, mode: 'degraded' },
+  ])('B1: $mode attached=$attached stops at the absolute monotonic deadline despite a backward wall-clock step', async ({ attached, mode }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let monotonic = 100;
+    let wall = 100_000;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const child = new EventEmitter(); child.pid = 987654; child.exitCode = null; child.signalCode = null;
+    const stop = vi.fn(() => ({ ok: false }));
+    const terminate = vi.fn(async () => ({ terminated: false }));
+    const status = vi.fn(() => ({ active: true, execMainCode: 0 }));
+    try {
+      const result = await planDirectWorkerLaunch({ name: 'r10-deadline', command: process.execPath, args: [], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, scopedBreaker: breaker, invocation: { selected: { cli: 'codex' } },
+        attached, memoryMaxGb: 4, allowDegraded: true, isolation: { mode }, isolationStatus: status,
+        stopUnit: stop, terminateChild: terminate, unitSettlementBoundMs: 1000,
+        dispatchGuard: { deadlineAtMs: 110, nowMs: () => monotonic },
+        spawn: (_command, args) => { if (args.includes('show-environment')) monotonic = 107; return { status: 0, stdout: args.includes('MainPID') ? '987654' : '' }; },
+        spawnAsync: () => { monotonic = 107; return child; },
+      });
+      expect(result.launched).toBe(true);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      wall -= 10_000; monotonic = 109;
+      await vi.advanceTimersByTimeAsync(2);
+      expect(stop).not.toHaveBeenCalled(); expect(terminate).not.toHaveBeenCalled();
+      wall -= 10_000; monotonic = 110;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mode === 'systemd-unit' ? stop : terminate).toHaveBeenCalledOnce();
+      expect(breaker.hasUnresolvedStop(result.admission.invocationId)).toBe(true);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1);
+      await vi.advanceTimersByTimeAsync(30);
+      expect(mode === 'systemd-unit' ? stop : terminate).toHaveBeenCalledOnce();
+    } finally { breaker.destroy(); wallClock.mockRestore(); vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('B2: standalone attached=%s observes terminal evidence after the first follow-up and bounds unresolved observation', async attached => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let monotonic = 0;
+    let terminal = false;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const status = vi.fn(() => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }));
+    const stop = vi.fn(() => ({ ok: false }));
+    const launch = () => {
+      const child = new EventEmitter(); child.pid = 987654;
+      return planDirectWorkerLaunch({ name: 'r10-late', command: process.execPath, args: [], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, scopedBreaker: breaker, invocation: { selected: { cli: 'codex' } },
+        attached, memoryMaxGb: 4, isolation: { mode: 'systemd-unit' }, isolationStatus: status, stopUnit: stop,
+        unitSettlementBoundMs: 10, unitSettlementPollMs: 2,
+        spawn: () => ({ status: 0, stdout: '' }), spawnAsync: () => child,
+      });
+    };
+    try {
+      const result = await launch();
+      if (attached) {
+        result.child.emit('exit', 0); // completion status can precede terminal unit evidence
+        await vi.advanceTimersByTimeAsync(0);
+        monotonic = 2;
+      } else {
+        monotonic = 10;
+        await vi.advanceTimersByTimeAsync(2); // bound: stop, retaining ownership
+      }
+      await vi.advanceTimersByTimeAsync(2); // first follow-up remains nonterminal
+      expect(breaker.hasUnresolvedStop(result.admission.invocationId)).toBe(true);
+      terminal = true;
+      monotonic += 2;
+      await vi.advanceTimersByTimeAsync(2); // second follow-up sees terminal evidence
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      terminal = false;
+      const unresolved = await launch();
+      monotonic += 10;
+      await vi.advanceTimersByTimeAsync(2);
+      const atBound = status.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(status.mock.calls.length - atBound).toBe(3);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(breaker.hasUnresolvedStop(unresolved.admission.invocationId)).toBe(true);
+      expect(breaker.reconcileStopEvidence({ invocationId: unresolved.admission.invocationId, confirmedStop: true })).toEqual({ released: 1 });
+    } finally { breaker.destroy(); vi.clearAllTimers(); vi.useRealTimers(); }
   });
 });

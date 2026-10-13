@@ -1,62 +1,12 @@
 /**
  * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
- *
- * Literal copy of `tools/ralph-external/session-launcher.mjs` as of commit
- * a4085b86a81d442e31d71bba1d9d193bbff532d6 (origin/main, the #2915 round 8
- * baseline reviewers diffed against -- see
- * `.aiwg/working/s1-scratch/design-round8-2915.md` D6 and
- * `.aiwg/working/s1-scratch/crit-round8-2915.md` D6's fixture-pinning
- * requirement). Used ONLY by the equivalence tests in
- * `test/unit/ralph-external/scoped-recovery.test.mjs` ("baseline
- * equivalence (#2915 round 8, D6)") to prove that disabled-dispatch
- * execution through the CURRENT branch's `launchOneWorkerBaseline`/
- * `planDirectWorkerLaunch` behaves byte-for-byte like this frozen
- * pre-#2915A body, from an equivalent starting state.
- *
- * Only the import of `./lib/worker-isolation.mjs` has been rewritten to
- * `./worker-isolation.mjs` -- the frozen sibling fixture in this same
- * directory, pinned to the SAME commit, because that file changed on this
- * branch (the D2 dispatch-commit hook). Every other STATIC/dynamic
- * (`importImpl`) import this file's own body makes points at the real,
- * unchanged source tree (`process-monitor.mjs`, `lib/worker-health.mjs`,
- * `_resolve-impl.mjs`, `serve/worker-invocation.js`,
- * `models/qualification-digest.mjs`, `cli/handlers/models.js`,
- * `serve/worker-stdin-frame.mjs`, `models/provider-policy.js`), none of
- * which changed between `a4085b86a` and this branch -- confirmed via
- * `git diff --name-only a4085b86a HEAD -- tools/ralph-external src/models
- * src/mission-protocol` when this fixture was written.
- *
- * #2915 round 8 review 8 (D2): this launcher body never imports a driver
- * object's own class directly -- every `driver.*` method call is reached
- * through whatever object a caller supplies as `inputs.drivers[cli]`. A
- * test that supplies a driver built from the CURRENT `lib/provider-adapter.mjs`
- * (`parseWorkerFinal`/`parseWorkerOutput`) or `src/models/worker-installation.mjs`
- * (`loadRecordedWorkerInstallations`) would silently exercise THEIR current
- * behavior through this otherwise-frozen body. Both are now ALSO frozen as
- * sibling fixtures in this directory (`provider-adapter.mjs`,
- * `worker-installation.mjs`) for any equivalence scenario that constructs
- * such a driver; the existing equivalence tests in
- * `scoped-recovery.test.mjs` build a hand-rolled driver object that defines
- * neither `parseWorkerFinal` nor an installation-derived `canVerifyAttempt`,
- * so neither frozen module is reachable from them today -- these siblings
- * are available, not yet wired into those specific tests.
- *
- * DO NOT:
- *   - import this file from any production source path;
- *   - "fix", refactor, or otherwise edit its body for any reason other than
- *     re-pinning it to a different reviewed base commit (in which case
- *     update BOTH this header and the SHA everywhere it is cited above);
- *   - add this file to any lint/registration surface that treats it as a
- *     test file or product module -- it is excluded from
- *     `tools/testing/check-test-registration.mjs` by living under
- *     `test/fixtures/**`, which that script's own `candidates` glob
- *     explicitly ignores, and it contains no `*.test.*`/`*.spec.*` suffix.
- *
- * Regenerate with:
- *   git show a4085b86a:tools/ralph-external/session-launcher.mjs > \
- *     test/fixtures/ralph-recovery-baseline/session-launcher.mjs
- *   (then rewrite the `./lib/worker-isolation.mjs` import to
- *   `./worker-isolation.mjs` and re-apply this header)
+ * Source: `tools/ralph-external/session-launcher.mjs` at a4085b86a81d442e31d71bba1d9d193bbff532d6.
+ * Only import routing and this pin header differ from the baseline body.
+ * Isolation, provider adapters, installation ownership, default loading and
+ * every importing dependency that can reach installation ownership use
+ * sibling fixtures. Unchanged dependencies use the repository source.
+ * Regenerate the body with `git show a4085b86a:tools/ralph-external/session-launcher.mjs`,
+ * then restore import routing and this header. Never import from production.
  */
 
 /**
@@ -257,7 +207,7 @@ export async function materializeWorkerArtifacts(invocation, runDir) {
     if (!match || !paths.has(match[1])) throw new Error('Undeclared worker artifact placeholder');
     return paths.get(match[1]);
   });
-  const { inspectWorkerPath } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { inspectWorkerPath } = await import('./src/serve/worker-invocation.ts');
   await inspectWorkerPath(runDir, 'directory');
   const stat = await lstat(runDir);
   if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('Worker artifact directory must be private and owned');
@@ -284,12 +234,12 @@ export async function materializeWorkerArtifacts(invocation, runDir) {
 }
 
 async function launchOneWorker(owner, options) {
-  const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+  const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await import('./src/serve/worker-invocation.ts');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
   const planBytes = await boundedPrivateRead(options.invocationPath, 1048576, inspect);
   const saved = JSON.parse(planBytes.toString('utf8'));
   const loadInputs = options.loadInputs ?? (options.inputs ? async () => options.inputs : async () =>
-    (await importImpl(import.meta.url, 'cli/handlers/models.js')).loadWorkerInputs({
+    (await import('./src/cli/handlers/models.ts')).loadWorkerInputs({
       cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: fileURLToPath(new URL('../../', import.meta.url)) }));
   let inputs = await loadInputs();
   const clock = () => typeof options.now === 'function' ? options.now() : options.now ?? new Date().toISOString();
@@ -904,7 +854,7 @@ export class SessionLauncher extends EventEmitter {
 
   /** Explicit manual observation grants no signal authority, with or without scratch. */
   async adoptWorker({ runDir, invocationId = null, worker, paths = null, request } = {}) {
-    const { inspectWorkerPath: inspect } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+    const { inspectWorkerPath: inspect } = await import('./src/serve/worker-invocation.ts');
     let record = {};
     if (runDir) {
       if (!await inspect(runDir, 'directory')) throw new Error('Manual run directory is missing');

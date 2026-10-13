@@ -4347,70 +4347,98 @@ export async function getClaudeVersion() {
 }
 
 /**
- * Bounded settlement observer for a STANDALONE non-attached systemd-unit
- * launch (#2915 review 6, finding 5): `launchIsolatedWorker`'s non-attached
- * systemd-unit path returns `{ mode: 'systemd-unit', unit, pid }` with no
- * `child` handle in this process at all, so the direct-child backstop below
- * (`result.child.once('exit', ...)`) can never attach here — leaving an
- * ordinary (non-canary, `Infinity`-deadline) reservation with no settlement
- * observer whatsoever if the caller never settles it itself.
- *
- * Poll the SAME native unit-status query every other systemd-unit
- * stop/finish path already uses (`getWorkerIsolationStatus`), bounded by
- * `boundMs`, and settle once the unit itself reports inactive. `now >=
- * deadline` (#2915 round 8, D5) is the one deadline comparison this
- * function makes, consistently with the rest of this module.
- *
- * #2915 round 8 (D4, critique "an operator command does not replace a live
- * observer"): at the bound, this does NOT simply abandon observation with a
- * bare `settleDirectWorker({ kind: 'uncertain' })` (the former behavior,
- * which could release a still-live unit's reservation with no stop evidence
- * at all) — it initiates the SAME bounded isolation-specific stop every
- * other stop path already uses (`stopUnit`), re-checks the unit's own
- * retained state exactly once more, and settles with `confirmedStop` set
- * EXPLICITLY (never omitted) from that evidence: `true` only when the unit
- * is now genuinely inactive with a terminal exec status, `false` otherwise
- * — retaining unresolved ownership (a breaker-side stop-evidence marker, for
- * a reservation this observer's admission happens to hold as a canary)
- * rather than fabricating a confirmed stop it never observed.
- * `settleDirectWorker` is idempotent, so an explicit caller settlement with
- * real evidence still wins if it happens first; this is purely a backstop
- * against "forgot to settle", exactly like the direct-child listener it
- * complements.
+ * Standalone ownership observer. Attached and detached launches share the
+ * admission clock and absolute deadline; child completion cannot disarm an
+ * unresolved unit's deadline. At the bound, attempt an isolation-specific
+ * stop, then retain ownership unless terminal unit evidence confirms it.
  */
 export function observeStandaloneUnitSettlement(unit, admission, {
   pollIntervalMs = 2000, boundMs = 300_000, getStatus = getWorkerIsolationStatus, stopUnit = stopWorkerUnit,
-  nowMs = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), unrefTimer = timer => timer?.unref?.(),
+  nowMs = () => admission.breaker?.nowMs?.() ?? performance.now(), deadlineAtMs = nowMs() + boundMs,
+  child = null, isolationMode = 'systemd-unit', terminateChild = terminateChildWithGrace,
+  setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = timer => clearTimeout(timer),
+  unrefTimer = timer => timer?.unref?.(),
 } = {}) {
-  const deadline = nowMs() + boundMs;
+  let timer;
+  let confirmed = false;
+  let stopStarted = false;
+  let childObserved = false;
+  const invocationId = admission.token?.invocationId ?? admission.invocationId;
   const settleObserved = async (status, stopFirst) => {
-    const evidence = await resolveStopEvidence({ isolationMode: 'systemd-unit', unitName: unit,
-      getStatus: stopFirst ? getStatus : () => status, stopUnit, stopFirst });
+    const evidence = await resolveStopEvidence({ isolationMode, unitName: unit, child, terminateChild,
+      getStatus: status ? () => status : getStatus, stopUnit, stopFirst });
     await settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: evidence.confirmedStop });
-    if (!evidence.confirmedStop) {
-      // One bounded follow-up, never an unbounded background poll.
-      unrefTimer(setTimer(() => {
-        resolveStopEvidence({ isolationMode: 'systemd-unit', unitName: unit, getStatus, stopFirst: false })
-          .then(later => {
-            if (later.confirmedStop) admission.breaker?.reconcileStopEvidence?.({ invocationId: admission.token?.invocationId ?? admission.invocationId, confirmedStop: true });
-          }).catch(() => {});
-      }, pollIntervalMs));
+    if (evidence.confirmedStop) {
+      confirmed = true;
+      clearTimer(timer);
+      admission.breaker?.reconcileStopEvidence?.({ invocationId, confirmedStop: true });
+    } else if (stopFirst && isolationMode === 'systemd-unit') {
+      // Bounded late observations; exhaustion leaves the marker available
+      // to explicit operator reconciliation, never releases it by age.
+      observeLateStopEvidence(async () => {
+        const later = await resolveStopEvidence({ isolationMode, unitName: unit, getStatus, stopFirst: false });
+        if (later.confirmedStop) admission.breaker?.reconcileStopEvidence?.({ invocationId, confirmedStop: true });
+        return later.confirmedStop;
+      }, { pollIntervalMs, setTimer, unrefTimer });
     }
   };
+  const schedule = () => {
+    const remaining = Math.max(0, deadlineAtMs - nowMs());
+    timer = setTimer(poll, isolationMode === 'systemd-unit' ? Math.min(pollIntervalMs, remaining) : remaining);
+    unrefTimer(timer);
+  };
+  const stopAtDeadline = () => {
+    if (nowMs() < deadlineAtMs) return false;
+    stopStarted = true;
+    settleObserved(null, true).catch(() => {});
+    return true;
+  };
   const poll = () => {
+    if (confirmed || stopStarted || stopAtDeadline()) return;
     let status = null;
-    try { status = getStatus(unit); } catch { status = null; }
-    if (status && status.active === false) {
+    if (isolationMode === 'systemd-unit') {
+      try { status = getStatus(unit); } catch { /* unavailable evidence retains ownership */ }
+    }
+    if (stopAtDeadline()) return;
+    if (status?.active === false && [1, 2, 3].includes(status.execMainCode)) {
       settleObserved(status, false).catch(() => {});
       return;
     }
-    if (nowMs() >= deadline) {
-      settleObserved(status, true).catch(() => {});
-      return;
-    }
-    unrefTimer(setTimer(poll, pollIntervalMs));
+    schedule();
   };
-  poll();
+  if (child && typeof child.once === 'function') {
+    const observe = () => {
+      if (childObserved || confirmed) return;
+      childObserved = true;
+      settleObserved(null, false).catch(() => {});
+    };
+    child.once('exit', observe);
+    child.once('error', observe);
+    schedule();
+  } else {
+    poll();
+  }
+}
+
+/** Three delayed observations, then explicit reconciliation owns any remainder. */
+export function observeLateStopEvidence(observe, {
+  pollIntervalMs = 2000, setTimer = (fn, ms) => setTimeout(fn, ms), unrefTimer = timer => timer?.unref?.(),
+} = {}) {
+  let remaining = 3;
+  let timer;
+  let cancelled = false;
+  const schedule = () => {
+    if (cancelled || remaining-- <= 0) return;
+    timer = setTimer(async () => {
+      if (cancelled) return;
+      let confirmed = false;
+      try { confirmed = await observe(); } catch { /* retain unresolved ownership */ }
+      if (!confirmed) schedule();
+    }, pollIntervalMs);
+    unrefTimer(timer);
+  };
+  schedule();
+  return () => { cancelled = true; clearTimeout(timer); };
 }
 
 /**
@@ -4554,13 +4582,13 @@ export function planDirectWorkerLaunch({
   taskChainDigest,
   maxAttempts,
   captureRoot,
-  // #2915 review 6 (finding 5): test-only injection for the standalone
-  // non-attached systemd-unit settlement observer below (production omits
-  // these and polls the real `getWorkerIsolationStatus` on a real bounded
-  // timer).
+  // Test-only isolation observation/stop seams for standalone launches.
+  // Production uses the native unit query and bounded isolation stop.
   isolationStatus,
   unitSettlementPollMs,
   unitSettlementBoundMs,
+  stopUnit,
+  terminateChild,
   // #2915 round 8 review 8 (C3): optional `{ deadlineAtMs, nowMs,
   // isCancelled }`, forwarded into both the borrowed and the standalone
   // dispatch-commit hook below — see `checkDispatchGuard`'s own doc
@@ -4753,14 +4781,20 @@ export function planDirectWorkerLaunch({
     // still has to run. `beginDispatch`/`commitDispatch` consume this
     // reservation's own launch authority exactly once, at that same leaf
     // boundary (#2915 round 8, D3).
+    const deadlineClockNow = dispatchGuard?.nowMs ?? (() => admission.breaker.nowMs());
+    const admittedAtMs = deadlineClockNow();
+    const deadlineAtMs = Math.min(dispatchGuard?.deadlineAtMs ?? Infinity, admission.token.deadlineMs,
+      admittedAtMs + (unitSettlementBoundMs ?? 300_000),
+      admittedAtMs + Math.min(invocation?.health?.hardTimeoutSeconds ?? Infinity, invocation?.limits?.wallSeconds ?? Infinity) * 1000);
+    const standaloneGuard = { ...dispatchGuard, deadlineAtMs, nowMs: deadlineClockNow };
     const onDispatchCommit = async () => {
       const began = admission.breaker.beginDispatch(admission.token,
         { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
       if (!began.ok) throw new Error(`Worker dispatch refused: ${began.reason}`);
       try {
-        checkDispatchGuard(dispatchGuard);
+        checkDispatchGuard(standaloneGuard);
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
-        checkDispatchGuard(dispatchGuard);
+        checkDispatchGuard(standaloneGuard);
       } catch (error) {
         try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
         throw error;
@@ -4786,52 +4820,10 @@ export function planDirectWorkerLaunch({
       const diagnostic = await settleDirectWorker(admission, { kind: 'uncertain' });
       return diagnostic ? { ...result, ledgerDiagnostics: [...(result.ledgerDiagnostics ?? []), diagnostic] } : result;
     }
-    // #2915 review 5 (finding 2c, "leaked capacity"): a standalone
-    // successful launch previously transferred settlement responsibility
-    // entirely to the caller via this function's own documented contract
-    // ("a caller that wants to track completion can call
-    // settleDirectWorker itself") -- but a NON-canary admission's token has
-    // an `Infinity` deadline (only a canary gets the breaker's own bounded
-    // `canaryTimeoutMs`; see `ScopedFailureBreaker.admit`), so a caller
-    // that never settles leaks this reservation forever; the breaker's own
-    // sweep can never reclaim it. For the direct-child isolation modes
-    // (not `systemd-unit`, which has no simple exit event here), attach a
-    // bounded safety-net settlement tied to the actual child's own exit,
-    // so an unsettled admission is cleaned up once the process it gated
-    // has genuinely ended, regardless of whether the caller ever settles.
-    // `settleDirectWorker` is idempotent, so an explicit caller settlement
-    // with real evidence still wins if it happens first; this is purely a
-    // backstop against "forgot to settle", never a replacement for real
-    // evidence-based settlement.
-    if (result.child && typeof result.child.once === 'function') {
-      let observed = false;
-      const observe = () => {
-        if (observed) return;
-        observed = true;
-        resolveStopEvidence({ isolationMode: result.mode, unitName: result.unit ?? null,
-          child: result.child, getStatus: isolationStatus, stopFirst: false })
-          .then(async evidence => {
-            await settleDirectWorker(admission, { kind: 'uncertain', confirmedStop: evidence.confirmedStop });
-            if (!evidence.confirmedStop && result.mode === 'systemd-unit' && result.unit) {
-              setTimeout(() => {
-                resolveStopEvidence({ isolationMode: result.mode, unitName: result.unit,
-                  getStatus: isolationStatus, stopFirst: false }).then(later => {
-                  if (later.confirmedStop) admission.breaker?.reconcileStopEvidence?.({ invocationId: admission.token?.invocationId ?? admission.invocationId, confirmedStop: true });
-                }).catch(() => {});
-              }, unitSettlementPollMs ?? 2000).unref?.();
-            }
-          }).catch(() => {});
-      };
-      result.child.once('exit', observe);
-      result.child.once('error', observe);
-    } else if (result.mode === 'systemd-unit' && result.unit) {
-      // #2915 review 6 (finding 5): the non-attached systemd-unit mode has
-      // no direct child to observe here at all -- give it the same kind of
-      // bounded backstop via the native unit-status query instead of
-      // leaving this reservation with no settlement observer whatsoever.
-      observeStandaloneUnitSettlement(result.unit, admission,
-        { getStatus: isolationStatus, pollIntervalMs: unitSettlementPollMs, boundMs: unitSettlementBoundMs });
-    }
+    observeStandaloneUnitSettlement(result.unit ?? null, admission, {
+      child: result.child, isolationMode: result.mode, getStatus: isolationStatus, stopUnit, terminateChild,
+      pollIntervalMs: unitSettlementPollMs, deadlineAtMs, nowMs: deadlineClockNow,
+    });
     return { ...result, admission };
   })();
 }
