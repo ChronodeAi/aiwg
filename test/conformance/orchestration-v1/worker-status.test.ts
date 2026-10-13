@@ -236,4 +236,22 @@ describe('T-OG-23 ownership, bounds, unknowns and observer gaps', () => {
     expect(report.exitCode).toBe(0); expect(module.formatWorkerStatus(report)).toContain('fixture-worker');
     expect(await readdir(installed)).toEqual(expect.arrayContaining(['process-monitor.mjs', 'lib']));
   });
+
+  it('WS20 the same staged-without-resolver monitor surfaces a diagnostic for getProcessHealth instead of a bare null (#3062 B/C finding 12)', async () => {
+    const installed = await root(); await mkdir(path.join(installed, 'lib'), { mode: 0o700 });
+    await cp('tools/ralph-external/process-monitor.mjs', path.join(installed, 'process-monitor.mjs'));
+    await cp('tools/ralph-external/lib/worker-health.mjs', path.join(installed, 'lib/worker-health.mjs'));
+    const module = await import(pathToFileURL(path.join(installed, 'process-monitor.mjs')).href);
+
+    const monitor = new module.ProcessMonitor({ projectRoot: installed });
+    monitor.monitoredLoops.set('loop', { pid: process.pid });
+    const health = monitor.getProcessHealth('loop');
+
+    expect(health).not.toBeNull();
+    expect(health.status).toBe('unavailable');
+    expect(health.cpu).toBeNull();
+    expect(health.memory).toBeNull();
+    expect(health.uptime).toBeNull();
+    expect(health.unavailableReason).toContain('bounded-child-process helper unavailable');
+  });
 });

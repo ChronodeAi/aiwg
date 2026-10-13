@@ -30,12 +30,21 @@ import { createWorkerHealthObserver } from './lib/worker-health.mjs';
 // top-level static import: a missing *static* import specifier fails
 // module linking before any of this module's own code (including a
 // try/catch) ever runs.
+//
+// Only the specific "this dependency is genuinely missing" error is
+// tolerated (#3062 B/C finding 12): a bare `catch {}` here would also
+// swallow a real defect in bounded-child-process.mjs itself (a syntax
+// error, a thrown assertion, ...) and silently report every live-process
+// health query as unavailable instead of surfacing the actual failure.
 let boundedExecFileSync = null;
+let processHealthUnavailableReason = null;
 try {
   const { importImpl } = await import('../_resolve-impl.mjs');
   ({ boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs'));
-} catch {
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
   boundedExecFileSync = null;
+  processHealthUnavailableReason = `bounded-child-process helper unavailable (standalone load without tools/_resolve-impl.mjs or src/dist/ nearby): ${error.message}`;
 }
 
 /** Side-effect-free Linux sample. Unknown identity never grants signal authority. */
@@ -332,7 +341,12 @@ export class ProcessMonitor extends EventEmitter {
       };
     }
 
-    if (!boundedExecFileSync) return null; // degraded standalone load (see module header) — no bounded helper available
+    if (!boundedExecFileSync) {
+      // #3062 B/C finding 12: surface *why* no metrics are available
+      // (module header) instead of returning a bare `null` indistinguishable
+      // from "process not monitored"/"ps produced nothing useful".
+      return { pid, cpu: null, memory: null, uptime: null, status: 'unavailable', unavailableReason: processHealthUnavailableReason };
+    }
 
     try {
       // Use ps command to get process stats
