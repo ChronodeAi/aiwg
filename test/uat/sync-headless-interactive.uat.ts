@@ -6,10 +6,9 @@
  * asserts each exits promptly instead of hanging: no real agent/editor/
  * provider binary is invoked by these scenarios (CI-safe, stub lane).
  *
- * `codex-login` has no scenario here: there is currently no `aiwg` command
- * that reaches `loginInProfile` (see the `codex-login` allow-list entry and
- * src/mcp/adapters/codex-runtime.ts) — it is covered at the unit level
- * (test/unit/mcp/credentials.test.ts) instead.
+ * `codex-login` has a dedicated CLI-wiring scenario here (`aiwg mcp profile
+ * login --api-key-env`, against a stub `codex`); `loginInProfile` itself is
+ * covered at the unit level (test/unit/mcp/credentials.test.ts).
  *
  * The `aiwg init --worker-dispatch` scenarios are a related but distinct
  * headless-safety gap under the same rule: the worker-dispatch offer never
@@ -17,32 +16,119 @@
  * previously had no argument to answer it directly — see
  * docs/getting-started/worker-dispatch.md#answering-headlessly.
  *
+ * Hang-guard design (#3062 review item 14): every scenario below is
+ * supervised by `runProcessAsync`, never by a synchronous `spawnSync` with
+ * a native `timeout`. A synchronous timeout sends SIGTERM once and then
+ * blocks the *calling* thread until the child actually exits — so a CLI
+ * that traps SIGTERM (or has a descendant still blocked in its own
+ * synchronous child call) hangs this test file's own process too, and
+ * Vitest's per-test timeout cannot interrupt a blocked native call either.
+ * `runProcessAsync` spawns detached (its own process group), races an
+ * independent `setTimeout` against the real `exit` event, and on expiry
+ * sends SIGKILL to the whole group (`process.kill(-pid, 'SIGKILL')`), not
+ * just the direct child — the only way to reach a descendant the child
+ * itself spawned and is blocked on. The dedicated "hang guard fires"
+ * scenario below proves this against a fixture built to defeat anything
+ * weaker.
+ *
  * Run on demand (included in npm run uat):
  *   npm run uat
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, delimiter } from 'node:path';
 import { stringify } from 'yaml';
 
 // @ts-ignore
 const __dirname_uat = new URL('.', import.meta.url).pathname;
 const PROJECT_ROOT = resolve(__dirname_uat, '../..');
 const BIN = join(PROJECT_ROOT, 'bin', 'aiwg.mjs');
+const FIXTURES = join(__dirname_uat, 'fixtures');
 
-// Generous relative to the test's own 20s assertion — this is the ceiling
+// Generous relative to each test's own assertions — this is the ceiling
 // that proves "did not hang", not the expected run time.
 const HANG_GUARD_MS = 20_000;
+// Vitest's own per-test timeout must exceed HANG_GUARD_MS with headroom,
+// or Vitest's timeout could fire first and mask whether our own guard
+// would have worked.
+const TEST_TIMEOUT_MS = HANG_GUARD_MS + 15_000;
 
-function runHeadless(args: string[], cwd: string, configDir: string) {
-  const result = spawnSync(process.execPath, [BIN, ...args], {
+interface ProcResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+}
+
+/**
+ * Supervise one child process asynchronously with an independent hard
+ * deadline, SIGKILLing its whole process group on expiry. See the module
+ * doc comment above for why this must never be a synchronous `spawnSync`.
+ */
+function runProcessAsync(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
+): Promise<ProcResult> {
+  return new Promise((settle) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let settled = false;
+
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+
+    if (options.input !== undefined) {
+      child.stdin!.write(options.input);
+      child.stdin!.end();
+    }
+
+    const killWholeGroup = () => {
+      try {
+        if (process.platform === 'win32' || !child.pid) child.kill('SIGKILL');
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // Already exited, or the group is already gone — fine either way.
+      }
+    };
+
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      killWholeGroup();
+    }, HANG_GUARD_MS);
+
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      settle({ stdout, stderr: `${stderr}\n${error.message}`, exitCode: null, signal: null, timedOut });
+    });
+
+    child.on('exit', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      settle({ stdout, stderr, exitCode: code, signal, timedOut });
+    });
+  });
+}
+
+function runHeadless(args: string[], cwd: string, configDir: string): Promise<ProcResult> {
+  return runProcessAsync(process.execPath, [BIN, ...args], {
     cwd,
-    encoding: 'utf8',
-    timeout: HANG_GUARD_MS,
-    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       AIWG_CONFIG: configDir,
@@ -54,11 +140,17 @@ function runHeadless(args: string[], cwd: string, configDir: string) {
       CI: 'true',
     },
   });
-  return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitCode: result.status, signal: result.signal, timedOut: result.error?.code === 'ETIMEDOUT' };
 }
 
 function makeTmpDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `aiwg-uat-headless-${label}-`));
+}
+
+function makeStubBin(dir: string, name: string, fixture: string): string {
+  const stubPath = join(dir, name);
+  writeFileSync(stubPath, readFileSync(join(FIXTURES, fixture), 'utf8'), { mode: 0o755 });
+  chmodSync(stubPath, 0o755);
+  return stubPath;
 }
 
 describe('UAT: headless-safe interactive call sites (#3062)', () => {
@@ -75,30 +167,30 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  it('editor-launch: `aiwg config edit` refuses instead of spawning $EDITOR', () => {
-    const result = runHeadless(['config', 'edit'], cwd, configDir);
+  it('editor-launch: `aiwg config edit` refuses instead of spawning $EDITOR', async () => {
+    const result = await runHeadless(['config', 'edit'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/--print-path/);
     expect(result.stderr + result.stdout).toMatch(/aiwg config set/);
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('editor-launch: `aiwg config edit --print-path` prints the path and exits 0', () => {
-    const result = runHeadless(['config', 'edit', '--print-path'], cwd, configDir);
+  it('editor-launch: `aiwg config edit --print-path` prints the path and exits 0', async () => {
+    const result = await runHeadless(['config', 'edit', '--print-path'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(join(configDir, 'config.yaml'));
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('harness-launch: `aiwg session` with no --prompt refuses instead of hanging waiting for a terminal', () => {
-    const result = runHeadless(['session', '--provider', 'claude', '--no-repair'], cwd, configDir);
+  it('harness-launch: `aiwg session` with no --prompt refuses instead of hanging waiting for a terminal', async () => {
+    const result = await runHeadless(['session', '--provider', 'claude', '--no-repair'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/--prompt/);
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('codex-exec: `aiwg session --profile` with no --prompt refuses before reaching the codex runtime home', () => {
-    const result = runHeadless(
+  it('codex-exec: `aiwg session --profile` with no --prompt refuses before reaching the codex runtime home', async () => {
+    const result = await runHeadless(
       ['session', '--provider', 'codex', '--profile', 'does-not-exist', '--no-repair'],
       cwd,
       configDir,
@@ -106,9 +198,57 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/--prompt/);
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('manifest-script-step: `aiwg setup-run` completes a non-prompting script without hanging', () => {
+  it('harness-launch: an unsupported (non-spawnable) provider given --prompt refuses, naming the provider, without spawning anything', async () => {
+    const result = await runHeadless(['session', '--provider', 'factory', '--prompt', 'hi', '--no-repair'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr + result.stdout).toMatch(/Factory AI/);
+    expect(result.stderr + result.stdout).toMatch(/no CLI binary to spawn/);
+  }, TEST_TIMEOUT_MS);
+
+  it('harness-launch: `aiwg session --prompt-file` runs a stub provider headless, prompt on stdin — never argv', async () => {
+    const binDir = makeTmpDir('stub-provider-bin');
+    const workDir = makeTmpDir('stub-provider-work');
+    makeStubBin(binDir, 'claude', 'stub-provider-stdin.mjs');
+    const argvLog = join(workDir, 'argv.log');
+    const stdinLog = join(workDir, 'stdin.log');
+    const promptFile = join(workDir, 'prompt.txt');
+    const promptText = 'treat this prompt as confidential: sk-not-a-real-secret';
+    writeFileSync(promptFile, `${promptText}\n`);
+
+    try {
+      const result = await runProcessAsync(process.execPath, [BIN, 'session', '--provider', 'claude', '--prompt-file', promptFile, '--no-repair'], {
+        cwd,
+        env: {
+          ...process.env,
+          AIWG_CONFIG: configDir,
+          NO_UPDATE_NOTIFIER: '1',
+          AIWG_TELEMETRY_DISABLED: '1',
+          CI: 'true',
+          PATH: `${binDir}${delimiter}${process.env.PATH}`,
+          UAT_ARGV_LOG: argvLog,
+          UAT_STDIN_LOG: stdinLog,
+        },
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(argvLog)).toBe(true);
+      const recordedArgv = readFileSync(argvLog, 'utf8');
+      // The prompt text never appears on argv — only the stdin-transport
+      // flags do (#3062 review item 8).
+      expect(recordedArgv).not.toContain(promptText);
+      expect(recordedArgv).toContain('--input-format');
+      expect(existsSync(stdinLog)).toBe(true);
+      expect(readFileSync(stdinLog, 'utf8')).toBe(promptText);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it('manifest-script-step: `aiwg setup-run` completes a non-prompting script without hanging', async () => {
     const manifestPath = join(cwd, 'setup.manifest.yaml');
     const marker = join(cwd, 'marker');
     const scriptPath = join(cwd, 'scripts', 'install.sh');
@@ -121,14 +261,14 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
       spec: { platforms: [{ os: 'linux' }], steps: [{ id: 'install', type: 'script', script: 'scripts/install.sh' }] },
     }), 'utf8');
 
-    const result = runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
+    const result = await runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, 'utf8')).toBe('ran');
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('manifest-shell-command: `aiwg setup-run` runs a non-prompting verify command without hanging', () => {
+  it('manifest-shell-command: `aiwg setup-run` runs a non-prompting verify command without hanging', async () => {
     const manifestPath = join(cwd, 'setup.manifest.yaml');
     writeFileSync(manifestPath, stringify({
       apiVersion: 'setup.aiwg.io/v1',
@@ -137,46 +277,12 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
       spec: { platforms: [{ os: 'linux' }], steps: [{ id: 'check', type: 'verify', commands: ['true'] }] },
     }), 'utf8');
 
-    const result = runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
+    const result = await runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
-  });
+  }, TEST_TIMEOUT_MS);
 
-  it('aiwg init --worker-dispatch enable writes only parallelism.worker_dispatch, headless', () => {
-    const result = spawnSync(process.execPath, [BIN, 'init', '--non-interactive', '--worker-dispatch', 'enable'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: HANG_GUARD_MS,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        AIWG_CONFIG: configDir,
-        // Enabling worker_dispatch makes writeAiwgConfig validate
-        // worker-model defaults against the bundled config; point it at
-        // this checkout instead of a real user-home install.
-        AIWG_HOME: PROJECT_ROOT,
-        NO_UPDATE_NOTIFIER: '1',
-        AIWG_TELEMETRY_DISABLED: '1',
-        CI: 'true',
-      },
-    });
-    expect(result.error?.code).not.toBe('ETIMEDOUT');
-    expect(result.status).toBe(0);
-    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
-    expect(config.parallelism.worker_dispatch).toBe(true);
-    expect(config.setup?.worker_dispatch_offer).toBeUndefined();
-  });
-
-  it('aiwg init --worker-dispatch decline writes only setup.worker_dispatch_offer, headless', () => {
-    const result = runHeadless(['init', '--non-interactive', '--worker-dispatch', 'decline'], cwd, configDir);
-    expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(0);
-    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
-    expect(config.setup?.worker_dispatch_offer).toBe('declined');
-    expect(config.parallelism?.worker_dispatch).not.toBe(true);
-  });
-
-  it('manifest step marked interactive: true is refused up front, without running it', () => {
+  it('manifest step marked interactive: true is refused up front, without running it', async () => {
     const manifestPath = join(cwd, 'setup.manifest.yaml');
     const marker = join(cwd, 'marker');
     const scriptPath = join(cwd, 'scripts', 'install.sh');
@@ -189,10 +295,221 @@ describe('UAT: headless-safe interactive call sites (#3062)', () => {
       spec: { platforms: [{ os: 'linux' }], steps: [{ id: 'install', type: 'script', script: 'scripts/install.sh', interactive: true }] },
     }), 'utf8');
 
-    const result = runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
+    const result = await runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).not.toBe(0);
     expect(existsSync(marker)).toBe(false);
     expect(result.stderr + result.stdout).toContain("step 'install'");
-  });
+  }, TEST_TIMEOUT_MS);
+
+  it('manifest "ask" step with every declared param supplied runs headless, never refusing', async () => {
+    const manifestPath = join(cwd, 'setup.manifest.yaml');
+    writeFileSync(manifestPath, stringify({
+      apiVersion: 'setup.aiwg.io/v1',
+      kind: 'SetupManifest',
+      metadata: { name: 'uat-headless-ask-step', description: 'no os configuration required', install_type: 'developer' },
+      spec: {
+        platforms: [{ os: 'linux' }],
+        params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+        steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] }],
+      },
+    }), 'utf8');
+
+    const result = await runHeadless(['setup-run', '--manifest', manifestPath, '--yes', '--param', 'DEPLOY_TARGET=staging'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+  }, TEST_TIMEOUT_MS);
+
+  it('manifest "ask" step with a missing declared param is refused up front, naming it', async () => {
+    const manifestPath = join(cwd, 'setup.manifest.yaml');
+    writeFileSync(manifestPath, stringify({
+      apiVersion: 'setup.aiwg.io/v1',
+      kind: 'SetupManifest',
+      metadata: { name: 'uat-headless-ask-step-missing', description: 'no os configuration required', install_type: 'developer' },
+      spec: {
+        platforms: [{ os: 'linux' }],
+        params: [{ name: 'DEPLOY_TARGET', type: 'string' }],
+        steps: [{ id: 'confirm-target', type: 'ask', message: 'Which target?', params: ['DEPLOY_TARGET'] }],
+      },
+    }), 'utf8');
+
+    const result = await runHeadless(['setup-run', '--manifest', manifestPath, '--yes'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain('DEPLOY_TARGET');
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg init --worker-dispatch enable writes only parallelism.worker_dispatch, headless', async () => {
+    const result = await runProcessAsync(process.execPath, [BIN, 'init', '--non-interactive', '--worker-dispatch', 'enable'], {
+      cwd,
+      env: {
+        ...process.env,
+        AIWG_CONFIG: configDir,
+        // Enabling worker_dispatch makes writeAiwgConfig validate
+        // worker-model defaults against the bundled config; point it at
+        // this checkout instead of a real user-home install.
+        AIWG_HOME: PROJECT_ROOT,
+        NO_UPDATE_NOTIFIER: '1',
+        AIWG_TELEMETRY_DISABLED: '1',
+        CI: 'true',
+      },
+    });
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
+    expect(config.parallelism.worker_dispatch).toBe(true);
+    expect(config.setup?.worker_dispatch_offer).toBeUndefined();
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg init --worker-dispatch decline writes only setup.worker_dispatch_offer, headless', async () => {
+    const result = await runHeadless(['init', '--non-interactive', '--worker-dispatch', 'decline'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
+    expect(config.setup?.worker_dispatch_offer).toBe('declined');
+    expect(config.parallelism?.worker_dispatch).not.toBe(true);
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg init --dry-run writes nothing at all, even with --providers/--script', async () => {
+    const result = await runHeadless(
+      ['init', '--non-interactive', '--dry-run', '--providers', 'codex', '--script', 'lint=npm run lint'],
+      cwd,
+      configDir,
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(cwd, '.aiwg'))).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg init headless with --providers/--default-scripts/--script answers every remaining wizard input directly', async () => {
+    const result = await runHeadless(
+      [
+        'init', '--non-interactive',
+        '--providers', 'codex,claude',
+        '--default-scripts', 'false',
+        '--script', 'lint=npm run lint',
+      ],
+      cwd,
+      configDir,
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
+    expect(config.providers).toEqual(['codex', 'claude']);
+    expect(config.scripts).toEqual({ lint: 'npm run lint' });
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg init: a value-taking flag present without a value is a usage error before any write', async () => {
+    const result = await runHeadless(['init', '--non-interactive', '--providers'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain('--providers');
+    expect(existsSync(join(cwd, '.aiwg'))).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg setup project --yes with every flag supplied runs headless, writing the supplied values, no prompts', async () => {
+    const result = await runHeadless(
+      [
+        'setup', 'project', '--yes',
+        '--primary', 'origin',
+        '--issue-provider', 'local',
+        '--delivery-mode', 'direct',
+        '--default-branch', 'main',
+        '--providers', 'claude',
+      ],
+      cwd,
+      configDir,
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(cwd, '.aiwg', 'aiwg.config'), 'utf8'));
+    expect(config.remotes.primary).toBe('origin');
+    expect(config.delivery.mode).toBe('direct');
+    expect(config.delivery.default_branch).toBe('main');
+  }, TEST_TIMEOUT_MS);
+
+  it('aiwg setup project: a value-taking flag present without a value is a usage error before any write', async () => {
+    const result = await runHeadless(['setup', 'project', '--yes', '--primary'], cwd, configDir);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr + result.stdout).toContain('--primary');
+    expect(existsSync(join(cwd, '.aiwg', 'aiwg.config'))).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  it('mcp profile login: without a terminal and without --api-key-env, refuses naming the argument, spawning nothing', async () => {
+    const binDir = makeTmpDir('stub-codex-bin');
+    const sentinelLog = join(binDir, 'sentinel.log');
+    makeStubBin(binDir, 'codex', 'stub-sentinel.mjs');
+    try {
+      const result = await runProcessAsync(process.execPath, [BIN, 'mcp', 'profile', 'login', 'uat-ci-profile'], {
+        cwd,
+        env: {
+          ...process.env,
+          AIWG_CONFIG: configDir,
+          HOME: cwd,
+          CODEX_HOME: join(cwd, '.codex'),
+          NO_UPDATE_NOTIFIER: '1',
+          AIWG_TELEMETRY_DISABLED: '1',
+          CI: 'true',
+          PATH: `${binDir}${delimiter}${process.env.PATH}`,
+          UAT_SENTINEL_LOG: sentinelLog,
+        },
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr + result.stdout).toMatch(/interactive terminal, or an API key/);
+      expect(result.stderr + result.stdout).toMatch(/apiKeyEnv/);
+      expect(existsSync(sentinelLog)).toBe(false);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it('mcp profile login --api-key-env logs in headless against a stub codex, key on stdin only', async () => {
+    const binDir = makeTmpDir('stub-codex-bin-2');
+    const argvLog = join(binDir, 'argv.log');
+    const stdinLog = join(binDir, 'stdin.log');
+    makeStubBin(binDir, 'codex', 'stub-provider-stdin.mjs');
+    try {
+      const result = await runProcessAsync(
+        process.execPath,
+        [BIN, 'mcp', 'profile', 'login', 'uat-ci-profile-2', '--api-key-env', 'UAT_FAKE_CODEX_KEY'],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            AIWG_CONFIG: configDir,
+            HOME: cwd,
+            CODEX_HOME: join(cwd, '.codex'),
+            NO_UPDATE_NOTIFIER: '1',
+            AIWG_TELEMETRY_DISABLED: '1',
+            CI: 'true',
+            PATH: `${binDir}${delimiter}${process.env.PATH}`,
+            UAT_ARGV_LOG: argvLog,
+            UAT_STDIN_LOG: stdinLog,
+            UAT_FAKE_CODEX_KEY: 'sk-uat-not-a-real-secret',
+          },
+        },
+      );
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain('sk-uat-not-a-real-secret');
+      expect(existsSync(argvLog)).toBe(true);
+      expect(readFileSync(argvLog, 'utf8')).not.toContain('sk-uat-not-a-real-secret');
+      expect(existsSync(stdinLog)).toBe(true);
+      expect(readFileSync(stdinLog, 'utf8')).toBe('sk-uat-not-a-real-secret');
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  }, TEST_TIMEOUT_MS);
+
+  it('hang guard: a descendant that ignores SIGTERM and blocks forever is still killed within the deadline', async () => {
+    const before = Date.now();
+    const result = await runProcessAsync(process.execPath, [join(FIXTURES, 'blocking-descendant.mjs')]);
+    const elapsedMs = Date.now() - before;
+    expect(result.timedOut).toBe(true);
+    expect(result.signal).toBe('SIGKILL');
+    // Killed at (approximately) the deadline, not left to run past it.
+    expect(elapsedMs).toBeLessThan(HANG_GUARD_MS + 10_000);
+  }, TEST_TIMEOUT_MS);
 });
