@@ -95,6 +95,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - `aiwg doctor --provider grok-build` no longer silently skips the context/memory firewall scan;
   `grok-build` is now in both the doctor provider label map and the firewall's own provider registry.
   The `grokbot.mjs` provider header comment now reads stable instead of experimental.
+- `aiwg runtime-info` and `aiwg steward capabilities` now agree on whether the current session is
+  Claude Code: both resolve through the shared `resolveActiveProvider` path, and the `claude` provider's
+  detection markers are the ones current Claude Code actually sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_DESKTOP_APP_VERSION`) instead of the stale `CLAUDE_CODE_VERSION` and the false-positive
+  `ANTHROPIC_API_KEY` (which any non-Claude session with that key set would otherwise match).
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;
