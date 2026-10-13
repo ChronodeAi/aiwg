@@ -110,7 +110,7 @@
     "clean": "npm run clean:build",
     "clean:build": "rm -rf dist build coverage",
     "clean:local": "rm -rf dist build coverage test-output test-results .pytest_cache .rlm-prep .aiwg/.index .aiwg/.storage-cache",
-    "clean:providers": "rm -rf .agents .claude .codex .cursor .factory .opencode .warp .windsurf .hermes .hermes.md .devin opencode.json",
+    "clean:providers": "node tools/cli/clean-providers.mjs",
     "check:install-size": "node tools/cli/check-install-size.mjs --verbose",
     "check:dep-budget": "node tools/cli/check-dep-budget.mjs --verbose",
     "check:budgets": "npm run check:install-size && npm run check:dep-budget",

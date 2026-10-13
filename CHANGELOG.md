@@ -88,6 +88,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   missing layer paths use filesystem-aware case comparisons to prevent overlap.
 - Regression coverage verifies inherited tool denies and credential references in Codex runtime configs
   and Claude injection, with TypeScript and runtime registries exercising the same layered behaviour.
+- `npm run clean:providers` removes only the subpaths AIWG deploys under `.claude/` (agents, commands,
+  skills, rules, hooks) instead of the whole directory, preserving Claude Desktop/Code-owned state
+  (`worktrees/`, `settings.local.json`, `settings.json` and its backups, `launch.json`). Every other
+  provider target keeps its previous whole-directory/whole-file removal behavior unchanged.
 
 - Claude profile settings preserve uncertain deny-rule ownership after manual edits, with a deny-array
   digest, tracked preservation and actionable warnings. Ownership follows realpath parent aliases;
