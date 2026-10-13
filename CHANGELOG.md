@@ -286,6 +286,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 ### Fixed
 
 - `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
+- The OMP provider failed in an installed package: its deploy tool imported two modules by a path
+  into the unshipped source tree, and `aiwg remove omp` imported that tool by a path that is one
+  directory short once compiled. Both now resolve from the installed layout (#3062, refs #3077).
+- A caller-supplied timeout of zero can no longer disable the bound on a synchronous child-process
+  call: such values go through a clamp helper, and the gate accepts a non-literal timeout only when
+  it resolves to a positive constant or to that helper (#3062).
+- A timed-out call whose child had already exited cleanly was read as success in the evaluation
+  harness, `aiwg doctor` and several lint and packaging tools; a timeout is now always a failure
+  (#3062).
+- `tools/qualification` and `tools/benchmarks` are no longer shipped in the npm package; nothing
+  installed uses them (#3062, refs #3075).
 - Shipped tools now find the bounded child-process helper through the same resolver they use for
   other built code, instead of a path into the unshipped source tree. Without this an installed
   `aiwg doctor`, deploy or new-project run would have failed to start. A packaging test now checks

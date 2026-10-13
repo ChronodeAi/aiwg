@@ -42,19 +42,6 @@ const ROOT = path.resolve(import.meta.dirname, '../..');
  * itself a behavior change this guard should not silently wave through.
  */
 const KNOWN_PREEXISTING_VIOLATIONS: Record<string, { resolvedRel: string; lazy: boolean }[]> = {
-  // Compiled from src/cli/handlers/subcommands.ts (outside this issue's
-  // file-set boundary — not fixed here, reported separately): a relative
-  // import that correctly reaches tools/ from src/cli/handlers/ resolves
-  // one directory short from dist/src/cli/handlers/, since dist/src/
-  // nests one level deeper than src/ relative to the repo root. Predates
-  // #3062 (introduced in 8e37a4f4e, well before this branch).
-  'dist/src/cli/handlers/subcommands.js': [
-    { resolvedRel: 'dist/tools/agents/providers/omp.mjs', lazy: true },
-  ],
-  'tools/agents/providers/omp.mjs': [
-    { resolvedRel: 'src/providers/omp-paths.mjs', lazy: false },
-    { resolvedRel: 'src/providers/omp-agent.mjs', lazy: false },
-  ],
   'tools/cockpit/qualify-desktop-issuer.mjs': [
     { resolvedRel: 'apps/cockpit/bridge/src/desktop-identity-keycloak.mjs', lazy: false },
     { resolvedRel: 'apps/cockpit/bridge/src/desktop-issuer-transport.mjs', lazy: false },

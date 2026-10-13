@@ -782,7 +782,9 @@ export const removeHandler: CommandHandler = {
     // adapter validates receipt hashes and preserves operator modifications.
     const nativeRemovalProvider = parseRemoveProvider(ctx.args);
     if (firstRemovePositional(ctx.args) === 'omp' && nativeRemovalProvider.provider === 'omp') {
-      const { uninstall } = await import('../../../tools/agents/providers/omp.mjs');
+      // Loaded from the package root, not by a path relative to this file: the
+      // compiled handler sits one directory deeper than its source.
+      const { uninstall } = (await import(pathToFileURL(path.join(await getFrameworkRoot(), 'tools/agents/providers/omp.mjs')).href)) as typeof import('../../../tools/agents/providers/omp.mjs');
       const { getProjectDir } = await import('../../config/aiwg-config.js');
       const dryRun = ctx.args.includes('--dry-run');
       const scope = ctx.args.includes('--user') || isScopeUser(ctx.args) ? 'user' : 'project';
