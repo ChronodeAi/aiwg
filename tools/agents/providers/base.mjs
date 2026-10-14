@@ -11,6 +11,7 @@
 import realFs from 'fs';
 import path from 'path';
 import os from 'os';
+import yaml from 'yaml';
 import { classifyModelRole } from './model-role.mjs';
 import { createHash } from 'crypto';
 import { createRequire } from 'module';
@@ -378,44 +379,38 @@ const PROVIDER_TO_PLATFORM = {
 
 /**
  * Parse the platforms: field from a SKILL.md frontmatter block.
- * Handles both inline array (platforms: [a, b]) and multi-line list formats.
- * Returns null if no platforms field is present (= deploy to all providers).
- * Returns an empty array only if the field is explicitly empty.
+ * Accepts a string or a list of strings; all alone means unrestricted.
+ * Returns null if platforms is missing, or no frontmatter is present.
+ * Returns an empty array for malformed frontmatter or invalid platforms.
  */
 export function parseSkillPlatforms(content) {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return null;
-
-  const fm = fmMatch[1];
-  const normalizePlatform = value => value.trim().replace(/^(["'])(.*)\1$/, '$2');
-
-  // Inline array: platforms: [claude-code, codex] or platforms: [all]
-  const inlineMatch = fm.match(/^platforms:\s*\[([^\]]*)\]/m);
-  if (inlineMatch) {
-    const items = inlineMatch[1].split(',').map(normalizePlatform).filter(Boolean);
-    if (items.length === 0 || (items.length === 1 && items[0] === 'all')) return null;
-    return items;
+  // A leading UTF-8 BOM must not hide the frontmatter (and its restrictions).
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m);
+  if (!fmMatch || fmMatch.index !== 0) {
+    return /^---[ \t]*(?:\r?\n|$)/.test(content) ? [] : null;
   }
 
-  // Multi-line list:
-  //   platforms:
-  //     - claude-code
-  //     - hermes
-  const multiMatch = fm.match(/^platforms:\s*\n((?:[ \t]+-[ \t]+\S[^\n]*\n?)+)/m);
-  if (multiMatch) {
-    const items = multiMatch[1]
-      .split('\n')
-      .map(line => line.match(/^[ \t]+-[ \t]+(\S+)/)?.[1])
-      .filter(Boolean)
-      .map(normalizePlatform);
-    if (items.length === 0 || (items.length === 1 && items[0] === 'all')) return null;
-    return items;
+  let metadata;
+  try {
+    const document = yaml.parseDocument(fmMatch[1]);
+    if (document.errors.length > 0) return [];
+    if (!document.contents) return null; // Empty frontmatter has no restrictions.
+    metadata = document.toJS();
+  } catch {
+    return [];
   }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  // The yaml package leaves merge keys unresolved, so platforms could arrive only
+  // through `<<`; without an explicit key that is ambiguous, so fail closed.
+  if (!Object.hasOwn(metadata, 'platforms')) return Object.hasOwn(metadata, '<<') ? [] : null;
 
-  // platforms: key present but empty
-  if (/^platforms:\s*$/m.test(fm)) return null;
-
-  return null; // Field absent = deploy to all
+  const platforms = metadata.platforms;
+  const items = typeof platforms === 'string' ? [platforms] : platforms;
+  if (!Array.isArray(items) || !items.every(item => typeof item === 'string')) return [];
+  const normalized = items.map(item => item.trim());
+  if (normalized.some(item => !item)) return [];
+  return normalized.length === 1 && normalized[0] === 'all' ? null : normalized;
 }
 
 /**

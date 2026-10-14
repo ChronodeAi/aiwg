@@ -167,6 +167,7 @@ function parseYamlLineByLine(yamlBlock) {
  */
 function buildYaml(metadata) {
   return yaml.stringify(metadata, {
+    compat: 'yaml-1.1', // Quote strings that YAML 1.1 consumers could coerce.
     defaultKeyType: 'PLAIN',
     defaultStringType: 'PLAIN',
     blockQuote: false,
