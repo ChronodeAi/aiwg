@@ -350,6 +350,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   using data-property definitions, preserving nested own `__proto__` keys in serialized JSON.
   Config YAML keys and dotted set paths reject all three names; config reads follow own properties only.
   Config read/parse errors report the file and reason and block overwrites; only missing files use defaults.
+- Cockpit bridge hardening (#3099, CodeQL WP2): the legacy bridge page escapes `&`, `<`, `>`, `"` and
+  `'` in every attribute it builds and renders the WebSocket role badge and session options with
+  `textContent` and an allowlist instead of `innerHTML`; outbound executor fetches are limited to the
+  operator-configured executor origin (AgentCard and request data cannot add destinations), refuse
+  redirects; bridge and upstream error responses return safe public projections, retain validated
+  inventory codes and `Retry-After`
+  metadata, and log each failed upstream response once with bounded, redacted details; the
+  `workspace-status` HTTP server returns a fixed error instead of exception text.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level

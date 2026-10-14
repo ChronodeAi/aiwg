@@ -86,14 +86,43 @@ async function resolveExecutorBearer(tokenFile) {
   return token;
 }
 
-async function executorFetch(target, init = {}) {
+function parseExecutorUrl(value) {
+  let url;
+  try { url = new URL(value); }
+  catch (cause) { throw executorAuthError('executor_target_refused', 'executor URL must be absolute HTTP(S)', cause); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw executorAuthError('executor_target_refused', 'executor URL must use HTTP(S) without URL credentials');
+  }
+  return url;
+}
+
+function allowedExecutorTarget(target, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL) {
+  const url = parseExecutorUrl(target);
+  // The operator-configured origin is the allowlist, including scheme and port.
+  // AgentCards and request data cannot add destinations to it.
+  const origin = parseExecutorUrl(executorUrl).origin;
+  if (url.origin !== origin) {
+    throw executorAuthError('executor_target_refused', 'outbound target is outside the configured executor origin');
+  }
+  return url;
+}
+
+async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL, hasFallback = false) {
+  const url = allowedExecutorTarget(target, executorUrl);
   const context = executorRequestContext.getStore();
   const headers = new Headers(init.headers);
-  if (context && new URL(target).origin === context.executorOrigin && !headers.has('authorization')) {
+  if (context && url.origin === context.executorOrigin && !headers.has('authorization')) {
     const token = await resolveExecutorBearer(context.executorTokenFile);
     if (token) headers.set('authorization', `Bearer ${token}`);
   }
-  return fetch(target, { ...init, headers });
+  const response = await fetch(url, { ...init, headers, redirect: 'manual' });
+  const text = !response.ok ? await logUpstreamError(response, hasFallback) : '';
+  if (response.type === 'opaqueredirect' || response.status === 0 || (response.status >= 300 && response.status < 400)) {
+    // Even same-origin redirects could replay credentials and a body to another agent or admin path.
+    throw executorAuthError('executor_redirect_refused', 'executor redirect refused');
+  }
+  // Error consumers must not resume an unbounded read of the original stream.
+  return response.ok ? response : new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 /** Serve a static file from the built web app, sandboxed to WEB_DIST. Returns true if served. */
@@ -532,9 +561,116 @@ export async function createUserIndexGraph(body, projectRoot = process.cwd()) {
   return { name, definition: config.index.graphs[name], config_path: configPath };
 }
 
+// Keep validated retry metadata local to the projected response, never in its JSON.
+const upstreamRetryAfter = new WeakMap();
+
 function json(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json' });
+  const retryAfter = [429, 503].includes(status) && body && upstreamRetryAfter.get(body);
+  res.writeHead(status, { 'content-type': 'application/json', ...(retryAfter ? { 'retry-after': retryAfter } : {}) });
   res.end(JSON.stringify(body));
+}
+
+function redactErrorText(value) {
+  return String(value ?? '')
+    .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, (value) => {
+      try { const url = new URL(value); return `${url.origin}${url.pathname}`; }
+      catch { return '[redacted URL]'; }
+    })
+    .replace(/(authorization["']?\s*[:=]\s*["']?)Digest\s+[^\r\n]*/gi, '$1[redacted]')
+    .replace(/(authorization["']?\s*[:=]\s*["']?)(?:[A-Za-z][\w.-]*\s+)?[^\s,;]+/gi, '$1[redacted]')
+    .replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [redacted]')
+    .replace(/((?:token|secret|password|api[_-]?key)["']?\s*[=:]\s*["']?)[^\s,;"']+/gi, '$1[redacted]');
+}
+
+function bridgeErrorBody(err, code = err?.code ?? 'bridge_upstream_error') {
+  console.error('[cockpit-bridge] request failed', {
+    code: redactErrorText(code), message: redactErrorText(err?.message ?? err), stack: redactErrorText(err?.stack),
+  });
+  // Exception codes can also contain subprocess or upstream diagnostics.
+  const publicCodes = new Set([
+    'bridge_upstream_error', 'upstream_not_found', 'upstream_method_not_allowed',
+    'executor_credential_unavailable', 'executor_credential_invalid', 'executor_credential_permissions',
+    'executor_unauthenticated', 'executor_forbidden', 'executor_trust_required', 'executor_refused',
+    'executor_target_refused', 'executor_redirect_refused', 'executor_attach_target_refused', 'mock_executor_refused',
+    'activity_invalid_request', 'activity_scope_required', 'activity_invalid_filter',
+    'activity_malformed_envelope', 'activity_malformed_export', 'activity_upstream_error',
+    'reconnect_failed', 'approval_response_failed', 'session_screen_unavailable',
+    'invalid_graph_definition', 'artifact_not_found', 'ambiguous_artifact', 'clone_failed',
+    'agent_not_registered', 'session_create_missing_id', 'OG_CONTRACT_UNSUPPORTED',
+  ]);
+  if (!publicCodes.has(code)) code = 'bridge_upstream_error';
+  const validationMessages = {
+    activity_invalid_request: 'Activity request must be an object.',
+    activity_scope_required: 'Activity requires tenant_id, host_id, instance_id and agent_id.',
+    activity_invalid_filter: 'Activity filters must use supported names and values; limit must be 1..1000.',
+  };
+  const message = validationMessages[code] ?? 'Bridge request failed.';
+  const recovery = code === 'executor_trust_required' && [
+    'Sandbox CA and bootstrap trust are ready.',
+    'Refresh sandbox CA/bootstrap readiness, rotate stale trust material, then reload Cockpit.',
+    'Plaintext local development mode only; enable sandbox mTLS before using remote or shared executors.',
+    'Configure sandbox CA provider and client trust refs before connecting Cockpit.',
+  ].includes(err?.recovery) ? err.recovery : undefined;
+  return { error: code, message, ...(recovery ? { recovery } : {}) };
+}
+
+async function logUpstreamError(response, hasFallback = false) {
+  const reader = response.clone().body?.getReader();
+  // Tee cancellation waits for both branches; start it without awaiting the other reader.
+  void response.body?.cancel().catch(() => {});
+  const chunks = [];
+  let size = 0;
+  let timeout;
+  try {
+    if (reader) await Promise.race([
+      (async () => {
+        while (size < 8192) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = Buffer.from(value.subarray(0, 8192 - size));
+          chunks.push(chunk);
+          size += chunk.length;
+        }
+      })(),
+      new Promise((resolve) => { timeout = setTimeout(resolve, 1000); }),
+    ]);
+  } catch {
+    // Preserve any bounded diagnostic already read.
+  } finally {
+    clearTimeout(timeout);
+    void reader?.cancel().catch(() => {});
+  }
+  const text = Buffer.concat(chunks, size).toString('utf8');
+  let body;
+  try { body = JSON.stringify(redactAuditValue(JSON.parse(text))); }
+  catch { body = text; }
+  const log = hasFallback && [404, 405].includes(response.status) ? console.debug : console.error;
+  log('[cockpit-bridge] upstream request failed', {
+    status: response.status,
+    body: Buffer.from(redactErrorText(body)).subarray(0, 4096).toString('utf8').replace(/\uFFFD$/, ''),
+  });
+  return text;
+}
+
+function safeUpstreamError(status, body) {
+  const code = typeof body?.code === 'string' && body.code === body.code.trim() && /^[a-z0-9_.-]{1,64}$/.test(body.code) ? body.code : undefined;
+  return { ...(code ? { code } : {}), status };
+}
+
+function upstreamErrorBody(status, body, headers) {
+  // Preserve only locally defined projections needed for recovery/negotiation.
+  const managed = managedDockerLaunchError(status, body);
+  const generic = { error: 'bridge_upstream_error', message: 'Bridge request failed.' };
+  const projected = managed.body !== body ? managed.body
+    : isA2AVersionNotSupported(status, body) ? { ...generic, error: 'version_not_supported', code: 'version_not_supported' }
+    : generic;
+  const retryAfter = headers?.get('retry-after');
+  if ([429, 503].includes(status) && retryAfter && (
+    /^[0-9]+$/.test(retryAfter) ||
+    (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(retryAfter) &&
+      Number.isFinite(Date.parse(retryAfter)) && new Date(retryAfter).toUTCString() === retryAfter)
+  )) upstreamRetryAfter.set(projected, retryAfter);
+  return projected;
 }
 
 function redactAuditValue(value) {
@@ -600,7 +736,7 @@ async function proxy(res, method, target) {
     err.upstreamStatus = r.status;
     throw err;
   }
-  return json(res, r.status, body);
+  return json(res, r.status, r.ok ? body : upstreamErrorBody(r.status, body, r.headers));
 }
 
 const SAFE_FALLBACK_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -623,13 +759,15 @@ function rethrowExecutorSecurityError(err) {
   if (
     [401, 403].includes(Number(err?.upstreamStatus)) ||
     String(err?.code ?? '').startsWith('executor_credential_') ||
+    err?.code === 'executor_redirect_refused' ||
     String(err?.code ?? '').startsWith('executor_trust_')
   ) throw err;
 }
 
-export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
+export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL } = {}) {
   const failures = [];
-  for (const candidate of candidates) {
+  let refused = 0;
+  for (const [index, candidate] of candidates.entries()) {
     const target = typeof candidate === 'string' ? candidate : candidate.target;
     const requestMethod = typeof candidate === 'string' ? method : candidate.method ?? method;
     const requestHeaders = typeof candidate === 'string' ? headers : candidate.headers ?? headers;
@@ -638,9 +776,15 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let r;
     try {
-      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
+      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) }, executorUrl, index + 1 < candidates.length);
     } catch (err) {
-      if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
+      rethrowExecutorSecurityError(err);
+      if (err?.code === 'executor_target_refused') {
+        refused++;
+        bridgeErrorBody(err);
+        failures.push(`${target} -> refused`);
+        continue; // No request was sent; a fixed fallback is safe even for POST.
+      }
       const failure = isAbortError(err) && timeoutMs > 0
         ? `${target} -> timeout after ${timeoutMs}ms`
         : `${target} -> ${String(err?.message ?? err)}`;
@@ -661,8 +805,9 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     }
     if (r.ok) return { target, status: r.status, body: responseBody };
     failures.push(`${target} -> ${r.status}`);
-    if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: responseBody, failures };
+    if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: upstreamErrorBody(r.status, responseBody, r.headers), adminError: safeUpstreamError(r.status, responseBody), failures };
   }
+  if (refused && refused === candidates.length) throw executorAuthError('executor_target_refused', 'no allowed upstream candidates');
   throw new Error(failures.join('; ') || 'no upstream candidates');
 }
 
@@ -696,7 +841,7 @@ async function assertRealExecutor(executorUrl, allowMockExecutor) {
 async function probeExecutor(executorUrl) {
   for (const path of ['/healthz/http', '/healthz', '/health']) {
     try {
-      const r = await executorFetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) });
+      const r = await executorFetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) }, executorUrl);
       if (r.ok) return true;
     } catch {
       // Try the next health endpoint.
@@ -735,7 +880,7 @@ async function getExecutorCapabilities(executorUrl) {
       status: 'unreachable',
       source: null,
       host_runtime_enabled: false,
-      error: String(err?.message ?? err),
+      error: bridgeErrorBody(err).message,
     };
   }
 }
@@ -758,7 +903,7 @@ async function getMcpDiscovery(executorUrl) {
       enabled: false,
       status: 'disabled',
       reason_code: 'mcp.discovery_unavailable',
-      error: String(err?.message ?? err),
+      error: bridgeErrorBody(err).message,
     }, executorUrl);
   }
 }
@@ -830,11 +975,11 @@ async function proxyMcpRequest(req, res, executorUrl, mcpTokenFile) {
     if (typeof protocolVersion === 'string' && protocolVersion.trim()) {
       headers['mcp-protocol-version'] = protocolVersion.trim();
     }
-    const response = await fetch(target, {
+    const response = await executorFetch(target, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-    });
+    }, executorUrl);
     status = response.status;
     const responseBody = await response.json().catch(() => ({}));
     await appendAudit('sandbox.mcp.proxy', {
@@ -842,7 +987,7 @@ async function proxyMcpRequest(req, res, executorUrl, mcpTokenFile) {
       method: rpcMethod,
       status,
     });
-    return json(res, status, responseBody);
+    return json(res, status, response.ok ? responseBody : upstreamErrorBody(status, responseBody, response.headers));
   } catch (err) {
     await appendAudit('sandbox.mcp.proxy', {
       result: 'error',
@@ -897,16 +1042,13 @@ async function proxyFirst(res, candidates, options) {
     return json(res, status, body);
   } catch (err) {
     if ([401, 403].includes(Number(err?.upstreamStatus))) {
-      return json(res, Number(err.upstreamStatus), { error: err.code, message: String(err.message) });
+      return json(res, Number(err.upstreamStatus), bridgeErrorBody(err));
     }
-    if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
+    rethrowExecutorSecurityError(err);
     const message = String(err?.message ?? err);
     const notFound = / -> 404(?:;|$)/.test(message);
     const methodNotAllowed = / -> 405(?:;|$)/.test(message);
-    return json(res, notFound ? 404 : methodNotAllowed ? 405 : 502, {
-      error: notFound ? 'upstream_not_found' : methodNotAllowed ? 'upstream_method_not_allowed' : 'bridge_upstream_error',
-      message,
-    });
+    return json(res, notFound ? 404 : methodNotAllowed ? 405 : 502, bridgeErrorBody(err, notFound ? 'upstream_not_found' : methodNotAllowed ? 'upstream_method_not_allowed' : 'bridge_upstream_error'));
   }
 }
 
@@ -934,7 +1076,7 @@ function defaultAssetRef(instanceId, action) {
 
 function upstreamBridgeError(err) {
   rethrowExecutorSecurityError(err);
-  return { status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } };
+  return { status: 502, body: bridgeErrorBody(err) };
 }
 
 async function providerFastStartAction(upstreamUrl, instanceId, action, body = {}) {
@@ -1210,7 +1352,7 @@ async function reconnectInstance(upstreamUrl, instanceId) {
         body: {
           error: 'reconnect_failed',
           message: `Could not run agent-reconnect in ${dockerName}. Repull/rebuild the agent image if it predates agentic-sandbox v2026.7.5.`,
-          detail: String(err?.message ?? err),
+          detail: bridgeErrorBody(err, 'reconnect_failed').message,
         },
       };
     }
@@ -1266,7 +1408,7 @@ async function reconnectInstance(upstreamUrl, instanceId) {
         body: {
           error: 'reconnect_failed',
           message: `Could not signal agent-client in VM ${domain} via qemu-guest-agent. The bridge host needs virsh access to the libvirt domain and the guest-agent channel must be up (agentic-sandbox#633).`,
-          detail: String(err?.message ?? err),
+          detail: bridgeErrorBody(err, 'reconnect_failed').message,
         },
       };
     }
@@ -1848,7 +1990,17 @@ async function discoverCockpitA2AInterface(executorUrl, instanceId) {
   const { body: card } = await fetchJsonFirst([
     `${executorUrl}/agents/${encodeURIComponent(instanceId)}/.well-known/agent-card.json`,
   ]);
-  return { card, selected: selectCockpitA2AInterface(card, cockpitA2ASettings().policy) };
+  return { card, selected: allowedCockpitA2AInterface(executorUrl, instanceId, selectCockpitA2AInterface(card, cockpitA2ASettings().policy)) };
+}
+
+function allowedCockpitA2AInterface(executorUrl, instanceId, selected) {
+  const target = allowedExecutorTarget(selected.url, executorUrl);
+  const paths = [`/agents/${encodeURIComponent(instanceId)}`, `/api/v1/agents/${encodeURIComponent(instanceId)}`];
+  if (!paths.includes(target.pathname.replace(/\/+$/, '')) || target.search || target.hash) {
+    throw executorAuthError('executor_target_refused', 'AgentCard interface is outside the requested agent endpoint');
+  }
+  // Reconstruct from trusted configuration and the validated agent path.
+  return { ...selected, url: `${parseExecutorUrl(executorUrl).origin}${target.pathname.replace(/\/+$/, '')}` };
 }
 
 function cockpitA2AHeaders(version, mutating = false) {
@@ -1876,6 +2028,8 @@ async function negotiatedCockpitA2ARequest(executorUrl, instanceId, candidatesFo
   try {
     ({ card, selected } = await discoverCockpitA2AInterface(executorUrl, instanceId));
   } catch (error) {
+    rethrowExecutorSecurityError(error);
+    if (error?.code === 'executor_target_refused') bridgeErrorBody(error);
     // Pre-AgentCard executors remain supported only under the explicit legacy
     // policy. Auto and 1.0 must negotiate from advertised interfaces.
     if (settings.policy !== '0.3') throw error;
@@ -1896,7 +2050,7 @@ async function negotiatedCockpitA2ARequest(executorUrl, instanceId, candidatesFo
     settings.allowFallback &&
     isA2AVersionNotSupported(result.status, result.body)
   ) {
-    active = selectCockpitA2AInterface(card, '0.3');
+    active = allowedCockpitA2AInterface(executorUrl, instanceId, selectCockpitA2AInterface(card, '0.3'));
     fallbackReason = `${result.body?.type ?? result.body?.code ?? 'VersionNotSupportedError'}`;
     result = await fetchJsonFirst(candidatesFor(active));
   }
@@ -2002,7 +2156,7 @@ async function getAgentBackedHostInventory(executorUrl, degradedDetail) {
 /** Normalize the executor's admin inventory into the Bridge's UI shape. */
 async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
   const bootstrapTrust = await getBootstrapTrustPosture(executorUrl, { requireSandboxMtls });
-  const { target, status, body } = await fetchJsonFirst([
+  const { target, status, body, adminError } = await fetchJsonFirst([
     `${executorUrl}/admin/instances`,
     `${executorUrl}/api/v2/admin/instances`,
   ]);
@@ -2022,7 +2176,7 @@ async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
         fetched_at: new Date().toISOString(),
         count: 0,
         degraded_admin_inventory: detail,
-        admin_error: body,
+        admin_error: adminError,
         bootstrap_trust: bootstrapTrust,
         instances: [],
       };
@@ -2096,6 +2250,7 @@ async function listInstanceTasks(executorUrl, instanceId) {
     }
     return asArrayFromEnvelope(result.body, ['tasks', 'items', 'data']).map(normalizeCockpitA2ATask);
   } catch (error) {
+    rethrowExecutorSecurityError(error);
     if (settings.policy !== '0.3') throw error;
     const candidates = unique([instanceId, agentId]).flatMap((id) => [
       `${executorUrl}/agents/${encodeURIComponent(id)}/tasks`,
@@ -2659,7 +2814,7 @@ async function respondApproval(executorUrl, approvalId, decision) {
     return { status: result.status, body: normalizeCockpitA2ATaskResponse(result.body) };
   } catch (e) {
     rethrowExecutorSecurityError(e);
-    return { status: 409, body: { error: 'approval_response_failed', detail: String(e?.message ?? e) } };
+    return { status: 409, body: bridgeErrorBody(e, 'approval_response_failed') };
   }
 }
 
@@ -2707,16 +2862,16 @@ async function getSessionScreen(executorUrl, instanceId, sessionId) {
   });
   try {
     const { body, target, status } = await fetchJsonFirst(paths);
+    if (status >= 400) return { status, body };
     return { status, body: normalizeScreenSnapshot(body, { instanceId, sessionId, source: target }) };
   } catch (e) {
     rethrowExecutorSecurityError(e);
     return {
       status: 404,
       body: {
-        error: 'session_screen_unavailable',
+        ...bridgeErrorBody(e, 'session_screen_unavailable'),
         instance_id: instanceId,
         session_id: sessionId,
-        detail: String(e?.message ?? e),
       },
     };
   }
@@ -2890,7 +3045,7 @@ function writeUpgradeHead(socket, response) {
   socket.write('\r\n');
 }
 
-async function proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile }) {
+async function proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile, executorUrl }) {
   const token = await resolveExecutorBearer(executorTokenFile);
   const requestedProtocols = String(req.headers['sec-websocket-protocol'] ?? '')
     .split(',')
@@ -2909,7 +3064,7 @@ async function proxyExecutorWebsocket({ req, socket, head, target, executorToken
   const transport = target.protocol === 'wss:' ? https : http;
   const requestTarget = new URL(target);
   requestTarget.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
-  const upstreamRequest = transport.request(requestTarget, { method: 'GET', headers });
+  const upstreamRequest = transport.request(allowedExecutorTarget(requestTarget, executorUrl), { method: 'GET', headers });
   upstreamRequest.on('upgrade', (response, upstreamSocket, upstreamHead) => {
     writeUpgradeHead(socket, response);
     if (head.length) upstreamSocket.write(head);
@@ -2996,6 +3151,7 @@ export function createBridge({
     throw new Error(`AIWG_COCKPIT_A2A_PROTOCOL_POLICY must be 0.3, 1.0, or auto (received '${a2aProtocolPolicy}')`);
   }
   const upstreamUrl = executorUrl;
+  const executorAddress = parseExecutorUrl(upstreamUrl);
   const TOKEN = token ?? randomBytes(24).toString('hex');
   const bootstrapNonces = new Map();
   const browserSessions = new Map();
@@ -3034,22 +3190,25 @@ export function createBridge({
   const requestAuth = (req) => bearerAuthed(req, TOKEN)
     ? { kind: 'bearer', csrf: TOKEN }
     : sessionAuth(req);
-  const executorOrigin = new URL(upstreamUrl).origin;
+  const executorOrigin = executorAddress.origin;
   const requestContext = Object.freeze({
     executorOrigin, executorTokenFile, a2aProtocolPolicy, allowA2AProtocolFallback,
     libraryDir: instanceLibraryDir, auditDir: instanceAuditDir,
     mcpTokenFile, localDockerFallback, localLibvirtFallback, aiwgCommand,
     corpusRoots: instanceCorpusRoots, contributionDirs: instanceContributionDirs,
   });
-  const executorAddress = new URL(upstreamUrl);
   const attachTargets = new Map();
   const issueAttachUrl = (req, value) => {
     const target = new URL(String(value));
+    const protocol = executorAddress.protocol === 'https:' ? 'wss:' : 'ws:';
+    const port = (url) => url.port || (['https:', 'wss:'].includes(url.protocol) ? '443' : '80');
     const sameHost = target.hostname === executorAddress.hostname ||
       (isLocalHostName(target.hostname) && isLocalHostName(executorAddress.hostname));
-    if (!['ws:', 'wss:'].includes(target.protocol) || !sameHost || !/^\/agents\/[^/]+\/sessions\/[^/]+\/attach$/.test(target.pathname)) {
+    if (target.protocol !== protocol || !sameHost || port(target) !== port(executorAddress) ||
+        target.username || target.password || !/^\/agents\/[^/]+\/sessions\/[^/]+\/attach$/.test(target.pathname)) {
       throw executorAuthError('executor_attach_target_refused', 'executor returned an attach URL outside the allowed PTY endpoint');
     }
+    target.host = executorAddress.host;
     const id = randomBytes(18).toString('base64url');
     attachTargets.set(id, target);
     if (attachTargets.size > 1024) attachTargets.delete(attachTargets.keys().next().value);
@@ -3159,7 +3318,7 @@ export function createBridge({
             await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls: true });
           }
         } catch (err) {
-          return json(res, Number(err?.upstreamStatus) || 502, { error: err.code ?? 'executor_refused', message: String(err?.message ?? err), recovery: err?.recovery });
+          return json(res, Number(err?.upstreamStatus) || 502, bridgeErrorBody(err, err.code ?? 'executor_refused'));
         }
       }
       if (url.pathname === '/api/events' && req.method === 'GET') {
@@ -3183,7 +3342,7 @@ export function createBridge({
         return json(res, 200, await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls }));
       }
       if (url.pathname === '/api/mcp/discovery' && req.method === 'GET') return json(res, 200, await getMcpDiscovery(upstreamUrl));
-      if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, mcpTokenFile);
+      if (url.pathname === '/api/mcp' && req.method === 'POST') return await proxyMcpRequest(req, res, upstreamUrl, mcpTokenFile);
       if (url.pathname === '/api/running') return json(res, 200, await getRunning(upstreamUrl));
       if (url.pathname === '/api/missions' && req.method === 'GET') return json(res, 200, await getMissions(upstreamUrl));
       if (url.pathname === '/api/missions' && req.method === 'POST') {
@@ -3200,7 +3359,7 @@ export function createBridge({
           await appendAudit('activity.coverage.queried', { scope: activityRequest(parsed.body).scope, complete: result.body?.completeness?.complete === true });
           return json(res, result.status, result.body);
         } catch (error) {
-          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), bridgeErrorBody(error, error?.code ?? 'activity_upstream_error'));
         }
       }
       if (url.pathname === '/api/activity/timeline' && req.method === 'POST') {
@@ -3212,7 +3371,7 @@ export function createBridge({
           await appendAudit('activity.timeline.queried', { scope: activityRequest(parsed.body).scope, event_count: result.body.events.length, complete: result.body.completeness.complete });
           return json(res, result.status, result.body);
         } catch (error) {
-          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), bridgeErrorBody(error, error?.code ?? 'activity_upstream_error'));
         }
       }
       if (url.pathname === '/api/activity/export' && req.method === 'POST') {
@@ -3227,7 +3386,7 @@ export function createBridge({
           res.setHeader('cache-control', 'no-store');
           return json(res, result.status, result.body);
         } catch (error) {
-          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), bridgeErrorBody(error, error?.code ?? 'activity_upstream_error'));
         }
       }
       if (url.pathname === '/api/loadouts') return json(res, 200, await getLoadouts(upstreamUrl));
@@ -3250,7 +3409,7 @@ export function createBridge({
           return json(res, 201, { ok: true, graph });
         } catch (error) {
           await appendAudit('index.graph.create.rejected', { request_ts: requested.ts, reason: String(error?.message ?? error) });
-          return json(res, 400, { error: 'invalid_graph_definition', detail: String(error?.message ?? error) });
+          return json(res, 400, bridgeErrorBody(error, 'invalid_graph_definition'));
         }
       }
       if (url.pathname === '/api/audit' && req.method === 'GET') {
@@ -3302,13 +3461,13 @@ export function createBridge({
             headers: { 'content-type': 'application/json' },
             body: requestBody,
           },
-        ]).catch((err) => ({ status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } }));
+        ]).catch((err) => ({ status: 502, body: bridgeErrorBody(err) }));
         const projected = managedDockerLaunchError(result.status, result.body);
         await appendAudit('instance.launch.result', { request_ts: before.ts, status: projected.status, result: projected.body });
         return json(res, projected.status, projected.body);
       }
       if ((m = url.pathname.match(/^\/api\/operations\/([^/]+)$/)) && req.method === 'GET') {
-        return proxyFirst(res, [
+        return await proxyFirst(res, [
           `${upstreamUrl}/api/v2/admin/operations/${encodeURIComponent(m[1])}`,
         ]);
       }
@@ -3368,7 +3527,7 @@ export function createBridge({
             const body = await readFile(resolved, 'utf8');
             return json(res, 200, { type, name: name ?? deriveName(resolved), path: resolved, body });
           } catch (e) {
-            return json(res, 404, { error: 'artifact_not_found', detail: String(e?.message ?? e) });
+            return json(res, 404, bridgeErrorBody(e, 'artifact_not_found'));
           }
         }
         // Fallback: resolve by name via the CLI. Map ambiguity/not-found to 4xx — an
@@ -3379,10 +3538,7 @@ export function createBridge({
         } catch (e) {
           const detail = String(e?.message ?? e);
           const ambiguous = /ambiguous/i.test(detail);
-          return json(res, ambiguous ? 409 : 404, {
-            error: ambiguous ? 'ambiguous_artifact' : 'artifact_not_found',
-            detail,
-          });
+          return json(res, ambiguous ? 409 : 404, bridgeErrorBody(e, ambiguous ? 'ambiguous_artifact' : 'artifact_not_found'));
         }
       }
       // user asset library — browse / clone-from-catalog / delete. AIWG install files
@@ -3393,7 +3549,7 @@ export function createBridge({
           return json(res, 201, await cloneToLibrary({
             type: url.searchParams.get('type'), name: url.searchParams.get('name'), path: url.searchParams.get('path'),
           }));
-        } catch (e) { return json(res, 400, { error: 'clone_failed', detail: String(e?.message ?? e) }); }
+        } catch (e) { return json(res, 400, bridgeErrorBody(e, 'clone_failed')); }
       }
       {
         const lm = url.pathname.match(/^\/api\/library\/(.+)$/);
@@ -3464,9 +3620,8 @@ export function createBridge({
             // Preserve the original create failure; reuse is a recovery path only.
           }
           return json(res, 409, {
-            error: 'agent_not_registered',
+            ...bridgeErrorBody(err, 'agent_not_registered'),
             message: 'The instance is visible in inventory, but its agent has not registered yet; PTY sessions are not ready.',
-            detail: String(err?.message ?? err),
           });
         }
         const { status, body } = sessionCreate;
@@ -3482,7 +3637,7 @@ export function createBridge({
         const wsBase = upstreamUrl.replace(/^http/i, 'ws');
         const sessionId = body.id ?? body.session_id ?? body.sessionId;
         if (status >= 200 && status < 300 && !sessionId && !body.attach_url && !body.attachUrl && !body.pty_ws_url && !body.ptyWsUrl) {
-          return json(res, 502, { error: 'session_create_missing_id', message: 'executor created no attachable session identifier', body });
+          return json(res, 502, bridgeErrorBody(new Error(JSON.stringify(body)), 'session_create_missing_id'));
         }
         let attachUrl = body.attach_url ?? body.attachUrl;
         if (!attachUrl && (body.pty_ws_url ?? body.ptyWsUrl)) {
@@ -3532,7 +3687,7 @@ export function createBridge({
         const result = await fetchJsonFirst([
           `${upstreamUrl}/admin/instances/${encodeURIComponent(m[1])}/${m[2]}`,
           `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(m[1])}/${m[2]}`,
-        ], { method: 'POST' }).catch((err) => ({ status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } }));
+        ], { method: 'POST' }).catch((err) => ({ status: 502, body: bridgeErrorBody(err) }));
         await appendAudit('instance.lifecycle.requested', { instance_id: decodeURIComponent(m[1]), action: m[2], status: result.status, result: result.body });
         return json(res, result.status, result.body);
       }
@@ -3610,7 +3765,7 @@ export function createBridge({
         return json(res, status, body);
       }
       if (url.pathname === '/api/cost' && req.method === 'GET')
-        return proxy(res, 'GET', `${upstreamUrl}/admin/cost`);
+        return await proxy(res, 'GET', `${upstreamUrl}/admin/cost`);
 
       if (url.pathname === '/api/health') return json(res, 200, {
         status: 'ok',
@@ -3650,7 +3805,7 @@ export function createBridge({
       json(res, 404, { error: 'not_found', path: url.pathname });
     } catch (err) {
       const status = Number(err?.status) || Number(err?.upstreamStatus) || 502;
-      json(res, status, { error: err?.code ?? 'bridge_upstream_error', message: String(err?.message ?? err) });
+      json(res, status, bridgeErrorBody(err));
     }
   };
   const server = http.createServer((req, res) => executorRequestContext.run(
@@ -3676,7 +3831,7 @@ export function createBridge({
           socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
           return;
         }
-        await proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile });
+        await proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile, executorUrl: upstreamUrl });
       } catch {
         if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
       }
