@@ -451,11 +451,14 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
+  if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) {
+    throw new Error('Config key path cannot contain __proto__, constructor, or prototype segments');
+  }
   let current: Record<string, unknown> = obj;
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
+    if (!Object.hasOwn(current, part) || typeof current[part] !== 'object' || current[part] === null) {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;

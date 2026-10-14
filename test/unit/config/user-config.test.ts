@@ -85,6 +85,36 @@ describe('UserConfig', () => {
   });
 
   describe('get/set', () => {
+    it.each(['__proto__', 'constructor', 'prototype'])('rejects %s in every position of a dotted set path', async (segment) => {
+      const config = new UserConfig(tempDir);
+      const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+      await config.set('defaults.provider', 'openai');
+      const savedBefore = await readFile(join(tempDir, 'config.yaml'), 'utf-8');
+
+      for (const path of [segment, `${segment}.polluted`, `custom.${segment}.polluted`, `defaults.${segment}`]) {
+        await expect(config.set(path, 'polluted')).rejects.toThrow('Config key path cannot contain __proto__, constructor, or prototype segments');
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+      }
+
+      expect(await readFile(join(tempDir, 'config.yaml'), 'utf-8')).toBe(savedBefore);
+      expect(await config.get('custom')).toBeUndefined();
+      expect(await config.get('defaults.provider')).toBe('openai');
+    });
+
+    it('creates own config nodes instead of traversing inherited objects', async () => {
+      const config = new UserConfig(tempDir);
+      const listed = await config.list();
+      const loaded = listed['config.yaml'] as Record<string, unknown>;
+      const inherited = { custom: { value: 'original' } };
+      Object.setPrototypeOf(loaded, inherited);
+
+      await config.set('custom.value', 'updated');
+
+      expect(inherited.custom.value).toBe('original');
+      expect(Object.hasOwn(loaded, 'custom')).toBe(true);
+      expect(await new UserConfig(tempDir).get('custom.value')).toBe('updated');
+    });
+
     it('should return default values for unset keys', async () => {
       const config = new UserConfig(tempDir);
       const value = await config.get('defaults.provider');

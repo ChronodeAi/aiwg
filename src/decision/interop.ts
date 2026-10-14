@@ -698,12 +698,16 @@ function projectOpaInput(input: JsonValue, allowlist: string[], redaction: { rem
     redaction.removed.push('$.input');
     return {};
   }
-  const output: Record<string, JsonValue> = {};
+  const output: Record<string, JsonValue> = Object.create(null);
   for (const pointer of allowlist) {
     if (!pointer.startsWith('/')) throw new DecisionInteropError('opa-input-projection', 'OPA input projection allowlist entries must be JSON Pointers');
+    const path = pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~'));
+    if (path.some(segment => segment === '__proto__' || segment === 'constructor' || segment === 'prototype')) {
+      throw new DecisionInteropError('opa-input-projection', 'OPA input projection cannot contain __proto__, constructor, or prototype segments');
+    }
     const resolved = resolveJsonPointer(input, pointer);
     if (!resolved.found) continue;
-    setProjectedValue(output, pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~')), sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
+    setProjectedValue(output, path, sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
   }
   return output;
 }
@@ -715,8 +719,8 @@ function setProjectedValue(target: Record<string, JsonValue>, path: string[], va
       cursor[segment] = value;
       return;
     }
-    const existing = cursor[segment];
-    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) cursor[segment] = {};
+    const existing = Object.hasOwn(cursor, segment) ? cursor[segment] : undefined;
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) cursor[segment] = Object.create(null);
     cursor = cursor[segment] as Record<string, JsonValue>;
   });
 }
