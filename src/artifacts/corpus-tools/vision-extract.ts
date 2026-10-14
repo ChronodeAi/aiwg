@@ -99,6 +99,9 @@ function visionCommand(template: string): string {
   };
   // Bound the checks below; a vision command template is a short command line.
   if (template.length > MAX_VISION_TEMPLATE_LENGTH) reject(`templates longer than ${MAX_VISION_TEMPLATE_LENGTH} characters`);
+  // A vision template is one command line; a backslash-newline continuation can
+  // join an allowed name with following text into a different variable at runtime.
+  if (/\\\r?\n|\\\r/.test(template)) reject('line continuations (backslash-newline)');
   // Recognize literal command names even when quoted or backslash-escaped.
   const syntax = template.replace(/\\\r?\n/g, '').replace(/\\([^\n])/g, '$1').replace(/["']/g, '');
   if (syntax.includes('$(')) reject('command substitution ($(...))');

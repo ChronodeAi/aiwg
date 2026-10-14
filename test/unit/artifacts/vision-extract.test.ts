@@ -62,6 +62,23 @@ describe('resolveAdapter (#1507)', () => {
     expect(() => resolveAdapter({ provider: 'command' })).toThrow(/requires --command/);
     expect(resolveAdapter({ provider: 'command', command: 'x {image} {out}' }).name).toBe('command');
   });
+  it.each(['image', 'prompt_file', 'out'])('rejects backslash-newline continuations that extend an allowed name for {%s}', (placeholder) => {
+    const dir = join(root, 'x;:>PWNED;y -z');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    for (const name of ['AIWG_VISION_OUT', 'AIWG_VISION_IMAGE', 'AIWG_VISION_PROMPT_FILE']) {
+      for (const newline of ['\n', '\r\n']) {
+        const command = `${name}_S=sh; "$${name}\\${newline}_S" -c 'printf original:'{${placeholder}} > {out}`;
+        expect(() => {
+          const adapter = resolveAdapter({ provider: 'command', command: `cd '${root}'; ${command}` });
+          adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+        }, command).toThrow(/line continuations/);
+        expect(existsSync(join(root, 'PWNED'))).toBe(false);
+        expect(existsSync(join(dir, 'PWNED'))).toBe(false);
+      }
+    }
+  });
   it('bounds template validation: rejects oversized templates and stays fast on whitespace-heavy input', () => {
     expect(() => resolveAdapter({ provider: 'command', command: `x {image} {out}${' '.repeat(4096)}` }))
       .toThrow(/longer than 4096 characters/);
@@ -137,7 +154,7 @@ describe('resolveAdapter (#1507)', () => {
     ['bash --noprofile "-xc" "$1"', 'nested shell'],
     ['bash -cl "$1"', 'nested shell'],
     ['s"h" -c "$1"', 'nested shell'],
-    ['sh \\\n-c "$1"', 'nested shell'],
+    ['sh \\\n-c "$1"', 'line continuations'],
     ['printf "%s" "#"', 'comments'],
     ['printf "%s" \\#', 'comments'],
   ])('rejects re-parsing construct in %s with actionable guidance', (command, construct) => {

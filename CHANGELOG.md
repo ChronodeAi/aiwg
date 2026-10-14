@@ -390,7 +390,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   quotes is literal text and allowed. Command substitution,
   backticks, `eval`, nested shells (any shell word together with a short `-c` option cluster
   anywhere in the template), here-documents and
-  here-strings (`<<`), `#` comments outside single quotes, and templates over 4096 characters are rejected. Use the quoted
+  here-strings (`<<`), `#` comments outside single quotes, backslash-newline line continuations, and templates over 4096 characters are rejected. Use the quoted
   positional parameters directly or a wrapper script for complex logic. Templates are trusted
   executable code and must not re-parse path values as shell source.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
