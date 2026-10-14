@@ -1,3 +1,4 @@
+import { tomlString } from './toml-string.mjs';
 import { type Layering, isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from './config-layers.mjs';
 import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
@@ -568,18 +569,6 @@ export function buildServerConfig(
     default:
       return {};
   }
-}
-
-/**
- * Build a TOML section for a server (Codex/OpenAI provider).
- */
-function tomlString(value: unknown): string {
-  if (typeof value !== 'string' || [...value].some(char => {
-    const point = char.codePointAt(0)!;
-    return point >= 0xd800 && point <= 0xdfff;
-  })) throw new Error('TOML values must be strings containing valid Unicode scalar values');
-  // JSON escapes align with TOML basic strings except DEL must also be escaped.
-  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
 }
 
 function tomlKey(value: unknown): string {

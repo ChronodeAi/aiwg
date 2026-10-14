@@ -129,37 +129,17 @@ OUTPUT:
 }
 
 /**
- * Check if a value needs quoting in YAML
- * @param {string} value - Value to check
- * @returns {boolean} True if value needs quoting
- */
-function needsQuoting(value) {
-  if (typeof value !== 'string') return false;
-
-  // Characters that require quoting in YAML
-  const specialChars = /[:\[\]{}#&*!|>'"%@`]/;
-
-  // Values starting with special markers
-  const startsWithSpecial = /^[-?:,\[\]{}#&*!|>'"%@`]/;
-
-  return specialChars.test(value) || startsWithSpecial.test(value);
-}
-
-/**
- * Quote a YAML value if necessary
- * @param {string} value - Value to potentially quote
- * @returns {string} Quoted or original value
+ * Encode string values as complete YAML double-quoted scalars.
+ * @param {*} value - Value to encode
+ * @returns {*} Encoded string or original non-string value
  */
 function quoteValue(value) {
   if (typeof value !== 'string') return value;
 
-  if (needsQuoting(value)) {
-    // Escape internal quotes
-    const escaped = value.replace(/"/g, '\\"');
-    return `"${escaped}"`;
-  }
-
-  return value;
+  return JSON.stringify(value)
+    .replace(/\u0085/g, '\\u0085')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 /**
@@ -218,7 +198,7 @@ function buildYaml(metadata) {
  * @returns {string} Modified content with injected metadata
  * @throws {Error} If frontmatter is malformed
  */
-function injectFrameworkMetadata(content, framework = 'sdlc-complete') {
+export function injectFrameworkMetadata(content, framework = 'sdlc-complete') {
   // Check if frontmatter exists
   if (content.startsWith('---\n')) {
     // Parse existing frontmatter
@@ -542,9 +522,11 @@ async function main() {
   }
 }
 
-// Run main function
-main().catch(error => {
-  console.error('\nFATAL ERROR:', error.message);
-  console.error(error.stack);
-  process.exit(1);
-});
+// Run only when invoked as a CLI.
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch(error => {
+    console.error('\nFATAL ERROR:', error.message);
+    console.error(error.stack);
+    process.exit(1);
+  });
+}

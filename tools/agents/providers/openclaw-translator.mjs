@@ -136,12 +136,15 @@ export function renderHookMd(behavior) {
     ? events.map((e) => `  - ${e}`).join('\n')
     : '  []';
 
-  const description = (behavior.description || '').replace(/"/g, '\\"').slice(0, 200);
+  const description = JSON.stringify((behavior.description || '').slice(0, 200))
+    .replace(/\u0085/g, '\\u0085')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 
   return [
     '---',
     `name: ${behavior.name}`,
-    `description: "${description}"`,
+    `description: ${description}`,
     'events:',
     eventsList,
     'handler: ./handler.js',
