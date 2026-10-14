@@ -996,9 +996,16 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
     const child = launch.child;
     const transport = new ChildProcessTransport(child, { terminate: () => stopOverflowWorker(launch) });
     let disconnected = false;
+    let retainOverflowControl = false;
     transport.onclose = () => { disconnected = true; };
     const control = {
       stop: async () => {
+        if (transport._failure) {
+          // The connection is closed after overflow. Reuse the owned launch's
+          // stop authority, including its termination proof, on explicit cancel.
+          await transport._termination;
+          return stopOverflowWorker(launch);
+        }
         try {
           // F2: the ACTUAL in-flight JSON-RPC request id (captured at the
           // transport layer — see `ChildProcessTransport.send`), never the
@@ -1065,11 +1072,12 @@ async function defaultCallMcpWorker(mcpBinding, server, options = {}) {
       const isTimeout = error?.code === -32001 || /timeout/i.test(String(error?.message ?? ''));
       try { await client.notification({ method: 'notifications/cancelled', params: { requestId: transport.lastRequestId, reason: isTimeout ? 'timeout' : 'error' } }); } catch { /* delivery only, never stop proof */ }
       const termination = transport._failure ? await transport._termination : await stopOverflowWorker(launch);
+      retainOverflowControl = !!transport._failure && termination?.termination !== 'confirmed';
       return { outcome: disconnected ? 'disconnected' : isTimeout ? 'timeout' : 'error', error: transport._failure ?? error,
         ...(transport._failure ? { termination: termination?.termination ?? 'uncertain',
           diagnostic: [transport._failure.code, termination?.diagnostic].filter(Boolean).join('; ') } : {}) };
     } finally {
-      try { registerControl?.(null); }
+      try { if (!retainOverflowControl) registerControl?.(null); }
       finally { try { await client.close(); } catch { /* already closed */ } }
     }
   };
@@ -1319,10 +1327,16 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           return registry.markTerminal(entry.invocationId, { status: 'blocked', termination: 'confirmed', diagnostics: [result.diagnostic ?? 'worker MCP launch was refused'] });
         }
         if (result.outcome !== 'responded') {
-          // Overflow releases capacity after the stop attempt, preserving uncertainty.
+          // Overflow holds capacity and stop control until termination is proven.
           if (result.diagnostic?.includes('OG_WORKER_MCP_FRAME_TOO_LARGE')) {
-            return registry.markTerminal(entry.invocationId, { status: result.termination === 'confirmed' ? 'failed' : 'uncertain',
-              termination: result.termination ?? 'uncertain', diagnostics: [result.diagnostic] });
+            // An explicit cancel can have confirmed termination while this run
+            // was awaiting its initial overflow evidence.
+            if (entry.terminalAt !== null) return entry;
+            const patch = { status: result.termination === 'confirmed' ? 'failed' : 'uncertain',
+              termination: result.termination ?? 'uncertain', diagnostics: [result.diagnostic] };
+            return result.termination === 'confirmed'
+              ? registry.markTerminal(entry.invocationId, { ...patch, control: null })
+              : registry.update(entry.invocationId, patch);
           }
           // M2: stays LIVE for the same reason as the shell timeout path above.
           return registry.update(entry.invocationId, { status: 'uncertain', termination: 'uncertain', diagnostics: [`worker ${result.outcome}; cancellation delivered, not confirmed stopped`] });
@@ -1454,12 +1468,20 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     // the stop signal was actually transmitted, never unconditionally.
     if (entry.terminalAt === null && entry.control) {
       let delivered = false;
-      try { delivered = !!(await entry.control.stop()); } catch { delivered = false; }
+      let evidence;
+      try {
+        const result = await entry.control.stop();
+        evidence = result && typeof result === 'object' ? result : undefined;
+        delivered = evidence ? evidence.delivered === true : !!result;
+      } catch { delivered = false; }
       registry.update(entry.invocationId, { cancelDelivered: delivered });
+      if (evidence?.termination === 'confirmed') {
+        registry.markTerminal(entry.invocationId, { status: 'cancelled', termination: 'confirmed', control: null });
+      }
     }
     // Cancellation delivery is recorded; it is NEVER treated as stop proof.
-    // The run's own completion path is the only thing that can confirm
-    // termination (#2896 defect: "cancellation proof required before replacement").
+    // Overflow's retained control can separately prove termination through the
+    // same stop authority used by the run; delivery alone never frees capacity.
     return publicStatus(registry.get(entry.invocationId), healthHook);
   }
 

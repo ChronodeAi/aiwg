@@ -20,21 +20,21 @@ describe('MCP overflow stop authority', () => {
     const result = await stopOverflowWorker(unit, { stopUnit, unitStatus, deadlineMs: 0 });
     expect(stopUnit).toHaveBeenCalledWith(unit.unit, { timeoutMs: 1 });
     expect(unitStatus).toHaveBeenCalledWith(unit.unit, { timeoutMs: 1 });
-    expect(result).toEqual({ termination: 'uncertain',
+    expect(result).toEqual({ termination: 'uncertain', delivered: ok,
       diagnostic: ok ? 'OG_WORKER_MCP_STOP_UNCONFIRMED' : 'OG_WORKER_MCP_STOP_FAILED' });
   });
 
   it.each([true, false])('waits for inactive unit state and retains stop failures (ok: %s)', async ok => {
     const unitStatus = vi.fn().mockReturnValueOnce({ active: true }).mockReturnValue({ active: false });
     const result = await stopOverflowWorker(unit, { stopUnit: () => ({ ok }), unitStatus });
-    expect(result).toEqual({ termination: 'confirmed', ...(ok ? {} : { diagnostic: 'OG_WORKER_MCP_STOP_FAILED' }) });
+    expect(result).toEqual({ termination: 'confirmed', delivered: ok, ...(ok ? {} : { diagnostic: 'OG_WORKER_MCP_STOP_FAILED' }) });
     expect(unitStatus).toHaveBeenCalledTimes(2);
   });
 
   it('cannot prove termination when unit state is unavailable', async () => {
     expect(await stopOverflowWorker(unit, { stopUnit: () => ({ ok: true }),
       unitStatus: () => { throw new Error('manager unavailable'); }, deadlineMs: 0,
-    })).toEqual({ termination: 'uncertain', diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
+    })).toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
   });
 
   it.each(['parent', 'birth', 'exited', 'ambiguous'])('refuses group signaling with invalid supervisor ownership (%s)', async failure => {
@@ -48,6 +48,7 @@ describe('MCP overflow stop authority', () => {
       platform: 'linux', sample, children: () => failure === 'ambiguous' ? [worker, worker] : [worker], signal,
     });
     expect(result.termination).toBe('uncertain');
+    expect(result.delivered).toBe(false);
     expect(signal).not.toHaveBeenCalled();
   });
 
@@ -55,7 +56,7 @@ describe('MCP overflow stop authority', () => {
     const child = { kill: vi.fn(() => true) };
     const sample = vi.fn(); const signal = vi.fn();
     expect(await stopOverflowWorker({ mode: 'degraded', child }, { platform, sample, signal }))
-      .toEqual({ termination: 'uncertain', diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
+      .toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     expect(sample).not.toHaveBeenCalled(); expect(signal).not.toHaveBeenCalled();
   });
@@ -63,7 +64,7 @@ describe('MCP overflow stop authority', () => {
   it.each(['false', 'throw'])('reports failed direct-child kill (%s)', async failure => {
     const child = { kill: () => { if (failure === 'throw') throw new Error('failed'); return false; } };
     expect(await stopOverflowWorker({ mode: 'degraded', child }, { platform: 'win32' }))
-      .toEqual({ termination: 'uncertain', diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
+      .toEqual({ termination: 'uncertain', delivered: false, diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
   });
 
   it('checks unit state after the final sleep at the deadline', async () => {
@@ -72,7 +73,7 @@ describe('MCP overflow stop authority', () => {
     const stopUnit = vi.fn(() => ({ ok: true }));
     expect(await stopOverflowWorker(unit, { stopUnit, unitStatus, deadlineMs: 10,
       pollIntervalMs: 25, clock: () => time, sleep: async ms => { time += ms; },
-    })).toEqual({ termination: 'confirmed' });
+    })).toEqual({ termination: 'confirmed', delivered: true });
     expect(unitStatus.mock.calls).toEqual([[unit.unit, { timeoutMs: 10 }], [unit.unit, { timeoutMs: 1 }]]);
     expect(stopUnit).toHaveBeenCalledWith(unit.unit, { timeoutMs: 10 });
   });
@@ -83,7 +84,7 @@ describe('MCP overflow stop authority', () => {
       .mockReturnValue({ active: false });
     expect(await stopOverflowWorker(unit, { stopUnit: () => ({ ok: true }), unitStatus,
       clock: () => time, sleep: async ms => { time += ms; },
-    })).toEqual({ termination: 'confirmed' });
+    })).toEqual({ termination: 'confirmed', delivered: true });
     expect(unitStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -138,7 +139,7 @@ setInterval(() => {}, 1000);
         await new Promise(resolve => setTimeout(resolve, 1));
       }
       expect(transport._failure?.code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
-      expect(await transport._termination).toEqual({ termination: 'uncertain', diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
+      expect(await transport._termination).toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
       await closed;
       expect(sampleWorkerGroup(workerPid)).toEqual([]);
       if (escaped) {

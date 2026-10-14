@@ -1099,7 +1099,7 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     };
     return f;
   }
-  async function invoke(root: string, config: string, extra: Record<string, unknown> = {}, registerOverrides: Record<string, unknown> = {}) {
+  async function prepareInvocation(root: string, config: string, extra: Record<string, unknown> = {}, registerOverrides: Record<string, unknown> = {}) {
     const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
     const briefPath = path.join(root, 'brief.md');
     const finalOutput = path.join(work, 'final.json');
@@ -1118,8 +1118,12 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
       ...registerOverrides,
     });
     const call = tools.get('worker-invoke').handler;
-    return call({ operation: 'run', request_id: `mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
-      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp', ...extra });
+    return { call, input: { operation: 'run', request_id: `mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp', ...extra } };
+  }
+  async function invoke(root: string, config: string, extra: Record<string, unknown> = {}, registerOverrides: Record<string, unknown> = {}) {
+    const { call, input } = await prepareInvocation(root, config, extra, registerOverrides);
+    return call(input);
   }
 
   it.each(['overflow-load', 'client-constructor'])('does not launch when pre-launch setup fails (%s)', async failure => {
@@ -1180,7 +1184,7 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     }
   });
 
-  it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('releases capacity with unconfirmed termination after repeated degraded overflows', async () => {
+  it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('retains capacity and control after each unconfirmed degraded overflow', async () => {
     const root = await tempRoot();
     const script = path.join(root, 'hostile-worker.mjs');
     const pidPath = path.join(root, 'worker.pid');
@@ -1194,8 +1198,8 @@ setInterval(() => {}, 1000);
     f.drivers.codex.mcpRegistry = {
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
     };
-    const registry = createInvocationRegistry();
     for (let i = 0; i < 6; i++) {
+      const registry = createInvocationRegistry({ maxActive: 1 });
       let pid: number | undefined;
       try {
         const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
@@ -1204,7 +1208,10 @@ setInterval(() => {}, 1000);
         expect(body.status).toBe('uncertain');
         expect(body.termination).toBe('uncertain');
         expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
-        expect(registry.values().filter((entry: any) => entry.terminalAt === null)).toHaveLength(0);
+        const [entry] = registry.values();
+        expect(entry.terminalAt).toBeNull();
+        expect(entry.control?.stop).toBeTypeOf('function');
+        expect(registry.canStart()).toBe(false);
         // SIGKILL delivery precedes process exit and reaping.
         await vi.waitFor(() => {
           expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
@@ -1217,19 +1224,22 @@ setInterval(() => {}, 1000);
     }
   }, 30000);
 
-  it.each(['confirmed', 'uncertain'])('awaits %s overflow evidence and frees the same registry capacity repeatedly', async termination => {
+  it.each(['confirmed', 'uncertain'])('awaits %s overflow evidence and releases capacity only with proof repeatedly', async termination => {
     const root = await tempRoot();
-    const registry = createInvocationRegistry({ maxActive: 4 });
+    const registry = createInvocationRegistry({ maxActive: 1 });
     for (let i = 0; i < 6; i++) {
       let confirm!: (value: any) => void;
       let stopStarted = false;
       const proof = new Promise(resolve => { confirm = resolve; });
-      const run = invoke(root, '', {}, { registry, callMcpWorker: async () => {
+      const stop = vi.fn(async () => ({ termination: 'confirmed', delivered: true }));
+      const { call, input } = await prepareInvocation(root, '', {}, { registry, callMcpWorker: async (_binding: any, _server: any, options: any) => {
+        options.registerControl({ stop });
         const { transport, emit } = await transportFixture({ terminate: () => { stopStarted = true; return proof; } });
         emit(Buffer.alloc(MAX_MCP_FRAME_BYTES + 1, 120));
         const evidence = await transport._termination;
         return { outcome: 'disconnected', ...evidence, diagnostic: [transport._failure.code, evidence.diagnostic].filter(Boolean).join('; ') };
       } });
+      const run = call(input);
       await waitFor(() => stopStarted);
       expect(registry.values().filter((entry: any) => entry.terminalAt === null)).toHaveLength(1);
       confirm({ termination, ...(termination === 'uncertain' ? { diagnostic: 'OG_WORKER_MCP_STOP_FAILED' } : {}) });
@@ -1237,8 +1247,100 @@ setInterval(() => {}, 1000);
       expect(body.status, JSON.stringify(body)).toBe(termination === 'confirmed' ? 'failed' : 'uncertain');
       expect(body.termination).toBe(termination);
       if (termination === 'uncertain') expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_STOP_FAILED');
+      if (termination === 'uncertain') {
+        expect(registry.canStart()).toBe(false);
+        const blocked = JSON.parse((await call({ ...input, request_id: `blocked-${i}` })).content[0].text);
+        expect(blocked.error).toContain('capacity is reserved');
+        const cancelled = JSON.parse((await call({ operation: 'cancel', invocation_id: body.invocationId })).content[0].text);
+        expect(cancelled.termination).toBe('confirmed');
+        expect(stop).toHaveBeenCalledOnce();
+      }
       expect(registry.values().filter((entry: any) => entry.terminalAt === null)).toHaveLength(0);
+      expect(registry.canStart()).toBe(true);
       await rm(path.join(root, 'work', 'final.json'), { force: true });
+    }
+  });
+
+  it.each(['failed', 'unconfirmed', 'confirmed', 'inactive-after-failed-stop'])('retains usable overflow control through MCP finalization (%s)', async initial => {
+    const root = await tempRoot();
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const { child } = await transportFixture({ start: false });
+    const launch = { launched: true, mode: 'systemd-unit', unit: 'fixture-overflow.service', child };
+    let stopOk = initial !== 'failed' && initial !== 'inactive-after-failed-stop';
+    let active = initial === 'failed' || initial === 'unconfirmed';
+    const stopUnit = vi.fn(() => ({ ok: stopOk }));
+    const unitStatus = vi.fn(() => ({ active }));
+    const realStop = (await vi.importActual<any>('../../../tools/ralph-external/lib/worker-overflow.mjs')).stopOverflowWorker;
+    const stop = vi.fn((ownedLaunch: any) => realStop(ownedLaunch, { stopUnit, unitStatus, deadlineMs: 0 }));
+    const close = vi.fn(async () => {});
+    const notification = vi.fn(async () => { throw new Error('connection closed'); });
+    const launchPlan = vi.fn(() => launch);
+    vi.doMock('../../../tools/ralph-external/session-launcher.mjs', async () => ({
+      ...await vi.importActual('../../../tools/ralph-external/session-launcher.mjs'), planDirectWorkerLaunch: launchPlan,
+    }));
+    vi.doMock('../../../tools/ralph-external/lib/worker-overflow.mjs', () => ({ stopOverflowWorker: stop }));
+    vi.doMock('@modelcontextprotocol/sdk/client/index.js', () => ({
+      Client: class {
+        close = close;
+        notification = notification;
+        async connect(transport: any) {
+          transport.onerror = () => {};
+          await transport.start();
+          child.stdout.emit('data', Buffer.alloc(MAX_MCP_FRAME_BYTES + 1, 120));
+          throw transport._failure;
+        }
+      },
+    }));
+    try {
+      const { call, input } = await prepareInvocation(root, '', {}, { registry });
+      const body = JSON.parse((await call(input)).content[0].text);
+      const entry = registry.get(body.invocationId);
+      expect(close).toHaveBeenCalledOnce();
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+      expect(child.stdin.destroy).toHaveBeenCalledOnce();
+      expect(stop).toHaveBeenCalledOnce(); // finalization adds no automatic retry
+      if (!active) {
+        expect(body.status).toBe('failed');
+        expect(body.termination).toBe('confirmed');
+        expect(entry.control).toBeNull();
+        expect(entry.terminalAt).not.toBeNull();
+      } else {
+        expect(body.status).toBe('uncertain');
+        expect(body.terminalAt).toBeNull();
+        const control = entry.control;
+        expect(control.stop).toBeTypeOf('function');
+        const blocked = JSON.parse((await call({ ...input, request_id: 'blocked-before-cancel' })).content[0].text);
+        expect(blocked.error).toContain('capacity is reserved');
+        expect(launchPlan).toHaveBeenCalledOnce();
+        // Delivery alone cannot release the slot, even when the explicit retry succeeds.
+        stopOk = true;
+        const pending = JSON.parse((await call({ operation: 'cancel', invocation_id: body.invocationId })).content[0].text);
+        expect(pending.cancelDelivered).toBe(true);
+        expect(pending.termination).toBe('uncertain');
+        expect(entry.control).toBe(control);
+        expect(registry.canStart()).toBe(false);
+        const stillBlocked = JSON.parse((await call({ ...input, request_id: 'blocked-after-delivery' })).content[0].text);
+        expect(stillBlocked.error).toContain('capacity is reserved');
+        expect(launchPlan).toHaveBeenCalledOnce();
+        active = false;
+        const stopped = JSON.parse((await call({ operation: 'cancel', invocation_id: body.invocationId })).content[0].text);
+        expect(stopped.status).toBe('cancelled');
+        expect(stopped.termination).toBe('confirmed');
+        expect(entry.control).toBeNull();
+        expect(entry.terminalAt).not.toBeNull();
+        expect(stop).toHaveBeenCalledTimes(3);
+        expect(child.kill).not.toHaveBeenCalled(); // owned unit authority survives pipe closure
+      }
+      expect(registry.canStart()).toBe(true);
+      await rm(input.final_output, { force: true });
+      active = false;
+      const replacement = JSON.parse((await call({ ...input, request_id: 'replacement-after-proof' })).content[0].text);
+      expect(replacement.termination).toBe('confirmed');
+      expect(launchPlan).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.doUnmock('../../../tools/ralph-external/session-launcher.mjs');
+      vi.doUnmock('../../../tools/ralph-external/lib/worker-overflow.mjs');
+      vi.doUnmock('@modelcontextprotocol/sdk/client/index.js');
     }
   });
 
