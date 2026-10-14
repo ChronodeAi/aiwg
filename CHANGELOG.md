@@ -373,6 +373,26 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   generated fixtures safely, tighten identity/version assertions, restore TLS test
   settings, and preserve literal data in comment and receipt-tampering checks.
 
+- Shell commands are no longer built from untrusted strings (#3093, CodeQL WP1). The agent-loop
+  `ralph-commit` hook commits with `git commit -F -` on stdin instead of interpolating a message that
+  embeds changed filenames into `git commit -m "..."`; `tools/daemon/tmux-manager.mjs` sends literal
+  text with argv `send-keys -l`; `tools/contrib/lib/github-client.mjs` calls `gh` with argv, passes
+  PR bodies and comments via `--body-file -`, and validates PR numbers and `owner/repo` arguments;
+  Remote topology in `tools/agents/providers/base.mjs` and disk checks in `tools/workspace/migration-tool.mjs` use argv.
+  edge-channel git calls in `src/channel/manager.mjs` use argv with `--` before clone operands and
+  require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
+  templates map unquoted, unescaped `{image}`/`{prompt_file}`/`{out}` placeholders to
+  `"$1"`/`"$2"`/`"$3"`, with paths passed as separate shell arguments. `AIWG_VISION_IMAGE`,
+  `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Only `$1`, `$2`, `$3`,
+  `$AIWG_VISION_IMAGE`, `$AIWG_VISION_PROMPT_FILE`, and `$AIWG_VISION_OUT` may expand,
+  also in braced form. All other `$` parameter/variable expansions are rejected, including
+  `$SHELL`, `$IFS`, special parameters, arithmetic, and braced operators; `$` inside single
+  quotes is literal text and allowed. Command substitution,
+  backticks, `eval`, nested shells (any shell word together with a short `-c` option cluster
+  anywhere in the template), here-documents and
+  here-strings (`<<`), `#` comments outside single quotes, backslash-newline line continuations, and templates over 4096 characters are rejected. Use the quoted
+  positional parameters directly or a wrapper script for complex logic. Templates are trusted
+  executable code and must not re-parse path values as shell source.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level
