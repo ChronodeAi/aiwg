@@ -77,6 +77,7 @@ describe('async systemd status and command path', () => {
     expect(() => parseShellUnitStatus(stdout)).toThrow(/status unavailable/);
   });
   it('retries a transient show error without stopping and gives short probes a timeout floor', async () => {
+    const { root, binary } = stubConductorClientEnv();
     let clock = 0;
     const exec = vi.fn().mockRejectedValueOnce(new Error('busy')).mockResolvedValueOnce({ stdout: active })
       .mockResolvedValueOnce({ stdout: success });
@@ -88,18 +89,28 @@ describe('async systemd status and command path', () => {
     for (const call of exec.mock.calls) {
       expect(path.isAbsolute(call[0])).toBe(true);
       expect(call[0]).not.toBe('systemctl');
+      expect(call[0]).toBe(resolveSystemdClient('systemctl'));
+      expect(call[0]).toBe(realpathSync(binary));
       expect(call[2].env).toBeDefined();
+      expectIsolatedClientEnv(call[2].env, root);
     }
     expect(exec.mock.calls[0][1]).toEqual(expect.arrayContaining(['LoadState', 'ActiveState', 'MainPID']));
     expect(exec.mock.calls.every(call => call[2].timeout >= 1000 && call[2].signal === abort.signal)).toBe(true);
   });
   it('accepts a verified collected unit even when systemctl show exits nonzero', async () => {
+    const { root, binary } = stubConductorClientEnv();
     const exec = vi.fn().mockRejectedValue({ code: 4, stdout: collected, stderr: 'Unit could not be found.' });
     expect(await waitForUnitTermination('test.service', 100, { exec }))
       .toEqual({ termination: 'confirmed', exitCode: null });
     expect(exec).toHaveBeenCalledOnce();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', 'show', 'test.service']));
+    expectIsolatedClientEnv(options.env, root);
   });
   it('cancels an in-flight show and produces no more probes after abort', async () => {
+    const { root, binary } = stubConductorClientEnv();
     const abort = new AbortController();
     let entered!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -113,6 +124,11 @@ describe('async systemd status and command path', () => {
     expect(await pending).toMatchObject({ termination: 'uncertain' });
     expect(exec).toHaveBeenCalledOnce();
     expect(exec.mock.calls[0][2].env).toBeDefined();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', 'show', 'test.service']));
+    expectIsolatedClientEnv(options.env, root);
   });
   it.each([['stop', defaultStopShellUnit], ['kill', defaultKillShellUnit]])('routes the default %s command through the canonical client with a filtered environment', async (verb, command) => {
     const { root, binary } = stubConductorClientEnv();
