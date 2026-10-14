@@ -1,5 +1,6 @@
 import { EventEmitter, once } from 'node:events';
 import { spawn } from 'node:child_process';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -8,11 +9,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildShellStopControl, parseShellUnitStatus, waitForUnitTermination, defaultStopShellUnit, defaultKillShellUnit } from '../../../src/mcp/tools/worker-shell-control.mjs';
 // @ts-expect-error — .mjs untyped
 import { prepareWorkerStdin, sweepWorkerStdin } from '../../../src/mcp/tools/worker-stdin-runtime.mjs';
+// @ts-expect-error — .mjs untyped
+import { resolveSystemdClient } from '../../../tools/ralph-external/lib/systemd-client.mjs';
 
 const roots: string[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 async function tempRoot() {
@@ -26,6 +30,32 @@ function childFixture() {
   child.kill = vi.fn(() => true);
   return child;
 }
+/** Conductor PATH fixture holding an executable `systemctl`, plus a synthetic
+ * hostile process environment: loader/bootstrap controls and an unlisted
+ * value that must never reach an async control client, and one permitted
+ * manager connection that must survive. Restored by afterEach. */
+function stubConductorClientEnv() {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'worker-shell-client-')));
+  roots.push(root);
+  const binary = path.join(root, 'systemctl');
+  copyFileSync(process.execPath, binary);
+  chmodSync(binary, 0o700);
+  vi.stubEnv('PATH', root);
+  vi.stubEnv('HOME', '/conductor/home');
+  vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/synthetic-conductor');
+  vi.stubEnv('LD_TRACE_LOADED_OBJECTS', '1');
+  vi.stubEnv('NODE_OPTIONS', 'synthetic-node-options');
+  vi.stubEnv('AIWG_TEST_UNLISTED', 'unlisted-value');
+  return { root, binary };
+}
+
+function expectIsolatedClientEnv(env: any, root: string) {
+  expect(env).toMatchObject({ PATH: root, HOME: '/conductor/home', XDG_RUNTIME_DIR: '/run/user/synthetic-conductor' });
+  for (const name of ['LD_TRACE_LOADED_OBJECTS', 'NODE_OPTIONS', 'AIWG_TEST_UNLISTED']) {
+    expect(env).not.toHaveProperty(name);
+  }
+}
+
 const active = 'LoadState=loaded\nActiveState=active\nResult=success\nExecMainStatus=0\nExecMainCode=0\nMainPID=42\n';
 const success = 'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainCode=1\nMainPID=0\n';
 const failed = 'LoadState=loaded\nActiveState=failed\nResult=exit-code\nExecMainStatus=7\nExecMainCode=1\nMainPID=0\n';
@@ -47,6 +77,7 @@ describe('async systemd status and command path', () => {
     expect(() => parseShellUnitStatus(stdout)).toThrow(/status unavailable/);
   });
   it('retries a transient show error without stopping and gives short probes a timeout floor', async () => {
+    const { root, binary } = stubConductorClientEnv();
     let clock = 0;
     const exec = vi.fn().mockRejectedValueOnce(new Error('busy')).mockResolvedValueOnce({ stdout: active })
       .mockResolvedValueOnce({ stdout: success });
@@ -55,17 +86,31 @@ describe('async systemd status and command path', () => {
       pollIntervalMs: 10, clock: () => clock, sleep: async (ms: number) => { clock += ms; } });
     expect(outcome).toEqual({ termination: 'confirmed', exitCode: 0 });
     expect(exec).toHaveBeenCalledTimes(3);
-    expect(exec.mock.calls[0][0]).toBe('systemctl');
+    for (const call of exec.mock.calls) {
+      expect(path.isAbsolute(call[0])).toBe(true);
+      expect(call[0]).not.toBe('systemctl');
+      expect(call[0]).toBe(resolveSystemdClient('systemctl'));
+      expect(call[0]).toBe(realpathSync(binary));
+      expect(call[2].env).toBeDefined();
+      expectIsolatedClientEnv(call[2].env, root);
+    }
     expect(exec.mock.calls[0][1]).toEqual(expect.arrayContaining(['LoadState', 'ActiveState', 'MainPID']));
     expect(exec.mock.calls.every(call => call[2].timeout >= 1000 && call[2].signal === abort.signal)).toBe(true);
   });
   it('accepts a verified collected unit even when systemctl show exits nonzero', async () => {
+    const { root, binary } = stubConductorClientEnv();
     const exec = vi.fn().mockRejectedValue({ code: 4, stdout: collected, stderr: 'Unit could not be found.' });
     expect(await waitForUnitTermination('test.service', 100, { exec }))
       .toEqual({ termination: 'confirmed', exitCode: null });
     expect(exec).toHaveBeenCalledOnce();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', 'show', 'test.service']));
+    expectIsolatedClientEnv(options.env, root);
   });
   it('cancels an in-flight show and produces no more probes after abort', async () => {
+    const { root, binary } = stubConductorClientEnv();
     const abort = new AbortController();
     let entered!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -78,16 +123,57 @@ describe('async systemd status and command path', () => {
     abort.abort();
     expect(await pending).toMatchObject({ termination: 'uncertain' });
     expect(exec).toHaveBeenCalledOnce();
+    expect(exec.mock.calls[0][2].env).toBeDefined();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', 'show', 'test.service']));
+    expectIsolatedClientEnv(options.env, root);
   });
-  it.each([['stop', defaultStopShellUnit], ['kill', defaultKillShellUnit]])('bounds the default %s command', async (verb, command) => {
+  it.each([['stop', defaultStopShellUnit], ['kill', defaultKillShellUnit]])('routes the default %s command through the canonical client with a filtered environment', async (verb, command) => {
+    const { root, binary } = stubConductorClientEnv();
     const exec = vi.fn(async () => ({ stdout: '' }));
     const abort = new AbortController();
     expect(await command('test.service', { exec, signal: abort.signal, timeout: 17 })).toEqual({ ok: true });
-    expect(exec).toHaveBeenCalledWith('systemctl', expect.arrayContaining(['--user', verb, 'test.service']),
-      { signal: abort.signal, timeout: 17 });
-    if (verb === 'kill') expect(exec.mock.calls[0][1]).toEqual(expect.arrayContaining(['--kill-who=all', '--signal=SIGKILL']));
+    expect(exec).toHaveBeenCalledOnce();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', verb, 'test.service']));
+    if (verb === 'kill') expect(args).toEqual(expect.arrayContaining(['--kill-who=all', '--signal=SIGKILL']));
+    expect(options.signal).toBe(abort.signal);
+    expect(options.timeout).toBe(17);
+    expectIsolatedClientEnv(options.env, root);
     exec.mockRejectedValueOnce(new Error('unavailable'));
     expect(await command('test.service', { exec })).toEqual({ ok: false });
+  });
+  it('isolates status probes from loader controls while keeping the manager connection', async () => {
+    const { root, binary } = stubConductorClientEnv();
+    const exec = vi.fn(async () => ({ stdout: success }));
+    expect(await waitForUnitTermination('test.service', 100, { exec }))
+      .toEqual({ termination: 'confirmed', exitCode: 0 });
+    expect(exec).toHaveBeenCalledOnce();
+    const [invoked, args, options]: any[] = exec.mock.calls[0];
+    expect(invoked).toBe(resolveSystemdClient('systemctl'));
+    expect(invoked).toBe(realpathSync(binary));
+    expect(args).toEqual(expect.arrayContaining(['--user', 'show', 'test.service']));
+    expect(options.timeout).toBeGreaterThanOrEqual(1000);
+    expectIsolatedClientEnv(options.env, root);
+  });
+  it.skipIf(process.platform === 'win32')('executes a real stop/kill client under loader hijack instead of inheriting it', async ctx => {
+    if (!existsSync('/bin/false')) { ctx.skip('no failing ELF binary available'); return; }
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'worker-shell-hijack-')));
+    roots.push(root);
+    const binary = path.join(root, 'systemctl');
+    copyFileSync(realpathSync('/bin/false'), binary);
+    chmodSync(binary, 0o700);
+    vi.stubEnv('PATH', root);
+    vi.stubEnv('LD_TRACE_LOADED_OBJECTS', '1');
+    vi.stubEnv('NODE_OPTIONS', 'synthetic-node-options');
+    // A hijacked loader prints its trace and exits 0 without running the
+    // client, so only a real execution (exit 1 here) reports { ok: false }.
+    expect(await defaultStopShellUnit('test.service')).toEqual({ ok: false });
+    expect(await defaultKillShellUnit('test.service')).toEqual({ ok: false });
   });
 });
 

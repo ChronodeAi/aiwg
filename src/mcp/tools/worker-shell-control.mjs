@@ -1,10 +1,31 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { getPackageRoot } from '../../channel/manager.mjs';
 
 const execFileAsync = promisify(execFile);
 const uncertain = () => ({ termination: 'uncertain', exitCode: null });
 const unitProperties = ['LoadState', 'ActiveState', 'Result', 'ExecMainStatus', 'ExecMainCode', 'MainPID'];
+
+// tools/ stays at the package root in both source and dist layouts.
+function loadSystemdClientModule() {
+  return import(pathToFileURL(path.join(getPackageRoot(),
+    'tools/ralph-external/lib/systemd-client.mjs')).href);
+}
+
+/** Run systemctl through the canonical hardened boundary: the absolute client
+ * resolved from the conductor PATH with a loader-filtered environment
+ * (manager connection preserved, nothing else inherited). Throws when the
+ * client is unavailable so pollers retry until deadline/cancellation and
+ * stop/kill report `{ ok: false }` — a bare inherited-env `systemctl` is
+ * never executed. */
+async function execCanonicalSystemctl(exec, args, options) {
+  const { resolveSystemdClient, buildSystemdClientEnv } = await loadSystemdClientModule();
+  return exec(resolveSystemdClient('systemctl'), args,
+    { ...options, env: buildSystemdClientEnv({ envNames: [] }) });
+}
 
 /** Parse only explicit stop proof. Missing/unknown properties are observation
  * failures, never evidence of termination. A collected unit has no exit result. */
@@ -34,7 +55,8 @@ export async function waitForUnitTermination(unit, deadlineMs, { signal, pollInt
   const deadline = clock() + deadlineMs;
   while (!signal?.aborted && clock() < deadline) {
     try {
-      const { stdout } = await exec('systemctl', ['--user', 'show', unit, ...unitProperties.flatMap(name => ['-p', name])],
+      const { stdout } = await execCanonicalSystemctl(exec,
+        ['--user', 'show', unit, ...unitProperties.flatMap(name => ['-p', name])],
         // Probes have a usable floor; the caller's AbortSignal bounds the
         // overall grace/deadline even when a probe is still in flight.
         { timeout: Math.max(1000, Math.min(10000, deadline - clock())), signal });
@@ -224,13 +246,13 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
 
 export async function defaultStopShellUnit(unit, { signal, timeout = 1000, exec = execFileAsync } = {}) {
   try {
-    await exec('systemctl', ['--user', '--no-block', 'stop', unit], { timeout, signal });
+    await execCanonicalSystemctl(exec, ['--user', '--no-block', 'stop', unit], { timeout, signal });
     return { ok: true };
   } catch { return { ok: false }; }
 }
 export async function defaultKillShellUnit(unit, { signal, timeout = 1000, exec = execFileAsync } = {}) {
   try {
-    await exec('systemctl', ['--user', 'kill', '--kill-who=all', '--signal=SIGKILL', unit], { timeout, signal });
+    await execCanonicalSystemctl(exec, ['--user', 'kill', '--kill-who=all', '--signal=SIGKILL', unit], { timeout, signal });
     return { ok: true };
   } catch { return { ok: false }; }
 }
