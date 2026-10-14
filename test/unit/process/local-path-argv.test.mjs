@@ -28,7 +28,7 @@ fs.appendFileSync(process.env.WP1_ARGV_LOG, JSON.stringify({ command: path.basen
 if (args[0] === 'clone') fs.mkdirSync(args.at(-1), { recursive: true });
 if (args.includes('get-url')) process.stdout.write('https://example.com/literal.git\\n');
 if (path.basename(process.argv[1]) === 'fsutil') process.stdout.write('Total # of free bytes : 4096000\\n');
-if (path.basename(process.argv[1]) === 'df') process.stdout.write('Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/test 5000 1000 4000 20% /fixture\\n');
+if (path.basename(process.argv[1]) === 'df') process.stdout.write(process.env.WP1_DF_OUTPUT ?? 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/test 5000 1000 4000 20% /fixture\\n');
 `;
     for (const command of ['git', 'df', 'fsutil']) {
       writeFileSync(join(bin, command), executable, { mode: 0o755 });
@@ -125,9 +125,29 @@ try { await switchToEdge(); } catch (error) { console.log(JSON.stringify({ error
     const output = run(`const { MigrationTool } = await import(${JSON.stringify(moduleUrl('tools/workspace/migration-tool.mjs'))});
 console.log(JSON.stringify(await new MigrationTool(${JSON.stringify(cwd)}).checkDiskSpace()));`, cwd);
 
-    expect(calls()).toEqual([{ command: 'df', args: ['-k', cwd] }]);
+    expect(calls()).toEqual([{ command: 'df', args: ['-kP', cwd] }]);
     expect(JSON.parse(output)).toMatchObject({ passed: true, available: 4000 * 1024, required: 0 });
     expect(existsSync(join(cwd, 'pwned'))).toBe(false);
+  });
+
+  it.each([
+    '/dev/very-long-filesystem-name\n  5000 1000 4000 20% /fixture',
+    '/dev/test 5000 1000 4000junk 20% /fixture',
+    '/dev/test 5000 1000 999999999999999999999999 20% /fixture',
+  ])('warns instead of treating malformed df output as available space: %s', (line) => {
+    const output = run(`const { MigrationTool } = await import(${JSON.stringify(moduleUrl('tools/workspace/migration-tool.mjs'))});
+const tool = new MigrationTool(${JSON.stringify(root)});
+tool._getDirectorySize = async () => 100000;
+const result = await tool.checkDiskSpace();
+console.log(JSON.stringify({ ...result, available: String(result.available) }));`, root, {
+      WP1_DF_OUTPUT: `Filesystem 1024-blocks Used Available Capacity Mounted on\n${line}\n`,
+    });
+
+    expect(calls()).toEqual([{ command: 'df', args: ['-kP', root] }]);
+    expect(JSON.parse(output)).toEqual({
+      passed: true, available: 'Infinity', required: 0,
+      warning: 'Invalid available disk space in df output',
+    });
   });
 
   it('checks Windows free space with literal fsutil argv', () => {
@@ -141,16 +161,15 @@ console.log(JSON.stringify(await new MigrationTool(${JSON.stringify(cwd)}).check
     expect(JSON.parse(output)).toMatchObject({ passed: true, available: 4096000, required: 0 });
   });
 
-  it('resolves topology URLs with literal project paths and remote names', () => {
+  it.each(['origin $(touch pwned) `touch pwned`', '--all'])('resolves topology URLs with literal project paths and remote %s', (remote) => {
     const target = join(root, 'repo $(touch pwned) "quoted"');
-    const remote = 'origin $(touch pwned) `touch pwned`';
     mkdirSync(join(target, '.aiwg'), { recursive: true });
     writeFileSync(join(target, '.aiwg', 'aiwg.config'), JSON.stringify({ remotes: { primary: remote } }));
 
     const block = run(`const { buildRemotesTopologyBlock } = await import(${JSON.stringify(moduleUrl('tools/agents/providers/base.mjs'))});
 console.log(buildRemotesTopologyBlock(${JSON.stringify(target)}));`);
 
-    expect(calls()).toEqual([{ command: 'git', args: ['-C', target, 'remote', 'get-url', remote] }]);
+    expect(calls()).toEqual([{ command: 'git', args: ['-C', target, 'remote', 'get-url', '--', remote] }]);
     expect(block).toContain(`\`${remote}\` (https://example.com/literal.git)`);
     expect(existsSync(join(root, 'pwned'))).toBe(false);
   });

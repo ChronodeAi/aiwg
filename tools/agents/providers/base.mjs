@@ -1816,7 +1816,7 @@ export function buildRemotesTopologyBlock(targetDir) {
 
   function getUrl(remote) {
     try {
-      return boundedExecFileSync('git', ['-C', targetDir, 'remote', 'get-url', remote], 'quick', {
+      return boundedExecFileSync('git', ['-C', targetDir, 'remote', 'get-url', '--', remote], 'quick', {
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf8',
       }).trim();

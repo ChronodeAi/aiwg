@@ -89,15 +89,29 @@ const codexAdapter: VisionAdapter = {
   },
 };
 
-/** Paths enter the shell through environment expansion, never as shell source. */
+/** Paths enter the shell as positional arguments, never as shell source. */
 function visionCommand(template: string): string {
+  const guidance = 'Use "$1"/"$2"/"$3" as data operands or move complex logic to a wrapper script';
+  const reject = (construct: string): never => {
+    throw new Error(`Vision command rejects ${construct}. ${guidance}`);
+  };
+  // Recognize literal command names even when quoted or backslash-escaped.
+  const syntax = template.replace(/\\\r?\n/g, '').replace(/\\([^\n])/g, '$1').replace(/["']/g, '');
+  if (syntax.includes('$(')) reject('command substitution ($(...))');
+  if (template.includes('`')) reject('backticks');
+  if (/\beval\b/.test(syntax)) reject('eval');
+  if (/\b(?:sh|bash|zsh|dash)\b[^;&|]*?-[a-zA-Z]*c[a-zA-Z]*\b/.test(syntax)) reject('nested shell invocation (-c)');
+
+  // Track quotes only to reject quoted/escaped placeholders and comments.
   let quote = '';
-  return template.replace(/\\?\{(image|prompt_file|out)\}|\\[\s\S]|\$'|["'`]/g, (token, name: string | undefined) => {
+  return template.replace(/\\?\{(image|prompt_file|out)\}|\\[\s\S]|\$'|["'#]/g, (token, name: string | undefined) => {
+    if ((token === '#' || token === '\\#') && quote !== "'") reject('comments (# outside single quotes)');
     if (name) {
-      if (quote) throw new Error('Vision command placeholders must be outside shell quotes');
-      if (token.startsWith('\\')) throw new Error('Vision command placeholders must not be escaped');
-      return `"$AIWG_VISION_${name.toUpperCase()}"`;
+      if (quote) throw new Error(`Vision command placeholders must be outside shell quotes. ${guidance}`);
+      if (token.startsWith('\\')) throw new Error(`Vision command placeholders must not be escaped. ${guidance}`);
+      return `"$${name === 'image' ? 1 : name === 'prompt_file' ? 2 : 3}"`;
     }
+    if (token === '#') return token;
     // Backslashes are literal inside POSIX single quotes, but escape the next
     // character in double quotes and ANSI-C ($'...') quotes.
     if (token.startsWith('\\')) {
@@ -113,11 +127,13 @@ function visionCommand(template: string): string {
 /**
  * Generic command-template adapter (provider-neutral). Runs
  * `AIWG_VISION_COMMAND` (or the `--command` flag) with placeholders:
- *   {image}        absolute image path
- *   {prompt_file}  path to a file containing the prompt
- *   {out}          path the command must write the transcription to
- * Placeholders must be unquoted and unescaped; each expands to a quoted
- * AIWG_VISION_IMAGE / AIWG_VISION_PROMPT_FILE / AIWG_VISION_OUT variable.
+ *   {image}        "$1": absolute image path
+ *   {prompt_file}  "$2": path to a file containing the prompt
+ *   {out}          "$3": path the command must write the transcription to
+ * Placeholders must be unquoted and unescaped. AIWG_VISION_IMAGE /
+ * AIWG_VISION_PROMPT_FILE / AIWG_VISION_OUT are also exported.
+ * Command substitution, backticks, eval, nested shells with -c, and # outside
+ * single quotes are rejected; use a wrapper script for complex logic.
  * e.g.  vision-cli --prompt-file {prompt_file} --image {image} > {out}
  */
 function commandAdapter(template: string): VisionAdapter {
@@ -131,7 +147,7 @@ function commandAdapter(template: string): VisionAdapter {
       fs.writeFileSync(promptFile, prompt);
       try {
         // Same caller-controlled-timeout clamp as the codex adapter above.
-        const r = spawnSync('sh', ['-c', cmd], {
+        const r = spawnSync('sh', ['-c', cmd, 'aiwg-vision', imagePath, promptFile, out], {
           timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000), encoding: 'utf8',
           env: { ...process.env, AIWG_VISION_IMAGE: imagePath, AIWG_VISION_PROMPT_FILE: promptFile, AIWG_VISION_OUT: out },
         });

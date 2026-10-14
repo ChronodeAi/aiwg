@@ -59,12 +59,12 @@ describe('resolveAdapter (#1507)', () => {
     expect(() => resolveAdapter({ provider: 'command' })).toThrow(/requires --command/);
     expect(resolveAdapter({ provider: 'command', command: 'x {image} {out}' }).name).toBe('command');
   });
-  it('passes image, prompt and output paths through environment variables in real shell templates (141)', () => {
+  it('passes image, prompt and output paths as positional arguments in real shell templates (141)', () => {
     const marker = join(root, 'pwned');
     const backtickMarker = join(root, 'backtick-pwned');
     // A slash-free relative marker lets the payload appear in a directory name.
     // The command intentionally starts in root so an unsafe substitution touches it.
-    const dir = join(root, "images {prompt_file} {out} $(touch pwned) `touch backtick-pwned` 'single' \\ \"double\"");
+    const dir = join(root, "x;:>PWNED;y images {prompt_file} {out} $(touch pwned) `touch backtick-pwned` 'single' \\ \"double\"");
     mkdirSync(dir);
     const image = join(dir, 'page-001.png');
     writeFileSync(image, 'literal image');
@@ -75,11 +75,12 @@ describe('resolveAdapter (#1507)', () => {
     expect(result).toEqual({ ok: true, text: 'literal image# Page 1\nPrompt' });
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(backtickMarker)).toBe(false);
+    expect(existsSync(join(root, 'PWNED'))).toBe(false);
     expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
     expect(existsSync(join(dir, '.vision-out-1.txt'))).toBe(false);
   });
 
-  it.each(['"{image}"', "$'{image}'", "'{prompt_file}'", '`{out}`', '\\{image}'])('rejects unsafe placeholder context %s (141)', (placeholder) => {
+  it.each(['"{image}"', "$'{image}'", "'{prompt_file}'", '\\{image}'])('rejects unsafe placeholder context %s (141)', (placeholder) => {
     const dir = join(root, '$(touch pwned)');
     mkdirSync(dir);
     const image = join(dir, 'page-001.png');
@@ -89,6 +90,59 @@ describe('resolveAdapter (#1507)', () => {
       adapter.transcribe(image, '# Page 1', { root, page: 1, timeoutSec: 10 });
     }).toThrow(/placeholders must/);
     expect(existsSync(join(root, 'pwned'))).toBe(false);
+  });
+
+  it.each(['image', 'prompt_file', 'out'])('rejects nested re-parsing and comment desync for {%s}', (placeholder) => {
+    const dir = join(root, 'x;:>PWNED;y');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const commands = [
+      [`printf '%s\\n' "$(sh -c "printf original:{${placeholder}}")"`, /command substitution/],
+      [`# "\nsh -c "printf original:{${placeholder}}"`, /nested shell/],
+      [`# "\nprintf '<%s>\\n' "{${placeholder}}"`, /comments/],
+    ] as const;
+    for (const [command, error] of commands) {
+      expect(() => {
+        const adapter = resolveAdapter({ provider: 'command', command: `cd ${quote(root)}; ${command}` });
+        adapter.transcribe(image, '# Page 1', { root, page: 1, timeoutSec: 10 });
+      }).toThrow(error);
+      expect(existsSync(join(root, 'PWNED'))).toBe(false);
+      expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
+    }
+  });
+
+  it.each([
+    ['printf "%s" "$(cat "$2")"', 'command substitution'],
+    ['printf "%s" `cat "$2"`', 'backticks'],
+    ['eval "$1"', 'eval'],
+    ['e"val" "$1"', 'eval'],
+    ...['sh', 'bash', 'zsh', 'dash'].map(shell => [`${shell} -c "$1"`, 'nested shell']),
+    ['env MODE=vision sh -c "$1"', 'nested shell'],
+    ['bash --noprofile "-xc" "$1"', 'nested shell'],
+    ['bash -cl "$1"', 'nested shell'],
+    ['s"h" -c "$1"', 'nested shell'],
+    ['sh \\\n-c "$1"', 'nested shell'],
+    ['printf "%s" "#"', 'comments'],
+    ['printf "%s" \\#', 'comments'],
+  ])('rejects re-parsing construct in %s with actionable guidance', (command, construct) => {
+    expect(() => resolveAdapter({ provider: 'command', command })).toThrow(construct);
+    expect(() => resolveAdapter({ provider: 'command', command })).toThrow('"$1"/"$2"/"$3"');
+    expect(() => resolveAdapter({ provider: 'command', command })).toThrow('wrapper script');
+  });
+
+  it.each([
+    'cat "$1" "$2" > "$3"',
+    'cat "$AIWG_VISION_IMAGE" "$AIWG_VISION_PROMPT_FILE" > "$AIWG_VISION_OUT"',
+  ])('accepts direct data references and single-quoted # in %s', (command) => {
+    const dir = join(root, 'x;:>PWNED;y');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'image');
+    const adapter = resolveAdapter({ provider: 'command', command: `printf '%s' '#'; ${command}` });
+    expect(adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 }))
+      .toEqual({ ok: true, text: 'imageprompt' });
   });
   it('rejects an unknown provider', () => {
     expect(() => resolveAdapter({ provider: 'bogus' })).toThrow(/unknown vision provider/);

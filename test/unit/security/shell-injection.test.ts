@@ -258,21 +258,23 @@ else if (args[0] === 'api') process.stdout.write('[]');
     expect(JSON.parse(readFileSync(join(configDir, 'channel.json'), 'utf8')).edgePath).toBe(edgePath);
   });
 
-  it('passes all vision path placeholders through environment variables while preserving shell templates', () => {
+  it('passes all vision path placeholders as arguments and exports matching environment variables', () => {
     fakeBinary('vision-probe', `
-const [image, promptFile, out] = args;
-if (image !== process.env.AIWG_VISION_IMAGE || promptFile !== process.env.AIWG_VISION_PROMPT_FILE || out !== process.env.AIWG_VISION_OUT) process.exit(1);
+const [imageFlag, image, promptFlag, promptFile] = args;
+if (imageFlag !== '--image' || promptFlag !== '--prompt-file') process.exit(1);
+if (image !== process.env.AIWG_VISION_IMAGE || promptFile !== process.env.AIWG_VISION_PROMPT_FILE || !process.env.AIWG_VISION_OUT) process.exit(1);
+if (process.env.AIWG_VISION_OUT !== require('node:path').join(require('node:path').dirname(image), '.vision-out-1.txt')) process.exit(1);
 if (fs.readFileSync(image, 'utf8') !== 'PNG') process.exit(1);
-fs.writeFileSync(out, fs.readFileSync(promptFile, 'utf8'));
+process.stdout.write(fs.readFileSync(promptFile, 'utf8'));
 `);
-    const dir = join(root, `${payload} {image} {prompt_file} {out}`);
+    const dir = join(root, `x;:>PWNED;y ${payload} {image} {prompt_file} {out}`);
     mkdirSync(dir, { recursive: true });
     const image = join(dir, 'page-001.png');
     writeFileSync(image, 'PNG');
-    const adapter = resolveAdapter({ provider: 'command', command: 'vision-probe {image} {prompt_file} {out}' });
+    const adapter = resolveAdapter({ provider: 'command', command: 'vision-probe --image {image} --prompt-file {prompt_file} > {out}' });
     expect(adapter.transcribe(image, '# Page 1\nLiteral transcription', { root, page: 1, timeoutSec: 10 }))
       .toEqual({ ok: true, text: '# Page 1\nLiteral transcription' });
-    expect(calls()[0].args).toEqual([image, join(dir, '.vision-prompt-1.txt'), join(dir, '.vision-out-1.txt')]);
+    expect(calls()[0].args).toEqual(['--image', image, '--prompt-file', join(dir, '.vision-prompt-1.txt')]);
     expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
     expect(existsSync(join(dir, '.vision-out-1.txt'))).toBe(false);
     expectNoExecution();
@@ -280,7 +282,7 @@ fs.writeFileSync(out, fs.readFileSync(promptFile, 'utf8'));
 
   it.each(['image', 'prompt_file', 'out'])('rejects quoted vision {%s} placeholders before running the template', (placeholder) => {
     fakeBinary('vision-probe', '');
-    for (const quoted of [`"{${placeholder}}"`, `'{${placeholder}}'`, `$'{${placeholder}}'`, `$'escaped\\' {${placeholder}}'`, `\`cat {${placeholder}}\``]) {
+    for (const quoted of [`"{${placeholder}}"`, `'{${placeholder}}'`, `$'{${placeholder}}'`, `$'escaped\\' {${placeholder}}'`]) {
       const command = `touch ${dollarMarker}; vision-probe ${quoted}`;
       expect(() => resolveAdapter({ provider: 'command', command }))
         .toThrow('Vision command placeholders must be outside shell quotes');

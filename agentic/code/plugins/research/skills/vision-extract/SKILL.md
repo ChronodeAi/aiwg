@@ -49,6 +49,15 @@ Outputs to `.aiwg/research/sources/text/<slug>-vision/`: per-page
 
 Both require a vision-capable model to be reachable; `needs-infrastructure`.
 
+Command templates must use unquoted, unescaped placeholders: `{image}` → `"$1"`,
+`{prompt_file}` → `"$2"`, `{out}` → `"$3"`. Paths are passed as separate shell
+arguments; `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE`, and `AIWG_VISION_OUT`
+are also exported. For example: `vision-cli --image {image} --prompt-file {prompt_file} > {out}`.
+Templates may use the quoted positional parameters or environment variables directly.
+Command substitution (`$(`), backticks, `eval`, nested shell invocations with `-c`
+(including `env … sh -c`), and `#` outside single quotes are rejected. Put complex
+logic in a wrapper script that receives the paths as data arguments.
+
 ## Contract preserved from the source script
 
 - **Strict transcription prompt**: reading order, `[?]` / `[unreadable]` markers, figure/chart text markers, no summarizing; must start exactly `# Page N`.

@@ -381,10 +381,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Remote topology in `tools/agents/providers/base.mjs` and disk checks in `tools/workspace/migration-tool.mjs` use argv.
   edge-channel git calls in `src/channel/manager.mjs` use argv with `--` before clone operands and
   require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
-  templates receive paths through `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE` and
-  `AIWG_VISION_OUT`; `{image}`/`{prompt_file}`/`{out}` placeholders must be unquoted and are
-  rejected inside quotes — reference the variables directly in quoted contexts, e.g.
-  `"$(cat "$AIWG_VISION_PROMPT_FILE")"`.
+  templates map unquoted, unescaped `{image}`/`{prompt_file}`/`{out}` placeholders to
+  `"$1"`/`"$2"`/`"$3"`, with paths passed as separate shell arguments. `AIWG_VISION_IMAGE`,
+  `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Command substitution,
+  backticks, `eval`, nested shells with `-c`, and `#` comments outside single quotes are
+  rejected. Use the quoted positional parameters directly or a wrapper script for complex logic.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level
