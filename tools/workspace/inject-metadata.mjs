@@ -168,7 +168,7 @@ function parseYamlLineByLine(yamlBlock) {
 function buildYaml(metadata) {
   return yaml.stringify(metadata, {
     defaultKeyType: 'PLAIN',
-    defaultStringType: 'QUOTE_DOUBLE',
+    defaultStringType: 'PLAIN',
     blockQuote: false,
     lineWidth: 0,
   }).trimEnd();

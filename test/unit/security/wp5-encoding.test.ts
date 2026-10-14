@@ -8,6 +8,7 @@ import { getStaticTOMLValue, parseForESLint } from 'toml-eslint-parser';
 import YAML from 'yaml';
 import { renderCodexHookToml } from '../../../src/smiths/hook-bridge/codex-translator.js';
 import { renderHookMd } from '../../../tools/agents/providers/openclaw-translator.mjs';
+import { skillMatchesProvider } from '../../../tools/agents/providers/base.mjs';
 import { injectFrameworkMetadata } from '../../../tools/workspace/inject-metadata.mjs';
 
 function frontmatter(markdown: string) {
@@ -45,6 +46,18 @@ describe('WP5 hook encoding', () => {
 });
 
 describe('WP5 metadata injection encoding', () => {
+  it.each(['all', 'codex'])(
+    'preserves %s platform routing after metadata injection', (platform) => {
+      const content = `---\nname: example\nplatforms: [${platform}]\n---\nBody.\n`;
+      const markdown = injectFrameworkMetadata(content);
+      expect(markdown).toContain(`platforms:\n  - ${platform}\n`);
+      expect(frontmatter(markdown).platforms).toEqual([platform]);
+      for (const provider of ['codex', 'claude']) {
+        expect(skillMatchesProvider(markdown, provider)).toBe(skillMatchesProvider(content, provider));
+        expect(skillMatchesProvider(markdown, provider)).toBe(platform === 'all' || provider === 'codex');
+      }
+    },
+  );
   it.each([hostile, 'C:\\new\\test\\', 'line\nadmin: true', 'line\u0085next\u2028next\u2029end', 'sdlc-complete', 'true', 'false', 'null', '42', '1e3', ' leading', 'trailing ', '  padded  ', ''])(
     'round-trips injected framework and existing string metadata: %j', (value) => {
       const content = `---\ndescription: ${JSON.stringify(value)}\n---\nBody.\n`;
@@ -64,8 +77,8 @@ describe('WP5 metadata injection encoding', () => {
     const content = `---\n${YAML.stringify(metadata)}---\nBody.\n`;
     const markdown = injectFrameworkMetadata(content);
     expect(frontmatter(markdown)).toEqual({ ...metadata, framework: 'sdlc-complete' });
-    expect(markdown).toContain('ordinary: "simple"');
-    expect(markdown).toContain('framework: "sdlc-complete"');
+    expect(markdown).toContain('ordinary: simple');
+    expect(markdown).toContain('framework: sdlc-complete');
     expect(markdown).toContain('\n---\nBody.\n');
   });
 
