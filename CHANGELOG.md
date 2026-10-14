@@ -346,6 +346,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   as data keys with own-property traversal. Projection and sanitization return ordinary objects
   using data-property definitions, preserving nested own `__proto__` keys in serialized JSON.
   Config YAML keys and dotted set paths reject all three names; config reads follow own properties only.
+  Config read/parse errors report the file and reason and block overwrites; only missing files use defaults.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level

@@ -296,11 +296,8 @@ export class UserConfig {
       return this.configCache;
     }
 
-    const configPath = resolve(this.configDir, 'config.yaml');
-
-    try {
-      const content = await readFile(configPath, 'utf-8');
-      const parsed = parseYamlSimple(content) as unknown as UserConfigData;
+    const parsed = await this.readConfig() as unknown as UserConfigData | null;
+    if (parsed) {
       this.configCache = {
         ...DEFAULT_USER_CONFIG,
         ...parsed,
@@ -310,7 +307,7 @@ export class UserConfig {
         community: { ...DEFAULT_USER_CONFIG.community, ...parsed.community },
       };
       return this.configCache;
-    } catch {
+    } else {
       // File doesn't exist — return defaults (don't create file yet)
       this.configCache = {
         ...DEFAULT_USER_CONFIG,
@@ -323,10 +320,23 @@ export class UserConfig {
     }
   }
 
+  private async readConfig(): Promise<Record<string, unknown> | null> {
+    const configPath = resolve(this.configDir, 'config.yaml');
+    try {
+      const content = await readFile(configPath, 'utf-8');
+      return parseYamlSimple(content);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new Error(`Failed to load ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /**
    * Save config.yaml
    */
   private async saveConfig(config: UserConfigData): Promise<void> {
+    // Recheck the existing file even when defaults or cached values are being saved.
+    await this.readConfig();
     await this.ensureDir();
     const configPath = resolve(this.configDir, 'config.yaml');
     const yaml = serializeYamlSimple(config as unknown as Record<string, unknown>);

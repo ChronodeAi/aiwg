@@ -85,6 +85,53 @@ describe('UserConfig', () => {
   });
 
   describe('get/set', () => {
+    it('reports rejected YAML and refuses writes without changing the file bytes', async () => {
+      const configPath = join(tempDir, 'config.yaml');
+      const content = Buffer.from('defaults:\n  provider: openai\n__proto__:\n  polluted: yes\n');
+      await writeFile(configPath, content);
+      const config = new UserConfig(tempDir);
+      const error = `Failed to load ${configPath}: Unsafe config key: prototype-related names are not allowed`;
+
+      await expect(config.get('defaults.provider')).rejects.toThrow(error);
+      await expect(config.list()).rejects.toThrow(error);
+      await expect(config.set('defaults.verbosity', 'verbose')).rejects.toThrow(error);
+      await expect(config.reset()).rejects.toThrow(error);
+      expect(await readFile(configPath)).toEqual(content);
+    });
+
+    it('refuses to save cached values over a file that now fails to parse', async () => {
+      const config = new UserConfig(tempDir);
+      await config.set('defaults.provider', 'openai');
+      const configPath = join(tempDir, 'config.yaml');
+      const content = Buffer.from('defaults:\n  provider: openai\n__proto__:\n  polluted: yes\n');
+      await writeFile(configPath, content);
+
+      await expect(config.set('defaults.verbosity', 'verbose')).rejects.toThrow(`Failed to load ${configPath}: Unsafe config key`);
+      expect(await readFile(configPath)).toEqual(content);
+    });
+
+    it('surfaces read errors instead of using defaults', async () => {
+      const configPath = join(tempDir, 'config.yaml');
+      await mkdir(configPath);
+      const config = new UserConfig(tempDir);
+
+      await expect(config.get('defaults.provider')).rejects.toThrow(`Failed to load ${configPath}: EISDIR`);
+      await expect(config.set('defaults.provider', 'openai')).rejects.toThrow(`Failed to load ${configPath}: EISDIR`);
+      await expect(config.reset()).rejects.toThrow(`Failed to load ${configPath}: EISDIR`);
+    });
+
+    it('uses defaults for a missing file and creates it on set', async () => {
+      const config = new UserConfig(join(tempDir, 'missing'));
+      const configPath = join(config.getPath(), 'config.yaml');
+      expect(await config.get('defaults.provider')).toBe('claude');
+      await expect(readFile(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await config.set('defaults.provider', 'openai');
+
+      expect(await new UserConfig(config.getPath()).get('defaults.provider')).toBe('openai');
+      expect(await readFile(configPath, 'utf-8')).toContain('provider: openai');
+    });
+
     it.each(['__proto__', 'constructor', 'prototype'])('rejects %s in every position of a dotted set path', async (segment) => {
       const config = new UserConfig(tempDir);
       const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
@@ -241,10 +288,9 @@ describe('UserConfig', () => {
       const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
       try {
         const config = new UserConfig(tempDir);
-        expect(await config.get('defaults.provider')).toBe('claude');
-        expect(await config.get('wp4Polluted')).toBeUndefined();
-        const loaded = (await config.list())['config.yaml'] as Record<string, unknown>;
-        expect(Object.hasOwn(loaded, key)).toBe(false);
+        await expect(config.get('defaults.provider')).rejects.toThrow('Unsafe config key');
+        await expect(config.get('wp4Polluted')).rejects.toThrow('Unsafe config key');
+        await expect(config.list()).rejects.toThrow('Unsafe config key');
         expect(await config.validate()).toEqual([
           expect.objectContaining({ file: 'config.yaml', severity: 'error', message: expect.stringContaining('Unsafe config key') }),
         ]);
