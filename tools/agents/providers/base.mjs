@@ -387,11 +387,12 @@ export function parseSkillPlatforms(content) {
   if (!fmMatch) return null;
 
   const fm = fmMatch[1];
+  const normalizePlatform = value => value.trim().replace(/^(["'])(.*)\1$/, '$2');
 
   // Inline array: platforms: [claude-code, codex] or platforms: [all]
   const inlineMatch = fm.match(/^platforms:\s*\[([^\]]*)\]/m);
   if (inlineMatch) {
-    const items = inlineMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+    const items = inlineMatch[1].split(',').map(normalizePlatform).filter(Boolean);
     if (items.length === 0 || (items.length === 1 && items[0] === 'all')) return null;
     return items;
   }
@@ -405,8 +406,10 @@ export function parseSkillPlatforms(content) {
     const items = multiMatch[1]
       .split('\n')
       .map(line => line.match(/^[ \t]+-[ \t]+(\S+)/)?.[1])
-      .filter(Boolean);
-    return items.length > 0 ? items : null;
+      .filter(Boolean)
+      .map(normalizePlatform);
+    if (items.length === 0 || (items.length === 1 && items[0] === 'all')) return null;
+    return items;
   }
 
   // platforms: key present but empty

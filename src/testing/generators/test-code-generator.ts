@@ -73,6 +73,8 @@ export class TestCodeGenerator {
     const files: GeneratedFile[] = [];
 
     try {
+      this.validateInputs(suite);
+
       // Group test cases by level
       const unitTests = suite.testCases.filter(tc => tc.level === 'unit');
       const integrationTests = suite.testCases.filter(tc => tc.level === 'integration');
@@ -126,6 +128,30 @@ export class TestCodeGenerator {
     }
   }
 
+  /** Validate declared string inputs before rendering any files. */
+  private validateInputs(suite: TestSuite): void {
+    const requireString = (value: unknown, field: string): void => {
+      if (typeof value !== 'string') throw new Error(`${field} must be a string`);
+    };
+    requireString(suite.name, 'suite.name');
+    for (const [index, testCase] of suite.testCases.entries()) {
+      const field = `testCases[${index}]`;
+      requireString(testCase.name, `${field}.name`);
+      if (!Array.isArray(testCase.testData)) throw new Error(`${field}.testData must be an array`);
+      for (const [dataIndex, data] of testCase.testData.entries()) {
+        const dataField = `${field}.testData[${dataIndex}]`;
+        requireString(data.name, `${dataField}.name`);
+        if (!Array.isArray(data.examples)) throw new Error(`${dataField}.examples must be an array`);
+        for (const [exampleIndex, example] of data.examples.entries()) {
+          requireString(example, `${dataField}.examples[${exampleIndex}]`);
+        }
+      }
+      for (const [stepIndex, step] of testCase.steps.entries()) {
+        if (step.testData !== undefined) requireString(step.testData, `${field}.steps[${stepIndex}].testData`);
+      }
+    }
+  }
+
   /**
    * Generate a test file for unit or integration tests
    */
@@ -149,7 +175,7 @@ export class TestCodeGenerator {
     lines.push('');
 
     // Test suite
-    lines.push(`describe('${suite.name} - ${level.charAt(0).toUpperCase() + level.slice(1)} Tests', () => {`);
+    lines.push(`describe(${JSON.stringify(`${suite.name} - ${level.charAt(0).toUpperCase() + level.slice(1)} Tests`)}, () => {`);
 
     // Setup/teardown
     if (this.options.includeSetup) {
@@ -200,7 +226,7 @@ export class TestCodeGenerator {
     lines.push('');
 
     // Test suite
-    lines.push(`test.describe('${suite.name} - E2E Tests', () => {`);
+    lines.push(`test.describe(${JSON.stringify(`${suite.name} - E2E Tests`)}, () => {`);
 
     // Setup
     if (this.options.includeSetup) {
@@ -235,12 +261,12 @@ export class TestCodeGenerator {
     if (!this.options.includeComments) return '';
 
     return `/**
- * ${_level.toUpperCase()} Tests: ${suite.name}
+ * ${_level.toUpperCase()} Tests: ${this.escapeComment(suite.name)}
  *
- * Auto-generated from ${suite.useCaseId}
- * Generated at: ${suite.generatedAt}
+ * Auto-generated from ${this.escapeComment(suite.useCaseId)}
+ * Generated at: ${this.escapeComment(suite.generatedAt)}
  *
- * @module test/${_level}/${suite.useCaseId.toLowerCase()}
+ * @module test/${_level}/${this.escapeComment(suite.useCaseId.toLowerCase())}
  */`;
   }
 
@@ -327,21 +353,21 @@ export class TestCodeGenerator {
     // Test description comment
     if (this.options.includeComments) {
       lines.push(`${indent}/**`);
-      lines.push(`${indent} * ${testCase.id}: ${testCase.name}`);
-      lines.push(`${indent} * ${testCase.description}`);
-      lines.push(`${indent} * Type: ${testCase.type}`);
-      lines.push(`${indent} * Priority: ${testCase.priority}`);
+      lines.push(`${indent} * ${this.escapeComment(testCase.id)}: ${this.escapeComment(testCase.name)}`);
+      lines.push(`${indent} * ${this.escapeComment(testCase.description)}`);
+      lines.push(`${indent} * Type: ${this.escapeComment(testCase.type)}`);
+      lines.push(`${indent} * Priority: ${this.escapeComment(testCase.priority)}`);
       lines.push(`${indent} */`);
     }
 
     // Test function
-    lines.push(`${indent}it('${this.escapeString(testCase.name)}', async () => {`);
+    lines.push(`${indent}it(${JSON.stringify(testCase.name)}, async () => {`);
 
     // Preconditions
     if (testCase.preconditions.length > 0) {
       lines.push(`${indent2}// Preconditions:`);
       for (const pre of testCase.preconditions) {
-        lines.push(`${indent2}// - ${pre}`);
+        lines.push(`${indent2}// - ${this.escapeComment(pre)}`);
       }
       lines.push('');
     }
@@ -351,7 +377,7 @@ export class TestCodeGenerator {
     if (testCase.testData.length > 0) {
       lines.push(`${indent2}const testData = {`);
       for (const data of testCase.testData) {
-        lines.push(`${indent3}${data.name}: ${this.getExampleValue(data.examples)}, // ${data.type}: ${data.constraints.join(', ')}`);
+        lines.push(`${indent3}${JSON.stringify(data.name)}: ${this.getExampleValue(data.examples)}, // ${this.escapeComment(data.type)}: ${this.escapeComment(data.constraints.join(', '))}`);
       }
       lines.push(`${indent2}};`);
     } else {
@@ -366,7 +392,7 @@ export class TestCodeGenerator {
           step.action.toLowerCase().includes('check')) {
         continue;  // Skip verification steps for Act section
       }
-      lines.push(`${indent2}// Step ${step.number}: ${step.action}`);
+      lines.push(`${indent2}// Step ${this.escapeComment(step.number)}: ${this.escapeComment(step.action)}`);
       lines.push(`${indent2}// TODO: Implement action`);
     }
     lines.push('');
@@ -378,7 +404,7 @@ export class TestCodeGenerator {
           !step.action.toLowerCase().includes('check')) {
         continue;  // Skip action steps for Assert section
       }
-      lines.push(`${indent2}// ${step.expectedResult}`);
+      lines.push(`${indent2}// ${this.escapeComment(step.expectedResult)}`);
       lines.push(`${indent2}// expect(result).toEqual(expected);`);
     }
 
@@ -397,7 +423,7 @@ export class TestCodeGenerator {
       lines.push('');
       lines.push(`${indent2}// Postconditions:`);
       for (const post of testCase.postconditions) {
-        lines.push(`${indent2}// - ${post}`);
+        lines.push(`${indent2}// - ${this.escapeComment(post)}`);
       }
     }
 
@@ -416,17 +442,17 @@ export class TestCodeGenerator {
     // Test description comment
     if (this.options.includeComments) {
       lines.push(`${indent}/**`);
-      lines.push(`${indent} * ${testCase.id}: ${testCase.name}`);
-      lines.push(`${indent} * ${testCase.description}`);
+      lines.push(`${indent} * ${this.escapeComment(testCase.id)}: ${this.escapeComment(testCase.name)}`);
+      lines.push(`${indent} * ${this.escapeComment(testCase.description)}`);
       lines.push(`${indent} */`);
     }
 
     // Test function
-    lines.push(`${indent}test('${this.escapeString(testCase.name)}', async ({ page }) => {`);
+    lines.push(`${indent}test(${JSON.stringify(testCase.name)}, async ({ page }) => {`);
 
     // Steps
     for (const step of testCase.steps) {
-      lines.push(`${indent2}// Step ${step.number}: ${step.action}`);
+      lines.push(`${indent2}// Step ${this.escapeComment(step.number)}: ${this.escapeComment(step.action)}`);
       lines.push(this.generateE2EStepCode(step, indent2));
       lines.push('');
     }
@@ -450,7 +476,7 @@ export class TestCodeGenerator {
       return `${indent}await page.click('selector'); // TODO: Update selector`;
     }
     if (action.includes('enter') || action.includes('type') || action.includes('input')) {
-      return `${indent}await page.fill('selector', '${step.testData || 'test-data'}'); // TODO: Update`;
+      return `${indent}await page.fill('selector', ${JSON.stringify(step.testData || 'test-data')}); // TODO: Update`;
     }
     if (action.includes('navigate') || action.includes('go to')) {
       return `${indent}await page.goto('/path'); // TODO: Update path`;
@@ -459,17 +485,16 @@ export class TestCodeGenerator {
       return `${indent}await page.waitForSelector('selector'); // TODO: Update selector`;
     }
     if (action.includes('verify') || action.includes('check') || action.includes('see')) {
-      return `${indent}await expect(page.locator('selector')).toBeVisible(); // ${step.expectedResult}`;
+      return `${indent}await expect(page.locator('selector')).toBeVisible(); // ${this.escapeComment(step.expectedResult)}`;
     }
 
-    return `${indent}// TODO: Implement step - ${step.action}`;
+    return `${indent}// TODO: Implement step - ${this.escapeComment(step.action)}`;
   }
 
-  /**
-   * Escape string for use in test names
-   */
-  private escapeString(str: string): string {
-    return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
+  /** Keep metadata within a single line or block comment. */
+  private escapeComment(value: string | number): string {
+    return String(value).replace(/\*\//g, '* /')
+      .replace(/[\r\n\u2028\u2029]/g, (char) => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
   }
 
   /**
@@ -478,7 +503,7 @@ export class TestCodeGenerator {
   private getExampleValue(examples: string[]): string {
     if (examples.length === 0) return "'test-value'";
     const example = examples[0];
-    if (example.match(/^\d+$/)) return example;
-    return `'${example}'`;
+    if (/^\d+$/.test(example) && String(Number(example)) === example) return example;
+    return JSON.stringify(example);
   }
 }

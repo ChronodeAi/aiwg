@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { TestCodeGenerator, CodeGeneratorOptions } from '../../../../src/testing/generators/test-code-generator.js';
 import { TestSuite, TestCase } from '../../../../src/testing/generators/test-case-generator.js';
 
@@ -384,7 +385,174 @@ describe('TestCodeGenerator', () => {
       const result = generator.generate(suite);
       const content = result.files[0].content;
 
-      expect(content).toContain("\\'single\\'");
+      expect(content).toContain(JSON.stringify(testCase.name));
+    });
+
+    it.each(['unit', 'integration', 'e2e'] as const)(
+      'preserves hostile names as data in %s test registration', (level) => {
+        const name = `quotes '" and backslashes \\"; */ injected = true; //\n\r\t雪`;
+        const testCase = createMockTestCase({ level, name, steps: [], testData: [] });
+        const suite = { ...createMockTestSuite([testCase]), name };
+        const result = new TestCodeGenerator({
+          framework: level === 'e2e' ? 'playwright' : 'vitest',
+          language: 'javascript', includeComments: true,
+          includeSetup: false, includeTeardown: false,
+        }).generate(suite);
+        expect(result.success).toBe(true);
+        const registered: string[] = [];
+        const describe = (title: string, body: () => void) => { registered.push(title); body(); };
+        const register = (title: string) => { registered.push(title); };
+        const context = { describe, it: register, test: Object.assign(register, { describe }), injected: false };
+        // Parse and execute registrations without running unfinished test bodies.
+        runInNewContext(result.files[0].content.replace(/^import .*$/gm, ''), context);
+        const label = level === 'e2e' ? 'E2E' : level[0].toUpperCase() + level.slice(1);
+        expect(registered).toEqual([`${name} - ${label} Tests`, name]);
+        expect(context.injected).toBe(false);
+      },
+    );
+
+    it.each(['unit', 'integration', 'e2e'] as const)(
+      'imports generated %s code with hostile comment metadata safely', async (level) => {
+        const block = '*/globalThis.injected=true;/*';
+        const line = '\n globalThis.injected=true; //\r\u2028 globalThis.injected=true; //\u2029';
+        const testCase = createMockTestCase({
+          level, id: block, description: block,
+          type: block as TestCase['type'], priority: block as TestCase['priority'],
+          preconditions: [line], postconditions: [line],
+          steps: [
+            { number: 1, action: `Enter data${line}`, expectedResult: line },
+            { number: 2, action: 'Verify result', expectedResult: line },
+            { number: 3, action: `Custom action${line}`, expectedResult: line },
+          ],
+          testData: [{ name: 'safe', type: line, constraints: [line], examples: ['safe'] }],
+        });
+        const suite = { ...createMockTestSuite([testCase]), useCaseId: block, generatedAt: block };
+        const result = new TestCodeGenerator({
+          framework: level === 'e2e' ? 'playwright' : 'vitest',
+          language: 'javascript', includeComments: true,
+          includeSetup: false, includeTeardown: false,
+        }).generate(suite);
+        expect(result.success).toBe(true);
+        // Replace framework imports with local stubs, then import the generated module.
+        const stubs = `
+          const globalThis = { injected: false };
+          const bodies = [];
+          const describe = (_name, body) => body();
+          const it = (_name, body) => bodies.push(body);
+          const test = Object.assign(it, { describe });
+          const expect = () => ({ toBe() {}, toBeVisible() {}, toHaveURL() {} });
+          export { globalThis as state, bodies };
+        `;
+        const code = stubs + result.files[0].content.replace(/^import .*$/gm, '');
+        const module = await import(/* @vite-ignore */ `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+        expect(module.state.injected).toBe(false);
+        for (const body of module.bodies) {
+          await body({ page: { fill() {}, locator() {} } });
+        }
+        expect(module.state.injected).toBe(false);
+      },
+    );
+
+    it.each(['unit', 'integration', 'e2e'] as const)(
+      'executes %s test bodies with hostile string values safely', async (level) => {
+        const value = "x'); globalThis.injected=true; //\\\n雪";
+        const testCase = createMockTestCase({
+          level, preconditions: [], postconditions: [],
+          steps: [{ number: 1, action: 'Enter data', expectedResult: '', testData: value }],
+          testData: [{ name: 'value', type: 'string', constraints: [], examples: [value] }],
+        });
+        const result = new TestCodeGenerator({
+          framework: level === 'e2e' ? 'playwright' : 'vitest',
+          language: 'javascript', includeComments: false,
+          includeSetup: false, includeTeardown: false,
+        }).generate(createMockTestSuite([testCase]));
+        const bodies: Array<(context: unknown) => Promise<void>> = [];
+        const register = (_name: string, body: (context: unknown) => Promise<void>) => bodies.push(body);
+        const describe = (_name: string, body: () => void) => body();
+        const context = {
+          describe, it: register, test: Object.assign(register, { describe }), injected: false,
+          expect: (actual: unknown) => ({
+            toBe: (expected: unknown) => expect(actual).toBe(expected),
+            toHaveURL: () => {},
+          }),
+        };
+        let code = result.files[0].content.replace(/^import .*$/gm, '');
+        // Observe the actual example value inside the generated unit/integration body.
+        code = code.replace('const testData = {', 'const testData = globalThis.captured = {');
+        runInNewContext(code, context);
+        const values: string[] = [];
+        for (const body of bodies) {
+          await body({ page: { fill: (_selector: string, data: string) => values.push(data) } });
+        }
+        if (level === 'e2e') {
+          expect(values).toEqual([value]);
+        } else {
+          expect((context as typeof context & { captured: unknown }).captured).toEqual({ value });
+        }
+        expect(context.injected).toBe(false);
+      },
+    );
+
+    it.each(['0123', '00', '08', '9007199254740993', '0', '123'])(
+      'imports numeric example %j as a valid ESM literal', async (example) => {
+        const testCase = createMockTestCase({
+          steps: [],
+          testData: [{ name: 'value', type: 'number', constraints: [], examples: [example] }],
+        });
+        const result = new TestCodeGenerator({
+          framework: 'vitest', language: 'javascript', includeSetup: false, includeTeardown: false,
+        }).generate(createMockTestSuite([testCase]));
+        expect(result.success).toBe(true);
+        const stubs = `
+          const bodies = [];
+          const describe = (_name, body) => body();
+          const it = (_name, body) => bodies.push(body);
+          const expect = () => ({ toBe() {} });
+          let captured;
+          export { bodies, captured };
+        `;
+        const code = stubs + result.files[0].content.replace(/^import .*$/gm, '')
+          .replace('const testData = {', 'const testData = captured = {');
+        const module = await import(/* @vite-ignore */ `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+        for (const body of module.bodies) await body();
+        const expected = String(Number(example)) === example ? Number(example) : example;
+        expect(module.captured).toEqual({ value: expected });
+      },
+    );
+
+    it.each([undefined, null, 1n, () => {}, Symbol('invalid'), {}].map((value, index) => ({ value, index })))(
+      'rejects non-string names and test data before generating files: $index', ({ value }) => {
+        const mutations: Array<[string, (suite: TestSuite) => void]> = [
+          ['suite.name', suite => { suite.name = value as string; }],
+          ['testCases[1].name', suite => { suite.testCases[1].name = value as string; }],
+          ['testCases[1].testData[0].name', suite => { suite.testCases[1].testData[0].name = value as string; }],
+          ['testCases[1].testData[0].examples[0]', suite => { suite.testCases[1].testData[0].examples[0] = value as string; }],
+        ];
+        if (value !== undefined) {
+          mutations.push(['testCases[1].steps[0].testData', suite => {
+            suite.testCases[1].steps[0].testData = value as string;
+          }]);
+        }
+        for (const [field, mutate] of mutations) {
+          const suite = createMockTestSuite([createMockTestCase(), createMockTestCase({ level: 'e2e' })]);
+          mutate(suite);
+          const result = generator.generate(suite);
+          expect(result.success).toBe(false);
+          expect(result.files).toEqual([]);
+          expect(result.errors).toEqual([`Code generation failed: ${field} must be a string`]);
+        }
+      },
+    );
+
+    it.each(['testData', 'examples'] as const)('rejects missing %s arrays clearly', (field) => {
+      const testCase = createMockTestCase();
+      if (field === 'testData') testCase.testData = undefined as unknown as TestCase['testData'];
+      else testCase.testData[0].examples = undefined as unknown as string[];
+      const result = generator.generate(createMockTestSuite([testCase]));
+      expect(result.success).toBe(false);
+      expect(result.files).toEqual([]);
+      const path = field === 'testData' ? 'testCases[0].testData' : 'testCases[0].testData[0].examples';
+      expect(result.errors).toEqual([`Code generation failed: ${path} must be an array`]);
     });
 
     it('should handle test case with no steps', () => {

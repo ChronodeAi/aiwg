@@ -129,40 +129,6 @@ OUTPUT:
 }
 
 /**
- * Check if a value needs quoting in YAML
- * @param {string} value - Value to check
- * @returns {boolean} True if value needs quoting
- */
-function needsQuoting(value) {
-  if (typeof value !== 'string') return false;
-
-  // Characters that require quoting in YAML
-  const specialChars = /[:\[\]{}#&*!|>'"%@`]/;
-
-  // Values starting with special markers
-  const startsWithSpecial = /^[-?:,\[\]{}#&*!|>'"%@`]/;
-
-  return specialChars.test(value) || startsWithSpecial.test(value);
-}
-
-/**
- * Quote a YAML value if necessary
- * @param {string} value - Value to potentially quote
- * @returns {string} Quoted or original value
- */
-function quoteValue(value) {
-  if (typeof value !== 'string') return value;
-
-  if (needsQuoting(value)) {
-    // Escape internal quotes
-    const escaped = value.replace(/"/g, '\\"');
-    return `"${escaped}"`;
-  }
-
-  return value;
-}
-
-/**
  * Parse YAML frontmatter line-by-line (handles malformed YAML)
  * @param {string} yamlBlock - Raw YAML content
  * @returns {Object} Parsed metadata object
@@ -200,14 +166,12 @@ function parseYamlLineByLine(yamlBlock) {
  * @returns {string} YAML string
  */
 function buildYaml(metadata) {
-  const lines = [];
-
-  for (const [key, value] of Object.entries(metadata)) {
-    const quotedValue = quoteValue(value);
-    lines.push(`${key}: ${quotedValue}`);
-  }
-
-  return lines.join('\n');
+  return yaml.stringify(metadata, {
+    defaultKeyType: 'PLAIN',
+    defaultStringType: 'PLAIN',
+    blockQuote: false,
+    lineWidth: 0,
+  }).trimEnd();
 }
 
 /**
@@ -218,7 +182,7 @@ function buildYaml(metadata) {
  * @returns {string} Modified content with injected metadata
  * @throws {Error} If frontmatter is malformed
  */
-function injectFrameworkMetadata(content, framework = 'sdlc-complete') {
+export function injectFrameworkMetadata(content, framework = 'sdlc-complete') {
   // Check if frontmatter exists
   if (content.startsWith('---\n')) {
     // Parse existing frontmatter
@@ -542,9 +506,11 @@ async function main() {
   }
 }
 
-// Run main function
-main().catch(error => {
-  console.error('\nFATAL ERROR:', error.message);
-  console.error(error.stack);
-  process.exit(1);
-});
+// Run only when invoked as a CLI.
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch(error => {
+    console.error('\nFATAL ERROR:', error.message);
+    console.error(error.stack);
+    process.exit(1);
+  });
+}

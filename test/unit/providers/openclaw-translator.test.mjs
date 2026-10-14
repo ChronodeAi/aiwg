@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import YAML from 'yaml';
 import {
   translateBehaviorToHook,
   translateAllBehaviors,
@@ -63,8 +65,8 @@ describe('translateBehaviorToHook', () => {
     expect(r.ok).toBe(true);
 
     const hookMd = await fs.readFile(path.join(hookDir, 'HOOK.md'), 'utf8');
-    expect(hookMd).toContain('name: test-watcher');
-    expect(hookMd).toContain('events:\n  - on_file_write');
+    expect(hookMd).toContain('name: "test-watcher"');
+    expect(hookMd).toContain('events:\n  - "on_file_write"');
     expect(hookMd).toContain('handler: ./handler.js');
     expect(hookMd).toContain('aiwg_managed: true');
 
@@ -174,10 +176,20 @@ describe('renderHookMd', () => {
       description: 'foo desc',
       hooks: { on_deploy: [], on_schedule: [] },
     });
-    expect(md).toMatch(/^---\nname: foo\n/);
-    expect(md).toContain('events:\n  - on_deploy\n  - on_schedule');
+    expect(md).toMatch(/^---\nname: "foo"\n/);
+    expect(md).toContain('events:\n  - "on_deploy"\n  - "on_schedule"');
     expect(md).toContain('handler: ./handler.js');
   });
+
+  it.each(['x\nevil: injected', 'e1\nhandler: injected.js', 'true', 'foo #bar', 'x: y', 'line\rnext\u0085next\u2028next\u2029end'])(
+    'round-trips name and event scalars without injecting fields: %j', (value) => {
+      const md = renderHookMd({ name: value, description: '', hooks: { [value]: [] } });
+      const parsed = YAML.parse(md.split('\n---\n')[0].slice(4));
+      expect(parsed).toEqual({
+        name: value, description: '', events: [value], handler: './handler.js', aiwg_managed: true,
+      });
+    },
+  );
 
   it('handles behaviors with no events', () => {
     const md = renderHookMd({ name: 'no-events', description: '', hooks: {} });
@@ -200,6 +212,21 @@ describe('renderHandlerJs', () => {
     expect(handler).toMatch(/^#!\/usr\/bin\/env node/);
     expect(handler).toContain("from 'node:child_process'");
   });
+
+  it.each(['\n', '\r', '\u2028', '\u2029'])(
+    'loads generated ESM safely with a hostile name containing %j', async (terminator) => {
+      const name = `hook${terminator}throw new Error('comment injection'); //`;
+      const handler = path.join(tmpDir, 'handler.mjs');
+      await fs.writeFile(handler, renderHandlerJs({ name, hooks: {} }));
+      await fs.symlink(path.resolve('node_modules'), path.join(tmpDir, 'node_modules'), 'dir');
+      const result = spawnSync(process.execPath, [handler], {
+        input: '', encoding: 'utf8', timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+    },
+  );
 
   it('emits dispatch table with event → script mapping', () => {
     const handler = renderHandlerJs({

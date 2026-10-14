@@ -7,6 +7,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct JavaScript test-name and OpenClaw handler-comment escaping, TOML hook/MCP
+  encoding, and YAML hook/metadata keys and nested values; preserve noncanonical
+  numeric test examples and reject invalid generator string inputs; warn explicitly
+  when Vault provisioning opts out of TLS verification (#3096).
+
 ### Added
 
 - `address-issues`, `aiwg-mission`, and `subagent-scoping` Rule 9 (Tier 0 direct handoff) now pass a
