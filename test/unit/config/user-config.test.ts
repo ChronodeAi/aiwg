@@ -138,7 +138,8 @@ describe('UserConfig', () => {
       await config.set('defaults.provider', 'openai');
       const savedBefore = await readFile(join(tempDir, 'config.yaml'), 'utf-8');
 
-      for (const path of [segment, `${segment}.polluted`, `custom.${segment}.polluted`, `defaults.${segment}`]) {
+      for (const path of [segment, `${segment}.polluted`, `custom.${segment}.polluted`,
+        `defaults.${segment}`, `defaults.provider.${segment}`, `custom.nested.${segment}.polluted`]) {
         await expect(config.set(path, 'polluted')).rejects.toThrow('Unsafe config key path: prototype-related segments are not allowed');
         expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
       }

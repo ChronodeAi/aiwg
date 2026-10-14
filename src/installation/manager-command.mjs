@@ -20,7 +20,7 @@ export function resolveManagerCommand(file, args, options = {}) {
   const command = `"${[file, ...args].map(quoteCmdArgument).join(' ')}"`;
   return {
     file: commandInterpreter,
-    args: ['/d', '/s', '/c', command],
+    args: ['/d', '/v:off', '/s', '/c', command],
     // The payload above already contains cmd.exe-native quoting. Instruct
     // Node not to apply MSVCRT escaping to those embedded quotes (#173).
     windowsVerbatimArguments: true,

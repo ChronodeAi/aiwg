@@ -9,8 +9,8 @@
  * @see https://docs.openclaw.ai
  */
 
-import { execSync } from 'child_process';
-import { boundedExecSync } from '../../process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../../process/bounded-child-process.mjs';
+import { cliCommand } from '../../process/cli-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import type { RegistryAdapter, SkillResult, SkillDetails, InstallOptions } from '../types.js';
@@ -31,9 +31,10 @@ function resolveSkillFallbackPath(target: string, projectDir: string, name: stri
 /**
  * Execute an openclaw CLI command and return stdout
  */
-function runOpenClaw(args: string): string | null {
+function runOpenClaw(args: string[]): string | null {
   try {
-    return execSync(`openclaw ${args}`, {
+    const [file, argv] = cliCommand('openclaw', args);
+    return boundedExecFileSync(file, argv, 'quick', {
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -159,7 +160,8 @@ export class OpenClawAdapter implements RegistryAdapter {
     if (fs.existsSync(openclawDir)) return true;
 
     try {
-      boundedExecSync('openclaw --version 2>/dev/null', 'quick', { encoding: 'utf-8' });
+      const [file, args] = cliCommand('openclaw', ['--version']);
+      boundedExecFileSync(file, args, 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
       return true;
     } catch {
       return false;
@@ -170,7 +172,7 @@ export class OpenClawAdapter implements RegistryAdapter {
     if (this.cachedSkills) return this.cachedSkills;
 
     // Try openclaw CLI with JSON output first
-    const jsonOutput = runOpenClaw('skills list --json 2>/dev/null');
+    const jsonOutput = runOpenClaw(['skills', 'list', '--json']);
     if (jsonOutput) {
       try {
         const parsed = JSON.parse(jsonOutput);
@@ -196,7 +198,7 @@ export class OpenClawAdapter implements RegistryAdapter {
 
   async search(query: string): Promise<SkillResult[]> {
     // Try CLI delegation first
-    const cliOutput = runOpenClaw(`skills search "${query}" --json 2>/dev/null`);
+    const cliOutput = runOpenClaw(['skills', 'search', query, '--json']);
     if (cliOutput) {
       try {
         const parsed = JSON.parse(cliOutput);
@@ -230,7 +232,7 @@ export class OpenClawAdapter implements RegistryAdapter {
 
     if (!skillMdPath || !fs.existsSync(skillMdPath)) {
       // Try CLI
-      const cliOutput = runOpenClaw(`skills info "${name}" --json 2>/dev/null`);
+      const cliOutput = runOpenClaw(['skills', 'info', name, '--json']);
       if (cliOutput) {
         try {
           const parsed = JSON.parse(cliOutput);
@@ -296,7 +298,7 @@ export class OpenClawAdapter implements RegistryAdapter {
 
   async install(name: string, options: InstallOptions): Promise<void> {
     // Try openclaw CLI install first
-    const cliResult = runOpenClaw(`skills install "${name}" 2>/dev/null`);
+    const cliResult = runOpenClaw(['skills', 'install', name]);
     if (cliResult !== null) {
       // CLI handled it — if target is different from openclaw, copy to target
       if (options.target && options.target !== 'openclaw') {

@@ -22,7 +22,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { importImpl } from '../_resolve-impl.mjs';
 
-const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 /**
  * Fields that MUST NEVER reach the optimizing agent. The default set matches
@@ -102,10 +102,18 @@ export class EvalHarness {
     this.forbiddenFields =
       this.contract.diagnostics_policy?.forbidden_optimizer_fields ||
       DEFAULT_FORBIDDEN_OPTIMIZER_FIELDS;
-    // Injectable for tests; defaults to execSync capturing exit code + stdout.
+    // Instruments are explicitly configured shell scripts, including pipelines.
+    // Keep that contract while passing the entire script as one argument to a
+    // fixed shell executable, rather than building an outer shell command.
     this._run = opts.runner?.run || ((cmd, o) => {
       try {
-        const stdout = boundedExecSync(cmd, 'long', { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const windows = process.platform === 'win32';
+        const shell = windows ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
+        const args = windows ? ['/d', '/s', '/c', `"${cmd}"`] : ['-c', cmd];
+        const stdout = boundedExecFileSync(shell, args, 'long', {
+          cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+          ...(windows ? { windowsVerbatimArguments: true } : {}),
+        });
         return { code: 0, stdout };
       } catch (err) {
         const captured = (err.stdout || '').toString() + (err.stderr || '').toString();

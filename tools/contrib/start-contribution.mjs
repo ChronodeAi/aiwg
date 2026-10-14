@@ -19,10 +19,11 @@
  *   9. Print next steps
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   checkGhAuth,
   getUsername,
@@ -38,14 +39,15 @@ const __dirname = path.dirname(__filename);
 
 /**
  * Execute command with error handling
- * @param {string} command - Command to execute
+ * @param {string} file - Executable to run
+ * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string }
  */
-function exec(command, options = {}) {
+function exec(file, args, options = {}) {
   try {
     const tier = options.tier ?? 'quick';
-    const stdout = boundedExecSync(command, tier, {
+    const stdout = boundedExecFileSync(file, args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -74,7 +76,7 @@ function exec(command, options = {}) {
  * @returns {Object} { installed: boolean, configured: boolean, error: string|null }
  */
 function checkGit() {
-  const versionCheck = exec('git --version');
+  const versionCheck = exec('git', ['--version']);
   if (!versionCheck.success) {
     return {
       installed: false,
@@ -83,8 +85,8 @@ function checkGit() {
     };
   }
 
-  const nameCheck = exec('git config --global user.name');
-  const emailCheck = exec('git config --global user.email');
+  const nameCheck = exec('git', ['config', '--global', 'user.name']);
+  const emailCheck = exec('git', ['config', '--global', 'user.email']);
 
   if (!nameCheck.success || !emailCheck.success) {
     return {
@@ -165,12 +167,12 @@ function isGitRepo(dir) {
  */
 function addRemotes(fork, upstream, cwd) {
   // Check existing remotes
-  const remotesResult = exec('git remote -v', { cwd });
+  const remotesResult = exec('git', ['remote', '-v'], { cwd });
   const remotes = remotesResult.stdout;
 
   // Add origin (fork) if not present
   if (!remotes.includes('origin')) {
-    const addOrigin = exec(`git remote add origin https://github.com/${fork}.git`, { cwd });
+    const addOrigin = exec('git', ['remote', 'add', 'origin', `https://github.com/${fork}.git`], { cwd });
     if (!addOrigin.success) {
       return {
         success: false,
@@ -184,7 +186,7 @@ function addRemotes(fork, upstream, cwd) {
 
   // Add upstream if not present
   if (!remotes.includes('upstream')) {
-    const addUpstream = exec(`git remote add upstream https://github.com/${upstream}.git`, { cwd });
+    const addUpstream = exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstream}.git`], { cwd });
     if (!addUpstream.success) {
       return {
         success: false,
@@ -198,12 +200,12 @@ function addRemotes(fork, upstream, cwd) {
 
   // Fetch both remotes
   console.log('Fetching remotes...');
-  const fetchOrigin = exec('git fetch origin', { cwd, tier: 'network' });
+  const fetchOrigin = exec('git', ['fetch', 'origin'], { cwd, tier: 'network' });
   if (!fetchOrigin.success) {
     console.warn('⚠ Warning: Failed to fetch origin');
   }
 
-  const fetchUpstream = exec('git fetch upstream', { cwd, tier: 'network' });
+  const fetchUpstream = exec('git', ['fetch', 'upstream'], { cwd, tier: 'network' });
   if (!fetchUpstream.success) {
     console.warn('⚠ Warning: Failed to fetch upstream');
   }
@@ -222,10 +224,10 @@ function addRemotes(fork, upstream, cwd) {
  */
 function createBranch(branchName, cwd) {
   // Check if branch already exists
-  const branchCheck = exec(`git rev-parse --verify ${branchName}`, { cwd });
+  const branchCheck = exec('git', ['rev-parse', '--verify', branchName], { cwd });
   if (branchCheck.success) {
     // Branch exists, just checkout
-    const checkout = exec(`git checkout ${branchName}`, { cwd });
+    const checkout = exec('git', ['checkout', branchName], { cwd });
     if (!checkout.success) {
       return {
         success: false,
@@ -237,10 +239,10 @@ function createBranch(branchName, cwd) {
   }
 
   // Create new branch from main (or master)
-  const mainCheck = exec('git rev-parse --verify main', { cwd });
+  const mainCheck = exec('git', ['rev-parse', '--verify', 'main'], { cwd });
   const baseBranch = mainCheck.success ? 'main' : 'master';
 
-  const createBranch = exec(`git checkout -b ${branchName} ${baseBranch}`, { cwd });
+  const createBranch = exec('git', ['checkout', '-b', branchName, baseBranch], { cwd });
   if (!createBranch.success) {
     return {
       success: false,
@@ -404,7 +406,7 @@ function deployAgents(cwd) {
     };
   }
 
-  const result = exec(`node ${deployScript} --target ${cwd} --mode sdlc`, { cwd, tier: 'long' });
+  const result = exec('node', [deployScript, '--target', cwd, '--mode', 'sdlc'], { cwd, tier: 'long' });
 
   if (!result.success) {
     return {
@@ -542,7 +544,7 @@ async function main() {
   if (!isGitRepo(cwd)) {
     // Clone the fork if git repo doesn't exist
     console.log('Cloning fork...');
-    const cloneResult = exec(`git clone https://github.com/${fork}.git ${cwd}`, { tier: 'long' });
+    const cloneResult = exec('git', ['clone', `https://github.com/${fork}.git`, cwd], { tier: 'long' });
     if (!cloneResult.success) {
       console.error('✗ Error: Failed to clone fork:', cloneResult.stderr);
       process.exit(1);
@@ -550,7 +552,7 @@ async function main() {
     console.log('✓ Cloned fork');
 
     // Add upstream remote
-    const addUpstream = exec(`git remote add upstream https://github.com/${upstream}.git`, { cwd });
+    const addUpstream = exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstream}.git`], { cwd });
     if (!addUpstream.success) {
       console.error('✗ Error: Failed to add upstream remote:', addUpstream.stderr);
       process.exit(1);
@@ -644,7 +646,11 @@ async function main() {
 }
 
 // Run main function
-main().catch(err => {
-  console.error('Fatal error:', err.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  main().catch(err => {
+    console.error('Fatal error:', err.message);
+    process.exit(1);
+  });
+}
+
+export { addRemotes, createBranch, deployAgents, main };

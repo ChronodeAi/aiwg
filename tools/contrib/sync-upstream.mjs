@@ -18,11 +18,14 @@
  *   8. Update workspace status
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
-import { execSync } from 'child_process';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
+import { execFileSync } from 'child_process';
+import { resolveExecutable } from '../../src/process/cli-command.mjs';
+import { resolveManagerCommand } from '../../src/installation/manager-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   loadWorkspaceData,
   updateWorkspaceStatus,
@@ -112,14 +115,15 @@ const colors = {
 
 /**
  * Execute command with error handling
- * @param {string} command - Command to execute
+ * @param {string} file - Executable to run
+ * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string }
  */
-function exec(command, options = {}) {
+function exec(file, args, options = {}) {
   try {
     const tier = options.tier ?? 'quick';
-    const stdout = boundedExecSync(command, tier, {
+    const stdout = boundedExecFileSync(file, args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -140,7 +144,7 @@ function exec(command, options = {}) {
  * @returns {Object} { success: boolean, branch: string|null, error: string|null }
  */
 function getCurrentBranch(cwd) {
-  const result = exec('git rev-parse --abbrev-ref HEAD', { cwd });
+  const result = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   if (!result.success) {
     return {
       success: false,
@@ -163,7 +167,7 @@ function getCurrentBranch(cwd) {
 function fetchUpstream(cwd) {
   console.log('Fetching upstream changes...');
   // Network call (#3062 review item 6) — not the default 'quick' tier.
-  const result = exec('git fetch upstream', { cwd, tier: 'network' });
+  const result = exec('git', ['fetch', 'upstream'], { cwd, tier: 'network' });
   if (!result.success) {
     return {
       success: false,
@@ -181,7 +185,7 @@ function fetchUpstream(cwd) {
  */
 function getDivergence(cwd) {
   // Get commits behind
-  const behindResult = exec('git rev-list --count HEAD..upstream/main', { cwd });
+  const behindResult = exec('git', ['rev-list', '--count', 'HEAD..upstream/main'], { cwd });
   if (!behindResult.success) {
     return {
       success: false,
@@ -194,7 +198,7 @@ function getDivergence(cwd) {
   const behind = parseInt(behindResult.stdout) || 0;
 
   // Get commits ahead
-  const aheadResult = exec('git rev-list --count upstream/main..HEAD', { cwd });
+  const aheadResult = exec('git', ['rev-list', '--count', 'upstream/main..HEAD'], { cwd });
   if (!aheadResult.success) {
     return {
       success: false,
@@ -209,11 +213,11 @@ function getDivergence(cwd) {
   // Check for potential conflicts
   const conflicts = [];
   if (behind > 0) {
-    const diffResult = exec('git diff --name-only HEAD upstream/main', { cwd });
+    const diffResult = exec('git', ['diff', '--name-only', 'HEAD', 'upstream/main'], { cwd });
     if (diffResult.success) {
       const changedFiles = diffResult.stdout.split('\n').filter(f => f.trim());
       // Check if any of these files have local changes
-      const statusResult = exec('git diff --name-only HEAD', { cwd });
+      const statusResult = exec('git', ['diff', '--name-only', 'HEAD'], { cwd });
       if (statusResult.success) {
         const localChanges = statusResult.stdout.split('\n').filter(f => f.trim());
         const potentialConflicts = changedFiles.filter(f => localChanges.includes(f));
@@ -291,11 +295,11 @@ function performRebase(cwd) {
   console.log('');
   console.log('Rebasing onto upstream/main...');
 
-  const result = exec('git rebase upstream/main', { cwd });
+  const result = exec('git', ['rebase', 'upstream/main'], { cwd });
 
   if (!result.success) {
     // Check if it's a conflict
-    const statusResult = exec('git status', { cwd });
+    const statusResult = exec('git', ['status'], { cwd });
     if (statusResult.stdout.includes('both modified') || statusResult.stdout.includes('rebase in progress')) {
       return {
         success: false,
@@ -323,11 +327,11 @@ function performMerge(cwd) {
   console.log('');
   console.log('Merging upstream/main...');
 
-  const result = exec('git merge upstream/main', { cwd });
+  const result = exec('git', ['merge', 'upstream/main'], { cwd });
 
   if (!result.success) {
     // Check if it's a conflict
-    const statusResult = exec('git status', { cwd });
+    const statusResult = exec('git', ['status'], { cwd });
     if (statusResult.stdout.includes('both modified') || statusResult.stdout.includes('Unmerged paths')) {
       return {
         success: false,
@@ -352,7 +356,7 @@ function performMerge(cwd) {
  * @returns {Array<string>} List of conflicted files
  */
 function getConflictedFiles(cwd) {
-  const result = exec('git diff --name-only --diff-filter=U', { cwd });
+  const result = exec('git', ['diff', '--name-only', '--diff-filter=U'], { cwd });
   if (!result.success) {
     return [];
   }
@@ -390,6 +394,38 @@ function showConflictOptions(conflicts, strategy) {
   console.log('');
 }
 
+/** Split EDITOR's executable and quoted arguments without invoking a shell. */
+function editorArgs(editor) {
+  const args = [];
+  let value = '';
+  let quote = '';
+  let started = false;
+  for (let i = 0; i < editor.length; i++) {
+    const char = editor[i];
+    if (char === '\\' && quote !== "'" && i + 1 < editor.length &&
+        /[\s\\"']/.test(editor[i + 1])) {
+      value += editor[++i];
+      started = true;
+    } else if (quote && char === quote) {
+      quote = '';
+    } else if (!quote && (char === '"' || char === "'")) {
+      quote = char;
+      started = true;
+    } else if (!quote && /\s/.test(char)) {
+      if (started) args.push(value);
+      value = '';
+      started = false;
+    } else {
+      value += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error('Unclosed quote in EDITOR');
+  if (started) args.push(value);
+  if (!args[0]) throw new Error('EDITOR must name an executable');
+  return args;
+}
+
 /**
  * Apply one numbered conflict-resolution choice (shared by the interactive
  * prompt and the headless `--on-conflict` path below). Choice `1` (open
@@ -408,22 +444,27 @@ function applyConflictChoice(choice, conflicts, strategy, cwd) {
     const editor = process.env.EDITOR || 'vi';
     console.log(`Opening ${firstFile} in ${editor}...`);
     try {
+      const [file, ...args] = editorArgs(editor);
+      const invocation = resolveManagerCommand(resolveExecutable(file, undefined, undefined, undefined, cwd), [...args, firstFile]);
       // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
       // the conflicted file; the user interacts with it directly (see
       // tools/testing/sync-spawn-allowlist.json). Callers of this function
       // only reach choice '1' when a terminal is attached (#3062) — see
       // `handleConflicts` below. Not a candidate for a bounded timeout.
-      execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
+      execFileSync(invocation.file, invocation.args, {
+        stdio: 'inherit', cwd,
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      });
     } catch (err) {
       console.log(`${colors.red}✗${colors.reset} Failed to open editor`);
     }
   } else if (choice === '2') {
-    const diffResult = exec(`git diff ${firstFile}`, { cwd });
+    const diffResult = exec('git', ['diff', '--', firstFile], { cwd });
     console.log(diffResult.stdout);
   } else if (choice === '3') {
-    const abortCommand = strategy === 'rebase' ? 'git rebase --abort' : 'git merge --abort';
+    const abortArgs = [strategy === 'rebase' ? 'rebase' : 'merge', '--abort'];
     console.log(`Aborting ${strategy}...`);
-    exec(abortCommand, { cwd });
+    exec('git', abortArgs, { cwd });
     console.log(`${colors.green}✓${colors.reset} ${strategy} aborted`);
   }
   // choice === '4' (or anything else reaching here): no-op — resolve manually.
@@ -510,9 +551,9 @@ function pushToOrigin(cwd, force = false) {
   console.log('');
   console.log('Pushing changes to origin...');
 
-  const forceFlag = force ? '--force-with-lease' : '';
+  const forceArgs = force ? ['--force-with-lease'] : [];
   // Network call (#3062 review item 6) — not the default 'quick' tier.
-  const result = exec(`git push origin HEAD ${forceFlag}`, { cwd, tier: 'network' });
+  const result = exec('git', ['push', 'origin', 'HEAD', ...forceArgs], { cwd, tier: 'network' });
 
   if (!result.success) {
     return {
@@ -736,7 +777,11 @@ async function main() {
 }
 
 // Run main function
-main().catch(err => {
-  console.error('Fatal error:', err.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  main().catch(err => {
+    console.error('Fatal error:', err.message);
+    process.exit(1);
+  });
+}
+
+export { applyConflictChoice, pushToOrigin };

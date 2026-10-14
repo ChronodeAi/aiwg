@@ -11,7 +11,7 @@ import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { resolve, dirname, basename, sep } from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { boundedExecSync } from '../process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import { resolveConfigDir } from '../config/user-config.js';
 import { resolveWorkspace, type ResolvedWorkspace } from '../config/workspace.js';
 import type {
@@ -670,7 +670,10 @@ export class OpsRegistry {
       if (remote) {
         console.log(`  Pushing ${repoName} to ${remote}/${branch}...`);
         try {
-          boundedExecSync(`git push ${shellEscape(remote)} ${shellEscape(branch)}`, 'network', {
+          if (remote.startsWith('-') || branch.startsWith('-')) {
+            throw new Error('Remote and branch must not start with "-"');
+          }
+          boundedExecFileSync('git', ['push', '--end-of-options', remote, branch], 'network', {
             cwd: repo.path,
             stdio: 'pipe',
           });
@@ -722,8 +725,8 @@ async function provisionRepo(
     }
     await mkdir(dirname(repoPath), { recursive: true });
     // Cloning a full repository; long tier (#3062).
-    boundedExecSync(
-      `git clone ${shellEscape(fromUrl)} ${shellEscape(repoPath)}`,
+    boundedExecFileSync(
+      'git', ['clone', '--', fromUrl, repoPath],
       'long',
       { stdio: silent ? 'pipe' : 'inherit' }
     );
@@ -732,17 +735,8 @@ async function provisionRepo(
 
   // Case 3: fresh init.
   await mkdir(repoPath, { recursive: true });
-  boundedExecSync('git init', 'quick', { cwd: repoPath, stdio: 'pipe' });
+  boundedExecFileSync('git', ['init'], 'quick', { cwd: repoPath, stdio: 'pipe' });
   return { action: 'Created', remote: undefined };
-}
-
-/**
- * Minimal shell escaping for git URLs and paths passed via execSync.
- * URLs are URL-encoded already, but paths may contain spaces.
- */
-function shellEscape(s: string): string {
-  if (/^[A-Za-z0-9_@:./~+,=-]+$/.test(s)) return s;
-  return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -752,7 +746,7 @@ function shellEscape(s: string): string {
 function readGitRemote(dirPath: string): string | undefined {
   if (!existsSync(resolve(dirPath, '.git'))) return undefined;
   try {
-    const out = boundedExecSync('git config --get remote.origin.url', 'quick', {
+    const out = boundedExecFileSync('git', ['config', '--get', 'remote.origin.url'], 'quick', {
       cwd: dirPath,
       stdio: ['ignore', 'pipe', 'ignore'],
     })

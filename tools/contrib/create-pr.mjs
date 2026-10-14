@@ -14,10 +14,10 @@
  *   aiwg -contribute-pr <feature-name> [--draft]
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import * as readline from 'readline';
 import * as fs from 'fs';
-import * as path from 'path';
+import { isMain } from '../_is-main.mjs';
 import { runAllGates, generateReport } from './lib/quality-validator.mjs';
 import { createPR } from './lib/github-client.mjs';
 import {
@@ -85,15 +85,15 @@ async function promptYesNo(question, defaultValue = false) {
 
 /**
  * Execute git command
- * @param {string} command - Git command
+ * @param {string[]} args - Git command arguments
  * @param {'quick'|'network'} [tier] - Bound tier; defaults to 'quick' for
  *   local-only commands (#3062 finding 6 — callers that hit the remote,
  *   e.g. push, must pass 'network' explicitly).
  * @returns {string} Command output
  */
-function execGit(command, tier = 'quick') {
+function execGit(args, tier = 'quick') {
   try {
-    return boundedExecSync(command, tier, {
+    return boundedExecFileSync('git', args, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
@@ -107,7 +107,7 @@ function execGit(command, tier = 'quick') {
  * @returns {boolean} True if working directory is clean
  */
 function isGitClean() {
-  const status = execGit('git status --porcelain');
+  const status = execGit(['status', '--porcelain']);
   return status === '';
 }
 
@@ -118,7 +118,7 @@ function isGitClean() {
  */
 function isBranchPushed(branch) {
   try {
-    execGit(`git rev-parse origin/${branch}`);
+    execGit(['rev-parse', `origin/${branch}`]);
     return true;
   } catch {
     return false;
@@ -131,7 +131,7 @@ function isBranchPushed(branch) {
  */
 function pushBranch(branch) {
   console.log(`\nPushing branch to origin...`);
-  execGit(`git push -u origin ${branch}`, 'network');
+  execGit(['push', '-u', 'origin', branch], 'network');
   console.log('✓ Branch pushed to origin');
 }
 
@@ -140,7 +140,7 @@ function pushBranch(branch) {
  * @returns {string} Branch name
  */
 function getCurrentBranch() {
-  return execGit('git rev-parse --abbrev-ref HEAD');
+  return execGit(['rev-parse', '--abbrev-ref', 'HEAD']);
 }
 
 /**
@@ -148,7 +148,7 @@ function getCurrentBranch() {
  * @returns {Array<string>} File paths
  */
 function getChangedFiles() {
-  const diff = execGit('git diff --name-only main...HEAD');
+  const diff = execGit(['diff', '--name-only', 'main...HEAD']);
   return diff.split('\n').filter(f => f.trim());
 }
 
@@ -469,7 +469,11 @@ async function main() {
 }
 
 // Run main
-main().catch(err => {
-  console.error(`\nError: ${err.message}`);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  main().catch(err => {
+    console.error(`\nError: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+export { isBranchPushed, pushBranch };

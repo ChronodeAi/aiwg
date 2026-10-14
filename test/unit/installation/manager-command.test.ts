@@ -19,6 +19,7 @@ describe('executeManagerCommand', () => {
       'C:\\Windows\\System32\\cmd.exe',
       [
         '/d',
+        '/v:off',
         '/s',
         '/c',
         '""C:\\Program Files\\nodejs\\npm.cmd" "install" "--global" "aiwg@latest""',
@@ -43,7 +44,7 @@ describe('executeManagerCommand', () => {
 
     expect(execute).toHaveBeenCalledWith(
       'cmd.exe',
-      ['/d', '/s', '/c', '""C:\\Program Files\\nodejs\\npm.cmd" "--version""'],
+      ['/d', '/v:off', '/s', '/c', '""C:\\Program Files\\nodejs\\npm.cmd" "--version""'],
       { ...execOptions, windowsVerbatimArguments: true },
     );
     expect(execOptions).not.toHaveProperty('windowsVerbatimArguments');

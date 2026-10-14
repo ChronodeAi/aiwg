@@ -13,8 +13,10 @@
  */
 
 import { importImpl } from '../_resolve-impl.mjs';
+import { isMain } from '../_is-main.mjs';
 
-const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 function parseArg(args, flag) {
   const idx = args.indexOf(flag);
@@ -22,25 +24,28 @@ function parseArg(args, flag) {
   return args[idx + 1];
 }
 
-async function runDeploy() {
-  const args = process.argv.slice(2);
+export async function runDeploy(args = process.argv.slice(2)) {
   const framework = args.find(a => !a.startsWith('--')) || 'all';
   const provider = parseArg(args, '--provider');
 
-  const providerFlag = provider ? ` --provider ${provider}` : '';
-  const cmd = `aiwg use ${framework}${providerFlag}`;
+  const deployArgs = ['use', framework];
+  if (provider) deployArgs.push('--provider', provider);
+  const cmd = `aiwg ${deployArgs.join(' ')}`;
 
   console.log(`Deploying: ${cmd}`);
 
   try {
-    boundedExecSync(cmd, 'long', { stdio: 'inherit' });
+    const [file, argv] = cliCommand('aiwg', deployArgs);
+    boundedExecFileSync(file, argv, 'long', { stdio: 'inherit' });
   } catch (err) {
     console.error(`Deploy failed for '${framework}': ${err.message}`);
     process.exit(1);
   }
 }
 
-runDeploy().catch((err) => {
-  console.error('Deploy error:', err.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  runDeploy().catch((err) => {
+    console.error('Deploy error:', err.message);
+    process.exit(1);
+  });
+}

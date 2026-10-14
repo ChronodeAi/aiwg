@@ -7,8 +7,7 @@
  * @architecture @.aiwg/architecture/toolsmith-implementation-spec.md
  */
 
-import { execSync } from 'child_process';
-import { boundedExecSync } from '../../process/bounded-child-process.mjs';
+import { boundedExecFileSync, boundedExecSync } from '../../process/bounded-child-process.mjs';
 import { readFile, writeFile, mkdir, access } from 'fs/promises';
 import { existsSync, constants } from 'fs';
 import { resolve, join, dirname } from 'path';
@@ -141,7 +140,7 @@ export class RuntimeDiscovery {
           }
         }
       } else if (os === 'darwin') {
-        const version = boundedExecSync('sw_vers -productVersion', 'quick', { encoding: 'utf-8' }).trim();
+        const version = boundedExecFileSync('sw_vers', ['-productVersion'], 'quick', { encoding: 'utf-8' }).trim();
         osVersion = `macOS ${version}`;
       } else if (os === 'win32') {
         osVersion = boundedExecSync('ver', 'quick', { encoding: 'utf-8' }).trim();
@@ -173,7 +172,7 @@ export class RuntimeDiscovery {
       // Disk space
       if (platform() === 'win32') {
         // Windows: use wmic
-        const output = boundedExecSync('wmic logicaldisk get size,freespace', 'quick', { encoding: 'utf-8' });
+        const output = boundedExecFileSync('wmic', ['logicaldisk', 'get', 'size,freespace'], 'quick', { encoding: 'utf-8' });
         const lines = output.trim().split('\n').slice(1);
         let totalFree = 0;
         for (const line of lines) {
@@ -185,7 +184,7 @@ export class RuntimeDiscovery {
         diskFreeGb = Math.round((totalFree / (1024 ** 3)) * 10) / 10;
       } else {
         // Unix: use df
-        const output = boundedExecSync('df -k .', 'quick', { encoding: 'utf-8' });
+        const output = boundedExecFileSync('df', ['-k', '.'], 'quick', { encoding: 'utf-8' });
         const lines = output.trim().split('\n');
         if (lines.length > 1) {
           const parts = lines[1].trim().split(/\s+/);
@@ -366,7 +365,7 @@ export class RuntimeDiscovery {
   async #findToolPath(toolName) {
     try {
       const cmd = platform() === 'win32' ? 'where' : 'which';
-      const path = boundedExecSync(`${cmd} ${toolName}`, 'quick', { encoding: 'utf-8' })
+      const path = boundedExecFileSync(cmd, [toolName], 'quick', { encoding: 'utf-8' })
         .trim()
         .split('\n')[0];
       return path;
@@ -394,15 +393,11 @@ export class RuntimeDiscovery {
     // Bare `version` (positional) is intentionally excluded: it caused
     // BPF tools to attach tracepoints, input-leapc to connect to
     // hostname "version", and cs2cs to open a file named "version".
-    const versionCommands = [
-      `${toolPath} --version`,
-      `${toolPath} -v`,
-      `${toolPath} -V`
-    ];
+    const versionArgs = ['--version', '-v', '-V'];
 
-    for (const cmd of versionCommands) {
+    for (const arg of versionArgs) {
       try {
-        const output = execSync(cmd, {
+        const output = boundedExecFileSync(toolPath, [arg], 'quick', {
           encoding: 'utf-8',
           timeout: 3000,
           killSignal: 'SIGKILL',
@@ -504,7 +499,7 @@ export class RuntimeDiscovery {
     if (platform() === 'win32') return undefined;
 
     try {
-      const manPath = boundedExecSync(`man -w ${toolName}`, 'quick', {
+      const manPath = boundedExecFileSync('man', ['-w', toolName], 'quick', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       }).trim();

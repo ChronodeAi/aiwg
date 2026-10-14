@@ -16,17 +16,16 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const SCRIPT = resolve(__dirname, '../../../tools/contrib/sync-upstream.mjs');
-const TIMEOUT_MS = 20_000;
 
 function git(args: string[], cwd: string): void {
-  execFileSync('git', args, { cwd, timeout: TIMEOUT_MS, stdio: 'pipe' });
+  execFileSync('git', args, { cwd, timeout: 20_000, stdio: 'pipe' });
 }
 
 function runScript(args: string[], cwd: string) {
   try {
     const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
       cwd,
-      timeout: TIMEOUT_MS,
+      timeout: 20_000,
       encoding: 'utf-8',
       // No TTY is attached to a spawned subprocess's stdio by default
       // already; CI=true belt-and-suspenders matches this file's own

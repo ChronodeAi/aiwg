@@ -99,7 +99,7 @@ describe('install-aware update service', () => {
 
     expect(execute).toHaveBeenCalledWith(
       'C:\\Windows\\System32\\cmd.exe',
-      ['/d', '/s', '/c', `""${managerExecutable}" "install" "--global" "aiwg@latest""`],
+      ['/d', '/v:off', '/s', '/c', `""${managerExecutable}" "install" "--global" "aiwg@latest""`],
       { stdio: 'inherit', windowsVerbatimArguments: true },
     );
   });

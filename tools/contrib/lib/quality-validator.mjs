@@ -16,20 +16,25 @@
  * - Missing tests: -10
  */
 
-import { boundedExecSync } from '../../../src/process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 /**
  * Execute command and return structured result
- * @param {string} command - Command to execute
+ * @param {string} file - Executable to run
+ * @param {string[]} args - Command arguments
  * @param {Object} options - Execution options
  * @returns {Object} { success: boolean, stdout: string, stderr: string }
  */
-function exec(command, options = {}) {
+function exec(file, args, options = {}) {
   try {
     const tier = options.tier ?? 'quick';
-    const stdout = boundedExecSync(command, tier, {
+    const [command, argv] = cliCommand(file, args);
+    const stdout = boundedExecFileSync(command, argv, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -52,7 +57,7 @@ function exec(command, options = {}) {
 export function runMarkdownLint(projectRoot = process.cwd()) {
   // `network`, not the default `quick` (#3062 finding 6): `npm exec` can
   // resolve/install the binary from the registry on demand.
-  const result = exec(`npm exec markdownlint-cli2 "**/*.md"`, { cwd: projectRoot, tier: 'network' });
+  const result = exec('npm', ['exec', 'markdownlint-cli2', '**/*.md'], { cwd: projectRoot, tier: 'network' });
 
   if (result.success) {
     return {
@@ -98,7 +103,7 @@ export function checkManifestSync(projectRoot = process.cwd()) {
   const checkManifestsPath = path.join(projectRoot, 'tools/manifest/check-manifests.mjs');
 
   if (fs.existsSync(checkManifestsPath)) {
-    const result = exec(`node ${checkManifestsPath}`, { cwd: projectRoot });
+    const result = exec('node', [checkManifestsPath], { cwd: projectRoot });
 
     // Check if output indicates sync issues
     const needsSync = result.stdout.includes('out of sync') || result.stdout.includes('missing');
@@ -216,7 +221,7 @@ export function checkDocumentation(feature, projectRoot = process.cwd()) {
  */
 function checkBreakingChanges(projectRoot = process.cwd()) {
   // Get list of changed files
-  const result = exec('git diff --name-only HEAD', { cwd: projectRoot });
+  const result = exec('git', ['diff', '--name-only', 'HEAD'], { cwd: projectRoot });
 
   if (!result.success) {
     return {

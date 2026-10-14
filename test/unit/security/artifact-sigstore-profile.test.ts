@@ -1,9 +1,11 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 
 import { describe, expect, it, vi } from 'vitest';
+import { escapeRegExp } from '../../helpers/regexp.js';
 
 const verifySpy = vi.fn();
-const releaseIdentity = '^https://github\\.com/jmagly/aiwg/';
+const releaseIdentity = `^${escapeRegExp('https://github.com/jmagly/aiwg/')}.*$`;
+const releaseIssuer = `^${escapeRegExp('https://token.actions.githubusercontent.com')}$`;
 
 vi.mock('@sigstore/bundle', () => ({
   bundleFromJSON: (value: unknown) => value,
@@ -44,6 +46,15 @@ describe('Sigstore trust-policy adapter (#2087)', () => {
       expect(identity.test(value), value).toBe(false);
     }
   });
+  it('matches only the exact GitHub Actions issuer hostname', () => {
+    const issuer = new RegExp(releaseIssuer);
+    expect(issuer.test('https://token.actions.githubusercontent.com')).toBe(true);
+    for (const value of ['https://tokenXactions.githubusercontent.com', 'https://token.actionsXgithubusercontent.com',
+      'https://token.actions.githubusercontentXcom', 'https://token.actions.githubusercontent.com.evil',
+      'prefixhttps://token.actions.githubusercontent.com', 'https://token.actions.githubusercontent.com/path']) {
+      expect(issuer.test(value), value).toBe(false);
+    }
+  });
   it('binds the exact DSSE bundle to explicit root, identity, and evidence thresholds', async () => {
     const artifact = Buffer.from('signed provider output\n');
     const payload = Buffer.from(canonicalJson({
@@ -65,7 +76,7 @@ describe('Sigstore trust-policy adapter (#2087)', () => {
         issuedAt: '2026-08-01T00:00:00.000Z', expiresAt: '2027-08-01T00:00:00.000Z',
         identities: [
           { id: 'root', independenceGroup: 'offline', kind: 'public-key', algorithm: 'ed25519', publicKey: rootPair.publicKey.export({ format: 'pem', type: 'spki' }).toString() },
-          { id: 'sigstore-release', independenceGroup: 'ci', kind: 'sigstore', profile: 'public-good', subjectAlternativeName: releaseIdentity, issuer: 'https://token.actions.githubusercontent.com' },
+          { id: 'sigstore-release', independenceGroup: 'ci', kind: 'sigstore', profile: 'public-good', subjectAlternativeName: releaseIdentity, issuer: releaseIssuer },
         ],
         sigstoreProfiles: [{ id: 'public-good', trustedRoot: { mediaType: 'test-root' }, tlogThreshold: 1, ctlogThreshold: 1, timestampThreshold: 1 }],
         root: { keyIds: ['root'], threshold: 1, scope: { assetTypes: ['*'], namespaces: ['*'], channels: ['*'] } },
@@ -92,7 +103,7 @@ describe('Sigstore trust-policy adapter (#2087)', () => {
     expect(outcome.status).toBe('verified');
     expect(verifySpy).toHaveBeenCalledWith(expect.objectContaining({
       options: { tlogThreshold: 1, ctlogThreshold: 1, timestampThreshold: 1 },
-      policy: { subjectAlternativeName: releaseIdentity, extensions: { issuer: 'https://token.actions.githubusercontent.com' } },
+      policy: { subjectAlternativeName: releaseIdentity, extensions: { issuer: releaseIssuer } },
     }));
   });
 });

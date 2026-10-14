@@ -11,8 +11,10 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+import { isMain } from '../_is-main.mjs';
 
-const { boundedExecFileSync, boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
@@ -843,7 +845,7 @@ async function checkOpenHumanHarnessTier2() {
 
 const BRAND_HEX = '#818CF8';
 
-async function runDoctor() {
+export async function runDoctor() {
   // Usage errors (unknown flags, valueless value flags, --json without
   // --probe-workers) exit 2 here, before any check, spawn, or write.
   const {
@@ -942,7 +944,8 @@ async function runDoctor() {
     check('AIWG Version', 'ok', `${versionInfo.version}${channelLabel}`);
   } catch {
     try {
-      const version = boundedExecSync('aiwg -version 2>/dev/null', 'quick', { encoding: 'utf-8' }).trim();
+      const [file, args] = cliCommand('aiwg', ['-version']);
+      const version = boundedExecFileSync(file, args, 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
       check('AIWG Version', 'ok', version.split('\n')[0]);
     } catch {
       check('AIWG Version', 'warn', 'Could not determine version');
@@ -953,14 +956,14 @@ async function runDoctor() {
   if (versionInfo?.devMode && versionInfo?.edgePath) {
     try {
       // Check if upstream remote exists (fork mode)
-      const remotes = boundedExecSync('git remote', 'quick', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
+      const remotes = boundedExecFileSync('git', ['remote'], 'quick', { cwd: versionInfo.edgePath, encoding: 'utf-8' }).trim().split('\n');
       if (remotes.includes('upstream')) {
         // Count commits upstream has that we don't
         let aheadCount = 0;
         try {
-          boundedExecSync('git fetch upstream --dry-run', 'network', { cwd: versionInfo.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['fetch', 'upstream', '--dry-run'], 'network', { cwd: versionInfo.edgePath, stdio: 'pipe' });
           aheadCount = parseInt(
-            boundedExecSync('git rev-list HEAD..upstream/main --count', 'quick', {
+            boundedExecFileSync('git', ['rev-list', 'HEAD..upstream/main', '--count'], 'quick', {
               cwd: versionInfo.edgePath, encoding: 'utf-8'
             }).trim(), 10
           ) || 0;
@@ -1513,7 +1516,8 @@ async function runDoctor() {
   // failure it prints shell-specific guidance and the `npx aiwg` fallback.
   // Doctor's exit code is not affected (PATH guidance is informational).
   try {
-    boundedExecSync('aiwg --version', 'quick', { stdio: 'ignore' });
+    const [file, args] = cliCommand('aiwg', ['--version']);
+    boundedExecFileSync(file, args, 'quick', { stdio: 'ignore' });
     // aiwg is callable — no PATH issue to report.
   } catch {
     const isTTY = Boolean(process.stdout.isTTY);
@@ -1875,7 +1879,7 @@ async function runDoctor() {
         // Collect actual git remote names; tolerate non-git directories.
         let gitRemotes = [];
         try {
-          gitRemotes = boundedExecSync('git remote', 'quick', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
+          gitRemotes = boundedExecFileSync('git', ['remote'], 'quick', { cwd: projectDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
             .trim()
             .split('\n')
             .filter(Boolean);
@@ -2732,7 +2736,9 @@ async function runDoctor() {
   console.log('');
 }
 
-runDoctor().catch(error => {
-  console.error('Doctor failed:', error.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  runDoctor().catch(error => {
+    console.error('Doctor failed:', error.message);
+    process.exit(1);
+  });
+}

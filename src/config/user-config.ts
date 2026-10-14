@@ -466,21 +466,26 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
-  // Unlike JSON data keys, config paths reject all three prototype-related names.
+  // Reject the entire path before mutating config; key uses below also guard each segment.
   if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) {
     throw new Error('Unsafe config key path: prototype-related segments are not allowed');
   }
   let current: Record<string, unknown> = obj;
 
-  for (let i = 0; i < parts.length - 1; i++) {
+  for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
+    if (part === '__proto__' || part === 'constructor' || part === 'prototype') {
+      throw new Error('Unsafe config key path: prototype-related segments are not allowed');
+    }
+    if (i === parts.length - 1) {
+      current[part] = value;
+      return;
+    }
     if (!Object.hasOwn(current, part) || typeof current[part] !== 'object' || current[part] === null) {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;
   }
-
-  current[parts[parts.length - 1]] = value;
 }
 
 function parseValue(value: string): unknown {
