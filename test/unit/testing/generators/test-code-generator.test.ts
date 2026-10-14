@@ -493,6 +493,68 @@ describe('TestCodeGenerator', () => {
       },
     );
 
+    it.each(['0123', '00', '08', '9007199254740993', '0', '123'])(
+      'imports numeric example %j as a valid ESM literal', async (example) => {
+        const testCase = createMockTestCase({
+          steps: [],
+          testData: [{ name: 'value', type: 'number', constraints: [], examples: [example] }],
+        });
+        const result = new TestCodeGenerator({
+          framework: 'vitest', language: 'javascript', includeSetup: false, includeTeardown: false,
+        }).generate(createMockTestSuite([testCase]));
+        expect(result.success).toBe(true);
+        const stubs = `
+          const bodies = [];
+          const describe = (_name, body) => body();
+          const it = (_name, body) => bodies.push(body);
+          const expect = () => ({ toBe() {} });
+          let captured;
+          export { bodies, captured };
+        `;
+        const code = stubs + result.files[0].content.replace(/^import .*$/gm, '')
+          .replace('const testData = {', 'const testData = captured = {');
+        const module = await import(/* @vite-ignore */ `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+        for (const body of module.bodies) await body();
+        const expected = String(Number(example)) === example ? Number(example) : example;
+        expect(module.captured).toEqual({ value: expected });
+      },
+    );
+
+    it.each([undefined, null, 1n, () => {}, Symbol('invalid'), {}].map((value, index) => ({ value, index })))(
+      'rejects non-string names and test data before generating files: $index', ({ value }) => {
+        const mutations: Array<[string, (suite: TestSuite) => void]> = [
+          ['suite.name', suite => { suite.name = value as string; }],
+          ['testCases[1].name', suite => { suite.testCases[1].name = value as string; }],
+          ['testCases[1].testData[0].name', suite => { suite.testCases[1].testData[0].name = value as string; }],
+          ['testCases[1].testData[0].examples[0]', suite => { suite.testCases[1].testData[0].examples[0] = value as string; }],
+        ];
+        if (value !== undefined) {
+          mutations.push(['testCases[1].steps[0].testData', suite => {
+            suite.testCases[1].steps[0].testData = value as string;
+          }]);
+        }
+        for (const [field, mutate] of mutations) {
+          const suite = createMockTestSuite([createMockTestCase(), createMockTestCase({ level: 'e2e' })]);
+          mutate(suite);
+          const result = generator.generate(suite);
+          expect(result.success).toBe(false);
+          expect(result.files).toEqual([]);
+          expect(result.errors).toEqual([`Code generation failed: ${field} must be a string`]);
+        }
+      },
+    );
+
+    it.each(['testData', 'examples'] as const)('rejects missing %s arrays clearly', (field) => {
+      const testCase = createMockTestCase();
+      if (field === 'testData') testCase.testData = undefined as unknown as TestCase['testData'];
+      else testCase.testData[0].examples = undefined as unknown as string[];
+      const result = generator.generate(createMockTestSuite([testCase]));
+      expect(result.success).toBe(false);
+      expect(result.files).toEqual([]);
+      const path = field === 'testData' ? 'testCases[0].testData' : 'testCases[0].testData[0].examples';
+      expect(result.errors).toEqual([`Code generation failed: ${path} must be an array`]);
+    });
+
     it('should handle test case with no steps', () => {
       const testCase = createMockTestCase({ steps: [] });
       const suite = createMockTestSuite([testCase]);

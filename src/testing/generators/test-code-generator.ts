@@ -73,6 +73,8 @@ export class TestCodeGenerator {
     const files: GeneratedFile[] = [];
 
     try {
+      this.validateInputs(suite);
+
       // Group test cases by level
       const unitTests = suite.testCases.filter(tc => tc.level === 'unit');
       const integrationTests = suite.testCases.filter(tc => tc.level === 'integration');
@@ -123,6 +125,30 @@ export class TestCodeGenerator {
           e2eTests: 0
         }
       };
+    }
+  }
+
+  /** Validate declared string inputs before rendering any files. */
+  private validateInputs(suite: TestSuite): void {
+    const requireString = (value: unknown, field: string): void => {
+      if (typeof value !== 'string') throw new Error(`${field} must be a string`);
+    };
+    requireString(suite.name, 'suite.name');
+    for (const [index, testCase] of suite.testCases.entries()) {
+      const field = `testCases[${index}]`;
+      requireString(testCase.name, `${field}.name`);
+      if (!Array.isArray(testCase.testData)) throw new Error(`${field}.testData must be an array`);
+      for (const [dataIndex, data] of testCase.testData.entries()) {
+        const dataField = `${field}.testData[${dataIndex}]`;
+        requireString(data.name, `${dataField}.name`);
+        if (!Array.isArray(data.examples)) throw new Error(`${dataField}.examples must be an array`);
+        for (const [exampleIndex, example] of data.examples.entries()) {
+          requireString(example, `${dataField}.examples[${exampleIndex}]`);
+        }
+      }
+      for (const [stepIndex, step] of testCase.steps.entries()) {
+        if (step.testData !== undefined) requireString(step.testData, `${field}.steps[${stepIndex}].testData`);
+      }
     }
   }
 
@@ -477,7 +503,7 @@ export class TestCodeGenerator {
   private getExampleValue(examples: string[]): string {
     if (examples.length === 0) return "'test-value'";
     const example = examples[0];
-    if (example.match(/^\d+$/)) return example;
+    if (/^\d+$/.test(example) && String(Number(example)) === example) return example;
     return JSON.stringify(example);
   }
 }

@@ -53,6 +53,22 @@ describe('WP5 metadata injection encoding', () => {
       expect(markdown).toContain('\n---\nBody.\n');
     },
   );
+  it('round-trips hostile keys and nested metadata without injecting fields', () => {
+    const metadata = {
+      'k: v\nx': 1,
+      true: 'true',
+      nested: { 'x: y': ['foo #bar', { 'line\nkey': 'line\nvalue' }, 2, false, null] },
+      array: [1, 2],
+      ordinary: 'simple',
+    };
+    const content = `---\n${YAML.stringify(metadata)}---\nBody.\n`;
+    const markdown = injectFrameworkMetadata(content);
+    expect(frontmatter(markdown)).toEqual({ ...metadata, framework: 'sdlc-complete' });
+    expect(markdown).toContain('ordinary: "simple"');
+    expect(markdown).toContain('framework: "sdlc-complete"');
+    expect(markdown).toContain('\n---\nBody.\n');
+  });
+
   it.each([hostile, 'true', '42', '  padded  ', ''])(
     'encodes a framework when adding new frontmatter: %j', (framework) => {
       const markdown = injectFrameworkMetadata('Body.\n', framework);

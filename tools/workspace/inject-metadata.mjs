@@ -129,20 +129,6 @@ OUTPUT:
 }
 
 /**
- * Encode string values as complete YAML double-quoted scalars.
- * @param {*} value - Value to encode
- * @returns {*} Encoded string or original non-string value
- */
-function quoteValue(value) {
-  if (typeof value !== 'string') return value;
-
-  return JSON.stringify(value)
-    .replace(/\u0085/g, '\\u0085')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-}
-
-/**
  * Parse YAML frontmatter line-by-line (handles malformed YAML)
  * @param {string} yamlBlock - Raw YAML content
  * @returns {Object} Parsed metadata object
@@ -180,14 +166,12 @@ function parseYamlLineByLine(yamlBlock) {
  * @returns {string} YAML string
  */
 function buildYaml(metadata) {
-  const lines = [];
-
-  for (const [key, value] of Object.entries(metadata)) {
-    const quotedValue = quoteValue(value);
-    lines.push(`${key}: ${quotedValue}`);
-  }
-
-  return lines.join('\n');
+  return yaml.stringify(metadata, {
+    defaultKeyType: 'PLAIN',
+    defaultStringType: 'QUOTE_DOUBLE',
+    blockQuote: false,
+    lineWidth: 0,
+  }).trimEnd();
 }
 
 /**

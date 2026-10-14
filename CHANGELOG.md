@@ -9,8 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
-- Correct JavaScript test-name, TOML hook, and YAML metadata/description escaping;
-  warn explicitly when Vault provisioning opts out of TLS verification (#3096).
+- Correct JavaScript test-name and OpenClaw handler-comment escaping, TOML hook/MCP
+  encoding, and YAML hook/metadata keys and nested values; preserve noncanonical
+  numeric test examples and reject invalid generator string inputs; warn explicitly
+  when Vault provisioning opts out of TLS verification (#3096).
 
 ### Added
 

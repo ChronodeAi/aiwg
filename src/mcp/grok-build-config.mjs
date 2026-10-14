@@ -4,15 +4,11 @@ import { access, lstat, readFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { replaceServer } from './toml-editor.mjs';
+import { tomlString as string } from './toml-string.mjs';
 
 const START = name => `# >>> AIWG-managed Grok MCP: ${name}`;
 const END = name => `# <<< AIWG-managed Grok MCP: ${name}`;
 const ENV_REF = /^(?:[^$]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\})*$/;
-
-function string(value) {
-  if (typeof value !== 'string') throw new Error('Grok MCP string fields must be strings');
-  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
-}
 
 function key(value) {
   return /^[A-Za-z0-9_-]+$/.test(value) ? value : string(value);
