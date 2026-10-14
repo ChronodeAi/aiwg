@@ -109,7 +109,7 @@ describe('verification client environment and read-isolation reporting', () => {
       // Spawn the selected command so bare names really use the caller PATH.
       const dispatch = (cmd: string, args: string[], options?: any) => {
         if (args.some(arg => arg.startsWith('--unit=aiwg-verify-') && !arg.startsWith('--unit=aiwg-verify-isolation-probe-'))) {
-          return realSpawnSync(cmd, args, options);
+          return realSpawnSync(cmd, args, { ...options, timeout: options?.timeout ?? 10000 });
         }
         return spawn(cmd, args, options);
       };

@@ -38,7 +38,7 @@ describe('trusted systemd client', () => {
     const fixture = systemdClientFixture(); roots.push(fixture.root);
     const nodeAlias = path.join(fixture.root, 'node with spaces'); symlinkSync(process.execPath, nodeAlias);
     const withSpaces = systemdClientFixture(nodeAlias); roots.push(withSpaces.root);
-    const result = spawnSync(withSpaces.binary, ['argument with spaces'], { encoding: 'utf8' });
+    const result = spawnSync(withSpaces.binary, ['argument with spaces'], { encoding: 'utf8', timeout: 10000 });
     if (result.error?.code === 'EPERM') { ctx.skip('sandbox denies real executable spawn'); return; }
     expect(result.error).toBeUndefined();
     expect(JSON.parse(result.stdout).args).toEqual(['argument with spaces']);

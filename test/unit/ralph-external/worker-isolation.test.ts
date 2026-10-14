@@ -261,7 +261,7 @@ describe('launchIsolatedWorker gate-then-launch', () => {
       env: { PATH: callerPath, AIWG_ISOLATION_TOKEN: 'caller-token' }, envNames: ['PATH', 'AIWG_ISOLATION_TOKEN'],
       spawn: ((binary: string, args: string[], options: any) => {
         if (path.basename(binary) === 'systemctl') return { status: 0, stdout: '', stderr: '', error: null };
-        clientResult = realSpawnSync(binary, args, options);
+        clientResult = realSpawnSync(binary, args, { ...options, timeout: options?.timeout ?? 10000 });
         return clientResult;
       }) as never,
     });
@@ -275,7 +275,7 @@ describe('launchIsolatedWorker gate-then-launch', () => {
   });
 
   it.skipIf(process.platform === 'win32')('uses the conductor executable for a real asynchronous attached launch', async ctx => {
-    const preflight = realSpawnSync(trustedBinary, [], { encoding: 'utf8' });
+    const preflight = realSpawnSync(trustedBinary, [], { encoding: 'utf8', timeout: 10000 });
     if (preflight.error?.code === 'EPERM') { ctx.skip('sandbox denies real executable spawn'); return; }
     expect(preflight.error).toBeUndefined();
     const callerRoot = tmpWorktree();
