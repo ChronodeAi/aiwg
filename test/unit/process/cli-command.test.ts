@@ -88,6 +88,54 @@ describe('cliCommand', () => {
       .toBe(join(dir, 'code.cmd'));
   });
 
+  it.each(['.\\code.exe', './code.exe'])('resolves relative %s against cwd instead of PATH', command => {
+    const cwd = join(dir, 'project');
+    mkdirSync(cwd);
+    const executable = join(cwd, 'code.exe');
+    writeFileSync(executable, '');
+    writeFileSync(join(dir, 'code.exe'), '');
+    expect(resolveExecutable(command, 'win32', dir, '.EXE;.CMD', cwd)).toBe(executable);
+    expect(cliCommand(command, ['--wait'], 'win32', dir, '.EXE;.CMD', cwd))
+      .toEqual([executable, ['--wait']]);
+    rmSync(executable);
+    expect(resolveExecutable(command, 'win32', dir, '.EXE;.CMD', cwd)).toBe(command);
+    expect(cliCommand(command, [], 'win32', dir, '.EXE;.CMD', cwd)).toEqual([command, []]);
+  });
+
+  it('applies PATHEXT to relative paths against cwd', () => {
+    const cwd = join(dir, 'project');
+    const tools = join(cwd, 'tools');
+    mkdirSync(tools, { recursive: true });
+    const shim = join(tools, 'code.cmd');
+    const entry = join(tools, 'entry.mjs');
+    writeFileSync(entry, '');
+    writeFileSync(shim, '"%_prog%" "%dp0%\\entry.mjs" %*\n');
+    expect(resolveExecutable('tools\\code', 'win32', dir, '.EXE;.CMD', cwd)).toBe(shim);
+    expect(cliCommand('tools\\code', ['--wait'], 'win32', dir, '.EXE;.CMD', cwd))
+      .toEqual([process.execPath, [entry, '--wait']]);
+  });
+
+  it('tries PATHEXT for dotted names while honoring an existing exact name', () => {
+    const executable = join(dir, 'subl.v2.exe');
+    const exact = join(dir, 'subl.v2');
+    writeFileSync(executable, '');
+    expect(resolveExecutable('subl.v2', 'win32', dir, '.EXE;.CMD')).toBe(executable);
+    expect(cliCommand('subl.v2', [], 'win32', dir, '.EXE;.CMD')).toEqual([executable, []]);
+    writeFileSync(exact, '');
+    expect(resolveExecutable('subl.v2', 'win32', dir, '.EXE;.CMD')).toBe(exact);
+    expect(cliCommand('subl.v2', [], 'win32', dir, '.EXE;.CMD')).toEqual([exact, []]);
+  });
+
+  it('keeps PATH directory precedence for cliCommand', () => {
+    const later = join(dir, 'later');
+    mkdirSync(later);
+    const executable = join(dir, 'code.exe');
+    writeFileSync(executable, '');
+    writeFileSync(join(later, 'code.com'), '');
+    expect(cliCommand('code', [], 'win32', `${dir};${later}`, '.COM;.EXE'))
+      .toEqual([executable, []]);
+  });
+
   it('refuses unsupported batch scripts and missing npm entry points', () => {
     const shim = join(dir, 'openclaw.cmd');
     writeFileSync(shim, '@echo arbitrary batch script\n');

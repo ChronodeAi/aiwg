@@ -2,12 +2,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 // Share PATH/PATHEXT lookup with callers that can launch arbitrary batch files.
-function* executableCandidates(command, searchPath, pathExt, preferNative = false) {
+function* executableCandidates(command, searchPath, pathExt, preferNative = false, cwd = process.cwd()) {
   const candidates = path.isAbsolute(command)
     ? [command]
-    : searchPath.split(';').filter(Boolean).map(dir => path.join(dir, command));
+    : /[\\/]/.test(command)
+      ? [path.resolve(cwd, ...command.split(/[\\/]/))]
+      : searchPath.split(';').filter(Boolean).map(dir => path.join(dir, command));
   for (const candidate of candidates) {
-    const extensions = path.extname(candidate) ? [''] : pathExt.split(';').filter(Boolean).map(ext => ext.toLowerCase());
+    const pathExtensions = pathExt.split(';').filter(Boolean).map(ext => ext.toLowerCase());
+    const extension = path.extname(candidate).toLowerCase();
+    const extensions = extension && (pathExtensions.includes(extension) || existsSync(candidate))
+      ? ['']
+      : pathExtensions;
     if (preferNative) {
       extensions.sort((a, b) => Number(!/\.(?:exe|com)$/i.test(a)) - Number(!/\.(?:exe|com)$/i.test(b)));
     }
@@ -23,9 +29,10 @@ export function resolveExecutable(
   platform = process.platform,
   searchPath = process.env.PATH ?? '',
   pathExt = process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD',
+  cwd = process.cwd(),
 ) {
   if (platform !== 'win32') return command;
-  for (const executable of executableCandidates(command, searchPath, pathExt, true)) {
+  for (const executable of executableCandidates(command, searchPath, pathExt, true, cwd)) {
     return executable;
   }
   return command;
@@ -39,9 +46,10 @@ export function cliCommand(
   platform = process.platform,
   searchPath = process.env.PATH ?? '',
   pathExt = process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD',
+  cwd = process.cwd(),
 ) {
   if (platform !== 'win32') return [command, args];
-  for (const shim of executableCandidates(command, searchPath, pathExt)) {
+  for (const shim of executableCandidates(command, searchPath, pathExt, false, cwd)) {
     if (!/\.(?:cmd|bat)$/i.test(shim)) return [shim, args];
     const contents = readFileSync(shim, 'utf8');
     const entry = contents.match(

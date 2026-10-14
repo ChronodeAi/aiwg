@@ -445,7 +445,7 @@ function applyConflictChoice(choice, conflicts, strategy, cwd) {
     console.log(`Opening ${firstFile} in ${editor}...`);
     try {
       const [file, ...args] = editorArgs(editor);
-      const invocation = resolveManagerCommand(resolveExecutable(file), [...args, firstFile]);
+      const invocation = resolveManagerCommand(resolveExecutable(file, undefined, undefined, undefined, cwd), [...args, firstFile]);
       // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
       // the conflicted file; the user interacts with it directly (see
       // tools/testing/sync-spawn-allowlist.json). Callers of this function

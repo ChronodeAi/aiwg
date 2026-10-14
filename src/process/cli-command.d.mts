@@ -3,6 +3,7 @@ export function resolveExecutable(
   platform?: NodeJS.Platform,
   searchPath?: string,
   pathExt?: string,
+  cwd?: string,
 ): string;
 
 export function cliCommand(
@@ -11,4 +12,5 @@ export function cliCommand(
   platform?: NodeJS.Platform,
   searchPath?: string,
   pathExt?: string,
+  cwd?: string,
 ): [string, string[]];

@@ -180,7 +180,7 @@ describe('contribution commands keep data in argv (#142)', () => {
 
     expect(editorExecFile).toHaveBeenCalledWith(
       process.env.ComSpec,
-      ['/d', '/s', '/c', `""${executable}"${editor.includes('--wait') ? ' "--wait"' : ''} "file with spaces & %%PATH%%.txt""`],
+      ['/d', '/v:off', '/s', '/c', `""${executable}"${editor.includes('--wait') ? ' "--wait"' : ''} "file with spaces & %%PATH%%.txt""`],
       { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
     );
   });
@@ -199,6 +199,26 @@ describe('contribution commands keep data in argv (#142)', () => {
     applyConflictChoice('1', [firstFile], 'merge', root);
 
     expect(editorExecFile).toHaveBeenCalledWith(executable, [firstFile], { cwd: root, stdio: 'inherit' });
+  });
+
+  it('resolves a relative Windows editor against the conflict working directory', () => {
+    const tools = path.join(root, 'tools');
+    mkdirSync(tools);
+    const executable = path.join(tools, 'code.cmd');
+    writeFileSync(executable, '@echo editor launcher');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('EDITOR', 'tools\\code --wait');
+    vi.stubEnv('PATH', '');
+    vi.stubEnv('PATHEXT', '.EXE;.CMD');
+    vi.stubEnv('ComSpec', 'custom-cmd.exe');
+
+    applyConflictChoice('1', ['conflict!.txt'], 'merge', root);
+
+    expect(editorExecFile).toHaveBeenCalledWith(
+      'custom-cmd.exe',
+      ['/d', '/v:off', '/s', '/c', `""${executable}" "--wait" "conflict!.txt""`],
+      { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
+    );
   });
 
   it('uses the default editor and reports malformed EDITOR quoting', () => {
