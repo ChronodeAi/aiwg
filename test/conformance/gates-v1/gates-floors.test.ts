@@ -1,3 +1,4 @@
+import { escapeRegExp } from '../../helpers/regexp.js';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -403,7 +404,7 @@ describe('project floors pack references and ceilings', () => {
     const bare = dropGate('integrity-ceiling');
     registry.registerPack(bare, { namespace: 'aiwg', bundle: 'test-gates' });
     expect(() => registry.resolveBinding(variantBinding(bare), refFloors(bareRef)))
-      .toThrow(new RegExp(`omits project floor gate 'integrity-ceiling'.*floor pack '${INTEGRITY_CEILING_FLOOR_PACK_ID.replace(/[/:]/g, '\\$&')}'`));
+      .toThrow(new RegExp(`omits project floor gate 'integrity-ceiling'.*floor pack '${escapeRegExp(INTEGRITY_CEILING_FLOOR_PACK_ID)}'`));
   });
 
   it('refuses forged pack references and unknown packs', () => {

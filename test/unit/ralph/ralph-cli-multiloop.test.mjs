@@ -7,15 +7,16 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { MultiLoopStateManager } from '../../../tools/ralph/state-manager-sync.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const TEST_DIR = path.join(__dirname, 'test-workspace-cli');
+const TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ralph workspace;$literal-cli-'));
 const RALPH_DIR = path.join(TEST_DIR, '.aiwg', 'ralph');
 
 function cleanupTestDir() {
@@ -24,12 +25,11 @@ function cleanupTestDir() {
   }
 }
 
-function runCli(args, options = {}) {
+function runCli(args, options = {}, execute = execFileSync) {
   const cliPath = path.join(__dirname, '../../../tools/ralph/ralph-cli.mjs');
-  const cmd = `node ${cliPath} ${args}`;
 
   try {
-    const output = execSync(cmd, {
+    const output = execute(process.execPath, [cliPath, ...args], {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
@@ -41,12 +41,11 @@ function runCli(args, options = {}) {
   }
 }
 
-function runStatus(args = '', options = {}) {
+function runStatus(args = [], options = {}, execute = execFileSync) {
   const cliPath = path.join(__dirname, '../../../tools/ralph/ralph-status.mjs');
-  const cmd = `node ${cliPath} ${args}`;
 
   try {
-    const output = execSync(cmd, {
+    const output = execute(process.execPath, [cliPath, ...args], {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
@@ -58,12 +57,11 @@ function runStatus(args = '', options = {}) {
   }
 }
 
-function runAbort(args = '', options = {}) {
+function runAbort(args = [], options = {}, execute = execFileSync) {
   const cliPath = path.join(__dirname, '../../../tools/ralph/ralph-abort.mjs');
-  const cmd = `node ${cliPath} ${args}`;
 
   try {
-    const output = execSync(cmd, {
+    const output = execute(process.execPath, [cliPath, ...args], {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
@@ -75,12 +73,11 @@ function runAbort(args = '', options = {}) {
   }
 }
 
-function runResume(args = '', options = {}) {
+function runResume(args = [], options = {}, execute = execFileSync) {
   const cliPath = path.join(__dirname, '../../../tools/ralph/ralph-resume.mjs');
-  const cmd = `node ${cliPath} ${args}`;
 
   try {
-    const output = execSync(cmd, {
+    const output = execute(process.execPath, [cliPath, ...args], {
       cwd: TEST_DIR,
       encoding: 'utf8',
       ...options,
@@ -91,6 +88,18 @@ function runResume(args = '', options = {}) {
     return { success: false, output: err.stdout || '', error: err.stderr || err.message };
   }
 }
+
+it('all Ralph helpers preserve spaces and shell syntax in argument arrays', () => {
+  const args = ['task with spaces; $(echo expanded)', '--completion', "it's literal"];
+  for (const run of [runCli, runStatus, runAbort, runResume]) {
+    const result = run(args, {}, (executable, actualArgs) => {
+      assert.strictEqual(executable, process.execPath);
+      assert.deepStrictEqual(actualArgs.slice(1), args);
+      return 'literal output';
+    });
+    assert.strictEqual(result.output, 'literal output');
+  }
+});
 
 describe('Ralph CLI Multi-Loop Support', () => {
   beforeEach(() => {
@@ -104,7 +113,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
 
   describe('ralph list', () => {
     it('should show no loops when none exist', () => {
-      const result = runCli('list');
+      const result = runCli(['list']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /No active Ralph loops/);
@@ -126,7 +135,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 5,
       });
 
-      const result = runCli('list');
+      const result = runCli(['list']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /Active Ralph Loops \(2\/4\)/);
@@ -145,7 +154,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         tags: ['refactoring', 'typescript'],
       });
 
-      const result = runCli('list');
+      const result = runCli(['list']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /Convert to TypeScript/);
@@ -155,9 +164,19 @@ describe('Ralph CLI Multi-Loop Support', () => {
   });
 
   describe('ralph creation with --loop-id', () => {
+    it('preserves task and completion arguments containing shell syntax', () => {
+      const task = 'Fix tests; $(echo expanded) "quoted"';
+      const completion = "npm test && echo 'done'";
+      const result = runCli([task, '--completion', completion, '--loop-id', 'literal-args']);
+      assert.strictEqual(result.success, true);
+      const state = new MultiLoopStateManager(TEST_DIR).getLoopState('literal-args');
+      assert.strictEqual(state.task, task);
+      assert.strictEqual(state.completion, completion);
+    });
+
     it('should create loop with custom loop ID', () => {
       const result = runCli(
-        '"Fix tests" --completion "npm test" --loop-id custom-loop-123'
+        ['Fix tests', '--completion', 'npm test', '--loop-id', 'custom-loop-123']
       );
 
       assert.strictEqual(result.success, true);
@@ -170,7 +189,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
     });
 
     it('should auto-generate loop ID if not provided', () => {
-      const result = runCli('"Fix failing tests" --completion "npm test"');
+      const result = runCli(['Fix failing tests', '--completion', 'npm test']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /Loop ID: ralph-fix-failing-tests-/);
@@ -189,7 +208,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
       }
 
       // Try to create 5th
-      const result = runCli('"Fifth task" --completion "done"');
+      const result = runCli(['Fifth task', '--completion', 'done']);
 
       assert.strictEqual(result.success, false);
       assert.match(result.error, /4 loops already active/);
@@ -209,7 +228,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
       }
 
       // Force create 5th
-      const result = runCli('"Fifth task" --completion "done" --force');
+      const result = runCli(['Fifth task', '--completion', 'done', '--force']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /Loop ID: ralph-fifth-task-/);
@@ -277,7 +296,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runStatus(`--loop-id ${loop1}`);
+      const result = runStatus(['--loop-id', loop1]);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, new RegExp(loop1));
@@ -300,7 +319,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runStatus('--all');
+      const result = runStatus(['--all']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /All Active Ralph Loops \(2\)/);
@@ -317,7 +336,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runStatus(`--loop-id ${loopId} --json`);
+      const result = runStatus(['--loop-id', loopId, '--json']);
 
       assert.strictEqual(result.success, true);
 
@@ -362,7 +381,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runAbort('--revert');
+      const result = runAbort(['--revert']);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, new RegExp(`Ralph Loop Aborted: ${loopId}`));
@@ -406,7 +425,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runAbort(`--loop-id ${loop1}`);
+      const result = runAbort(['--loop-id', loop1]);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, new RegExp(`Ralph Loop Aborted: ${loop1}`));
@@ -429,7 +448,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
         maxIterations: 10,
       });
 
-      const result = runAbort('--loop-id nonexistent-loop');
+      const result = runAbort(['--loop-id', 'nonexistent-loop']);
 
       assert.strictEqual(result.success, false);
       assert.match(result.error, /Loop not found/);
@@ -505,7 +524,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
       // Pause loop1
       stateManager.updateLoopState(loop1, { active: false, status: 'paused' });
 
-      const result = runResume(`--loop-id ${loop1}`);
+      const result = runResume(['--loop-id', loop1]);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, new RegExp(`Resuming Ralph Loop: ${loop1}`));
@@ -526,7 +545,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
 
       stateManager.updateLoopState(loopId, { active: false, status: 'paused' });
 
-      const result = runResume(`--loop-id ${loopId} --max-iterations 20`);
+      const result = runResume(['--loop-id', loopId, '--max-iterations', '20']);
 
       assert.strictEqual(result.success, true);
 
@@ -545,7 +564,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
 
       stateManager.updateLoopState(loopId, { status: 'success', active: false });
 
-      const result = runResume(`--loop-id ${loopId}`);
+      const result = runResume(['--loop-id', loopId]);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /completed successfully/);
@@ -562,7 +581,7 @@ describe('Ralph CLI Multi-Loop Support', () => {
 
       stateManager.updateLoopState(loopId, { status: 'aborted', active: false });
 
-      const result = runResume(`--loop-id ${loopId}`);
+      const result = runResume(['--loop-id', loopId]);
 
       assert.strictEqual(result.success, true);
       assert.match(result.output, /was aborted/);

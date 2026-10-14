@@ -4,12 +4,47 @@
  * Tests AIWG agent and command deployment to OpenCode format.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execSync, spawnSync } from 'child_process';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { execFileSync, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { OPENCODE_DEPLOY_MODELS } from '../fixtures/models.js';
+import { cliCommand } from '../helpers/cli-command.js';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
+function runNode(args: string[], options: Parameters<typeof execFileSync>[2]) {
+  return execFileSync(process.execPath, args, options);
+}
+
+describe('OpenCode literal command arguments', () => {
+  it.each([
+    { site: 'agent directory', flags: ['--provider', 'opencode', '--mode', 'sdlc'] },
+    { site: 'command directory', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--deploy-commands'] },
+    { site: 'skill directory', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'] },
+    { site: 'skill files', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'] },
+    { site: 'agent manifest', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'] },
+    { site: 'first manifest append', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'] },
+    { site: 'second manifest append', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'] },
+    { site: 'model configuration', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'] },
+    { site: 'marketing mode', flags: ['--provider', 'opencode', '--mode', 'marketing', '--deploy-skills'] },
+    { site: 'dry run', flags: ['--provider', 'opencode', '--mode', 'sdlc', '--dry-run'] },
+    { site: 'MCP configuration', flags: ['install', 'opencode'] },
+    { site: 'MCP merge', flags: ['install', 'opencode'] },
+  ])('preserves paths for $site', ({ flags }) => {
+    const script = 'script with spaces;$literal.mjs';
+    const target = 'target with spaces;$(echo expanded)';
+    const args = flags[0] === 'install' ? [script, ...flags, target] : [script, '--target', target, ...flags];
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('literal output');
+    expect(runNode(args, { encoding: 'utf-8', timeout: 60_000 })).toBe('literal output');
+    expect(execute).toHaveBeenLastCalledWith(process.execPath, args, { encoding: 'utf-8', timeout: 60_000 });
+  });
+});
 
 // OpenCode is installed at ~/.opencode/bin/opencode
 const OPENCODE_PATH = path.join(os.homedir(), '.opencode', 'bin', 'opencode');
@@ -19,20 +54,20 @@ function isOpenCodeAvailable(): boolean {
   try {
     // Try direct path first
     if (fs.existsSync(OPENCODE_PATH)) {
-      const result = spawnSync(OPENCODE_PATH, ['--version'], {
+      const result = spawnSync(...cliCommand(OPENCODE_PATH, ['--version']), {
         encoding: 'utf-8',
         timeout: 5000,
       });
       return result.status === 0;
     }
     // Try via PATH
-    const result = spawnSync('opencode', ['--version'], {
+    const result = spawnSync(...cliCommand('opencode', ['--version']), {
       encoding: 'utf-8',
       timeout: 5000,
-      shell: true,
     });
     return result.status === 0;
-  } catch {
+  } catch (error) {
+    console.warn(`opencode CLI probe failed: ${String(error)}`);
     return false;
   }
 }
@@ -45,14 +80,13 @@ function runOpenCode(
   options: { cwd?: string; timeout?: number } = {}
 ): { stdout: string; stderr: string; status: number | null } {
   try {
-    // Use direct path if available, otherwise try via shell
+    // Use direct path if available, otherwise resolve the executable via PATH
     const cmd = fs.existsSync(OPENCODE_PATH) ? OPENCODE_PATH : 'opencode';
-    const result = spawnSync(cmd, args, {
+    const result = spawnSync(...cliCommand(cmd, args), {
       encoding: 'utf-8',
       timeout: options.timeout || 30000,
       cwd: options.cwd || process.cwd(),
       env: process.env,
-      shell: !fs.existsSync(OPENCODE_PATH),
     });
     return {
       stdout: result.stdout || '',
@@ -70,7 +104,7 @@ describe('OpenCode Deployment', () => {
 
   beforeEach(() => {
     // Create temporary test directory
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-opencode-test-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg opencode;$literal-test-'));
   });
 
   afterEach(() => {
@@ -83,7 +117,7 @@ describe('OpenCode Deployment', () => {
   describe('Agent Deployment', () => {
     it('should deploy agents to .opencode/agent/ directory', () => {
       // OpenCode discovers agents via glob within .opencode/agent/ directory.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -94,7 +128,7 @@ describe('OpenCode Deployment', () => {
     it('should NOT deploy commands to legacy .opencode/commands/', () => {
       // OpenCode's generated command surface is .opencode/command/ (singular);
       // .opencode/commands/ is not scanned.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-commands`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--deploy-commands'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -105,7 +139,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Skill Deployment', () => {
     it('should deploy skills to .opencode/skill/ directory', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -117,7 +151,7 @@ describe('OpenCode Deployment', () => {
     });
 
     it('should deploy skills with SKILL.md files', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -135,7 +169,7 @@ describe('OpenCode Deployment', () => {
 
   describe('AGENTS.md Generation', () => {
     it('should create AGENTS.md when --create-agents-md is specified', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -153,10 +187,10 @@ describe('OpenCode Deployment', () => {
       fs.writeFileSync(agentsMdPath, '# Project Agents\n\nExisting content.\n');
 
       // Deploy twice
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'], { timeout: 60_000,
         encoding: 'utf-8'
       });
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--create-agents-md'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -180,7 +214,7 @@ describe('OpenCode Deployment', () => {
     it('should deploy skills without errors (model config applies to MCP, not file artifacts)', () => {
       // OpenCode agents are config-only — model format is validated via opencode.json, not file deployment.
       // Skills are the deployable artifacts; verify they deploy cleanly.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--deploy-skills'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -191,7 +225,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Marketing Mode', () => {
     it('should deploy marketing skills when mode is marketing', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode marketing --deploy-skills`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'marketing', '--deploy-skills'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -206,7 +240,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Dry Run', () => {
     it('should not write files in dry-run mode', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --dry-run`, { timeout: 60_000,
+      runNode([deployScript, '--target', testDir, '--provider', 'opencode', '--mode', 'sdlc', '--dry-run'], { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -221,7 +255,7 @@ describe('OpenCode MCP Configuration', () => {
   const cliPath = path.resolve(__dirname, '../../src/mcp/cli.mjs');
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-opencode-mcp-test-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg opencode;$literal-mcp-test-'));
   });
 
   afterEach(() => {
@@ -232,7 +266,7 @@ describe('OpenCode MCP Configuration', () => {
 
   it('should generate opencode.json with MCP configuration', () => {
     // Use cwd option instead of process.chdir (not supported in workers)
-    execSync(`node ${cliPath} install opencode ${testDir}`, { timeout: 60_000,
+    runNode([cliPath, 'install', 'opencode', testDir], { timeout: 60_000,
       encoding: 'utf-8',
       cwd: testDir
     });
@@ -259,7 +293,7 @@ describe('OpenCode MCP Configuration', () => {
     }, null, 2));
 
     // Use cwd option instead of process.chdir
-    execSync(`node ${cliPath} install opencode ${testDir}`, { timeout: 60_000,
+    runNode([cliPath, 'install', 'opencode', testDir], { timeout: 60_000,
       encoding: 'utf-8',
       cwd: testDir
     });

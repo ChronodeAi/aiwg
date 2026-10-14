@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { replaceHtmlComments } from '../helpers/comment-text.mjs';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
 import { activityRequest, createBridge, createUserIndexGraph, missionSummary, normalizeManagedDockerPosture, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution, validateActivityEnvelope } from '../../apps/cockpit/bridge/src/server.mjs';
 
@@ -1248,7 +1249,7 @@ describe('cockpit web — app shell served', () => {
   });
   it('references + serves the built bundle outside comments when a React build is present', async () => {
     // strip comments first: a module script trapped in a comment must not count.
-    const live = html.replace(/<!--[\s\S]*?-->/g, '');
+    const live = replaceHtmlComments(html, '');
     if (/assets\//.test(html)) {
       const m = live.match(/<script[^>]+type="module"[^>]+src="([^"]*assets\/[^"]+\.js)"/);
       expect(m, 'module bundle must be referenced outside comments').toBeTruthy();

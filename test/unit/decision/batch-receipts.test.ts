@@ -371,7 +371,11 @@ describe('batch store integrity, encryption and lifecycle (#2672)', () => {
       await writeFile(latest, original);
     }
     const original = await readFile(latest, 'utf8');
-    await writeFile(latest, original.replace('{', '{ '));
+    // Add legal JSON whitespace without rewriting any serialized field.
+    const tampered = ` ${original}`;
+    expect(tampered).not.toBe(original);
+    expect(JSON.parse(tampered)).toEqual(JSON.parse(original));
+    await writeFile(latest, tampered);
     await expect(receipts.read(done.batchId, done.tenantId, done.projectId)).rejects.toBeInstanceOf(BatchStoreIntegrityError);
     await writeFile(latest, original);
     expect(await receipts.read(done.batchId, done.tenantId, done.projectId)).toEqual(done);

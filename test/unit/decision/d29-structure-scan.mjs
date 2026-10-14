@@ -30,6 +30,8 @@
  * - The non-blind scan (`unitFeatures`, `exclusiveFeatures`) reads every
  *   non-relevant role, with the explicit allowlist `NON_BLIND_ALLOWED`.
  */
+import { splitCommentDelimiters } from '../../helpers/comment-text.mjs';
+
 const ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const esc = text => text.replace(ESCAPE, '\\$&');
 const ATTRIBUTES = { port: 'port', protocol: 'protocol', region: 'region', 'owner-team': 'owner team', 'major-version': 'major version' };
@@ -672,7 +674,8 @@ const ATTRIBUTE_VALUE = /\b(?:\d+|QUIC|TCP|UDP|SCTP|east|west|north|south|Cedar|
 const ANAPHOR = /^(?:it|now)\b|\b(?:it|its|that module)\b/i;
 export function clausesOf(payload) {
   const text = [payload.claim ?? payload.criterion, payload.source ?? payload.evidence, payload.context].filter(Boolean).join('\n');
-  return text.split(/\.(?=\s|$)|;|\n|<!--|-->|[()[\]]|^>\s/m).map(clause => clause.replace(/^\s*>\s*/, '').trim()).filter(Boolean);
+  return splitCommentDelimiters(text).flatMap(part => part.split(/\.(?=\s|$)|;|\n|[()[\]]|^>\s/m))
+    .map(clause => clause.replace(/^\s*>\s*/, '').trim()).filter(Boolean);
 }
 export function assertsRecord(clause) {
   return CRITERION_NAMES.test(clause) || (ATTRIBUTE_NOUN.test(clause) && ATTRIBUTE_VALUE.test(clause));

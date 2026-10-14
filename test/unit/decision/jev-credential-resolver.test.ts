@@ -131,6 +131,19 @@ describe('TV-12 trusted Jev credential resolver (offline)', () => {
     expect(zeroed).toContain(SECRET);
   });
 
+  it.each([false, true])('restores the TLS environment after a scoped test (failure: %s)', fail => {
+    const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    const scoped = () => {
+      vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0');
+      try {
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
+        if (fail) throw new Error('fixture failure');
+      } finally { vi.unstubAllEnvs(); }
+    };
+    if (fail) expect(scoped).toThrow('fixture failure'); else scoped();
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe(previous);
+  });
+
   it('verifies TLS explicitly even when the process disables verification', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tv12-tls-'));
     const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
@@ -142,14 +155,15 @@ describe('TV-12 trusted Jev credential resolver (offline)', () => {
       server.on('request', (_request, response) => { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"ok":true}'); });
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
       const url = `https://localhost:${(server.address() as { port: number }).port}/v1/sys/health`;
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0');
       await expect(verifiedHttpsFetch({})(url, { method: 'GET', headers: {} })).rejects.toThrow();
       const trusted = await verifiedHttpsFetch({ BAO_CACERT: join(directory, 'cert.pem') })(url, { method: 'GET', headers: {} });
       expect(await trusted.json()).toEqual({ ok: true });
     } finally {
-      if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+      vi.unstubAllEnvs();
       server.close(); await rm(directory, { recursive: true, force: true });
     }
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe(previous);
   });
 
   it('runs the host helper without argv secrets and discards its stderr', async () => {
