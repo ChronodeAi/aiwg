@@ -353,6 +353,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   offsets (#3106); writing fidelity reviews unpunctuated spans ending at a newline (#3107); Logseq
   strips final `id::` properties and preserves body lines after empty values (#3108).
 
+- Pi timeout teardown tests publish fixture receipts only after their JSON write completes,
+  preventing an interrupted write from being parsed as empty JSON under load. A regression
+  synchronizes timeout with an in-progress receipt write and verifies production Pi teardown
+  without an abort grace window (#3113).
 - Polynomial-time regular expressions on imported or external text are replaced with linear scans
   (#3094, CodeQL WP3): session candidate structural labels and structure-breaking checks
   (`src/sessions/candidates.ts`), Logseq `id::` stripping, frontmatter and property parsing
