@@ -66,6 +66,20 @@ describe('WP5 metadata injection encoding', () => {
       expect(markdown).toContain('\n---\nBody.\n');
     },
   );
+  it.each(['yes', 'no', 'on', 'off', 'y', 'n'].flatMap(word => [word, word.toUpperCase(), word[0].toUpperCase() + word.slice(1)]))(
+    'round-trips YAML 1.1 boolean words as strings: %s', (value) => {
+      const metadata = { [value]: value, nested: { value }, array: [value] };
+      const content = `---\n${YAML.stringify(metadata)}---\nBody.\n`;
+      const markdown = injectFrameworkMetadata(content, value);
+      const raw = markdown.split('\n---\n')[0].slice(4);
+      const expected = { ...metadata, framework: value };
+      expect(YAML.parse(raw)).toEqual(expected);
+      expect(YAML.parse(raw, { version: '1.1' })).toEqual(expected);
+      expect(frontmatter(injectFrameworkMetadata('Body.\n', value))).toEqual({ framework: value });
+      const fresh = injectFrameworkMetadata('Body.\n', value).split('\n---\n')[0].slice(4);
+      expect(YAML.parse(fresh, { version: '1.1' })).toEqual({ framework: value });
+    },
+  );
   it('round-trips hostile keys and nested metadata without injecting fields', () => {
     const metadata = {
       'k: v\nx': 1,

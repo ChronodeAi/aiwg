@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Parse skill platform frontmatter with YAML to preserve comments and scalar restrictions,
+  fail closed on malformed restrictions, and quote YAML 1.1 boolean words in injected
+  metadata (#3109).
+
 - Correct JavaScript test-name and OpenClaw handler-comment escaping, TOML hook/MCP
   encoding, and YAML hook/metadata keys and nested values; preserve noncanonical
   numeric test examples and reject invalid generator string inputs; warn explicitly
