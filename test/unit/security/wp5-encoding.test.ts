@@ -105,7 +105,7 @@ describe('WP5 Vault TLS opt-in', () => {
         const result = spawnSync(process.execPath, [
           path.resolve('ci/provision-vault-approle.mjs'), '--addr', 'https://localhost:8200',
           '--policy-file', policy, '--handoff', path.join(tempDir, 'handoff.env'),
-        ], { env, encoding: 'utf8' });
+        ], { env, encoding: 'utf8', timeout: 60_000 });
         expect(result.error).toBeUndefined();
         expect(result.status).toBe(0);
         expect(result.stdout).toContain('Dry-run: would provision');
