@@ -82,6 +82,18 @@ describe('skill platform YAML parsing', () => {
     },
   );
 
+  it('reads restrictions behind a leading UTF-8 BOM', () => {
+    expect(parseSkillPlatforms('\uFEFF---\nplatforms: [codex]\n---\nbody')).toEqual(['codex']);
+    expect(parseSkillPlatforms('\uFEFF---\r\nplatforms:\r\n  - codex\r\n---\r\n')).toEqual(['codex']);
+  });
+
+  it('fails closed when platforms could only come from a YAML merge key', () => {
+    const merged = '---\nbase: &base\n  platforms: [codex]\nskill:\n  <<: *base\n<<: *base\n---\n';
+    expect(parseSkillPlatforms(merged)).toEqual([]);
+    const explicit = '---\nbase: &base\n  platforms: [codex]\n<<: *base\nplatforms: [claude-code]\n---\n';
+    expect(parseSkillPlatforms(explicit)).toEqual(['claude-code']);
+  });
+
   it('handles CRLF frontmatter', () => {
     expect(parseSkillPlatforms('---\r\nplatforms: [codex]\r\n---\r\nBody.')).toEqual(['codex']);
   });

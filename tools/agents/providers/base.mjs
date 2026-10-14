@@ -384,6 +384,8 @@ const PROVIDER_TO_PLATFORM = {
  * Returns an empty array for malformed frontmatter or invalid platforms.
  */
 export function parseSkillPlatforms(content) {
+  // A leading UTF-8 BOM must not hide the frontmatter (and its restrictions).
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   const fmMatch = content.match(/^---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m);
   if (!fmMatch || fmMatch.index !== 0) {
     return /^---[ \t]*(?:\r?\n|$)/.test(content) ? [] : null;
@@ -399,7 +401,9 @@ export function parseSkillPlatforms(content) {
     return [];
   }
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
-  if (!Object.hasOwn(metadata, 'platforms')) return null;
+  // The yaml package leaves merge keys unresolved, so platforms could arrive only
+  // through `<<`; without an explicit key that is ambiguous, so fail closed.
+  if (!Object.hasOwn(metadata, 'platforms')) return Object.hasOwn(metadata, '<<') ? [] : null;
 
   const platforms = metadata.platforms;
   const items = typeof platforms === 'string' ? [platforms] : platforms;
