@@ -62,7 +62,7 @@ const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.string
 const roots: string[] = [];
 // Some sandbox hosts refuse native child stdio pipes (EPERM). Framing unit
 // tests still run there; the supervised-process check needs actual pipes.
-const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8' }).stdout === 'ok';
+const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8', timeout: 10000 }).stdout === 'ok';
 afterEach(async () => { vi.unstubAllEnvs(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
 
 async function tempRoot() {

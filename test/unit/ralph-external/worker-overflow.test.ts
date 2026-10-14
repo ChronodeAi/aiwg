@@ -94,7 +94,7 @@ describe('MCP overflow stop authority', () => {
     const pidFile = path.join(root, 'worker.pid');
     const descendantFile = path.join(root, 'descendant.pid');
     const fifo = path.join(root, 'stdout.fifo');
-    expect(spawnSync('mkfifo', [fifo], { stdio: 'ignore' }).status).toBe(0);
+    expect(spawnSync('mkfifo', [fifo], { stdio: 'ignore', timeout: 10000 }).status).toBe(0);
     // The descendant inherits a FIFO writer even when native pipes are prohibited.
     const writer = openSync(fifo, constants.O_RDWR);
     const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
