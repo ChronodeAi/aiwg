@@ -135,19 +135,17 @@ describe('TmuxManager', () => {
 
       const calls = execFileSync.mock.calls;
       // Call 0: tmux -V (isTmuxAvailable)
-      expect(['tmux', ...calls[0][1]].join(' ')).toBe('tmux -V');
+      expect(calls[0][1]).toEqual(['-V']);
       // Call 1: has-session (sessionExists)
-      expect(['tmux', ...calls[1][1]].join(' ')).toContain('has-session');
+      expect(calls[1][1]).toEqual(['has-session', '-t', 'aiwg-daemon']);
       // Call 2: new-session
-      expect(['tmux', ...calls[2][1]].join(' ')).toContain('tmux new-session -d -s aiwg-daemon');
-      expect(calls[2][1].at(-1)).toBe('echo "Chat pane ready"');
+      expect(calls[2][1]).toEqual(['new-session', '-d', '-s', 'aiwg-daemon', '-x', '200', '-y', '50', 'echo "Chat pane ready"']);
       expect(calls[2][2]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
       // Call 3: split-window with 30% status pane
-      expect(['tmux', ...calls[3][1]].join(' ')).toContain('tmux split-window -t aiwg-daemon -v -p 30');
-      expect(['tmux', ...calls[3][1]].join(' ')).toContain('Status pane ready');
+      expect(calls[3][1]).toEqual(['split-window', '-t', 'aiwg-daemon', '-v', '-p', '30', 'echo "Status pane ready"']);
       expect(calls[3][2]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
       // Call 4: select-pane
-      expect(['tmux', ...calls[4][1]].join(' ')).toBe('tmux select-pane -t aiwg-daemon:0.0');
+      expect(calls[4][1]).toEqual(['select-pane', '-t', 'aiwg-daemon:0.0']);
     });
 
     it('should select chat pane as active after creation', () => {
@@ -158,7 +156,7 @@ describe('TmuxManager', () => {
       );
 
       expect(selectCall).toBeDefined();
-      expect(['tmux', ...selectCall[1]].join(' ')).toBe('tmux select-pane -t aiwg-daemon:0.0');
+      expect(selectCall[1]).toEqual(['select-pane', '-t', 'aiwg-daemon:0.0']);
     });
 
     it('should emit session:created event and return true', () => {
@@ -204,7 +202,7 @@ describe('TmuxManager', () => {
         call[1].join(' ').includes('new-session')
       );
 
-      expect(['tmux', ...newSessionCall[1]].join(' ')).toContain('custom-command --arg');
+      expect(newSessionCall[1]).toEqual(['new-session', '-d', '-s', 'aiwg-daemon', '-x', '200', '-y', '50', 'custom-command --arg']);
     });
 
     it('should use custom statusCommand when provided', () => {
@@ -214,7 +212,7 @@ describe('TmuxManager', () => {
         call[1].join(' ').includes('split-window')
       );
 
-      expect(['tmux', ...splitCall[1]].join(' ')).toContain('custom-status --watch');
+      expect(splitCall[1]).toEqual(['split-window', '-t', 'aiwg-daemon', '-v', '-p', '30', 'custom-status --watch']);
     });
 
     it('should respect custom chatPaneRatio', () => {
@@ -232,7 +230,7 @@ describe('TmuxManager', () => {
         call[1].join(' ').includes('split-window')
       );
 
-      expect(['tmux', ...splitCall[1]].join(' ')).toContain('-p 20'); // 100 - 80 = 20
+      expect(splitCall[1]).toEqual(['split-window', '-t', 'aiwg-daemon', '-v', '-p', '20', 'echo "Status pane ready"']); // 100 - 80 = 20
     });
 
     it('should throw wrapped error when execFileSync fails during creation', () => {
@@ -388,7 +386,10 @@ describe('TmuxManager', () => {
 
       const sendCall = execFileSync.mock.calls.find(c => c[1].join(' ').includes('send-keys'));
       expect(sendCall[1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.0', '-l', '--', 'test command']);
-      expect(execFileSync.mock.calls.at(-1)[1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.0', 'Enter']);
+      expect(execFileSync.mock.calls.filter(c => c[1][0] === 'send-keys').map(c => c[1])).toEqual([
+        ['send-keys', '-t', 'aiwg-daemon:0.0', '-l', '--', 'test command'],
+        ['send-keys', '-t', 'aiwg-daemon:0.0', 'Enter'],
+      ]);
       expect(sendCall[2]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
     });
 
@@ -397,7 +398,9 @@ describe('TmuxManager', () => {
 
       const sendCall = execFileSync.mock.calls.find(c => c[1].join(' ').includes('send-keys'));
       expect(sendCall[1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', '-l', '--', 'partial text']);
-      expect(execFileSync.mock.calls.filter(c => c[1][0] === 'send-keys')).toHaveLength(1);
+      expect(execFileSync.mock.calls.filter(c => c[1][0] === 'send-keys').map(c => c[1])).toEqual([
+        ['send-keys', '-t', 'aiwg-daemon:0.1', '-l', '--', 'partial text'],
+      ]);
       expect(sendCall[2]).toEqual({ stdio: 'pipe', timeout: 30000, killSignal: 'SIGKILL' });
     });
 
@@ -446,7 +449,7 @@ describe('TmuxManager', () => {
         tmux.sendToPane(pane, 'test');
 
         const sendCall = execFileSync.mock.calls.find(c => c[1].join(' ').includes('send-keys'));
-        expect(['tmux', ...sendCall[1]].join(' ')).toContain(`:0.${pane}`);
+        expect(sendCall[1]).toEqual(['send-keys', '-t', `aiwg-daemon:0.${pane}`, '-l', '--', 'test']);
       }
     });
   });
@@ -469,8 +472,8 @@ describe('TmuxManager', () => {
 
       // Control keys, then each literal line followed by Enter
       expect(calls).toHaveLength(6);
-      expect(['tmux', ...calls[0][1]].join(' ')).toContain('C-c');
-      expect(['tmux', ...calls[1][1]].join(' ')).toContain('C-l');
+      expect(calls[0][1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', 'C-c']);
+      expect(calls[1][1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', 'C-l']);
       expect(calls[2][1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', '-l', '--', 'Line 1']);
       expect(calls[3][1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', 'Enter']);
       expect(calls[4][1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', '-l', '--', 'Line 2']);
@@ -484,7 +487,7 @@ describe('TmuxManager', () => {
         c[1].join(' ').includes('send-keys') && c[1].join(' ').includes('Status: Running')
       );
       expect(contentCall).toBeDefined();
-      expect(['tmux', ...contentCall[1]].join(' ')).toContain('aiwg-daemon:0.1');
+      expect(contentCall[1]).toEqual(['send-keys', '-t', 'aiwg-daemon:0.1', '-l', '--', 'Status: Running']);
     });
 
     it('should return silently when session does not exist', () => {
@@ -907,7 +910,7 @@ describe('TmuxManager', () => {
       const listPanesCall = execFileSync.mock.calls.find(c =>
         c[1].join(' ').includes('list-panes')
       );
-      expect(['tmux', ...listPanesCall[1]].join(' ')).toContain('-t aiwg-daemon');
+      expect(listPanesCall[1]).toEqual(['list-panes', '-t', 'aiwg-daemon', '-F', '#{pane_index}:#{pane_width}x#{pane_height}:#{pane_active}']);
     });
   });
 

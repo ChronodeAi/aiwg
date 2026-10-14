@@ -378,6 +378,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   embeds changed filenames into `git commit -m "..."`; `tools/daemon/tmux-manager.mjs` sends literal
   text with argv `send-keys -l`; `tools/contrib/lib/github-client.mjs` calls `gh` with argv, passes
   PR bodies and comments via `--body-file -`, and validates PR numbers and `owner/repo` arguments;
+  Remote topology in `tools/agents/providers/base.mjs` and disk checks in `tools/workspace/migration-tool.mjs` use argv.
   edge-channel git calls in `src/channel/manager.mjs` use argv with `--` before clone operands and
   require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
   templates receive paths through `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE` and

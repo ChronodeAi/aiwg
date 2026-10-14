@@ -52,8 +52,9 @@ export class TmuxManager extends EventEmitter {
   /**
    * Create a new tmux session with 2-pane layout
    * @param {object} options - Creation options
-   * @param {string} options.chatCommand - Command for the chat pane
-   * @param {string} options.statusCommand - Command for the status pane
+   * tmux executes these trusted, operator-supplied commands through its shell.
+   * @param {string} options.chatCommand - Shell command for the chat pane
+   * @param {string} options.statusCommand - Shell command for the status pane
    */
   createSession(options = {}) {
     if (!this.isTmuxAvailable()) {
