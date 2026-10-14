@@ -45,6 +45,47 @@ function importProfile(hitPolicy: DmnHitPolicy, rows: string, aggregation = '', 
 }
 
 describe('DMN/OPA decision interoperability profile', () => {
+  function logValue(value: string) {
+    const result = rulesetResult();
+    result.spec.outcome = value;
+    return exportOpaDecisionLog(result, {
+      profileVersion: DECISION_INTEROP_PROFILE_VERSION,
+      bundle: { name: 'authz', revision: 'rev-1' },
+      decisionId: 'decision-1', policyPath: '/aiwg/decision/allow',
+      input: { value }, inputProjectionAllowlist: ['/value'],
+    });
+  }
+
+  it.each(['a'.repeat(60_000), `a@${'.'.repeat(60_000)}!`, 'a'.repeat(64 * 1024), 'a'.repeat(64 * 1024 + 1), 'a'.repeat(1_000_000)].map(value => ({ value, size: value.length })))('bounds email redaction for pathological input of length $size (alert 2)', ({ value }) => {
+    const started = performance.now();
+    const log = logValue(value);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    if (value.length > 64 * 1024) {
+      expect(log.result).toBe('[redacted]');
+      expect(log.input).toEqual({ value: '[redacted]' });
+      expect(log.redaction.removed).toEqual(['$.input/value', '$.result']);
+    } else {
+      expect(log.result).toBe(value);
+      expect(log.input).toEqual({ value });
+    }
+  });
+
+  it.each([65_535, 65_536, 65_537])('applies the OPA redaction cap at %i UTF-16 code units', size => {
+    // Non-ASCII content distinguishes the string-length cap from a byte cap.
+    const value = 'é'.repeat(size);
+    const log = logValue(value);
+    const expected = size > 65_536 ? '[redacted]' : value;
+    expect(log.result).toBe(expected);
+    expect(log.input).toEqual({ value: expected });
+    expect(log.redaction.removed).toEqual(size > 65_536 ? ['$.input/value', '$.result'] : []);
+
+    const sensitive = `${value.slice(0, size - 7)}a@b.com`;
+    const sensitiveLog = logValue(sensitive);
+    expect(sensitiveLog.result).toBe('[redacted]');
+    expect(sensitiveLog.input).toEqual({ value: '[redacted]' });
+    expect(sensitiveLog.redaction.removed).toEqual(['$.input/value', '$.result']);
+  });
+
   it('emits schema-valid dry-run mapping provenance and round-trips supported DMN', () => {
     const mapping = importProfile('FIRST', [
       row('review', 1, '= "docs"', '>= 0.7', '"manual-review"'),

@@ -161,12 +161,12 @@ export class StructuralCandidateExtractor implements CandidateExtractor {
         if (separator >= 0 && Object.hasOwn(STRUCTURAL_TYPES, label)
           && remainder.length > 0 && !/[\r\u2028\u2029]/u.test(content || remainder.slice(-1))) {
           const assertion = content.trim();
-          const start = offset + line.indexOf(assertion);
+          const start = offset + line.length - content.length;
           const type = STRUCTURAL_TYPES[label];
           const relationship = type === 'relationship'
             ? parseRelationship(assertion)
             : { subject: null, predicate: null, object: null };
-          if (type && (type !== 'relationship' || relationship.subject)) {
+          if (type && assertion && (type !== 'relationship' || relationship.subject)) {
             drafts.push({
               type,
               assertion,

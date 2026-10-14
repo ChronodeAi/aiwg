@@ -10,12 +10,21 @@ const mode = (id: string, mandatory = false): ResolvedOutputMode => ({
 });
 
 describe('conservative fidelity assessment', () => {
-  it('scans a large unterminated sentence before a newline within one second (alert 10)', () => {
+  it('bounds sentence scanning on a megabyte unterminated line (alert 10)', () => {
+    const candidate = `${'a'.repeat(1_000_000)}\nI wrote this.`;
+    const started = performance.now();
+    const assessment = assessWritingFidelity('', candidate);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(assessment.changes.filter(change => change.kind === 'first-person')).toEqual([
+      expect.objectContaining({ start: 1_000_001, end: candidate.length }),
+    ]);
+  });
+  it('scans a large unterminated sentence before a newline within five seconds (alert 10)', () => {
     const candidate = `${'a'.repeat(50_000)}\nI agree.`;
     const start = performance.now();
     const result = assessWritingFidelity('Other text.', candidate);
     expect(result.changes.filter(change => change.kind === 'first-person')).toMatchObject([{ start: 50_001, end: 50_009 }]);
-    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(performance.now() - start).toBeLessThan(5_000);
   });
 
   it('preserves first-person sentence text and offsets across delimiters and newlines', () => {

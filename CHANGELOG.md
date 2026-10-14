@@ -339,7 +339,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   (#3094, CodeQL WP3): session candidate structural labels and structure-breaking checks
   (`src/sessions/candidates.ts`), Logseq `id::` stripping, frontmatter and property parsing
   (`src/storage/backends/logseq.ts`), decision-interop log redaction email detection (values over
-  65,536 characters are now redacted in full) and writing-fidelity sentence splitting. Output on
+  65,536 UTF-16 code units are now redacted in full) and writing-fidelity sentence splitting. Output on
   normal input is unchanged (characterization tests pin it).
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
