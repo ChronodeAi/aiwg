@@ -29,8 +29,9 @@ function sentences(text: string) {
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
     if (character === '\n' || character === '.' || character === '!' || character === '?') {
-      if (character !== '\n' && index > start) {
-        result.push({ text: text.slice(start, index + 1), start, end: index + 1 });
+      if (index > start) {
+        const end = character === '\n' ? index : index + 1;
+        result.push({ text: text.slice(start, end), start, end });
       }
       start = index + 1;
     }

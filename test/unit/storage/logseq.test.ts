@@ -52,11 +52,11 @@ describe('storage/backends/logseq', () => {
 
   describe('frontmatter → page-property transform', () => {
     it.each([
-      ['block ID (alert 5)', `id::${' '.repeat(50_000)}`, `id::${' '.repeat(50_000)}`],
-      ['block IDs without LF terminators (alert 5)', 'id::x\r'.repeat(10_000), 'id::x\r'.repeat(10_000)],
+      ['block ID (alert 5)', `id::${' '.repeat(50_000)}`, ''],
+      ['block IDs without LF terminators (alert 5)', 'id::x\r'.repeat(10_000), ''],
       ['frontmatter delimiters (alert 6)', `---${'\n'.repeat(50_000)}title: note`, `---${'\n'.repeat(50_000)}title: note`],
       ['frontmatter property (alert 7)', `---\ntitle:${' '.repeat(50_000)}x\u2028y\n---\n- body`, '- body'],
-    ])('parses large nonmatching %s within five seconds', async (_site, input, expected) => {
+    ])('parses large %s within five seconds', async (_site, input, expected) => {
       const start = performance.now();
       await adapter.write('pages/foo.md', input);
       expect(await adapter.read('pages/foo.md')).toBe(expected);
@@ -66,11 +66,32 @@ describe('storage/backends/logseq', () => {
     it.each([
       ['id:: abc\n- body\n', '- body\n'],
       ['- keep\n\n  id:: abc\r\n- body\n', '- keep\n- body\n'],
-      ['id:: abc', 'id:: abc'], ['ID:: abc\n', 'ID:: abc\n'], ['- id:: abc\n', '- id:: abc\n'],
-      ['id::\n- body\n', ''], ['id:: \n', ''], ['id::\n', 'id::\n'],
+      ['id:: abc', ''], ['ID:: abc\n', 'ID:: abc\n'], ['- id:: abc\n', '- id:: abc\n'],
+      ['id::\n- body\n', '- body\n'], ['id:: \n', ''], ['id::\n', ''],
     ])('preserves block ID stripping for %j', async (input, expected) => {
       await adapter.write('pages/foo.md', input);
       expect(await adapter.read('pages/foo.md')).toBe(expected);
+    });
+
+    it.each([
+      ['- body\nid:: final', '- body\n'], ['id::', ''],
+      ['id:: \t\n- body\n', '- body\n'], ['id::\r\n- body\r\n', '- body\r\n'],
+      ['id::\n- body\nid:: final', '- body\n'],
+    ])('strips final or empty block IDs without consuming body lines: %j', async (input, expected) => {
+      await adapter.write('pages/foo.md', input);
+      expect(await adapter.read('pages/foo.md')).toBe(expected);
+    });
+
+    it.each([
+      ['LF', '\n'], ['bare CR', '\r'], ['CRLF', '\r\n'],
+      ['LS', '\u2028'], ['PS', '\u2029'],
+    ])('preserves body exactly after block IDs terminated by %s', async (_name, ending) => {
+      for (const value of ['', 'x']) {
+        for (const body of ['- body', `- body${ending}- second${ending}`]) {
+          await adapter.write('pages/foo.md', `id::${value}${ending}${body}`);
+          expect(await adapter.read('pages/foo.md')).toBe(body);
+        }
+      }
     });
 
     it.each([

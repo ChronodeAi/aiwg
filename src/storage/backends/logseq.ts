@@ -256,25 +256,16 @@ interface ExtractedYaml {
 function stripBlockIds(content: string): string {
   const chunks: string[] = [];
   let start = 0;
-  let newline = content.indexOf('\n');
   while (start < content.length) {
     let property = start;
     while (property < content.length && /\s/u.test(content[property])) property++;
     if (content.startsWith('id::', property)) {
-      let value = property + 4;
-      let whitespaceNewline = -1;
-      while (value < content.length && /\s/u.test(content[value])) {
-        if (content[value] === '\n' && value > property + 4 && content[value - 1] !== '\n') {
-          whitespaceNewline = value;
-        }
-        value++;
-      }
-      while (newline >= 0 && newline < value) newline = content.indexOf('\n', newline + 1);
-      const end = newline >= 0 ? newline : whitespaceNewline;
-      if (end >= 0) {
-        start = end + 1;
-        continue;
-      }
+      // Only the property's own line belongs to the block ID.
+      let end = property + 4;
+      while (end < content.length && !/[\n\r\u2028\u2029]/u.test(content[end])) end++;
+      if (content[end] === '\r' && content[end + 1] === '\n') end++;
+      start = end < content.length ? end + 1 : content.length;
+      continue;
     }
     // Keep the original line and any preceding blank lines verbatim.
     let end = property;
