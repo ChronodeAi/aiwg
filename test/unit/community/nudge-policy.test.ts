@@ -53,6 +53,21 @@ describe('community nudge policy', () => {
     expect(shouldShowNudge('milestone')).toBe(false);
   });
 
+  it.each([
+    '__proto__:\n  wp4Polluted: yes\n',
+    'community:\n  __proto__:\n    wp4Polluted: yes\n',
+  ])('ignores rejected YAML without polluting prototypes: %s', async yaml => {
+    writeFileSync(path.join(configDir, 'config.yaml'), yaml, 'utf8');
+    const { shouldShowNudge } = await loadPolicy();
+    const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+    try {
+      expect(shouldShowNudge('milestone')).toBe(true);
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototype);
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).wp4Polluted;
+    }
+  });
+
   it('throttles intake and footer contexts independently', async () => {
     const { markNudgeShown, shouldShowNudge } = await loadPolicy();
     const now = new Date('2026-05-21T18:00:00Z');

@@ -371,11 +371,16 @@ export function parseYamlSimple(content: string): Record<string, unknown> {
     const key = match[1].trim();
     const rawValue = match[2].trim();
 
+    // Config keys have no legitimate use for prototype-related names at any level.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      throw new Error('Unsafe config key: prototype-related names are not allowed');
+    }
+
     if (indent === 0) {
       if (rawValue === '' || rawValue === undefined) {
         // Section header
         currentSection = key;
-        if (!(key in result)) {
+        if (!Object.hasOwn(result, key)) {
           result[key] = {};
         }
       } else {
@@ -440,7 +445,7 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   let current: unknown = obj;
 
   for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
+    if (current === null || current === undefined || typeof current !== 'object' || !Object.hasOwn(current, part)) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
@@ -451,8 +456,9 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
+  // Unlike JSON data keys, config paths reject all three prototype-related names.
   if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) {
-    throw new Error('Config key path cannot contain __proto__, constructor, or prototype segments');
+    throw new Error('Unsafe config key path: prototype-related segments are not allowed');
   }
   let current: Record<string, unknown> = obj;
 

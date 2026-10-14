@@ -92,7 +92,7 @@ describe('UserConfig', () => {
       const savedBefore = await readFile(join(tempDir, 'config.yaml'), 'utf-8');
 
       for (const path of [segment, `${segment}.polluted`, `custom.${segment}.polluted`, `defaults.${segment}`]) {
-        await expect(config.set(path, 'polluted')).rejects.toThrow('Config key path cannot contain __proto__, constructor, or prototype segments');
+        await expect(config.set(path, 'polluted')).rejects.toThrow('Unsafe config key path: prototype-related segments are not allowed');
         expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
       }
 
@@ -127,6 +127,24 @@ describe('UserConfig', () => {
       expect(value).toBeUndefined();
     });
 
+    it.each(['__proto__', '__proto__.toString', 'constructor', 'constructor.prototype', 'toString', 'defaults.__proto__', 'defaults.constructor', 'defaults.toString'])('does not read inherited config path %s', async key => {
+      expect(await new UserConfig(tempDir).get(key)).toBeUndefined();
+    });
+
+    it('reads own config values while ignoring inherited values at every depth', async () => {
+      Object.defineProperty(Object.prototype, 'wp4ReadInherited', { value: { value: 'inherited' }, configurable: true });
+      try {
+        const config = new UserConfig(tempDir);
+        await config.set('custom.value', 'own');
+        expect(await config.get('wp4ReadInherited')).toBeUndefined();
+        expect(await config.get('wp4ReadInherited.value')).toBeUndefined();
+        expect(await config.get('custom.wp4ReadInherited.value')).toBeUndefined();
+        expect(await config.get('custom.value')).toBe('own');
+      } finally {
+        delete (Object.prototype as Record<string, unknown>).wp4ReadInherited;
+      }
+    });
+
     it('should set and get a string value', async () => {
       const config = new UserConfig(tempDir);
       await config.set('defaults.provider', 'openai');
@@ -156,6 +174,47 @@ describe('UserConfig', () => {
       const value = await config.get('custom.nested.key');
       expect(value).toBe('value');
     });
+
+    it.each([
+      'constructor.prototype.wp4Polluted',
+      'custom.constructor.prototype.wp4Polluted',
+      ...['__proto__', 'constructor', 'prototype'].flatMap(segment => [
+        segment,
+        `${segment}.wp4Polluted`,
+        `custom.${segment}.wp4Polluted`,
+        `custom.nested.${segment}`,
+      ]),
+    ])('rejects unsafe config path %s without changing config or prototypes', async key => {
+      const config = new UserConfig(tempDir);
+      await config.set('defaults.provider', 'openai');
+      const before = await readFile(join(tempDir, 'config.yaml'), 'utf-8');
+      const cached = structuredClone((await config.list())['config.yaml']);
+      const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+      try {
+        await expect(config.set(key, 'true')).rejects.toThrow(/unsafe.*config.*path/i);
+        expect((await config.list())['config.yaml']).toEqual(cached);
+        expect(await readFile(join(tempDir, 'config.yaml'), 'utf-8')).toBe(before);
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototype);
+      } finally {
+        delete (Object.prototype as Record<string, unknown>).wp4Polluted;
+      }
+    });
+
+    it('creates an own config section instead of writing into an inherited object', async () => {
+      const inherited = { value: 'original' };
+      Object.defineProperty(Object.prototype, 'wp4Inherited', { value: inherited, writable: true, configurable: true });
+      try {
+        const config = new UserConfig(tempDir);
+        await config.set('wp4Inherited.value', 'local');
+        expect(inherited.value).toBe('original');
+        const saved = (await config.list())['config.yaml'] as Record<string, unknown>;
+        expect(Object.hasOwn(saved, 'wp4Inherited')).toBe(true);
+        expect(await new UserConfig(tempDir).get('wp4Inherited.value')).toBe('local');
+        expect(inherited.value).toBe('original');
+      } finally {
+        delete (Object.prototype as Record<string, unknown>).wp4Inherited;
+      }
+    });
   });
 
   describe('list', () => {
@@ -177,6 +236,25 @@ describe('UserConfig', () => {
   });
 
   describe('validate', () => {
+    it.each(['__proto__', 'constructor', 'prototype'])('handles rejected YAML key %s safely during loading and validation', async key => {
+      await writeFile(join(tempDir, 'config.yaml'), `apiVersion: aiwg.io/v1\nkind: UserConfig\n${key}:\n  wp4Polluted: yes\n`, 'utf-8');
+      const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+      try {
+        const config = new UserConfig(tempDir);
+        expect(await config.get('defaults.provider')).toBe('claude');
+        expect(await config.get('wp4Polluted')).toBeUndefined();
+        const loaded = (await config.list())['config.yaml'] as Record<string, unknown>;
+        expect(Object.hasOwn(loaded, key)).toBe(false);
+        expect(await config.validate()).toEqual([
+          expect.objectContaining({ file: 'config.yaml', severity: 'error', message: expect.stringContaining('Unsafe config key') }),
+        ]);
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototype);
+      } finally {
+        delete (Object.prototype as Record<string, unknown>).wp4Polluted;
+        delete (Object as unknown as Record<string, unknown>).wp4Polluted;
+      }
+    });
+
     it('should report info when config directory does not exist', async () => {
       const config = new UserConfig(join(tempDir, 'nonexistent'));
       const issues = await config.validate();
@@ -246,6 +324,22 @@ describe('UserConfig', () => {
 
 describe('YAML helpers', () => {
   describe('parseYamlSimple', () => {
+    it.each(['__proto__', 'constructor', 'prototype'].flatMap(key => [
+      `${key}:\n  wp4Polluted: yes\n`,
+      `${key}: yes\n`,
+      `defaults:\n  ${key}:\n    wp4Polluted: yes\n`,
+      `defaults:\n  ${key}: yes\n`,
+    ]))('rejects prototype-related YAML keys at every level: %s', yaml => {
+      const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+      try {
+        expect(() => parseYamlSimple(yaml)).toThrow('Unsafe config key');
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototype);
+      } finally {
+        delete (Object.prototype as Record<string, unknown>).wp4Polluted;
+        delete (Object as unknown as Record<string, unknown>).wp4Polluted;
+      }
+    });
+
     it('should parse top-level key-value pairs', () => {
       const result = parseYamlSimple('name: test\nversion: 1');
       expect(result.name).toBe('test');
