@@ -16,6 +16,7 @@ const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_QUERY_LIMIT = 1000;
 const CONFIG_PATH = '.aiwg/memory/line-memory.config.json';
 const LOCK_PATH = '.aiwg/memory/line-memory.lock';
+const LOCK_WAIT_TIMEOUT_MS = 30_000;
 const TRANSACTION_PATH = '.aiwg/memory/transactions';
 const CONFIG_KEYS = new Set(Object.keys(DEFAULT_CONFIG));
 
@@ -163,7 +164,9 @@ async function withLock(cwd, operation) {
   const lockPath = path.join(cwd, LOCK_PATH);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   let handle;
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // A healthy writer can hold the lock longer than 100 polls under load.
+  const deadline = performance.now() + LOCK_WAIT_TIMEOUT_MS;
+  while (performance.now() < deadline) {
     try {
       handle = await fs.open(lockPath, 'wx', 0o600);
       await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`);

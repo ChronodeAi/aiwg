@@ -48,8 +48,9 @@ afterEach(async () => {
 
 describe('line-memory process concurrency', () => {
   it('retains every unrelated fact across parallel processes', async () => {
-    const facts = Array.from({ length: 12 }, (_, index) => `parallel fact ${index}`);
-    await Promise.all(facts.map(addFromProcess));
+    const facts = Array.from({ length: 25 }, (_, index) => `parallel fact ${index}`);
+    const results = await Promise.allSettled(facts.map(addFromProcess));
+    expect(results, JSON.stringify(results)).toEqual(facts.map(() => ({ status: 'fulfilled', value: undefined })));
 
     const text = await readFile(
       path.join(projectDir, '.aiwg/memory/line-memory.txt'),

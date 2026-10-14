@@ -6,6 +6,12 @@ const REPO_ROOT = process.cwd();
 const PLUGIN_SOURCE_ROOT = 'agentic/code/plugins';
 
 describe('plugin repository layout', () => {
+  it('keeps the packaged line-memory command identical to its addon source', async () => {
+    const source = await readFile(join(REPO_ROOT, 'agentic/code/addons/line-memory/commands/line-memory.mjs'), 'utf8');
+    const packaged = await readFile(join(REPO_ROOT, 'agentic/code/plugins/line-memory/commands/line-memory.mjs'), 'utf8');
+    expect(packaged).toBe(source);
+  });
+
   it('keeps package output under agentic/code/plugins', async () => {
     const packager = await readFile(join(REPO_ROOT, 'tools/plugin/package-plugins.mjs'), 'utf8');
     const workflow = await readFile(join(REPO_ROOT, '.gitea/workflows/build-plugins.yml'), 'utf8');

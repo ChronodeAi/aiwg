@@ -335,6 +335,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `line-memory` concurrent additions now wait up to 30 seconds for a live project lock instead
+  of exhausting 100 short retries under load (#3110). Deterministic contention regressions verify
+  every add succeeds and all 25 facts and their metadata survive in both addon and plugin copies.
 - Polynomial-time regular expressions on imported or external text are replaced with linear scans
   (#3094, CodeQL WP3): session candidate structural labels and structure-breaking checks
   (`src/sessions/candidates.ts`), Logseq `id::` stripping, frontmatter and property parsing

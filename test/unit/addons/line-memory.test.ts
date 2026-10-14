@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import fs, { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -7,6 +7,9 @@ import {
   LineMemoryPromotionDestination,
   runLineMemory,
 } from '../../../agentic/code/addons/line-memory/commands/line-memory.mjs';
+import {
+  runLineMemory as runPluginLineMemory,
+} from '../../../agentic/code/plugins/line-memory/commands/line-memory.mjs';
 
 let projectDir: string;
 let output: string[];
@@ -354,13 +357,77 @@ describe('line-memory commands', () => {
   });
 
   it('serializes concurrent additions so unrelated facts are not lost', async () => {
+    const facts = Array.from({ length: 25 }, (_, index) => `fact ${index}`);
     const results = await Promise.all(
-      Array.from({ length: 25 }, (_, index) => runLineMemory('add', [`fact ${index}`], projectDir)),
+      facts.map((fact) => runLineMemory('add', [fact], projectDir)),
     );
-    expect(results.every((item) => item.exitCode === 0)).toBe(true);
+    expect(results, JSON.stringify(results)).toEqual(facts.map(() => expect.objectContaining({ exitCode: 0 })));
     const retained = (await memoryText()).trim().split('\n').sort();
-    expect(retained).toHaveLength(25);
-    expect(new Set(retained).size).toBe(25);
+    expect(retained).toEqual([...facts].sort());
+  });
+
+  it.each([
+    ['addon', runLineMemory],
+    ['plugin', runPluginLineMemory],
+  ] as const)('retains all 25 facts after prolonged live-lock contention in the %s', async (_site, run) => {
+    const lockPath = path.join(projectDir, '.aiwg/memory/line-memory.lock');
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    const owner = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+    await writeFile(lockPath, owner);
+
+    const open = fs.open.bind(fs);
+    let attempts = 0;
+    let signalContention!: () => void;
+    const contended = new Promise<void>((resolve) => { signalContention = resolve; });
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      try {
+        return await open(...args);
+      } catch (error: any) {
+        if (args[0] === lockPath && error?.code === 'EEXIST') {
+          // Exhaust the old 100-attempt budget for 25 waiters before releasing.
+          if (++attempts === 25 * 100) signalContention();
+        }
+        throw error;
+      }
+    });
+    const facts = Array.from({ length: 25 }, (_, index) => `contended fact ${index}`);
+    const pending = Promise.all(facts.map((fact) => run('add', [fact], projectDir)));
+    let observedOwner: string | undefined;
+    try {
+      await Promise.race([contended, pending]);
+      observedOwner = await readFile(lockPath, 'utf8');
+    } finally {
+      await rm(lockPath, { force: true });
+      await pending;
+    }
+    const results = await pending;
+    expect(observedOwner).toBe(owner);
+    expect(attempts).toBeGreaterThanOrEqual(25 * 100);
+    expect(results, JSON.stringify(results)).toEqual(facts.map(() => expect.objectContaining({ exitCode: 0 })));
+    expect((await memoryText()).trim().split('\n').sort()).toEqual([...facts].sort());
+    const metadata = JSON.parse(await readFile(path.join(projectDir, DEFAULT_CONFIG.metadataPath), 'utf8'));
+    const active = Object.values(metadata.entries).filter((entry: any) => entry.status === 'active');
+    expect(active.map((entry: any) => entry.value).sort()).toEqual([...facts].sort());
+  });
+
+  it('bounds the wait for a live lock without removing its owner', async () => {
+    const lockPath = path.join(projectDir, '.aiwg/memory/line-memory.lock');
+    await mkdir(path.dirname(lockPath), { recursive: true });
+    const owner = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+    await writeFile(lockPath, owner);
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(30_001);
+
+    const outcome = await runLineMemory('add', ['blocked fact'], projectDir);
+
+    expect(outcome).toEqual({
+      exitCode: 1,
+      message: 'line-memory: timed out waiting for the project memory lock',
+    });
+    expect(await readFile(lockPath, 'utf8')).toBe(owner);
+    await expect(memoryText()).rejects.toThrow();
   });
 
   it('replays an incomplete dual-file transaction before serving reads', async () => {
