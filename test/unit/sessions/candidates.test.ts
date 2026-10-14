@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CandidateExtractionService,
   StructuralCandidateExtractor,
+  classifyCandidateSecurity,
   type CandidateStorePort,
   type IntelligenceCandidate,
   type SessionSearchDocument,
@@ -56,6 +57,39 @@ const policy = {
 };
 
 describe('candidate extraction contracts', () => {
+  it('scans a large structural-label remainder within one second (alert 3)', () => {
+    const text = `Decision:${' '.repeat(50_000)}value\rmore`;
+    const start = performance.now();
+    expect(new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text }])).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
+  it.each(['['.repeat(50_000), `\n${' '.repeat(50_000)}text`, `[label](${'x'.repeat(50_000)}`])('scans large nonmatching structure content within one second (alert 4): %#', assertion => {
+    const start = performance.now();
+    expect(classifyCandidateSecurity({ assertion }).warnings).not.toContain('structure-breaking');
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
+  it('preserves structural labels, colons, whitespace, relationships, and evidence offsets', () => {
+    const text = 'dEcIsIoN:\t keep: SQLite  \nFailed approach: retry\nRelationship: A | uses | B\n Decision: ignored\nUnknown: ignored\nTask:\nTask:   ';
+    const drafts = new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text }]);
+    expect(drafts.map(draft => [draft.type, draft.assertion])).toEqual([
+      ['decision', 'keep: SQLite'], ['failed-approach', 'retry'], ['relationship', 'A | uses | B'], ['task', ''],
+    ]);
+    expect(drafts[0].evidence).toEqual([{ eventId: 'event-1', start: 11, end: 23 }]);
+    expect(drafts[2]).toMatchObject({ subject: 'A', predicate: 'uses', object: 'B' });
+    expect(new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text: 'Relationship: A | B\nDecision: a\rb\nDecision: ignored\r\nTasK: ignored' }])).toEqual([]);
+  });
+
+  it.each([
+    ['plain text', false], ['\n \t--- \r\ntext', true], ['text\n...\n', true], ['--- extra', false],
+    ['```code', true], ['~~~code', true], ['<note>', true], ['< text', false],
+    ['![image](', true], ['![](', true], ['[label](target)', true], ['[label](unfinished', false],
+    ['[](target)', false], ['[[nested](target)', true], ['{{value', true], ['{%value', true],
+  ])('preserves structure classification for %j', (assertion, suspicious) => {
+    expect(classifyCandidateSecurity({ assertion }).warnings.includes('structure-breaking')).toBe(suspicious);
+  });
+
   it('extracts fixed typed candidates with exact evidence spans and no memory side effects', async () => {
     const service = new CandidateExtractionService(store());
     const documents = [document([

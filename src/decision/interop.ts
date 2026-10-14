@@ -135,7 +135,8 @@ const FORBIDDEN_CONTROL_FIELDS = new Set([
 ]);
 
 const SENSITIVE_LOG_KEY = /(?:raw|body|secret|token|credential|private|locator|state|authorization|password|key)/iu;
-const SENSITIVE_LOG_VALUE = /(?:bearer\s+\S+|secret|token|file:\/\/|\/home\/|private|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/iu;
+const SENSITIVE_LOG_VALUE = /(?:bearer\s+\S+|secret|token|file:\/\/|\/home\/|private)/iu;
+const MAX_LOG_VALUE_LENGTH = 65_536;
 const SUPPORTED_DMN_ELEMENTS = new Set(['definitions', 'decision', 'informationRequirement', 'requiredDecision', 'decisionTable', 'input', 'inputExpression', 'output', 'rule', 'inputEntry', 'outputEntry', 'text']);
 
 interface DmnCell {
@@ -721,7 +722,34 @@ function setProjectedValue(target: Record<string, JsonValue>, path: string[], va
 }
 
 function isSensitiveValue(value: unknown): boolean {
-  return typeof value === 'string' && SENSITIVE_LOG_VALUE.test(value);
+  if (typeof value !== 'string') return false;
+  // Redact oversized values in full so a sensitive suffix cannot escape inspection.
+  if (value.length > MAX_LOG_VALUE_LENGTH) return true;
+  if (SENSITIVE_LOG_VALUE.test(value)) return true;
+  let localLength = 0;
+  let domainLength = -1;
+  let suffixLength = -1;
+  for (const character of value) {
+    const letter = /[A-Z]/iu.test(character);
+    if (character === '@') {
+      domainLength = localLength > 0 ? 0 : -1;
+      suffixLength = -1;
+    } else if (domainLength >= 0) {
+      if (/[A-Z0-9.-]/iu.test(character)) {
+        if (character === '.') suffixLength = domainLength > 0 ? 0 : -1;
+        else if (letter && suffixLength >= 0) {
+          suffixLength++;
+          if (suffixLength >= 2) return true;
+        } else suffixLength = -1;
+        domainLength++;
+      } else {
+        domainLength = -1;
+        suffixLength = -1;
+      }
+    }
+    localLength = /[A-Z0-9._%+-]/iu.test(character) ? localLength + 1 : 0;
+  }
+  return false;
 }
 
 function assertUnique(values: string[], label: string): void {

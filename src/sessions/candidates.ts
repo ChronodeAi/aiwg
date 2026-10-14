@@ -154,10 +154,13 @@ export class StructuralCandidateExtractor implements CandidateExtractor {
     for (const item of evidence) {
       let offset = 0;
       for (const line of item.text.split(/\n/)) {
-        const match = STRUCTURAL_PATTERN.exec(line);
-        if (match) {
-          const label = match[1].toLowerCase();
-          const assertion = match[2].trim();
+        const separator = line.indexOf(':');
+        const label = line.slice(0, separator).replace(/[A-Z]/g, character => character.toLowerCase());
+        const remainder = line.slice(separator + 1);
+        const content = remainder.trimStart();
+        if (separator >= 0 && Object.hasOwn(STRUCTURAL_TYPES, label)
+          && remainder.length > 0 && !/[\r\u2028\u2029]/u.test(content || remainder.slice(-1))) {
+          const assertion = content.trim();
           const start = offset + line.indexOf(assertion);
           const type = STRUCTURAL_TYPES[label];
           const relationship = type === 'relationship'
@@ -185,7 +188,6 @@ export class StructuralCandidateExtractor implements CandidateExtractor {
 const SECURITY_POLICY_VERSION = '1.0.0';
 const INSTRUCTION_PATTERN = /\b(?:ignore|override|disregard)\b.{0,40}\b(?:instruction|prompt|policy|rule)s?\b|\b(?:system|developer)\s+(?:message|instruction|prompt)\b|\b(?:execute|invoke|run)\b.{0,30}\b(?:tool|command|shell|script)\b/i;
 const SECRET_PATTERN = /\b(?:api[_-]?key|access[_-]?token|password|passwd|private[_-]?key|authorization|cookie|secret)\b\s*(?:[:=]|\bis\b)/i;
-const STRUCTURE_PATTERN = /(?:^|\n)\s*(?:---|\.\.\.)\s*(?:\n|$)|```|~~~|<[/!?A-Za-z]|!\[[^\]]*\]\(|\[[^\]]+\]\([^)]*\)|\{\{|\{%/;
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 const BIDI_PATTERN = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 const LATIN_PATTERN = /\p{Script=Latin}/u;
@@ -202,7 +204,7 @@ export function classifyCandidateSecurity(input: {
     .join('\n');
   const warnings: CandidateSecurityWarning[] = [];
   if (INSTRUCTION_PATTERN.test(text)) warnings.push('instruction-like');
-  if (STRUCTURE_PATTERN.test(text)) warnings.push('structure-breaking');
+  if (hasStructureBreakingContent(text)) warnings.push('structure-breaking');
   if (CONTROL_PATTERN.test(text)) warnings.push('control-character');
   if (BIDI_PATTERN.test(text)) warnings.push('bidi-control');
   if (LATIN_PATTERN.test(text) && CONFUSABLE_SCRIPT_PATTERN.test(text)) {
@@ -231,7 +233,33 @@ function evidenceSupportsAssertion(assertion: string, quote: string): boolean {
   return [...assertionTokens].some((token) => quoteTokens.has(token));
 }
 
-const STRUCTURAL_PATTERN = /^(Decision|Requirement|Constraint|Preference|Task|Discovery|Fix|Failed approach|Procedure|Risk|Contradiction|Question|Entity|Relationship):\s*(.+)$/i;
+function hasStructureBreakingContent(text: string): boolean {
+  if (/```|~~~|<[/!?A-Za-z]|\{\{|\{%/.test(text)) return true;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '---' || trimmed === '...') return true;
+  }
+  let bracket = -1;
+  let image = false;
+  let link = false;
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === '[') {
+      if (bracket < 0) bracket = index;
+      if (index > 0 && text[index - 1] === '!') image = true;
+    } else if (text[index] === ']') {
+      if (text[index + 1] === '(') {
+        if (image) return true;
+        if (bracket >= 0 && index > bracket + 1) link = true;
+      }
+      bracket = -1;
+      image = false;
+    } else if (text[index] === ')' && link) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const STRUCTURAL_TYPES: Record<string, IntelligenceCandidate['type']> = {
   decision: 'decision',
   requirement: 'requirement',
