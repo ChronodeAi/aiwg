@@ -404,8 +404,13 @@ export async function createServer() {
   await registerOptInToolsets(server, requested, { projectRoot });
 
   // Resolve operator configuration once per trusted project, then pin it.
+  // Artifact tools default to the server-start project (the launch directory),
+  // not an ancestor discovered by walking up from it: a fresh launch directory
+  // inside another marked tree (for example a stray `.aiwg` in the temp dir)
+  // must pin its own missing default at startup, never adopt the ancestor's
+  // store. Callers select other projects explicitly via `project_dir`.
   const artifactEnv = { ...process.env };
-  const trustedProjectRoot = await fs.realpath(projectRoot || process.cwd());
+  const trustedProjectRoot = await fs.realpath(process.cwd());
   const trustedArtifactRoot = await resolveProjectAiwgDir(trustedProjectRoot, { env: artifactEnv });
   const startupStore = await pinArtifactRoot(trustedArtifactRoot, trustedProjectRoot);
   const trustedStore = startupStore.root;

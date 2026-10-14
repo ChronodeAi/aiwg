@@ -197,6 +197,31 @@ describe.skipIf(!linuxDescriptors)('descriptor artifact access', () => {
     expect(await fs.readFile(join(outside, 'secret'), 'utf8')).toBe('outside content');
   });
 
+  it('pins a fresh child default at startup despite an ancestor marker', async () => {
+    const parent = join(root, 'ancestor');
+    const parentStore = join(parent, '.aiwg');
+    const child = join(parent, 'child');
+    const childStore = join(child, '.aiwg');
+    await fs.mkdir(parentStore, { recursive: true });
+    await fs.writeFile(join(parentStore, 'parent-file'), 'parent content');
+    await fs.mkdir(child, { recursive: true });
+    vi.spyOn(process, 'cwd').mockReturnValue(child);
+    await restart();
+    const writeDefault = (artifactPath: string) =>
+      client.callTool({ name: 'artifact-write', arguments: { path: artifactPath, content: 'replacement' } });
+    expect((await writeDefault('new/deep/file')).isError).toBeUndefined();
+    expect(await fs.readFile(join(childStore, 'new/deep/file'), 'utf8')).toBe('replacement');
+    expect(await fs.readFile(join(parentStore, 'parent-file'), 'utf8')).toBe('parent content');
+    expect(await fs.readdir(parentStore)).toEqual(['parent-file']);
+    await fs.rm(childStore, { recursive: true, force: true });
+    await restart();
+    await fs.symlink(outside, childStore, 'dir');
+    expect((await writeDefault('secret')).isError).toBe(true);
+    expect(await fs.readFile(join(outside, 'secret'), 'utf8')).toBe('outside content');
+    expect(await fs.readFile(join(parentStore, 'parent-file'), 'utf8')).toBe('parent content');
+    expect(await fs.readdir(parentStore)).toEqual(['parent-file']);
+  });
+
   it('refuses a directory installed after the default was pinned as missing', async () => {
     await fs.rm(artifacts, { recursive: true });
     await restart();

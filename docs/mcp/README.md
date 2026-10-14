@@ -42,7 +42,7 @@ aiwg mcp info
 
 Artifact containment holds against any path the caller supplies; it does not hold against concurrent modification of the artifact tree by another local process. Leftover temporary files after a failed write are possible.
 
-Artifact stores configured by `.aiwg-location` or the artifact-root environment override are resolved and pinned at server start for the default project, and on first use for other `project_dir` selections. Linux uses descriptor-anchored I/O; macOS and Windows use static containment, symlink, and link-count checks. `artifact-write` refuses location pointer filenames.
+Artifact stores configured by `.aiwg-location` or the artifact-root environment override are resolved and pinned at server start for the default project, and on first use for other `project_dir` selections. The default artifact project is the server launch directory; callers launched in a subdirectory should select `project_dir` explicitly. Linux uses descriptor-anchored I/O; macOS and Windows use static containment, symlink, and link-count checks. `artifact-write` refuses location pointer filenames.
 
 Opt-in toolsets add Flow, Mission, memory, knowledge-base, research,
 activity-log, index, Ralph, Mission Control, ops, and Agentic Sandbox tools:
