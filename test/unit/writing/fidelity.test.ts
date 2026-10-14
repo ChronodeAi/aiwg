@@ -31,8 +31,18 @@ describe('conservative fidelity assessment', () => {
     const candidate = '. I agree!?\nWe tried\nmy notes. Our plan? us\rme\u2028I';
     const result = assessWritingFidelity('Other text.', candidate);
     expect(result.changes.filter(change => change.kind === 'first-person').map(change => [change.start, change.end, candidate.slice(change.start, change.end)])).toEqual([
-      [1, 10, ' I agree!'], [21, 30, 'my notes.'], [30, 40, ' Our plan?'], [40, 48, ' us\rme\u2028I'],
+      [1, 10, ' I agree!'], [12, 20, 'We tried'], [21, 30, 'my notes.'], [30, 40, ' Our plan?'], [40, 48, ' us\rme\u2028I'],
     ]);
+  });
+
+  it.each(['I finish\n', 'I finish', 'I finish\r\n', '\nI finish\n\n'])('reviews unpunctuated first-person spans in %j', candidate => {
+    const start = candidate.indexOf('I');
+    const end = candidate.indexOf('\n', start) < 0 ? candidate.length : candidate.indexOf('\n', start);
+    const result = assessWritingFidelity('Other text.', candidate);
+    expect(result.changes.filter(change => change.kind === 'first-person')).toEqual([
+      expect.objectContaining({ side: 'candidate', start, end }),
+    ]);
+    expect(assessWritingFidelity('I finish', candidate).changes.some(change => change.kind === 'first-person')).toBe(false);
   });
 
   const original = 'Support is experimental. Run --scope project with 2 files. It does not publish. See https://example.test/source.';

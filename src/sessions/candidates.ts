@@ -153,15 +153,16 @@ export class StructuralCandidateExtractor implements CandidateExtractor {
     const drafts: ExtractedCandidateDraft[] = [];
     for (const item of evidence) {
       let offset = 0;
-      for (const line of item.text.split(/\n/)) {
+      for (const rawLine of item.text.split(/\n/)) {
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
         const separator = line.indexOf(':');
-        const label = line.slice(0, separator).replace(/[A-Z]/g, character => character.toLowerCase());
+        const label = line.slice(0, separator).normalize('NFKC').toLowerCase();
         const remainder = line.slice(separator + 1);
         const content = remainder.trimStart();
         if (separator >= 0 && Object.hasOwn(STRUCTURAL_TYPES, label)
           && remainder.length > 0 && !/[\r\u2028\u2029]/u.test(content || remainder.slice(-1))) {
           const assertion = content.trim();
-          const start = offset + line.length - content.length;
+          const start = offset + separator + 1 + remainder.length - content.length;
           const type = STRUCTURAL_TYPES[label];
           const relationship = type === 'relationship'
             ? parseRelationship(assertion)
@@ -178,7 +179,7 @@ export class StructuralCandidateExtractor implements CandidateExtractor {
             });
           }
         }
-        offset += line.length + 1;
+        offset += rawLine.length + 1;
       }
     }
     return drafts;

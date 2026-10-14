@@ -69,6 +69,25 @@ describe('candidate extraction contracts', () => {
     expect(drafts[1].evidence[0].start).toBe(text.indexOf('Decision: Decision') + 'Decision: '.length);
   });
 
+  it('accepts CRLF and locale-independent Unicode label case with colon-relative offsets', () => {
+    const text = 'TasK: Task  \r\nDECISION:\tDECISION: keep\r\nTasK: Kelvin\r\nＴＡＳＫ: fullwidth\r\nＦａｉｌｅｄ ａｐｐｒｏａｃｈ: retry';
+    const drafts = new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text }]);
+    expect(drafts.map(draft => [draft.type, draft.assertion])).toEqual([
+      ['task', 'Task'], ['decision', 'DECISION: keep'], ['task', 'Kelvin'],
+      ['task', 'fullwidth'], ['failed-approach', 'retry'],
+    ]);
+    const assertions = ['Task', 'DECISION: keep', 'Kelvin', 'fullwidth', 'retry'];
+    let offset = 0;
+    for (const [index, line] of text.split('\n').entries()) {
+      const start = offset + line.indexOf(':') + 1 + line.slice(line.indexOf(':') + 1).search(/\S/u);
+      const span = drafts[index].evidence[0];
+      expect(span).toEqual({ eventId: 'event-1', start, end: start + assertions[index].length });
+      expect(text.slice(span.start, span.end)).toBe(assertions[index]);
+      expect(drafts[index].assertion).not.toContain('\r');
+      offset += line.length + 1;
+    }
+  });
+
   it.each([' ', '\t'])('bounds label parsing with megabyte overlapping whitespace %j (alert 3)', whitespace => {
     const text = `Decision:${whitespace.repeat(1_000_000)}x\rx\nTask: finish`;
     const started = performance.now();
@@ -108,7 +127,7 @@ describe('candidate extraction contracts', () => {
     ]);
     expect(drafts[0].evidence).toEqual([{ eventId: 'event-1', start: 11, end: 23 }]);
     expect(drafts[2]).toMatchObject({ subject: 'A', predicate: 'uses', object: 'B' });
-    expect(new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text: 'Relationship: A | B\nDecision: a\rb\nDecision: ignored\r\nTasK: ignored' }])).toEqual([]);
+    expect(new StructuralCandidateExtractor().extract([{ eventId: 'event-1', text: 'Relationship: A | B\nDecision: a\rb' }])).toEqual([]);
   });
 
   it.each([
