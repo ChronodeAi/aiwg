@@ -10,6 +10,31 @@ const mode = (id: string, mandatory = false): ResolvedOutputMode => ({
 });
 
 describe('conservative fidelity assessment', () => {
+  it('bounds sentence scanning on a megabyte unterminated line (alert 10)', () => {
+    const candidate = `${'a'.repeat(1_000_000)}\nI wrote this.`;
+    const started = performance.now();
+    const assessment = assessWritingFidelity('', candidate);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(assessment.changes.filter(change => change.kind === 'first-person')).toEqual([
+      expect.objectContaining({ start: 1_000_001, end: candidate.length }),
+    ]);
+  });
+  it('scans a large unterminated sentence before a newline within five seconds (alert 10)', () => {
+    const candidate = `${'a'.repeat(50_000)}\nI agree.`;
+    const start = performance.now();
+    const result = assessWritingFidelity('Other text.', candidate);
+    expect(result.changes.filter(change => change.kind === 'first-person')).toMatchObject([{ start: 50_001, end: 50_009 }]);
+    expect(performance.now() - start).toBeLessThan(5_000);
+  });
+
+  it('preserves first-person sentence text and offsets across delimiters and newlines', () => {
+    const candidate = '. I agree!?\nWe tried\nmy notes. Our plan? us\rme\u2028I';
+    const result = assessWritingFidelity('Other text.', candidate);
+    expect(result.changes.filter(change => change.kind === 'first-person').map(change => [change.start, change.end, candidate.slice(change.start, change.end)])).toEqual([
+      [1, 10, ' I agree!'], [21, 30, 'my notes.'], [30, 40, ' Our plan?'], [40, 48, ' us\rme\u2028I'],
+    ]);
+  });
+
   const original = 'Support is experimental. Run --scope project with 2 files. It does not publish. See https://example.test/source.';
   it.each([
     ['--scope', '--global'], ['2 files', '3 files'], ['https://example.test/source', 'https://other.test/source'],

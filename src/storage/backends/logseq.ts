@@ -167,7 +167,7 @@ export class LogseqAdapter implements StorageAdapter {
 
     // Defensive: refuse to write `id::` block IDs ourselves. Logseq
     // auto-assigns them; if the caller smuggled one in, strip it.
-    body = body.replace(/^\s*id::\s*[^\n]+\n/gm, '');
+    body = stripBlockIds(body);
 
     await writeFile(abs, body, 'utf-8');
   }
@@ -253,6 +253,39 @@ interface ExtractedYaml {
   body: string;
 }
 
+function stripBlockIds(content: string): string {
+  const chunks: string[] = [];
+  let start = 0;
+  let newline = content.indexOf('\n');
+  while (start < content.length) {
+    let property = start;
+    while (property < content.length && /\s/u.test(content[property])) property++;
+    if (content.startsWith('id::', property)) {
+      let value = property + 4;
+      let whitespaceNewline = -1;
+      while (value < content.length && /\s/u.test(content[value])) {
+        if (content[value] === '\n' && value > property + 4 && content[value - 1] !== '\n') {
+          whitespaceNewline = value;
+        }
+        value++;
+      }
+      while (newline >= 0 && newline < value) newline = content.indexOf('\n', newline + 1);
+      const end = newline >= 0 ? newline : whitespaceNewline;
+      if (end >= 0) {
+        start = end + 1;
+        continue;
+      }
+    }
+    // Keep the original line and any preceding blank lines verbatim.
+    let end = property;
+    while (end < content.length && !/[\n\r\u2028\u2029]/u.test(content[end])) end++;
+    if (end < content.length) end++;
+    chunks.push(content.slice(start, end));
+    start = end;
+  }
+  return chunks.join('');
+}
+
 /**
  * If `content` starts with a `---` YAML block, parse the block and
  * return the parsed fields plus the body without the YAML. Otherwise
@@ -262,15 +295,41 @@ interface ExtractedYaml {
  * Anything more complex falls back to dropping the value as a string.
  */
 function extractYamlFrontmatter(content: string): ExtractedYaml | null {
-  const match = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/.exec(content);
-  if (!match) return null;
-  const [, yamlBody, body] = match;
+  if (!content.startsWith('---')) return null;
+  let openingEnd = 3;
+  let firstNewline = -1;
+  let lastNewline = -1;
+  while (openingEnd < content.length && /\s/u.test(content[openingEnd])) {
+    if (content[openingEnd] === '\n') {
+      if (firstNewline < 0) firstNewline = openingEnd;
+      lastNewline = openingEnd;
+    }
+    openingEnd++;
+  }
+  if (firstNewline < 0) return null;
+  let yamlStart = lastNewline + 1;
+  let closing = content.indexOf('\n---', yamlStart);
+  if (closing < 0) {
+    closing = content.indexOf('\n---', firstNewline + 1);
+    if (closing < 0) return null;
+    yamlStart = firstNewline + 1;
+    for (let index = yamlStart; index < closing; index++) {
+      if (content[index] === '\n') yamlStart = index + 1;
+    }
+  }
+  const yamlBody = content.slice(yamlStart, content[closing - 1] === '\r' ? closing - 1 : closing);
+  let bodyStart = closing + 4;
+  while (bodyStart < content.length && /\s/u.test(content[bodyStart])) bodyStart++;
+  const body = content.slice(bodyStart);
   const fields: Record<string, unknown> = {};
   for (const line of yamlBody.split(/\r?\n/)) {
     if (line.trim().length === 0 || line.trim().startsWith('#')) continue;
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line);
-    if (!m) continue;
-    const [, k, rawV] = m;
+    const separator = line.indexOf(':');
+    if (separator < 0) continue;
+    const k = line.slice(0, separator).trimEnd();
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(k)) continue;
+    const rawV = line.slice(separator + 1).trimStart();
+    if (/[\r\u2028\u2029]/u.test(rawV)) continue;
     fields[k] = parseYamlScalar(rawV.trim());
   }
   return { fields, body };
