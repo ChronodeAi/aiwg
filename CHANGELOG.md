@@ -531,6 +531,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   rechecks; cap tree hashing at 10 MiB/file, 100 MiB, 10,000 entries and depth 128.
 - Bound unit stop/status timeouts; filesystem reads remain subject to host I/O.
 
+- MCP shell deadlines and cancellation escalate to SIGKILL; capacity and evidence remain reserved until termination is confirmed.
+- Shell workers use private framed stdin, `0600` output reservations, and systemd memory limits; pre-launch failures release resources.
+- Status checks retry transient failures and use bounded background polling; confirmed stops clear timers and clean up stdin.
 - **Runtime MCP dependency floor** - the root package and the `droid-bridge`
   addon/plugin now require `@modelcontextprotocol/sdk@^1.30.0` resolved to
   current patch releases, closing `GHSA-6qxp-vccf-f47h` and raising the

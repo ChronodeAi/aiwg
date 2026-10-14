@@ -614,8 +614,19 @@ describe('batch store integrity, encryption and lifecycle (#2672)', () => {
       let output = ''; let errors = '';
       child.stdout.on('data', chunk => { output += String(chunk); });
       child.stderr.on('data', chunk => { errors += String(chunk); });
-      child.on('exit', code => code === 0 ? resolve(JSON.parse(output.trim().split('\n').at(-1)!) as Record<string, unknown>)
-        : reject(new Error(errors)));
+      child.once('error', reject);
+      // Process exit can precede the final stdout data; close waits for both pipes.
+      child.once('close', code => {
+        if (code !== 0) {
+          reject(new Error(errors));
+          return;
+        }
+        try {
+          resolve(JSON.parse(output.trim().split('\n').at(-1)!) as Record<string, unknown>);
+        } catch (error) {
+          reject(error);
+        }
+      });
     });
     expect(await run('write')).toEqual({ written: true });
     const results = resultStore(resultDirectory);
