@@ -43,7 +43,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 import os from 'node:os';
 import path from 'node:path';
-import { getWorkerRecoveryCapabilities, registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
@@ -103,6 +103,9 @@ import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adap
 // block below; never by production code.
 import { SessionLauncher as SessionLauncherBaseline, planDirectWorkerLaunch as planDirectWorkerLaunchBaseline }
   from '../../fixtures/ralph-recovery-baseline/session-launcher.mjs';
+
+const { installation: recoveryInstallation } = await loadRecoveryModuleGraph();
+const { getWorkerRecoveryCapabilities, registerWorkerRecoveryCapabilities } = recoveryInstallation;
 
 const INSTALL = scopeKeyFor.installation('codex');
 const QUOTA = scopeKeyFor.quota('acct-1');

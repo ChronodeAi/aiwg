@@ -18,37 +18,45 @@ import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
-import { registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../src/mcp/tools/subsystems.mjs';
 
-// @ts-expect-error — .mjs untyped
-import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
-import { resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
-// Namespace import, used ONLY to `vi.spyOn` ledger/breaker-adjacent exports
-// for the #2915 round 8 (D6) equivalence suite's "no recovery module
-// function was called" assertions -- never to call these directly as
-// production logic.
-import * as sessionLauncherModule from '../../../tools/ralph-external/session-launcher.mjs';
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
-import * as workerIsolation from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 // Frozen a4085b86a reference -- see that file's own header. Baseline
 // equivalence tests only; never a production import.
 // @ts-expect-error — .mjs untyped
 import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
 
-const {
+let recoveryGraph = await loadRecoveryModuleGraph();
+let { workerInvoke, launcher: sessionLauncherModule, isolation: workerIsolation } = recoveryGraph;
+let { registerWorkerRecoveryCapabilities } = recoveryGraph.installation;
+let { resetInProcessAllowanceLedger } = sessionLauncherModule;
+let {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
   registerWorkerInvokeToolset: registerProductionToolset,
   WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
   ChildProcessTransport, MAX_MCP_FRAME_BYTES,
 } = workerInvoke as any;
+
+// The bridge imports readers lazily. A reset in an earlier test invalidates
+// their private WeakMaps even when a top-level namespace is still retained.
+// Reacquire registration, readers and cleanup together before building drivers.
+beforeEach(async () => {
+  recoveryGraph = await loadRecoveryModuleGraph();
+  ({ workerInvoke, launcher: sessionLauncherModule, isolation: workerIsolation } = recoveryGraph);
+  ({ registerWorkerRecoveryCapabilities } = recoveryGraph.installation);
+  ({ resetInProcessAllowanceLedger } = sessionLauncherModule);
+  ({ createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
+    registerWorkerInvokeToolset: registerProductionToolset, WORKERS_TOOLSET_NAME,
+    withServerQueue, __testOnlyMcpServerQueueCount } = workerInvoke);
+});
 
 /** A fixed, generous `readLiveHostResources()`-shaped sample (see
  * `tools/scripts/resource-preflight.mjs`), injected via the real
@@ -74,10 +82,7 @@ function registerWorkerInvokeToolset(server: any, options: Record<string, unknow
   return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
 }
 
-// Tests that reset Vitest's module cache must register with the same current
-// installation-owner instance that the bridge's dynamic imports will read.
 async function registerRecoveryCapabilities(driver: object, capabilities: { canVerifyAttempt?: boolean }) {
-  const { registerWorkerRecoveryCapabilities } = await import('../../../src/models/worker-installation.mjs');
   return registerWorkerRecoveryCapabilities(driver, capabilities);
 }
 
@@ -4858,13 +4863,14 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
   // bound the blast radius of resetting the module registry mid-suite.
   // -------------------------------------------------------------------------
   it('scenario: resolver error (resolveWorkerInvocation throws) -- byte-equivalent to baseline, same as a loadWorkerInputs throw by construction', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     vi.doMock('../../../src/serve/worker-invocation.js', async (importOriginal) => {
       const mod = await importOriginal<any>();
       return { ...mod, resolveWorkerInvocation: async () => { throw new Error('synthetic: resolver exploded'); } };
     });
     vi.resetModules();
     try {
-      const freshBranch = await import('../../../src/mcp/tools/worker-invoke.mjs') as any;
+      const { workerInvoke: freshBranch } = await loadRecoveryModuleGraph();
       const freshBaseline = await import('../../fixtures/ralph-recovery-baseline/worker-invoke.mjs') as any;
       async function runOne(registerFn: any) {
         const root = await tempRoot();
@@ -4872,7 +4878,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
         const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
         const finalOutput = path.join(work, 'final.json');
         const f = buildFixture(root, 'shell');
-        const registry = createInvocationRegistry({ maxActive: 4 });
+        const registry = freshBranch.createInvocationRegistry({ maxActive: 4 });
         const tools = new Map<string, any>();
         await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
           projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
@@ -5135,22 +5141,24 @@ describe('review 10 frozen fixture ownership', () => {
 });
 
 describe('review 11 populated default driver equivalence', () => {
-  it('P2: real Codex default-loaded drivers have exactly the frozen Reflect.ownKeys and retain gated capabilities', async () => {
+  it.each(['src', 'dist'])('P2 (%s): real Codex default-loaded drivers have exactly the frozen Reflect.ownKeys and retain gated capabilities', async (side) => {
     vi.resetModules();
-    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', side);
     const root = await tempRoot();
     const cwd = path.join(root, 'project');
     await mkdir(cwd);
     const loaded: any[] = [];
+    const disabled: any[] = [];
     const owners: any[] = [];
     try {
+      const current = await loadRecoveryModuleGraph();
       for (const baseline of [true, false]) {
         const owner = baseline
           ? await import('../../fixtures/ralph-recovery-baseline/worker-installation.mjs')
-          : await import('../../../src/models/worker-installation.mjs');
+          : current.installation;
         owners.push(owner);
         const f = workerResolutionFixture();
-        f.snapshot.config.parallelism!.worker_dispatch = false;
+        f.snapshot.config.parallelism!.worker_dispatch = true;
         const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
         adapter.id = 'codex';
         const binding = f.snapshot.installations.codex;
@@ -5191,10 +5199,10 @@ describe('review 11 populated default driver equivalence', () => {
           cases: Object.fromEntries(Object.keys(owner.workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
         await writeFile(path.join(configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
           registrations: [{ cli: 'codex', binding, adapter, installation }] }), { mode: 0o600 });
-        const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : await import('../../../src/config/aiwg-config.js');
-        const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : await import('../../../src/models/config-loader.js');
-        const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : await import('../../../src/providers/provider-inventory.js');
-        const discovery = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js') : await import('../../../src/models/model-discovery.js');
+        const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : current.config;
+        const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : current.configLoader;
+        const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : current.inventory;
+        const discovery = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js') : current.discovery;
         const spies = [
           vi.spyOn(config, 'readAiwgConfig').mockResolvedValue(f.snapshot.config),
           vi.spyOn(ConfigLoader.prototype, 'load').mockResolvedValue(f.snapshot.models),
@@ -5203,8 +5211,11 @@ describe('review 11 populated default driver equivalence', () => {
           vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockResolvedValue(f.snapshot.catalog),
         ];
         try {
-          const { loadWorkerInputs } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/cli/handlers/models.js') : await import('../../../src/cli/handlers/models.js');
+          const { loadWorkerInputs } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/cli/handlers/models.js') : current.models;
           loaded.push(await loadWorkerInputs({ cwd, frameworkRoot: process.cwd(), args: [], rawArgs: [] } as any));
+          f.snapshot.config.parallelism!.worker_dispatch = false;
+          disabled.push(await loadWorkerInputs({ cwd, frameworkRoot: process.cwd(), args: [], rawArgs: [] } as any));
+          f.snapshot.config.parallelism!.worker_dispatch = true;
         } finally { for (const spy of spies) spy.mockRestore(); }
       }
       expect(Object.keys(loaded[0].drivers)).toEqual(['codex']);
@@ -5216,13 +5227,33 @@ describe('review 11 populated default driver equivalence', () => {
       const capabilities = owners[1].getWorkerRecoveryCapabilities(driver);
       expect(capabilities.canVerifyAttempt).toBe(true);
       expect(owners[1].getWorkerRecoveryCapabilities({ ...driver })).toBeNull();
-      const launcher = await import('../../../tools/ralph-external/session-launcher.mjs');
+      const launcher = current.launcher;
       const eligibility = { invocation: { selected: { cli: 'codex' } }, drivers: loaded[1].drivers, config: loaded[1].snapshot.config };
       expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: false }).gated).toBe(false);
       expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: true }).gated).toBe(true);
       const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
       await expect(capabilities.parseWorkerAttemptFinal(JSON.stringify(claims), { format: 'json',
         observation: { transport: 'shell', status: 'completed', attemptOutcome: 'succeeded', exitCode: 0 } })).resolves.toEqual(claims);
+      // Disabled loading has its own equivalence assertion. Populated-driver
+      // coverage above does not depend on disabled loading returning drivers.
+      expect(Reflect.ownKeys(disabled[1].drivers)).toEqual(Reflect.ownKeys(disabled[0].drivers));
+      for (const cli of Reflect.ownKeys(disabled[0].drivers)) {
+        expect(Reflect.ownKeys(disabled[1].drivers[cli])).toEqual(Reflect.ownKeys(disabled[0].drivers[cli]));
+      }
+      // The registration is private to the exact driver, not its own properties
+      // or a spread copy. Re-register that copy explicitly in this graph.
+      const keys = Reflect.ownKeys(driver);
+      owners[1].registerWorkerRecoveryCapabilities(driver, { ...capabilities, canVerifyAttempt: false });
+      expect(Reflect.ownKeys(driver)).toEqual(keys);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: true }))
+        .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+      const copy = { ...driver };
+      expect(owners[1].getWorkerRecoveryCapabilities(copy)).toBeNull();
+      expect(launcher.directRecoveryEligibility({ ...eligibility, drivers: { codex: copy }, gateEnabled: true }).gated).toBe(true);
+      owners[1].registerWorkerRecoveryCapabilities(copy, owners[1].getWorkerRecoveryCapabilities(driver));
+      expect(Reflect.ownKeys(copy)).toEqual(keys);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, drivers: { codex: copy }, gateEnabled: true }))
+        .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
     } finally { vi.resetModules(); }
   });
 });
