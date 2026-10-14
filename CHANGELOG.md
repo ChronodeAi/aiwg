@@ -341,6 +341,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   (`src/storage/backends/logseq.ts`), decision-interop log redaction email detection (values over
   65,536 UTF-16 code units are now redacted in full) and writing-fidelity sentence splitting. Output on
   normal input is unchanged (characterization tests pin it).
+- Prototype-polluting key paths are rejected (#3095, CodeQL WP4): decision-interop OPA input
+  projection refuses `__proto__`, `constructor` and `prototype` JSON Pointer segments, builds
+  projection nodes with null prototypes and follows own properties only; `aiwg config set` dotted
+  key paths reject the same segments with a clear error.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level
