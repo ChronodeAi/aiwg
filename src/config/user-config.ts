@@ -296,11 +296,8 @@ export class UserConfig {
       return this.configCache;
     }
 
-    const configPath = resolve(this.configDir, 'config.yaml');
-
-    try {
-      const content = await readFile(configPath, 'utf-8');
-      const parsed = parseYamlSimple(content) as unknown as UserConfigData;
+    const parsed = await this.readConfig() as unknown as UserConfigData | null;
+    if (parsed) {
       this.configCache = {
         ...DEFAULT_USER_CONFIG,
         ...parsed,
@@ -310,7 +307,7 @@ export class UserConfig {
         community: { ...DEFAULT_USER_CONFIG.community, ...parsed.community },
       };
       return this.configCache;
-    } catch {
+    } else {
       // File doesn't exist — return defaults (don't create file yet)
       this.configCache = {
         ...DEFAULT_USER_CONFIG,
@@ -323,10 +320,23 @@ export class UserConfig {
     }
   }
 
+  private async readConfig(): Promise<Record<string, unknown> | null> {
+    const configPath = resolve(this.configDir, 'config.yaml');
+    try {
+      const content = await readFile(configPath, 'utf-8');
+      return parseYamlSimple(content);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new Error(`Failed to load ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /**
    * Save config.yaml
    */
   private async saveConfig(config: UserConfigData): Promise<void> {
+    // Recheck the existing file even when defaults or cached values are being saved.
+    await this.readConfig();
     await this.ensureDir();
     const configPath = resolve(this.configDir, 'config.yaml');
     const yaml = serializeYamlSimple(config as unknown as Record<string, unknown>);
@@ -371,11 +381,16 @@ export function parseYamlSimple(content: string): Record<string, unknown> {
     const key = match[1].trim();
     const rawValue = match[2].trim();
 
+    // Config keys have no legitimate use for prototype-related names at any level.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      throw new Error('Unsafe config key: prototype-related names are not allowed');
+    }
+
     if (indent === 0) {
       if (rawValue === '' || rawValue === undefined) {
         // Section header
         currentSection = key;
-        if (!(key in result)) {
+        if (!Object.hasOwn(result, key)) {
           result[key] = {};
         }
       } else {
@@ -440,7 +455,7 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   let current: unknown = obj;
 
   for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
+    if (current === null || current === undefined || typeof current !== 'object' || !Object.hasOwn(current, part)) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
@@ -451,11 +466,15 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
+  // Unlike JSON data keys, config paths reject all three prototype-related names.
+  if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) {
+    throw new Error('Unsafe config key path: prototype-related segments are not allowed');
+  }
   let current: Record<string, unknown> = obj;
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
+    if (!Object.hasOwn(current, part) || typeof current[part] !== 'object' || current[part] === null) {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;

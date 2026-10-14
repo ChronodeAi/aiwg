@@ -362,6 +362,40 @@ describe('INTOP review regressions: sanitized and truthful OPA logs', () => {
     expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow(/control|provider/i);
   });
 
+  it.each(['__proto__'])('rejects intermediate %s projection segments without changing Object.prototype', (segment) => {
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+    for (const pointer of [`/${segment}/polluted`, `/safe/${segment}/polluted`]) {
+      const data = envelope();
+      data.input = JSON.parse(`{"${segment}":{"polluted":true},"safe":{"${segment}":{"polluted":true}}}`);
+      data.inputProjectionAllowlist = [pointer];
+      expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow('OPA input projection cannot contain __proto__ segments');
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+    }
+  });
+
+  it.each(['__proto__'])('rejects final %s projection segments even when input is missing', (segment) => {
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+    for (const input of [JSON.parse(`{"${segment}":true,"safe":{"${segment}":true}}`), {}]) {
+      for (const pointer of [`/${segment}`, `/safe/${segment}`]) {
+        const data = envelope();
+        data.input = input;
+        data.inputProjectionAllowlist = [pointer];
+        expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow('OPA input projection cannot contain __proto__ segments');
+        expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+      }
+    }
+  });
+
+  it('preserves normal projected JSON including nested and escaped pointer segments', () => {
+    const data = envelope();
+    data.input = { subject: 'operator', evidence: { value: 'docs', score: 3 }, 'a/b': { '~key': true }, ignored: 'omit' };
+    data.inputProjectionAllowlist = ['/subject', '/evidence/value', '/evidence/score', '/a~1b/~0key'];
+    const projected = exportOpaDecisionLog(storedResult(), data).input;
+    expect(JSON.stringify(projected)).toBe('{"subject":"operator","evidence":{"value":"docs","score":3},"a/b":{"~key":true}}');
+    expect(Object.getPrototypeOf(projected)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf((projected as Record<string, unknown>).evidence)).toBe(Object.prototype);
+  });
+
   it('serializes bundles as the OPA object keyed by bundle name', () => {
     const exported = exportOpaDecisionLog(storedResult(), envelope());
     expect(Array.isArray(exported.bundles)).toBe(false);

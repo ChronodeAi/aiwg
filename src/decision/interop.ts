@@ -686,7 +686,11 @@ function sanitizeJson(value: JsonValue, path: string, redaction: { removed: stri
         redaction.removed.push(`${path}.${key}`);
         continue;
       }
-      result[key] = sanitizeJson(child, `${path}.${key}`, redaction);
+      // Keep ordinary objects while preserving __proto__ as an own JSON data key.
+      Object.defineProperty(result, key, {
+        value: sanitizeJson(child, `${path}.${key}`, redaction),
+        enumerable: true, writable: true, configurable: true,
+      });
     }
     return result;
   }
@@ -701,9 +705,15 @@ function projectOpaInput(input: JsonValue, allowlist: string[], redaction: { rem
   const output: Record<string, JsonValue> = {};
   for (const pointer of allowlist) {
     if (!pointer.startsWith('/')) throw new DecisionInteropError('opa-input-projection', 'OPA input projection allowlist entries must be JSON Pointers');
+    const path = pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~'));
+    // Only __proto__ is forbidden in pointers; constructor/prototype are valid data keys.
+    // Own-property traversal and data-property writes keep ordinary projection objects safe.
+    if (path.some(segment => segment === '__proto__')) {
+      throw new DecisionInteropError('opa-input-projection', 'OPA input projection cannot contain __proto__ segments');
+    }
     const resolved = resolveJsonPointer(input, pointer);
     if (!resolved.found) continue;
-    setProjectedValue(output, pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~')), sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
+    setProjectedValue(output, path, sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
   }
   return output;
 }
@@ -712,11 +722,17 @@ function setProjectedValue(target: Record<string, JsonValue>, path: string[], va
   let cursor: Record<string, JsonValue> = target;
   path.forEach((segment, index) => {
     if (index === path.length - 1) {
-      cursor[segment] = value;
+      Object.defineProperty(cursor, segment, {
+        value, enumerable: true, writable: true, configurable: true,
+      });
       return;
     }
-    const existing = cursor[segment];
-    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) cursor[segment] = {};
+    const existing = Object.hasOwn(cursor, segment) ? cursor[segment] : undefined;
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      Object.defineProperty(cursor, segment, {
+        value: {}, enumerable: true, writable: true, configurable: true,
+      });
+    }
     cursor = cursor[segment] as Record<string, JsonValue>;
   });
 }
