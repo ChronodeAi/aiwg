@@ -374,15 +374,16 @@ describe('Cockpit bridge outbound security', () => {
 
   it.each([401, 403, 404, 405, 429, 500, 503])('logs each %i upstream response once with bounded redacted detail', async (status) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
     const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({
       detail: 'operator-reason http://user:password@executor.example/path?token=query-secret',
       token: 'nested-secret', diagnostic: 'x'.repeat(10000),
     }, status));
     const bridge = createBridge({ executorUrl, allowMockExecutor: true });
     for (const path of ['/api/operations/operation', '/api/cost']) {
-      log.mockClear(); outbound.mockClear();
+      log.mockClear(); debug.mockClear(); outbound.mockClear();
       await request(bridge, path);
-      const entries = log.mock.calls.filter(([message]) => message === '[cockpit-bridge] upstream request failed');
+      const entries = [...log.mock.calls, ...debug.mock.calls].filter(([message]) => message === '[cockpit-bridge] upstream request failed');
       expect(entries).toHaveLength(outbound.mock.calls.length);
       expect(entries.length).toBeGreaterThan(0);
       for (const [, entry] of entries) {
@@ -406,6 +407,80 @@ describe('Cockpit bridge outbound security', () => {
     expect(JSON.stringify(log.mock.calls)).toMatch(/redirect diagnostic/);
     expect(JSON.stringify(log.mock.calls)).toMatch(/plain diagnostic/);
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/redirect-secret|text-secret/);
+  });
+
+  it.each([307, 500])('bounds a never-ending %i error stream and cancels its original body', async (status) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let produced = 0;
+    const cancelled = vi.fn();
+    const response = new Response(new ReadableStream({
+      pull(controller) { produced += 1024; controller.enqueue(new Uint8Array(1024).fill(120)); },
+      cancel: cancelled,
+    }), { status });
+    let cancelOriginal;
+    const clone = response.clone.bind(response);
+    vi.spyOn(response, 'clone').mockImplementation(() => {
+      const copy = clone();
+      cancelOriginal = vi.spyOn(response.body, 'cancel');
+      return copy;
+    });
+    const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    const pending = fetchJsonFirst([`${executorUrl}/stream`], { executorUrl });
+    if (status === 307) await expect(pending).rejects.toMatchObject({ code: 'executor_redirect_refused' });
+    else expect((await pending).status).toBe(500);
+    expect(outbound).toHaveBeenCalledOnce();
+    expect(cancelOriginal).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+    expect(produced).toBeLessThanOrEqual(12 * 1024);
+    expect(Buffer.byteLength(log.mock.calls[0][1].body)).toBe(4096);
+  }, 3000);
+
+  it.each([307, 500])('finishes a stalled %i error stream below the byte limit', async (status) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cancelled = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('partial diagnostic')); },
+      cancel: cancelled,
+    }), { status }));
+    const pending = fetchJsonFirst([`${executorUrl}/stalled`], { executorUrl });
+    if (status === 307) await expect(pending).rejects.toMatchObject({ code: 'executor_redirect_refused' });
+    else expect((await pending).status).toBe(500);
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+  }, 3000);
+
+  it.each([
+    'Authorization: Basic dXNlcjpwYXNz',
+    'Authorization: Digest username="private-user", realm="private-realm", nonce="private-nonce", response="private-response"',
+    'Authorization: Bearer private-bearer',
+    'Authorization=private-bare',
+    'token=private-token secret=private-secret password=private-password api-key=private-api-key',
+  ])('redacts complete credentials from upstream text: %s', async (text) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(text, { status: 500 }));
+    await fetchJsonFirst([`${executorUrl}/failure`], { executorUrl });
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0][1].body).toContain('[redacted]');
+    expect(log.mock.calls[0][1].body).not.toMatch(/dXNlcjpwYXNz|private-/);
+  });
+
+  it.each([404, 405])('logs a %i fallback probe at debug and a terminal failure at error', async (status) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({}, status));
+    await expect(fetchJsonFirst([`${executorUrl}/first`, `${executorUrl}/last`], { executorUrl })).rejects.toThrow();
+    expect(outbound).toHaveBeenCalledTimes(2);
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(debug.mock.calls[0][1].status).toBe(status);
+    expect(error.mock.calls[0][1].status).toBe(status);
+  });
+
+  it.each(['opaqueredirect', 'default'])('refuses a status-zero %s response', async (type) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = Response.error();
+    Object.defineProperty(response, 'type', { value: type });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    await expect(fetchJsonFirst([`${executorUrl}/first`], { executorUrl })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
   });
 
   it.each([

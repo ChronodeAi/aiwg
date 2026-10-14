@@ -107,7 +107,7 @@ function allowedExecutorTarget(target, executorUrl = executorRequestContext.getS
   return url;
 }
 
-async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL) {
+async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL, hasFallback = false) {
   const url = allowedExecutorTarget(target, executorUrl);
   const context = executorRequestContext.getStore();
   const headers = new Headers(init.headers);
@@ -116,13 +116,13 @@ async function executorFetch(target, init = {}, executorUrl = executorRequestCon
     if (token) headers.set('authorization', `Bearer ${token}`);
   }
   const response = await fetch(url, { ...init, headers, redirect: 'manual' });
-  if (!response.ok) await logUpstreamError(response);
-  if (response.status >= 300 && response.status < 400) {
-    await response.body?.cancel();
+  const text = !response.ok ? await logUpstreamError(response, hasFallback) : '';
+  if (response.type === 'opaqueredirect' || response.status === 0 || (response.status >= 300 && response.status < 400)) {
     // Even same-origin redirects could replay credentials and a body to another agent or admin path.
     throw executorAuthError('executor_redirect_refused', 'executor redirect refused');
   }
-  return response;
+  // Error consumers must not resume an unbounded read of the original stream.
+  return response.ok ? response : new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 /** Serve a static file from the built web app, sandboxed to WEB_DIST. Returns true if served. */
@@ -576,8 +576,10 @@ function redactErrorText(value) {
       try { const url = new URL(value); return `${url.origin}${url.pathname}`; }
       catch { return '[redacted URL]'; }
     })
+    .replace(/(authorization["']?\s*[:=]\s*["']?)Digest\s+[^\r\n]*/gi, '$1[redacted]')
+    .replace(/(authorization["']?\s*[:=]\s*["']?)(?:[A-Za-z][\w.-]*\s+)?[^\s,;]+/gi, '$1[redacted]')
     .replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [redacted]')
-    .replace(/((?:token|secret|password|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[redacted]');
+    .replace(/((?:token|secret|password|api[_-]?key)["']?\s*[=:]\s*["']?)[^\s,;"']+/gi, '$1[redacted]');
 }
 
 function bridgeErrorBody(err, code = err?.code ?? 'bridge_upstream_error') {
@@ -612,15 +614,42 @@ function bridgeErrorBody(err, code = err?.code ?? 'bridge_upstream_error') {
   return { error: code, message, ...(recovery ? { recovery } : {}) };
 }
 
-async function logUpstreamError(response) {
-  const text = await response.clone().text().catch(() => '');
+async function logUpstreamError(response, hasFallback = false) {
+  const reader = response.clone().body?.getReader();
+  // Tee cancellation waits for both branches; start it without awaiting the other reader.
+  void response.body?.cancel().catch(() => {});
+  const chunks = [];
+  let size = 0;
+  let timeout;
+  try {
+    if (reader) await Promise.race([
+      (async () => {
+        while (size < 8192) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = Buffer.from(value.subarray(0, 8192 - size));
+          chunks.push(chunk);
+          size += chunk.length;
+        }
+      })(),
+      new Promise((resolve) => { timeout = setTimeout(resolve, 1000); }),
+    ]);
+  } catch {
+    // Preserve any bounded diagnostic already read.
+  } finally {
+    clearTimeout(timeout);
+    void reader?.cancel().catch(() => {});
+  }
+  const text = Buffer.concat(chunks, size).toString('utf8');
   let body;
   try { body = JSON.stringify(redactAuditValue(JSON.parse(text))); }
   catch { body = text; }
-  console.error('[cockpit-bridge] upstream request failed', {
+  const log = hasFallback && [404, 405].includes(response.status) ? console.debug : console.error;
+  log('[cockpit-bridge] upstream request failed', {
     status: response.status,
     body: Buffer.from(redactErrorText(body)).subarray(0, 4096).toString('utf8').replace(/\uFFFD$/, ''),
   });
+  return text;
 }
 
 function safeUpstreamError(status, body) {
@@ -738,7 +767,7 @@ function rethrowExecutorSecurityError(err) {
 export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL } = {}) {
   const failures = [];
   let refused = 0;
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     const target = typeof candidate === 'string' ? candidate : candidate.target;
     const requestMethod = typeof candidate === 'string' ? method : candidate.method ?? method;
     const requestHeaders = typeof candidate === 'string' ? headers : candidate.headers ?? headers;
@@ -747,7 +776,7 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let r;
     try {
-      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) }, executorUrl);
+      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) }, executorUrl, index + 1 < candidates.length);
     } catch (err) {
       rethrowExecutorSecurityError(err);
       if (err?.code === 'executor_target_refused') {
