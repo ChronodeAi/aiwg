@@ -2,7 +2,7 @@
 // Offline Pi CLI stand-in. Default invocations mirror a healthy pinned Pi 0.85.0.
 // AIWG_PI_STUB_SCENARIO selects a negative or long-running path for adapter
 // contract tests; AIWG_PI_STUB_RECEIPT records what the stub observed.
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, openSync, writeSync, closeSync, renameSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const scenario = process.env.AIWG_PI_STUB_SCENARIO || '';
@@ -14,15 +14,16 @@ const record = patch => {
   try { current = JSON.parse(readFileSync(receipt, 'utf8')); } catch { /* first write */ }
   // Only a completed write is a readable receipt. Timeout can kill the child
   // between opening/truncating the file and writing its JSON (#3113).
-  const pending = `${receipt}.pending`;
+  const target = `${receipt}.pending`;
+  const fd = openSync(target, 'w');
   if (scenario === 'hang-during-receipt') {
-    writeFileSync(pending, '');
     process.stderr.write('pi-stub: receipt write pending\n');
     setInterval(() => {}, 1000);
     return;
   }
-  writeFileSync(pending, JSON.stringify({ ...current, ...patch }));
-  renameSync(pending, receipt);
+  writeSync(fd, JSON.stringify({ ...current, ...patch }));
+  closeSync(fd);
+  renameSync(target, receipt);
 };
 
 if (args.includes('--version')) {

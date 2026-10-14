@@ -219,19 +219,26 @@ test('launcher propagates the abort command on timeout and the child exits witho
   } finally { run.cleanup(); }
 });
 
-test('launcher tears down a Pi child that ignores the abort command', { timeout: 15000 }, async () => {
-  const run = await launch('ignore-stdin', { timeoutMs: 100 }, new StdinAbortAdapter());
-  try {
-    assert.equal(run.result.timedOut, true);
-    assert.equal(run.receipt.abort, undefined);
-    assert.equal(run.child.signalCode, 'SIGTERM', 'bounded escalation terminated the unresponsive child');
-    assert.equal(run.child.exitCode, null);
-    assert.equal(run.result.exitCode, 1, 'signal exits surface as failure');
-    assert.ok(run.result.duration >= 2000 && run.result.duration < 7000, `SIGTERM after the 2s abort grace window (${run.result.duration}ms)`);
-    assert.equal(new PiAdapter().parseOutput(run.stdout).settled, false);
-    assert.equal(run.launcher.currentProcess, null);
-    assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'the SIGKILL timer is cleared after SIGTERM reaped the child');
-  } finally { run.cleanup(); }
+test('launcher tears down a Pi child that ignores the abort command', { timeout: 15000 }, async t => {
+  for (const publishReceipt of [true, false]) {
+    await t.test(publishReceipt ? 'with a receipt' : 'without a receipt', async () => {
+      const adapter = new StdinAbortAdapter();
+      if (!publishReceipt) adapter.getEnvOverrides = () => ({ CI: 'true', NO_COLOR: '1', AIWG_PI_STUB_RECEIPT: '' });
+      const run = await launch('ignore-stdin', { timeoutMs: 100 }, adapter);
+      try {
+        assert.equal(run.result.timedOut, true);
+        assert.equal(run.receipt?.abort, undefined);
+        if (!publishReceipt) assert.equal(run.receipt, null);
+        assert.equal(run.child.signalCode, 'SIGTERM', 'bounded escalation terminated the unresponsive child');
+        assert.equal(run.child.exitCode, null);
+        assert.equal(run.result.exitCode, 1, 'signal exits surface as failure');
+        assert.ok(run.result.duration >= 2000 && run.result.duration < 7000, `SIGTERM after the 2s abort grace window (${run.result.duration}ms)`);
+        assert.equal(new PiAdapter().parseOutput(run.stdout).settled, false);
+        assert.equal(run.launcher.currentProcess, null);
+        assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'the SIGKILL timer is cleared after SIGTERM reaped the child');
+      } finally { run.cleanup(); }
+    });
+  }
 });
 
 test('launcher tears down a production Pi child on timeout without an abort grace window', { timeout: 15000 }, async () => {
@@ -244,25 +251,29 @@ test('launcher tears down a production Pi child on timeout without an abort grac
   } finally { run.cleanup(); }
 });
 
-test('timeout during a Pi receipt write returns a failure with empty stdout and no partial JSON receipt', { timeout: 15000 }, async t => {
-  // Fire the real launcher timeout callback only after the child confirms it
-  // opened the receipt for writing. No startup-speed assumption is involved.
+async function checkReceiptWriteTimeout(t, fireOnStderr) {
+  // Fire the real launcher timeout callback after the child confirms it
+  // opened the receipt, with a bounded fallback if the signal is not handled.
+  const timeoutMs = 100;
   const setTimeout = globalThis.setTimeout;
   const escalationDelays = [];
   let fireTimeout;
   t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
-    if (delay === 100) {
+    if (delay === timeoutMs) {
       fireTimeout = callback;
-      return setTimeout(() => {}, 60_000);
+      return setTimeout(() => {
+        const expire = fireTimeout; fireTimeout = null;
+        expire?.();
+      }, 5000);
     }
     escalationDelays.push(delay);
     return setTimeout(callback, delay, ...args);
   });
-  const run = await launch('hang-during-receipt', { timeoutMs: 100 }, new PiAdapter(), launcher => {
+  const run = await launch('hang-during-receipt', { timeoutMs }, new PiAdapter(), launcher => {
     let stderr = '';
     launcher.on('stderr', chunk => {
       stderr += chunk.toString();
-      if (stderr.includes('receipt write pending\n') && fireTimeout) {
+      if (fireOnStderr && stderr.includes('receipt write pending\n') && fireTimeout) {
         const expire = fireTimeout; fireTimeout = null;
         expire();
       }
@@ -280,6 +291,14 @@ test('timeout during a Pi receipt write returns a failure with empty stdout and 
     assert.equal(run.launcher.currentProcess, null);
     assert.equal(run.launcher.pendingEscalationTimers.size, 0);
   } finally { run.cleanup(); }
+}
+
+test('timeout during a Pi receipt write returns a failure with empty stdout and no partial JSON receipt', { timeout: 15000 }, async t => {
+  await checkReceiptWriteTimeout(t, true);
+});
+
+test('receipt write timeout fallback kills the child when the stderr trigger is not handled', { timeout: 15000 }, async t => {
+  await checkReceiptWriteTimeout(t, false);
 });
 
 test('launcher captures the Pi transcript from the isolated session directory', async () => {
