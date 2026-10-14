@@ -18,7 +18,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 function runNode(args: string[], options: Parameters<typeof execFileSync>[2]) {
-  return execFileSync(process.execPath, args, options);
+  return execFileSync(process.execPath, args, { ...options, timeout: options?.timeout ?? 60_000 });
 }
 
 describe('OpenCode literal command arguments', () => {
