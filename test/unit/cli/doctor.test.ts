@@ -24,6 +24,8 @@ import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { writeExecutableSync } from '../../helpers/write-executable.js';
+import * as sharedFlagParsing from '../../../src/cli/flag-parsing.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -695,9 +697,36 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
   });
 
   it('exposes strict, baseline, and provider-budget controls', () => {
-    expect(content).toContain("a === '--strict-context'");
-    expect(content).toContain("a === '--context-baseline'");
-    expect(content).toContain("a === '--context-budget-tokens'");
+    // Execute the actual parser with the shared helpers, without running the
+    // script's top-level diagnostics or process.exit(). This checks values and
+    // precedence rather than depending on the spelling of its former loop.
+    const parserSource = content.slice(content.indexOf('const DOCTOR_VALUE_FLAGS'), content.indexOf('// Parse-or-exit wrapper'));
+    const parse = new Function('shared', `
+      const {
+        requireFlagValue: requireDoctorFlagValue,
+        hasPositionalOrSwitch: hasDoctorFlagSwitch,
+        argsTerminatorIndex: doctorArgsTerminatorIndex,
+        valueTokenIndexes: doctorValueTokenIndexes,
+        MissingFlagValueError: DoctorMissingFlagValueError,
+      } = shared;
+      ${parserSource}
+      return parseDoctorArgs;
+    `)(sharedFlagParsing);
+    expect(parse([])).toMatchObject({ strictContext: false,
+      contextBaseline: '.aiwg/context-memory-firewall-baseline.json', contextBudgetTokens: 200_000 });
+    expect(parse(['--strict-context', '--context-baseline', 'reviewed.json', '--context-budget-tokens', '12345']))
+      .toMatchObject({ strictContext: true, contextBaseline: 'reviewed.json', contextBudgetTokens: 12345 });
+    expect(parse(['--context-baseline=old.json', '--context-baseline=new.json',
+      '--context-budget-tokens=1000', '--context-budget-tokens=2000']))
+      .toMatchObject({ contextBaseline: 'new.json', contextBudgetTokens: 2000 });
+    expect(parse(['--', '--strict-context', '--context-baseline', 'ignored.json']))
+      .toMatchObject({ strictContext: false, contextBaseline: '.aiwg/context-memory-firewall-baseline.json' });
+    for (const flag of ['--context-baseline', '--context-budget-tokens']) {
+      expect(() => parse([flag])).toThrow(`${flag} requires a value`);
+      expect(() => parse([`${flag}=`])).toThrow(`${flag} requires a value`);
+    }
+    expect(content).toContain('baselinePath: contextBaseline');
+    expect(content).toContain('budgetTokens: contextBudgetTokens');
     expect(content).toContain("strictContext ? 'error' : 'warn'");
   });
 
@@ -833,8 +862,11 @@ describe('doctor: unknown-provider check names installation drift (#270)', () =>
 describe('doctor: direct-worker probes are opt-in (#2894)', () => {
   const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
-  it('parses --probe-workers in the existing boolean flag style', () => {
-    expect(content).toContain("if (a === '--probe-workers') { out.probeWorkers = true; continue; }");
+  it('parses doctor flags through the shared strict parser (#3062/#3066)', () => {
+    expect(content).toContain("await importImpl(import.meta.url, 'cli/flag-parsing.js')");
+    expect(content).toContain("hasDoctorFlagSwitch(argv, '--probe-workers'");
+    expect(content).toContain("requireDoctorFlagValue(argv, valueOptions, '--provider')");
+    expect(content).not.toContain("if (a === '--probe-workers')");
   });
 
   it('renders the section through the shared builder with the flag', () => {
@@ -846,9 +878,13 @@ describe('doctor: direct-worker probes are opt-in (#2894)', () => {
   it('emits no direct-worker section when no workers are configured, explicitly or implicitly', () => {
     // Gating covers both an explicit parallelism.clis entry and a cli
     // referenced only implicitly by a group member (#2894 fix: implicit
-    // group-referenced installations must not be skipped).
+    // group-referenced installations must not be skipped). A plain run
+    // (no --probe-workers) stays silent; an explicit probe ask renders the
+    // one-line empty state instead (#3066).
     expect(content).toContain('directCliIds');
     expect(content).toContain('if (directCliIds.size) {');
+    expect(content).toContain('if (!directCliIds.size && probeWorkers) {');
+    expect(content).toContain('WORKER_PROBE_EMPTY_MESSAGE');
   });
 
   it('reuses the shared config read instead of reading aiwg.config a second time', () => {
@@ -1006,5 +1042,292 @@ describe('doctor: real-process no-workers-configured output/exit regression (#28
     // whatever the unrelated Worker Health role-guidance check reports for
     // this same no-groups config.
     expect(lines.every(line => !line.includes('✗'))).toBe(true);
+  }, 60_000);
+});
+
+// ── Worker-probe JSON, empty state, and unknown-flag rejection (#3066) ──
+//
+// Source-shape assertions (same style as the #2894 block above: doctor.mjs
+// has top-level await and calls process.exit() directly) plus real-process
+// runs of the script against scratch projects with self-written fake worker
+// CLIs — banners mirror the proven fixtures in
+// test/unit/models/worker-direct-readiness.test.ts (codex-cli 0.161.0 is in
+// range, 0.999.0 is out of range). No real provider CLI is executed, no
+// network call is made, and HOME/USERPROFILE/XDG_* are isolated exactly as
+// in the #2894 real-process block. Every child process below is bounded by
+// an explicit timeout.
+describe('doctor: worker-probe JSON output and visible empty state (#3066)', () => {
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+  it('rejects unknown flags naming the flag with usage exit 2', () => {
+    expect(content).toContain('DOCTOR_KNOWN_FLAGS');
+    expect(content).toContain('Unknown flag: ${name}');
+    expect(content).toContain('assertNoUnknownDoctorFlags(argv)');
+    expect(content).toContain('process.exit(2)');
+  });
+
+  it('parses --json and requires --probe-workers for it', () => {
+    expect(content).toContain("hasDoctorFlagSwitch(argv, '--json'");
+    expect(content).toContain('--json requires --probe-workers');
+  });
+
+  it('maps one JSON record per CLI from the install-kind findings', () => {
+    expect(content).toContain('installFindings');
+    expect(content).toContain('toWorkerProbeRecord');
+    for (const field of ['cli', 'installed', 'version', 'inRange', 'ready', 'reason']) {
+      expect(content).toContain(`${field}:`);
+    }
+    expect(content).toContain('workersConfigured');
+  });
+
+  it('names a valid configuration command in the empty-state message', async () => {
+    expect(content).toContain('WORKER_PROBE_EMPTY_MESSAGE');
+    expect(content).toContain('No worker CLIs are configured');
+    expect(content).toContain('aiwg config set --project parallelism.clis.');
+    const example = content.match(/aiwg config set --project parallelism\.clis\.codex '([^']+)'/);
+    expect(example).not.toBeNull();
+    const { validateParallelismConfig } = await import('../../../src/config/aiwg-config.js');
+    expect(validateParallelismConfig({ clis: { codex: JSON.parse(example![1]!) } })).toEqual([]);
+  });
+
+  it('documents --json in doctor help', () => {
+    const utilities = readFileSync(resolve(__dirname, '../../../src/cli/handlers/utilities.ts'), 'utf-8');
+    expect(utilities).toContain('--json');
+    expect(utilities).toMatch(/--probe-workers.*one worker-probe record per CLI/);
+  });
+});
+
+describe('doctor: real-process worker-probe behavior (#3066)', () => {
+  const scratchRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of scratchRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  function makeProbeProject(configContent: string | null): string {
+    const projectDir = mkdtempSync(join(tmpdir(), 'aiwg-doctor-probe3066-'));
+    scratchRoots.push(projectDir);
+    if (configContent !== null) {
+      mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+      writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), configContent, 'utf-8');
+    }
+    return projectDir;
+  }
+
+  /** A fake CLI that prints `banner` on stdout for any argv and exits 0. */
+  function writeFakeCli(filePath: string, banner: string): void {
+    writeExecutableSync(filePath, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(`${banner}\n`)});\nprocess.exit(0);\n`);
+  }
+
+  function codexCliEntry(executable: string): Record<string, string> {
+    return { adapter: 'providers:codex', accountScope: 'local-account', quotaScope: 'probe-3066', executable };
+  }
+
+  /** Scratch project with present/in-range, absent, and out-of-range worker CLIs. */
+  function makeMatrixProject(): { projectDir: string } {
+    const projectDir = mkdtempSync(join(tmpdir(), 'aiwg-doctor-probe3066-'));
+    scratchRoots.push(projectDir);
+    const binDir = mkdtempSync(join(tmpdir(), 'aiwg-doctor-probe3066-bin-'));
+    scratchRoots.push(binDir);
+    const readyPath = join(binDir, 'fake-codex-ready');
+    writeFakeCli(readyPath, 'codex-cli 0.161.0');
+    const oldPath = join(binDir, 'fake-codex-old');
+    writeFakeCli(oldPath, 'codex-cli 0.999.0');
+    const missingPath = join(binDir, 'nonexistent-codex');
+    mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1',
+      providers: ['claude'],
+      parallelism: {
+        worker_dispatch: true,
+        clis: {
+          'codex-ready': codexCliEntry(readyPath),
+          'codex-old': codexCliEntry(oldPath),
+          'codex-missing': codexCliEntry(missingPath),
+        },
+      },
+    }, null, 2));
+    return { projectDir };
+  }
+
+  async function runDoctorWithArgs(
+    args: string[],
+    projectDir: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'aiwg-doctor-home-'));
+    scratchRoots.push(isolatedHome);
+    const env = {
+      ...process.env,
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      XDG_CONFIG_HOME: join(isolatedHome, '.config'),
+      XDG_DATA_HOME: join(isolatedHome, '.local', 'share'),
+      XDG_CACHE_HOME: join(isolatedHome, '.cache'),
+      XDG_STATE_HOME: join(isolatedHome, '.local', 'state'),
+      AIWG_HOME: resolve(__dirname, '../../..'),
+    };
+    try {
+      const { stdout, stderr } = await execFileAsync('node', [DOCTOR_SCRIPT, ...args], {
+        cwd: projectDir, env, timeout: 60_000,
+      });
+      return { stdout, stderr, exitCode: 0 };
+    } catch (error) {
+      const err = error as { stdout?: string; stderr?: string; code?: number };
+      return {
+        stdout: err.stdout ?? '',
+        stderr: err.stderr ?? '',
+        exitCode: typeof err.code === 'number' ? err.code : 1,
+      };
+    }
+  }
+
+  function recordsByCli(stdout: string): Record<string, {
+    cli: string; installed: boolean; version: string | null;
+    inRange: boolean | null; ready: boolean; reason: string;
+  }> {
+    // stdout must contain nothing but the JSON document in JSON mode.
+    const payload = JSON.parse(stdout) as { workers: Array<{
+      cli: string; installed: boolean; version: string | null;
+      inRange: boolean | null; ready: boolean; reason: string;
+    }> };
+    return Object.fromEntries(payload.workers.map(record => [record.cli, record]));
+  }
+
+  it('rejects an unknown flag with exit 2 naming the flag', async () => {
+    const projectDir = makeProbeProject(null);
+    for (const flag of ['--bogus-flag', '-bogus', '--json=true']) {
+      const result = await runDoctorWithArgs([flag], projectDir);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(flag.split('=')[0]);
+      expect(result.stdout).toBe('');
+    }
+    // These modes return before the script runs; validate at the public
+    // handler as well, before it touches deployment or user configuration.
+    const { doctorHandler } = await import('../../../src/cli/handlers/utilities.js');
+    for (const mode of [[], ['--deployment'], ['--scope', 'user']]) {
+      const args = [...mode, '--bogus-flag'];
+      const result = await doctorHandler.execute({ args, rawArgs: args, cwd: projectDir, frameworkRoot: '' });
+      expect(result.exitCode).toBe(2);
+      expect(result.message).toContain('--bogus-flag');
+    }
+  }, 60_000);
+
+  it('rejects a present-but-valueless value flag with exit 2 naming the flag', async () => {
+    const projectDir = makeProbeProject(null);
+    const result = await runDoctorWithArgs(['--provider'], projectDir);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--provider requires a value');
+  }, 60_000);
+
+  it('rejects --json without --probe-workers with exit 2', async () => {
+    const projectDir = makeProbeProject(null);
+    const result = await runDoctorWithArgs(['--json'], projectDir);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--json requires --probe-workers');
+  }, 60_000);
+
+  it('prints one visible empty-state line in text mode when nothing is configured', async () => {
+    const projectDir = makeProbeProject(JSON.stringify({
+      version: '1', providers: ['claude'], parallelism: { worker_dispatch: true },
+    }));
+    const result = await runDoctorWithArgs(['--probe-workers'], projectDir);
+    const lines = result.stdout.split('\n').filter(line => line.includes('Direct Worker'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('No worker CLIs are configured');
+    expect(lines[0]).toContain('aiwg config set --project parallelism.clis.');
+  }, 60_000);
+
+  it('reports ready / out-of-range / not-installed in text mode with announce lines first', async () => {
+    const { projectDir } = makeMatrixProject();
+    const result = await runDoctorWithArgs(['--probe-workers'], projectDir);
+    const lines = result.stdout.split('\n');
+    const indexOf = (needle: string): number => lines.findIndex(line => line.includes(needle));
+    const ready = indexOf('Direct Worker (codex-ready): WORKER_DIRECT_READY');
+    const outOfRange = indexOf('Direct Worker (codex-old): WORKER_DIRECT_VERSION_OUT_OF_RANGE');
+    const notInstalled = indexOf('Direct Worker (codex-missing): WORKER_DIRECT_NOT_INSTALLED');
+    expect(ready).toBeGreaterThanOrEqual(0);
+    expect(outOfRange).toBeGreaterThanOrEqual(0);
+    expect(notInstalled).toBeGreaterThanOrEqual(0);
+    expect(lines[ready]).toContain('version 0.161.0');
+    expect(lines[outOfRange]).toContain('version 0.999.0');
+    // Each executable is announced (naming the exact command line and cli
+    // id) before its own finding line is rendered.
+    for (const [cli, finding] of [
+      ['codex-ready', ready], ['codex-old', outOfRange], ['codex-missing', notInstalled],
+    ] as Array<[string, number]>) {
+      const announce = indexOf(`(cli '${cli}')`);
+      expect(announce).toBeGreaterThanOrEqual(0);
+      expect(announce).toBeLessThan(finding);
+      expect(lines[announce]).toContain('about to run');
+    }
+  }, 120_000);
+
+  it('emits one JSON record per CLI with stdout holding only the document', async () => {
+    const { projectDir } = makeMatrixProject();
+    const result = await runDoctorWithArgs(['--probe-workers', '--json'], projectDir);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trimStart().startsWith('{')).toBe(true);
+    const payload = JSON.parse(result.stdout) as {
+      probeWorkers: boolean; workersConfigured: boolean; workers: unknown[];
+    };
+    expect(payload.probeWorkers).toBe(true);
+    expect(payload.workersConfigured).toBe(true);
+    expect(payload.workers).toHaveLength(3);
+    const byCli = recordsByCli(result.stdout);
+    expect(byCli['codex-ready']).toEqual({
+      cli: 'codex-ready', installed: true, version: '0.161.0',
+      inRange: true, ready: true, reason: 'WORKER_DIRECT_READY',
+    });
+    expect(byCli['codex-old']).toEqual({
+      cli: 'codex-old', installed: true, version: '0.999.0',
+      inRange: false, ready: false, reason: 'WORKER_DIRECT_VERSION_OUT_OF_RANGE',
+    });
+    expect(byCli['codex-missing']).toEqual({
+      cli: 'codex-missing', installed: false, version: null,
+      inRange: null, ready: false, reason: 'WORKER_DIRECT_NOT_INSTALLED',
+    });
+    // Configured CLIs remain visible when dispatch disables all probes.
+    const configPath = join(projectDir, '.aiwg', 'aiwg.config');
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    config.parallelism.worker_dispatch = false;
+    writeFileSync(configPath, JSON.stringify(config));
+    const disabled = await runDoctorWithArgs(['--probe-workers', '--json'], projectDir);
+    expect(disabled.exitCode).toBe(0);
+    const disabledPayload = JSON.parse(disabled.stdout);
+    expect(disabledPayload.workerDispatch).toBe(false);
+    expect(disabledPayload.workersConfigured).toBe(true);
+    expect(disabledPayload.message).toContain('no version probes were run');
+    expect(disabledPayload.workers).toHaveLength(3);
+    for (const record of disabledPayload.workers) {
+      expect(record).toEqual({ cli: record.cli, installed: false, version: null,
+        inRange: null, ready: false, reason: 'WORKER_DIRECT_DISABLED' });
+    }
+  }, 120_000);
+
+  it('emits workersConfigured false plus the configure guidance in JSON mode when nothing is configured', async () => {
+    const projectDir = makeProbeProject(JSON.stringify({
+      version: '1', providers: ['claude'], parallelism: { worker_dispatch: true },
+    }));
+    const result = await runDoctorWithArgs(['--probe-workers', '--json'], projectDir);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      probeWorkers: boolean; workersConfigured: boolean;
+      workers: unknown[]; message: string;
+    };
+    expect(payload.probeWorkers).toBe(true);
+    expect(payload.workersConfigured).toBe(false);
+    expect(payload.workers).toEqual([]);
+    expect(payload.message).toContain('No worker CLIs are configured');
+    expect(payload.message).toContain('aiwg config set --project parallelism.clis.');
+  }, 60_000);
+
+  it('exits non-zero with empty stdout when the config cannot be read in JSON mode', async () => {
+    const projectDir = makeProbeProject('{ not valid json');
+    const result = await runDoctorWithArgs(['--probe-workers', '--json'], projectDir);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('.aiwg/aiwg.config');
   }, 60_000);
 });

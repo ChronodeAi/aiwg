@@ -124,18 +124,23 @@ describe(missingBuiltCli() && REQUIRED ? 'UAT: WD-001 — direct-worker readines
     expect(announceClaude).toBeLessThan(readyClaude);
     expect(announceCodex).toBeLessThan(outOfRangeCodex);
     expect(announceMuse).toBeLessThan(notInstalledMuse);
+
+    // Exercise the public CLI/handler boundary too: the script's JSON unit
+    // checks cannot catch extra text appended by the router or handler.
+    const json = runAiwgCli(['doctor', '--probe-workers', '--json'], { cwd: projectDir, env, timeoutMs: 30_000 });
+    expect(json.status).toBe(0);
+    const payload = JSON.parse(json.stdout);
+    expect(payload.workersConfigured).toBe(true);
+    expect(payload.workers).toHaveLength(3);
+    expect(Object.fromEntries(payload.workers.map((worker: { cli: string; reason: string }) => [worker.cli, worker.reason])))
+      .toEqual({ claude: 'WORKER_DIRECT_READY', codex: 'WORKER_DIRECT_VERSION_OUT_OF_RANGE', muse: 'WORKER_DIRECT_NOT_INSTALLED' });
   });
 
-  // FINDING, tracked on roctinam/aiwg#3066: with `worker_dispatch: true` and
-  // no `parallelism.clis` / group members configured at all, the direct
-  // worker readiness section renders *no lines whatsoever*
-  // (buildDirectWorkerDoctorSection returns `{ lines: [] }` when
-  // `allConfiguredCliIds(...)` is empty — src/models/worker-direct-readiness.ts).
-  // #3066 asks for a visible line here instead of silence. This assertion
-  // documents today's behavior (absence) so it fails loudly — turn it into
-  // the opposite assertion (a line IS present) once #3066 lands; that is
-  // the intended trigger to update this test.
-  it.skipIf(missingBuiltCli() && !REQUIRED)('documents today\'s behavior: no CLIs configured renders no Direct Worker section (#3066)', async () => {
+  // roctinam/aiwg#3066: with `worker_dispatch: true` and no
+  // `parallelism.clis` / group members configured at all, the direct worker
+  // readiness section renders one visible, actionable line instead of
+  // silence, so an empty run cannot be mistaken for "all workers ready".
+  it.skipIf(missingBuiltCli() && !REQUIRED)('no CLIs configured renders one visible Direct Worker empty-state line (#3066)', async () => {
     if (missingBuiltCli() && REQUIRED) throw new Error('dist/ is missing — run `npm run build:cli` before `npm run uat:workers-live`');
     const projectDir = trackedTmpDir('aiwg-uat-wd001-empty-proj-');
     const configDir = trackedTmpDir('aiwg-uat-wd001-empty-config-');
@@ -148,7 +153,15 @@ describe(missingBuiltCli() && REQUIRED ? 'UAT: WD-001 — direct-worker readines
     const env = await buildHermeticEnv({ pathDirs: [], aiwgConfig: configDir, extra: { AIWG_HOME: REPO_ROOT } });
     const result = runAiwgCli(['doctor', '--probe-workers'], { cwd: projectDir, env, timeoutMs: 30_000 });
 
-    // Today: silent. #3066 wants this to change to a visible, actionable line.
-    expect(result.stdout).not.toContain('Direct Worker');
+    const lines = result.stdout.split('\n').filter(line => line.includes('Direct Worker'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('No worker CLIs are configured');
+    expect(lines[0]).toContain('aiwg config set --project parallelism.clis.');
+    const json = runAiwgCli(['doctor', '--probe-workers', '--json'], { cwd: projectDir, env, timeoutMs: 30_000 });
+    expect(json.status).toBe(0);
+    const payload = JSON.parse(json.stdout);
+    expect(payload.workersConfigured).toBe(false);
+    expect(payload.workers).toEqual([]);
+    expect(payload.message).toContain('No worker CLIs are configured');
   });
 });

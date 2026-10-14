@@ -621,6 +621,11 @@ export interface DirectWorkerDoctorLine {
  * workers configured (explicitly or implicitly through a group member) means
  * no lines at all, so doctor output and exit code are unchanged there.
  *
+ * `installFindings` carries the structured per-cli installation findings
+ * (`kind === 'install'`, one per configured cli, untruncated) backing
+ * `lines`, so machine-readable surfaces (`aiwg doctor --probe-workers
+ * --json`) can render one record per CLI without re-running the probes.
+ *
  * Trust boundary: with `probeWorkers: true`, every probed executable is
  * exactly the one named by project configuration (or the registry default)
  * run with only its registered version arguments — opting in trusts that
@@ -635,10 +640,10 @@ export async function buildDirectWorkerDoctorSection(input: {
   configFile?: string;
   projectRoot?: string;
   resolverSnapshot?: DirectWorkerResolverSnapshot;
-}): Promise<{ lines: DirectWorkerDoctorLine[]; probed: boolean; workersConfigured: boolean }> {
+}): Promise<{ lines: DirectWorkerDoctorLine[]; probed: boolean; workersConfigured: boolean; installFindings: DirectWorkerReadinessFinding[] }> {
   const { parallelism, registry, probeWorkers } = input;
   const cliIds = allConfiguredCliIds(parallelism ?? {});
-  if (!cliIds.length) return { lines: [], probed: false, workersConfigured: false };
+  if (!cliIds.length) return { lines: [], probed: false, workersConfigured: false, installFindings: [] };
   const lines: DirectWorkerDoctorLine[] = [];
   if (probeWorkers) {
     lines.push({ name: 'Direct Worker Probes', status: 'info',
@@ -668,5 +673,18 @@ export async function buildDirectWorkerDoctorSection(input: {
     lines.push({ name: 'Direct Worker', status: 'info',
       message: 'no profile is onboarded; profiles are unqualified until an authenticated smoke run (see #3005)' });
   }
-  return { lines, probed: probeWorkers, workersConfigured: true };
+  return {
+    lines,
+    probed: probeWorkers,
+    workersConfigured: true,
+    // Disabled dispatch skips probes but still needs one record per configured
+    // CLI in machine-readable output. Keep the existing text findings intact.
+    installFindings: report.enabled
+      ? report.findings.filter(finding => finding.kind === 'install')
+      : cliIds.map(cli => ({
+        ...report.findings[0]!, cli, kind: 'install' as const,
+        configKey: `/parallelism/clis/${cli}`, readiness: 'skipped' as const,
+        eligibility: null, eligibilityDetail: null,
+      })),
+  };
 }

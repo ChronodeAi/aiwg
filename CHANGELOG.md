@@ -335,6 +335,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
+  strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
+  record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level
+  `probeWorkers`/`workerDispatch`/`workersConfigured` fields and a `message` naming the
+  configuration command when there is nothing to report); with no worker CLIs configured the text
+  run prints one `Direct Worker` line saying so and how to configure a complete CLI entry
+  (`aiwg config set --project parallelism.clis.codex` with adapter and account/quota scopes)
+  instead of silence; disabled dispatch still reports each CLI as skipped in JSON; unknown
+  `aiwg doctor` flags (and valueless value flags, and `--json` without `--probe-workers`) exit 2
+  naming the flag. Doctor flags are parsed through the shared strict parser from #3062 rather than
+  a hand-rolled loop.
 - `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
 - The OMP provider failed in an installed package: its deploy tool imported two modules by a path
   into the unshipped source tree, and `aiwg remove omp` imported that tool by a path that is one
