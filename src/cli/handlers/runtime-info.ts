@@ -317,15 +317,18 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       console.log(`  State:     ${installation.state}`);
 
       // Scheduler backend detection
-      const { boundedExecSync } = await import('../../process/bounded-child-process.mjs');
+      const { boundedExecFileSync } = await import('../../process/bounded-child-process.mjs');
       let schedulerBackend = 'external trigger required (system cron/systemd/CI)';
       let chronyInstalled = false;
 
-      try {
-        boundedExecSync('which chronyc 2>/dev/null || which chronyd 2>/dev/null', 'quick', { stdio: 'pipe' });
-        chronyInstalled = true;
-      } catch {
-        // chrony not found
+      for (const tool of ['chronyc', 'chronyd']) {
+        try {
+          boundedExecFileSync('which', [tool], 'quick', { stdio: ['pipe', 'pipe', 'ignore'] });
+          chronyInstalled = true;
+          break;
+        } catch {
+          // Try the next chrony binary.
+        }
       }
 
       // Native CronCreate is only available when running inside a Claude Code agent context.

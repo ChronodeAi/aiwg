@@ -1,8 +1,7 @@
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
-import { writeExecutable } from '../../helpers/write-executable.js';
 import { compileModelPolicy } from '../../../src/models/provider-policy.js';
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,15 +9,14 @@ import { OmpFrameDecoder, MAX_FRAME, OmpRpcClient, inspectOmpProcess, waitForOmp
 import { OmpAdapter } from '../../../tools/ralph-external/lib/omp-adapter.mjs';
 import { OmpTaskGate, runOmpTeam, acquireOmpWorkspaceSlot } from '../../../tools/providers/omp-teams.mjs';
 import { discoverOmpModels, resolveOmpRoleModel } from '../../../src/models/model-discovery.js';
-const shellQuote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 const jsonl = (...frames: any[]) => frames.map(f => JSON.stringify(f) + '\n').join('');
 const message = { role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' };
 
-// Execute a committed shim; temporary scripts are interpreter input, never exec targets.
-// exec preserves the actual child PID and signal/EOF lifecycle under test.
-const rpcFixture = (script: string) => ({
-  binary: fileURLToPath(new URL('../../fixtures/providers/omp-rpc-launcher.sh', import.meta.url)),
-  env: { ...process.env, AIWG_OMP_TEST_SCRIPT: script },
+const rpcNodeFixture = (config: Record<string, unknown>) => ({
+  binary: fileURLToPath(new URL('../../fixtures/providers/omp-rpc-node-launcher.sh', import.meta.url)),
+  env: { ...process.env, AIWG_OMP_TEST_NODE: process.execPath,
+    AIWG_OMP_TEST_FIXTURE: fileURLToPath(new URL('../../fixtures/providers/omp-rpc.cjs', import.meta.url)),
+    AIWG_OMP_TEST_CONFIG: JSON.stringify(config) },
 });
 
 describe('OMP catalog', () => {
@@ -72,21 +70,26 @@ describe('OMP JSON and frames', () => {
 });
 describe('OMP RPC lifecycle', () => {
   it.each([1, 2])('negotiates v%s with correlation, terminal events and process cleanup', async version => {
-    const dir = await mkdtemp(join(tmpdir(), "omp-rpc-'\\\n-")); const fixture = join(dir, 'fixture.cjs');
-    await writeFile(fixture, `process.stdout.write(JSON.stringify({type:'ready',protocolVersion:1,supportedProtocolVersions:[1,${version}]})+'\\n');setTimeout(()=>process.stderr.write('fixture stderr noise'),25);require('readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');send({type:'response',id:m.id,command:m.type,success:true,data:m.type==='get_state'?{isStreaming:false}: {protocolVersion:2}});if(m.type==='prompt'){send({type:'agent_end',willContinue:true,messages:[]});send({type:'message_end',message:${JSON.stringify(message)}});send({type:'agent_end',messages:[]});}});`);
-    // Wrapper absorbs OMP args while retaining a real child process lifecycle.
-    const executable = join(dir, 'omp'); await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)}\n`);
-    const client = new OmpRpcClient({ ...rpcFixture(executable), timeoutMs: 2000 });
+    const dir = await mkdtemp(join(tmpdir(), "omp-rpc-'\\\n-"));
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'negotiate', version, message }), cwd: dir, timeoutMs: 2000 });
     try { await client.connect(); expect(client.protocolVersion).toBe(version); await vi.waitFor(() => expect(client.stderr).toContain('fixture stderr noise'), { timeout: 500, interval: 5 }); expect((await client.prompt('hello')).success).toBe(true); }
     finally { await client.close(); await rm(dir, { recursive: true, force: true }); }
     expect(client.isClosed).toBe(true);
   });
+  it('reads code-like messages as fixture JSON data', async () => {
+    const text = `done '" \\ newline\n; process.exit(99);`;
+    const fixtureMessage = { ...message, content: [{ type: 'text', text }] };
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'negotiate', version: 1, message: fixtureMessage }), timeoutMs: 2000 });
+    try {
+      await client.connect();
+      const result = await client.prompt('hello');
+      expect(result.success).toBe(true); expect(result.text).toBe(text);
+    } finally { await client.close(); }
+  });
   it('allows EOF disposal to reap an owned descendant before closing', async () => {
-    const dir = await mkdtemp(join(tmpdir(), "omp-dispose-'\\\n-")); const executable = join(dir, 'omp');
-    const fixture = join(dir, 'fixture.cjs'); const receipt = join(dir, 'reaped');
-    await writeFile(fixture, `const {spawn}=require('child_process');const fs=require('fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});process.stdout.write(JSON.stringify({type:'ready'})+'\\n');process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>{child.once('exit',()=>{fs.writeFileSync(${JSON.stringify(receipt)},String(child.pid));process.exit(0)});child.kill('SIGTERM')},100));`);
-    await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)}\n`);
-    const client = new OmpRpcClient({ ...rpcFixture(executable), closeGraceMs: 1000 });
+    const dir = await mkdtemp(join(tmpdir(), "omp-dispose-'\\\n-"));
+    const receipt = join(dir, `reaped-'"; process.exit(99);`);
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'dispose', receipt }), closeGraceMs: 1000 });
     try {
       await client.connect(); await client.close();
       const pid = Number(await readFile(receipt, 'utf8'));
@@ -95,9 +98,8 @@ describe('OMP RPC lifecycle', () => {
     } finally { await client.close(); await rm(dir, { recursive: true, force: true }); }
   });
   it('bounds shutdown when a ready process ignores EOF and SIGTERM', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'omp-close-bound-')); const executable = join(dir, 'omp');
-    await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} -e 'process.on("SIGTERM",()=>{});process.stdout.write(JSON.stringify({type:"ready"})+"\\n");process.stdin.resume();setInterval(()=>{},1000)'\n`);
-    const client = new OmpRpcClient({ ...rpcFixture(executable), closeGraceMs: 50 });
+    const dir = await mkdtemp(join(tmpdir(), 'omp-close-bound-'));
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'ignore-eof' }), cwd: dir, closeGraceMs: 50 });
     try { await client.connect(); const started = Date.now(); await client.close(); expect(Date.now() - started).toBeLessThan(2000); expect(client.child.signalCode).toBe('SIGKILL'); }
     finally { await client.close(); await rm(dir, { recursive: true, force: true }); }
   });
@@ -109,9 +111,8 @@ describe('OMP RPC lifecycle', () => {
     expect(receipt.complete).toBe(false); expect(receipt.final[0].present).toBe(true);
   });
   it('kills a hanging child on timeout and abort', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'omp-hang-')); const executable = join(dir, 'omp');
-    await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} -e 'setInterval(()=>{},1000)'\n`);
-    const client = new OmpRpcClient({ ...rpcFixture(executable), timeoutMs: 50 });
+    const dir = await mkdtemp(join(tmpdir(), 'omp-hang-'));
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'descendant' }), cwd: dir, timeoutMs: 50 });
     await expect(client.connect()).rejects.toThrow('timeout'); await client.close(); expect(client.isClosed).toBe(true);
     await rm(dir, { recursive: true, force: true });
   });
@@ -121,21 +122,14 @@ describe('OMP RPC lifecycle', () => {
   // command/prompt timeout -- and that warm-up and startup must be measured and ordered, not just
   // pass/fail.
   it('separates the first-start readiness budget from the normal command timeout, and records an ordered, measured warm-up', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-')); const executable = join(dir, 'omp');
-    const fixture = join(dir, 'fixture.cjs'); const trace = join(dir, 'trace.log');
-    // Forwards argv: `--version` logs 'warmup' and answers immediately; the RPC start logs
-    // 'rpc-start', is slow to become ready (like a cold start competing for the host), and then
-    // never answers any command -- so only a command's own (short) timeout can end it.
-    await writeFile(fixture, `const fs=require('fs');const log=l=>fs.appendFileSync(${JSON.stringify(trace)},l+' '+Date.now()+'\\n');` +
-      `if(process.argv[2]==='--version'){log('warmup');process.stdout.write('18.1.10\\n');process.exit(0);}log('rpc-start');` +
-      `process.stdin.resume();setTimeout(()=>{process.stdout.write(JSON.stringify({type:'ready'})+'\\n');},150);`);
-    await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)} "$@"\n`);
+    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-')); const trace = join(dir, 'trace.log');
+    // The static fixture answers --version, then starts RPC slowly without answering commands.
     try {
       // A fixed wait shorter than the cold start fails exactly as the filed #2999 incident did
       // (see "kills a hanging child on timeout and abort" above for that case in isolation).
       // The larger, explicit `readyTimeoutMs` this fix adds lets the same slow-but-healthy binary
       // connect, while the ordinary (short) `timeoutMs` keeps bounding what happens after.
-      const { client, warmup, warmedMs, readyMs } = await warmAndConnectOmpRpcClient({ ...rpcFixture(executable), readyTimeoutMs: 2000, timeoutMs: 80, closeGraceMs: 50 });
+      const { client, warmup, warmedMs, readyMs } = await warmAndConnectOmpRpcClient({ ...rpcNodeFixture({ mode: 'warm', trace }), readyTimeoutMs: 2000, timeoutMs: 80, closeGraceMs: 50 });
       try {
         expect(client.failure).toBeUndefined();
         expect(warmup).toMatchObject({ status: 0, signal: null, error: null });
@@ -154,17 +148,10 @@ describe('OMP RPC lifecycle', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
   it('closes the client when connect() rejects (e.g. a protocol negotiation rejection), so the helper never loses ownership', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-reject-')); const executable = join(dir, 'omp');
-    const fixture = join(dir, 'fixture.cjs'); const pidFile = join(dir, 'pid');
-    // Advertises protocol v2 (so `connect()` negotiates) but rejects every command, including
-    // `negotiate_protocol` -- `connect()` must reject, and the helper must still close the process.
-    await writeFile(fixture, `const fs=require('fs');fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));` +
-      `process.stdout.write(JSON.stringify({type:'ready',supportedProtocolVersions:[1,2]})+'\\n');` +
-      `require('readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);` +
-      `process.stdout.write(JSON.stringify({type:'response',id:m.id,command:m.type,success:false})+'\\n');});`);
-    await writeFile(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)} "$@"\n`);
+    const dir = await mkdtemp(join(tmpdir(), 'omp-warm-reject-')); const pidFile = join(dir, 'pid');
+    // The static fixture advertises v2 but rejects protocol negotiation.
     try {
-      await expect(warmAndConnectOmpRpcClient({ ...rpcFixture(executable), readyTimeoutMs: 2000, closeGraceMs: 50 }))
+      await expect(warmAndConnectOmpRpcClient({ ...rpcNodeFixture({ mode: 'reject', pidFile }), readyTimeoutMs: 2000, closeGraceMs: 50 }))
         .rejects.toThrow('negotiate_protocol failed');
       const pid = Number(await readFile(pidFile, 'utf8'));
       await vi.waitFor(async () => { expect((await inspectOmpProcess({ pid })).present).toBe(false); }, { timeout: 2000, interval: 20 });
@@ -226,9 +213,8 @@ describe('OMP edge cases', () => {
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
   it('rejects RPC EOF without a terminal event', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'omp-eof-')); const executable = join(dir, 'omp');
-    await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '{"type":"ready","supportedProtocolVersions":[1]}'\nread line\nprintf '%s\\n' '{"type":"response","id":"aiwg-1","command":"prompt","success":true}'\n`);
-    const client = new OmpRpcClient({ ...rpcFixture(executable), timeoutMs: 1000 });
+    const dir = await mkdtemp(join(tmpdir(), 'omp-eof-'));
+    const client = new OmpRpcClient({ ...rpcNodeFixture({ mode: 'eof' }), cwd: dir, timeoutMs: 1000 });
     try { await client.connect(); await expect(client.prompt('work')).rejects.toThrow('exited'); } finally { await client.close(); await rm(dir, { recursive: true, force: true }); }
   });
 });
@@ -253,18 +239,19 @@ describe('OMP native model field contract', () => {
 describe('OMP External Ralph session integration', () => {
   it('does not treat AIWG tracking UUID as native resume and rejects model failure despite exit zero', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'omp-launcher-'));
-    const executable = join(dir, 'omp');
+    let fixture = rpcNodeFixture({ mode: 'session', messages: [message] });
     const adapter = new OmpAdapter(); let received: any;
-    adapter.getBinary = () => executable;
+    adapter.getBinary = () => fixture.binary;
+    const getEnvOverrides = adapter.getEnvOverrides.bind(adapter);
+    adapter.getEnvOverrides = () => ({ ...getEnvOverrides(), ...fixture.env });
     const build = adapter.buildSessionArgs.bind(adapter);
     adapter.buildSessionArgs = (options: any) => { received = options; return build(options); };
     const launcher = new SessionLauncher(); launcher.setProviderAdapter(adapter);
     const options = { prompt: 'work', sessionId: 'aiwg-tracking-uuid', workingDir: dir, stdoutPath: join(dir, 'stdout'), stderrPath: join(dir, 'stderr'), timeoutMs: 1000 };
     try {
-      await writeExecutable(executable, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(JSON.stringify({ type: 'agent_end', messages: [message] }))}\n`);
       const success = await launcher._launchSession(options);
       expect(received.sessionId).toBeUndefined(); expect(success.exitCode).toBe(0);
-      await writeExecutable(executable, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(JSON.stringify({ type: 'agent_end', messages: [{ ...message, stopReason: 'error' }] }))}\n`);
+      fixture = rpcNodeFixture({ mode: 'session', messages: [{ ...message, stopReason: 'error' }] });
       const failed = await launcher._launchSession({ ...options, resumeSession: '/existing/native.jsonl' });
       expect(received.sessionId).toBe('/existing/native.jsonl'); expect(failed.exitCode).toBe(1);
     } finally { await rm(dir, { recursive: true, force: true }); }

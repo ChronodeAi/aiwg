@@ -9,6 +9,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Remaining CodeQL findings after the security sweep (#3093–#3097, #3099 follow-up): use argv for synchronous command callers, guard every nested configuration key, anchor and escape test hostname patterns, and replace generated runtime test code with static fixtures.
+
 - Parse skill platform frontmatter with YAML to preserve comments and scalar restrictions,
   fail closed on malformed restrictions, and quote YAML 1.1 boolean words in injected
   metadata (#3109).

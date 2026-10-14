@@ -10,7 +10,7 @@
 import { MultiLoopStateManager } from './state-manager-sync.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
 
-const { boundedExecSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 function displayActiveLoops(stateManager) {
   const activeLoops = stateManager.listActiveLoops();
@@ -111,8 +111,8 @@ async function main() {
       console.log('Reverting changes...');
       try {
         // Find ralph commits for this loop
-        const log = boundedExecSync(
-          `git log --oneline --grep="^ralph:.*${loopId}" -n 20`,
+        const log = boundedExecFileSync(
+          'git', ['log', '--oneline', `--grep=^ralph:.*${loopId}`, '-n', '20'],
           'quick',
           { encoding: 'utf8' }
         );

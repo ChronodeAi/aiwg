@@ -10,7 +10,9 @@
  *   aiwg -contribute-status cursor-integration  # Show feature details
  */
 
-import { boundedExecSync } from '../../src/process/bounded-child-process.mjs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import {
   listWorkspaces,
   loadWorkspaceData,
@@ -78,14 +80,14 @@ function formatRelativeTime(isoDate) {
 function getGitStatus(projectRoot = process.cwd()) {
   try {
     // Get current branch
-    const branch = boundedExecSync('git rev-parse --abbrev-ref HEAD', 'quick', {
+    const branch = boundedExecFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], 'quick', {
       cwd: projectRoot,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
 
     // Get uncommitted changes
-    const statusOutput = boundedExecSync('git status --porcelain', 'quick', {
+    const statusOutput = boundedExecFileSync('git', ['status', '--porcelain'], 'quick', {
       cwd: projectRoot,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe']
@@ -96,7 +98,7 @@ function getGitStatus(projectRoot = process.cwd()) {
     let aheadOrigin = 0;
     let behindOrigin = 0;
     try {
-      const aheadBehindOrigin = boundedExecSync(`git rev-list --left-right --count origin/${branch}...HEAD 2>/dev/null`, 'quick', {
+      const aheadBehindOrigin = boundedExecFileSync('git', ['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`], 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe']
@@ -111,7 +113,7 @@ function getGitStatus(projectRoot = process.cwd()) {
     let aheadUpstream = 0;
     let behindUpstream = 0;
     try {
-      const aheadBehindUpstream = boundedExecSync(`git rev-list --left-right --count upstream/main...HEAD 2>/dev/null`, 'quick', {
+      const aheadBehindUpstream = boundedExecFileSync('git', ['rev-list', '--left-right', '--count', 'upstream/main...HEAD'], 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe']
@@ -431,4 +433,8 @@ function main() {
 }
 
 // Run main
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
+
+export { getGitStatus };
