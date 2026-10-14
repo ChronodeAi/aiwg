@@ -70,7 +70,7 @@ operators such as `${1:-fallback}`. A `$` inside single quotes is literal text a
 Keep the provided references quoted when using them as data arguments.
 Command substitution (`$(`), backticks, `eval`, nested shell invocations with `-c`
 (including redirections and `env … sh -c`), here-documents and here-strings (`<<`),
-`#` outside single quotes, and backslash-newline line continuations are rejected. Put complex logic in a wrapper script
+`#` outside single quotes, and backslash-newline line continuations (anywhere, regardless of quoting) are rejected. Put complex logic in a wrapper script
 that receives the paths as data arguments. Templates are trusted executable code
 and must not re-parse path values as shell source. Validation is defense in depth;
 keep path arguments quoted in the wrapper, as in the example above.

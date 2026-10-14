@@ -68,7 +68,7 @@ describe('resolveAdapter (#1507)', () => {
     const image = join(dir, 'page-001.png');
     writeFileSync(image, 'PNG');
     for (const name of ['AIWG_VISION_OUT', 'AIWG_VISION_IMAGE', 'AIWG_VISION_PROMPT_FILE']) {
-      for (const newline of ['\n', '\r\n']) {
+      for (const newline of ['\n', '\r\n', '\r']) {
         const command = `${name}_S=sh; "$${name}\\${newline}_S" -c 'printf original:'{${placeholder}} > {out}`;
         expect(() => {
           const adapter = resolveAdapter({ provider: 'command', command: `cd '${root}'; ${command}` });
