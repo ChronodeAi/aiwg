@@ -165,6 +165,42 @@ describe('contribution commands keep data in argv (#142)', () => {
     expect(existsSync(path.join(root, 'injected'))).toBe(false);
   });
 
+  it.each(['code', 'code.cmd --wait', 'code.bat --wait'])('launches Windows EDITOR=%s with separately quoted operands', editor => {
+    const extension = editor.includes('.bat') ? '.bat' : '.cmd';
+    const executable = path.join(root, `code${extension}`);
+    writeFileSync(executable, '@echo editor launcher');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PATH', root);
+    vi.stubEnv('PATHEXT', '.CMD;.BAT;.EXE;.COM');
+    vi.stubEnv('ComSpec', 'C:\\Windows\\System32\\custom-cmd.exe');
+    vi.stubEnv('EDITOR', editor);
+    const firstFile = 'file with spaces & %PATH%.txt';
+
+    applyConflictChoice('1', [firstFile], 'merge', root);
+
+    expect(editorExecFile).toHaveBeenCalledWith(
+      process.env.ComSpec,
+      ['/d', '/s', '/c', `""${executable}"${editor.includes('--wait') ? ' "--wait"' : ''} "file with spaces & %%PATH%%.txt""`],
+      { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
+    );
+  });
+
+  it('launches a Windows native editor directly, preferring it over a batch launcher', () => {
+    const executable = path.join(root, 'notepad.exe');
+    writeFileSync(executable, '');
+    writeFileSync(path.join(root, 'notepad.cmd'), '@echo editor launcher');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PATH', root);
+    vi.stubEnv('PATHEXT', '.CMD;.EXE;.COM');
+    vi.stubEnv('ComSpec', 'custom-cmd.exe');
+    vi.stubEnv('EDITOR', 'notepad');
+    const firstFile = 'file with spaces & %PATH%.txt';
+
+    applyConflictChoice('1', [firstFile], 'merge', root);
+
+    expect(editorExecFile).toHaveBeenCalledWith(executable, [firstFile], { cwd: root, stdio: 'inherit' });
+  });
+
   it('uses the default editor and reports malformed EDITOR quoting', () => {
     vi.stubEnv('EDITOR', '');
     applyConflictChoice('1', ['conflict.txt'], 'merge', root);

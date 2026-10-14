@@ -20,6 +20,8 @@
 
 import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import { execFileSync } from 'child_process';
+import { resolveExecutable } from '../../src/process/cli-command.mjs';
+import { resolveManagerCommand } from '../../src/installation/manager-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -443,12 +445,16 @@ function applyConflictChoice(choice, conflicts, strategy, cwd) {
     console.log(`Opening ${firstFile} in ${editor}...`);
     try {
       const [file, ...args] = editorArgs(editor);
+      const invocation = resolveManagerCommand(resolveExecutable(file), [...args, firstFile]);
       // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
       // the conflicted file; the user interacts with it directly (see
       // tools/testing/sync-spawn-allowlist.json). Callers of this function
       // only reach choice '1' when a terminal is attached (#3062) — see
       // `handleConflicts` below. Not a candidate for a bounded timeout.
-      execFileSync(file, [...args, firstFile], { stdio: 'inherit', cwd });
+      execFileSync(invocation.file, invocation.args, {
+        stdio: 'inherit', cwd,
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      });
     } catch (err) {
       console.log(`${colors.red}✗${colors.reset} Failed to open editor`);
     }

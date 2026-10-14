@@ -9,7 +9,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
-- Remaining CodeQL findings after the security sweep (#3093–#3097, #3099 follow-up): use argv for synchronous command callers, guard every nested configuration key, anchor and escape test hostname patterns, and replace generated runtime test code with static fixtures. Review follow-up (#3116) preserves Windows npm shim execution and symlinked script entry points, escapes tmux separators, retains Windows eval script quoting, rejects Git push option operands, and passes ClawHub queries, editor file paths, npm package names, and Git revision ranges safely.
+- Remaining CodeQL findings after the security sweep (#3093–#3097, #3099 follow-up): use argv for synchronous command callers, guard every nested configuration key, anchor and escape test hostname patterns, and replace generated runtime test code with static fixtures. Review follow-up (#3116) preserves Windows npm shim execution and symlinked script entry points, escapes tmux separators, retains Windows eval script quoting, rejects Git push option operands, and passes ClawHub queries, editor file paths, npm package names, and Git revision ranges safely. `sync-upstream` resolves Windows editors through PATH/PATHEXT, prefers native executables, and launches `.cmd`/`.bat` editors through ComSpec with separately quoted arguments.
 
 - Parse skill platform frontmatter with YAML to preserve comments and scalar restrictions,
   fail closed on malformed restrictions, and quote YAML 1.1 boolean words in injected

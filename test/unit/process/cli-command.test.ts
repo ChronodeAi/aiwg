@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cliCommand } from '../../../src/process/cli-command.mjs';
+import { cliCommand, resolveExecutable } from '../../../src/process/cli-command.mjs';
 
 describe('cliCommand', () => {
   let dir: string;
@@ -59,6 +59,33 @@ describe('cliCommand', () => {
     writeFileSync(executable, '');
     expect(cliCommand('openclaw', ['--version'], 'win32', dir, '.EXE;.CMD'))
       .toEqual([executable, ['--version']]);
+  });
+
+  it('resolves arbitrary batch executables without interpreting their contents', () => {
+    const executable = join(dir, 'code.cmd');
+    writeFileSync(executable, '@echo arbitrary editor launcher');
+    expect(resolveExecutable('code', 'win32', dir, '.EXE;.CMD')).toBe(executable);
+    expect(resolveExecutable(executable, 'win32', '', '.EXE;.CMD')).toBe(executable);
+    expect(resolveExecutable('missing', 'win32', dir, '.EXE;.CMD')).toBe('missing');
+    expect(resolveExecutable('code', 'linux', dir, '.CMD')).toBe('code');
+  });
+
+  it.each(['.CMD;.EXE;.BAT;.COM', '.BAT;.COM;.CMD;.EXE'])('prefers native executables in PATHEXT order: %s', pathExt => {
+    for (const extension of ['cmd', 'bat', 'exe', 'com']) {
+      writeFileSync(join(dir, `code.${extension}`), '');
+    }
+    const expected = pathExt.indexOf('.EXE') < pathExt.indexOf('.COM') ? 'exe' : 'com';
+    expect(resolveExecutable('code', 'win32', dir, pathExt)).toBe(join(dir, `code.${expected}`));
+    expect(resolveExecutable('code.cmd', 'win32', dir, pathExt)).toBe(join(dir, 'code.cmd'));
+  });
+
+  it('keeps PATH precedence when preferring native executables', () => {
+    const later = join(dir, 'later');
+    mkdirSync(later);
+    writeFileSync(join(dir, 'code.cmd'), '');
+    writeFileSync(join(later, 'code.exe'), '');
+    expect(resolveExecutable('code', 'win32', `${dir};${later}`, '.CMD;.EXE'))
+      .toBe(join(dir, 'code.cmd'));
   });
 
   it('refuses unsupported batch scripts and missing npm entry points', () => {
