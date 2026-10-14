@@ -83,6 +83,18 @@ describe('storage/backends/logseq', () => {
     });
 
     it.each([
+      ['LF', '\n'], ['bare CR', '\r'], ['CRLF', '\r\n'],
+      ['LS', '\u2028'], ['PS', '\u2029'],
+    ])('preserves body exactly after block IDs terminated by %s', async (_name, ending) => {
+      for (const value of ['', 'x']) {
+        for (const body of ['- body', `- body${ending}- second${ending}`]) {
+          await adapter.write('pages/foo.md', `id::${value}${ending}${body}`);
+          expect(await adapter.read('pages/foo.md')).toBe(body);
+        }
+      }
+    });
+
+    it.each([
       ['---\r\ntitle: "Note: detail"\r\ntags: [a, b]\r\n---\r\n\n- body', 'title:: Note: detail\ntags:: a, b\n- body'],
       ['---\n\n---\n- body', '- body'],
       ['---\n\n---title: note\n---\n- body', '- body'],
