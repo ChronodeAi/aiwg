@@ -234,40 +234,53 @@ describe('Cockpit bridge outbound security', () => {
     }
   });
 
-  it.each([301, 302, 303, 307, 308])('revalidates %i redirects and never retries a refused POST', async (status) => {
-    const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, {
+  it.each([301, 302, 303, 307, 308])('refuses cross-origin %i redirects and never retries a POST', async (status) => {
+    const response = new Response('redirect body', {
       status, headers: { location: 'http://untrusted.example/private' },
-    }));
+    });
+    const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
     await expect(fetchJsonFirst([`${executorUrl}/redirect`, `${executorUrl}/fallback`], {
       executorUrl, method: 'POST', body: '{}', headers: { authorization: 'Bearer synthetic-secret' },
     })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
-    expect(outbound).toHaveBeenCalledExactlyOnceWith(new URL(`${executorUrl}/redirect`), expect.objectContaining({ redirect: 'manual' }));
+    expect(outbound).toHaveBeenCalledExactlyOnceWith(new URL(`${executorUrl}/redirect`), expect.objectContaining({
+      method: 'POST', body: '{}', redirect: 'manual',
+    }));
+    expect(outbound.mock.calls[0][1].headers.get('authorization')).toBe('Bearer synthetic-secret');
+    expect(response.bodyUsed).toBe(true);
   });
 
-  it('follows relative redirects on the approved origin and checks every hop', async () => {
-    const outbound = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(null, { status: 307, headers: { location: '/second' } }))
-      .mockResolvedValueOnce(new Response(null, { status: 308, headers: { location: '/last' } }))
-      .mockResolvedValueOnce(jsonResponse({ ok: true }));
-    const result = await fetchJsonFirst([`${executorUrl}/first`], { executorUrl });
-    expect(result.body).toEqual({ ok: true });
-    expect(outbound.mock.calls.map(([url]) => url.href)).toEqual([
-      `${executorUrl}/first`, `${executorUrl}/second`, `${executorUrl}/last`,
-    ]);
-    expect(outbound.mock.calls.every(([, options]) => options.redirect === 'manual')).toBe(true);
-    outbound.mockReset()
-      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: '/second' } }))
-      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: '//untrusted.example/private' } }));
-    await expect(fetchJsonFirst([`${executorUrl}/first`], { executorUrl })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
-    expect(outbound).toHaveBeenCalledTimes(2);
+  it.each([301, 302, 303, 307, 308])('refuses same-origin %i redirects without replaying the body or bearer', async (status) => {
+    for (const location of ['/agents/other/v1/tasks', `${executorUrl}/admin/instances`]) {
+      const response = new Response('redirect body', { status, headers: { location } });
+      const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+      await expect(fetchJsonFirst([`${executorUrl}/first`, `${executorUrl}/fallback`], {
+        executorUrl, method: 'POST', body: '{"task":"private"}',
+        headers: { authorization: 'Bearer synthetic-secret', 'content-type': 'application/json' },
+      })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
+      expect(outbound).toHaveBeenCalledExactlyOnceWith(new URL(`${executorUrl}/first`), expect.objectContaining({
+        method: 'POST', body: '{"task":"private"}', redirect: 'manual',
+      }));
+      expect(outbound.mock.calls[0][1].headers.get('authorization')).toBe('Bearer synthetic-secret');
+      expect(outbound.mock.calls[0][1].headers.get('content-type')).toBe('application/json');
+      expect(response.bodyUsed).toBe(true);
+      outbound.mockRestore();
+    }
   });
 
-  it('bounds redirect loops', async () => {
+  it.each([300, 304, 305, 306, 399])('refuses %i without Location and never tries a GET fallback', async (status) => {
+    const response = new Response(null, { status });
+    const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    await expect(fetchJsonFirst([`${executorUrl}/first`, `${executorUrl}/fallback`], { executorUrl }))
+      .rejects.toMatchObject({ code: 'executor_redirect_refused' });
+    expect(outbound).toHaveBeenCalledExactlyOnceWith(new URL(`${executorUrl}/first`), expect.objectContaining({ redirect: 'manual' }));
+  });
+
+  it('refuses a redirect loop on its first response', async () => {
     const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, {
       status: 302, headers: { location: '/loop' },
     }));
     await expect(fetchJsonFirst([`${executorUrl}/loop`], { executorUrl })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
-    expect(outbound).toHaveBeenCalledTimes(6);
+    expect(outbound).toHaveBeenCalledTimes(1);
   });
 
   it('skips hostile AgentCard origins and paths and uses a fixed agent fallback', async () => {
@@ -381,12 +394,14 @@ describe('Cockpit bridge outbound security', () => {
     }
   });
 
-  it('logs a non-JSON upstream failure and a followed redirect once each', async () => {
+  it('logs a non-JSON upstream failure and a refused redirect once each', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response('redirect diagnostic token=redirect-secret', { status: 307, headers: { location: '/last' } }))
       .mockResolvedValueOnce(new Response('plain diagnostic Bearer text-secret', { status: 500 }));
-    await fetchJsonFirst([`${executorUrl}/first`], { executorUrl });
+    await expect(fetchJsonFirst([`${executorUrl}/first`], { executorUrl })).rejects.toMatchObject({ code: 'executor_redirect_refused' });
+    expect(log).toHaveBeenCalledTimes(1);
+    await fetchJsonFirst([`${executorUrl}/failure`], { executorUrl });
     expect(log).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(log.mock.calls)).toMatch(/redirect diagnostic/);
     expect(JSON.stringify(log.mock.calls)).toMatch(/plain diagnostic/);

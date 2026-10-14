@@ -108,36 +108,21 @@ function allowedExecutorTarget(target, executorUrl = executorRequestContext.getS
 }
 
 async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL) {
-  let url = allowedExecutorTarget(target, executorUrl);
+  const url = allowedExecutorTarget(target, executorUrl);
   const context = executorRequestContext.getStore();
   const headers = new Headers(init.headers);
   if (context && url.origin === context.executorOrigin && !headers.has('authorization')) {
     const token = await resolveExecutorBearer(context.executorTokenFile);
     if (token) headers.set('authorization', `Bearer ${token}`);
   }
-  let options = { ...init, headers, redirect: 'manual' };
-  for (let redirects = 0; ; redirects++) {
-    const response = await fetch(url, options);
-    if (!response.ok) await logUpstreamError(response);
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    const location = response.headers.get('location');
-    if (!location) return response;
+  const response = await fetch(url, { ...init, headers, redirect: 'manual' });
+  if (!response.ok) await logUpstreamError(response);
+  if (response.status >= 300 && response.status < 400) {
     await response.body?.cancel();
-    try {
-      if (redirects >= 5) throw new Error('executor redirect limit exceeded');
-      url = allowedExecutorTarget(new URL(location, url), executorUrl);
-    } catch (cause) {
-      // A request was already sent: do not retry a mutating fallback.
-      throw executorAuthError('executor_redirect_refused', 'executor redirect target refused', cause);
-    }
-    const method = String(options.method ?? 'GET').toUpperCase();
-    if ((response.status === 303 && !['GET', 'HEAD'].includes(method)) ||
-        ([301, 302].includes(response.status) && method === 'POST')) {
-      headers.delete('content-type');
-      headers.delete('content-length');
-      options = { ...options, method: 'GET', body: undefined };
-    }
+    // Even same-origin redirects could replay credentials and a body to another agent or admin path.
+    throw executorAuthError('executor_redirect_refused', 'executor redirect refused');
   }
+  return response;
 }
 
 /** Serve a static file from the built web app, sandboxed to WEB_DIST. Returns true if served. */

@@ -353,9 +353,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Cockpit bridge hardening (#3099, CodeQL WP2): the legacy bridge page escapes `&`, `<`, `>`, `"` and
   `'` in every attribute it builds and renders the WebSocket role badge and session options with
   `textContent` and an allowlist instead of `innerHTML`; outbound executor fetches are limited to the
-  operator-configured executor origin (AgentCard and request data cannot add destinations), follow
-  redirects manually with the same origin check and a five-hop limit; bridge and upstream error
-  responses return safe public projections, retain validated inventory codes and `Retry-After`
+  operator-configured executor origin (AgentCard and request data cannot add destinations), refuse
+  redirects; bridge and upstream error responses return safe public projections, retain validated
+  inventory codes and `Retry-After`
   metadata, and log each failed upstream response once with bounded, redacted details; the
   `workspace-status` HTTP server returns a fixed error instead of exception text.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
