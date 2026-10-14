@@ -38,13 +38,14 @@ class StdinAbortAdapter extends PiAdapter {
   getAbortInput() { return `${JSON.stringify({ type: 'abort', id: 'aiwg-abort' })}\n`; }
 }
 
-async function launch(scenario, options = {}, adapter = new PiAdapter()) {
+async function launch(scenario, options = {}, adapter = new PiAdapter(), configure = () => {}) {
   const { dir, cleanup } = scratch('pi-adapter-launch-');
   const receipt = join(dir, 'receipt.json');
   const launcher = new SessionLauncher();
   launcher.setProviderAdapter(adapter);
   let started = null; let child = null;
   launcher.on('started', info => { started = info; child = launcher.currentProcess; });
+  configure(launcher);
   const env = { AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: scenario || undefined, AIWG_PI_STUB_RECEIPT: receipt,
     PI_CODING_AGENT_SESSION_DIR: options.sessionDir, CI: undefined, NO_COLOR: undefined };
   const result = await withEnv(env, () => launcher.launch({
@@ -239,6 +240,44 @@ test('launcher tears down a production Pi child on timeout without an abort grac
     assert.equal(run.result.timedOut, true);
     assert.equal(run.child.signalCode, 'SIGTERM');
     assert.ok(run.result.duration < 2000, `SIGTERM is immediate when no abort frame exists (${run.result.duration}ms)`);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0);
+  } finally { run.cleanup(); }
+});
+
+test('timeout during a Pi receipt write returns a failure with empty stdout and no partial JSON receipt', { timeout: 15000 }, async t => {
+  // Fire the real launcher timeout callback only after the child confirms it
+  // opened the receipt for writing. No startup-speed assumption is involved.
+  const setTimeout = globalThis.setTimeout;
+  const escalationDelays = [];
+  let fireTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay === 100) {
+      fireTimeout = callback;
+      return setTimeout(() => {}, 60_000);
+    }
+    escalationDelays.push(delay);
+    return setTimeout(callback, delay, ...args);
+  });
+  const run = await launch('hang-during-receipt', { timeoutMs: 100 }, new PiAdapter(), launcher => {
+    let stderr = '';
+    launcher.on('stderr', chunk => {
+      stderr += chunk.toString();
+      if (stderr.includes('receipt write pending\n') && fireTimeout) {
+        const expire = fireTimeout; fireTimeout = null;
+        expire();
+      }
+    });
+  });
+  try {
+    assert.equal(readFileSync(join(run.dir, 'receipt.json.pending'), 'utf8'), '', 'the child was killed inside the receipt write');
+    assert.equal(run.receipt, null, 'an unfinished receipt is never published for JSON parsing');
+    assert.equal(run.stdout, '');
+    assert.equal(run.result.stdoutBuffer, '');
+    assert.equal(run.result.timedOut, true);
+    assert.equal(run.result.exitCode, 1);
+    assert.equal(run.child.signalCode, 'SIGTERM');
+    assert.deepEqual(escalationDelays, [0, 5000], 'production Pi has no abort grace window');
+    assert.equal(run.launcher.currentProcess, null);
     assert.equal(run.launcher.pendingEscalationTimers.size, 0);
   } finally { run.cleanup(); }
 });
