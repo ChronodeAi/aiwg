@@ -11,6 +11,7 @@ import {
 } from '../../../tools/contrib/lib/github-client.mjs';
 import { TmuxManager } from '../../../tools/daemon/tmux-manager.mjs';
 import { resolveAdapter } from '../../../src/artifacts/corpus-tools/vision-extract.js';
+import { boundedSpawnSync } from '../../../src/process/bounded-child-process.mjs';
 
 const require = createRequire(import.meta.url);
 let root: string;
@@ -36,6 +37,14 @@ function calls(): { binary: string; args: string[]; input: string }[] {
 function expectNoExecution(): void {
   expect(existsSync(dollarMarker)).toBe(false);
   expect(existsSync(backtickMarker)).toBe(false);
+}
+
+// Exercise the private adapter's complete result contract without exporting it.
+function execGhResult(): { success: boolean; stdout: string; stderr: string; error: Error | null } {
+  const source = readFileSync(resolve('tools/contrib/lib/github-client.mjs'), 'utf8')
+    .replace(/^import .*;$/gm, '')
+    .replace(/^export /gm, '');
+  return runInNewContext(`${source}\nexecGh(['api', 'rate_limit']);`, { boundedSpawnSync });
 }
 
 beforeEach(() => {
@@ -131,6 +140,61 @@ else { process.stderr.write('permission denied'); process.exit(1); }
     expectNoExecution();
   });
 
+  it('preserves the execGh result contract when gh is missing (ENOENT)', () => {
+    vi.stubEnv('PATH', root);
+    const result = execGhResult();
+    expect(Object.keys(result).sort()).toEqual(['error', 'stderr', 'stdout', 'success']);
+    expect(result).toMatchObject({ success: false, stdout: '', stderr: expect.stringContaining('ENOENT') });
+    expect(result.error).toMatchObject({ code: 'ENOENT', message: result.stderr });
+    expect(checkRateLimit()).toEqual({
+      success: false, limit: null, remaining: null, reset: null,
+      error: `Failed to check rate limit: ${result.stderr}`,
+    });
+  });
+
+  it.each(['permission denied\n', ''])('preserves the execGh result contract on non-zero exit with stderr %j', (stderr) => {
+    fakeBinary('gh', `process.stdout.write(' partial output \\n'); process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 7;`);
+    const result = execGhResult();
+    expect(Object.keys(result).sort()).toEqual(['error', 'stderr', 'stdout', 'success']);
+    const detail = stderr || 'gh exited with code 7';
+    expect(result).toMatchObject({ success: false, stdout: ' partial output \n', stderr: detail });
+    expect(result.error).toMatchObject({ name: 'Error', message: detail });
+    expect(checkRateLimit()).toEqual({
+      success: false, limit: null, remaining: null, reset: null,
+      error: `Failed to check rate limit: ${detail}`,
+    });
+  });
+
+  it.each(['--help', '-1', 0, -1, 1.5, '1.5', '1e2', '42 --help', '', Number.MAX_SAFE_INTEGER + 1])('rejects invalid PR number %j before invoking gh', (prNumber) => {
+    fakeBinary('gh', '');
+    const error = 'PR number must be a positive integer';
+    expect(getPRStatus(prNumber)).toEqual({ success: false, status: null, error });
+    expect(commentOnPR(prNumber, payload)).toEqual({ success: false, error });
+    expect(getPRReviews(prNumber)).toEqual({ success: false, reviews: null, error });
+    expect(getPRReviewComments(prNumber)).toEqual({ success: false, comments: null, error });
+    expect(existsSync(capture)).toBe(false);
+    expectNoExecution();
+  });
+
+  it.each(['--help/repo', 'owner/--help', '--help', 'owner/repo --help', 'owner', 'owner/repo/extra'])('rejects invalid repository %s before invoking gh', (upstream) => {
+    fakeBinary('gh', '');
+    const error = 'Repository must be in owner/repo format';
+    expect(forkRepo(upstream)).toEqual({ success: false, fork: null, alreadyExists: false, error });
+    expect(checkPRExists(upstream)).toEqual({ success: false, hasPR: false, pr: null, error });
+    expect(existsSync(capture)).toBe(false);
+  });
+
+  it.each(['42', '042'])('accepts numeric PR string %s and a repository with a dot-prefixed name', (prNumber) => {
+    fakeBinary('gh', `
+if (args[0] === 'auth') process.stderr.write('Logged in to github.com account tester');
+else if (args[1] === 'list') process.stdout.write('[]');
+else if (args[1] === 'view' && args[0] === 'pr') process.stdout.write('{"state":"OPEN"}');
+`);
+    expect(getPRStatus(prNumber)).toEqual({ success: true, status: { state: 'OPEN' }, error: null });
+    expect(forkRepo('owner/.github')).toEqual({ success: true, fork: 'tester/.github', alreadyExists: true, error: null });
+    expect(checkPRExists('owner/.github')).toEqual({ success: true, hasPR: false, pr: null, error: null });
+  });
+
   it('preserves gh caller result contracts for fork, status, reviews and rate limits', () => {
     fakeBinary('gh', `
 if (args[0] === 'auth') process.stderr.write('Logged in to github.com account tester');
@@ -166,7 +230,7 @@ else if (args[0] === 'api') process.stdout.write('[]');
       stdio: 'pipe', timeout: 30_000,
     });
     expect(calls().find(call => call.args[0] === 'clone')!.args).toEqual([
-      'clone', '--branch', 'main', 'https://github.com/jmagly/aiwg.git', edgePath,
+      'clone', '--branch', 'main', '--', 'https://github.com/jmagly/aiwg.git', edgePath,
     ]);
     expect(calls().filter(call => call.args[0] === 'sparse-checkout').map(call => call.args)).toEqual([
       ['sparse-checkout', 'init', '--cone'],
@@ -176,9 +240,28 @@ else if (args[0] === 'api') process.stdout.write('[]');
     expectNoExecution();
   });
 
-  it('quotes all vision path placeholders literally while preserving shell templates', () => {
+  it.each(['--upload-pack=probe', 'relative-edge'])('rejects non-absolute edge path %s before invoking git', (edgePath) => {
+    fakeBinary('git', '');
+    const configDir = join(root, 'config');
+    mkdirSync(configDir);
+    writeFileSync(join(configDir, 'channel.json'), JSON.stringify({ edgePath }));
+    const managerUrl = new URL('../../../src/channel/manager.mjs', import.meta.url).href;
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', `
+      const { switchToEdge } = await import(${JSON.stringify(managerUrl)});
+      try { await switchToEdge(); } catch (error) { console.log(error.message); }
+    `], {
+      env: { ...process.env, HOME: root, AIWG_CONFIG: configDir, AIWG_CLI_DRY_RUN: '1' },
+      encoding: 'utf8', timeout: 30_000,
+    });
+    expect(output.trim()).toBe('Edge installation path must be absolute');
+    expect(existsSync(capture)).toBe(false);
+    expect(JSON.parse(readFileSync(join(configDir, 'channel.json'), 'utf8')).edgePath).toBe(edgePath);
+  });
+
+  it('passes all vision path placeholders through environment variables while preserving shell templates', () => {
     fakeBinary('vision-probe', `
 const [image, promptFile, out] = args;
+if (image !== process.env.AIWG_VISION_IMAGE || promptFile !== process.env.AIWG_VISION_PROMPT_FILE || out !== process.env.AIWG_VISION_OUT) process.exit(1);
 if (fs.readFileSync(image, 'utf8') !== 'PNG') process.exit(1);
 fs.writeFileSync(out, fs.readFileSync(promptFile, 'utf8'));
 `);
@@ -192,6 +275,23 @@ fs.writeFileSync(out, fs.readFileSync(promptFile, 'utf8'));
     expect(calls()[0].args).toEqual([image, join(dir, '.vision-prompt-1.txt'), join(dir, '.vision-out-1.txt')]);
     expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
     expect(existsSync(join(dir, '.vision-out-1.txt'))).toBe(false);
+    expectNoExecution();
+  });
+
+  it.each(['image', 'prompt_file', 'out'])('rejects quoted vision {%s} placeholders before running the template', (placeholder) => {
+    fakeBinary('vision-probe', '');
+    for (const quoted of [`"{${placeholder}}"`, `'{${placeholder}}'`, `$'{${placeholder}}'`, `$'escaped\\' {${placeholder}}'`, `\`cat {${placeholder}}\``]) {
+      const command = `touch ${dollarMarker}; vision-probe ${quoted}`;
+      expect(() => resolveAdapter({ provider: 'command', command }))
+        .toThrow('Vision command placeholders must be outside shell quotes');
+    }
+    expect(existsSync(capture)).toBe(false);
+    expectNoExecution();
+  });
+
+  it('rejects escaped vision placeholders before running the template', () => {
+    expect(() => resolveAdapter({ provider: 'command', command: `touch ${dollarMarker}; vision-probe \\{image}` }))
+      .toThrow('Vision command placeholders must not be escaped');
     expectNoExecution();
   });
 });

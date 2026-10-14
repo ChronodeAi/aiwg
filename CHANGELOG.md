@@ -373,6 +373,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   generated fixtures safely, tighten identity/version assertions, restore TLS test
   settings, and preserve literal data in comment and receipt-tampering checks.
 
+- Shell commands are no longer built from untrusted strings (#3093, CodeQL WP1). The agent-loop
+  `ralph-commit` hook commits with `git commit -F -` on stdin instead of interpolating a message that
+  embeds changed filenames into `git commit -m "..."`; `tools/daemon/tmux-manager.mjs` sends literal
+  text with argv `send-keys -l`; `tools/contrib/lib/github-client.mjs` calls `gh` with argv, passes
+  PR bodies and comments via `--body-file -`, and validates PR numbers and `owner/repo` arguments;
+  edge-channel git calls in `src/channel/manager.mjs` use argv with `--` before clone operands and
+  require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
+  templates receive paths through `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE` and
+  `AIWG_VISION_OUT`; `{image}`/`{prompt_file}`/`{out}` placeholders must be unquoted and are
+  rejected inside quotes — reference the variables directly in quoted contexts, e.g.
+  `"$(cat "$AIWG_VISION_PROMPT_FILE")"`.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level

@@ -25,14 +25,15 @@ function execGh(args, options = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
     });
-    if (result.error) throw result.error;
-    const stdout = result.stdout?.toString().trim() || '';
+    const stdout = result.stdout?.toString() || '';
     const stderr = result.stderr?.toString() || '';
+    const success = result.status === 0 && !result.error;
+    const error = success ? null : (result.error || new Error(stderr || `gh exited with code ${result.status}`));
     return {
-      success: result.status === 0,
-      stdout,
-      stderr,
-      error: result.status === 0 ? null : new Error(stderr || `gh exited with code ${result.status}`)
+      success,
+      stdout: success ? stdout.trim() : stdout,
+      stderr: stderr || error?.message || '',
+      error
     };
   } catch (err) {
     return {
@@ -42,6 +43,15 @@ function execGh(args, options = {}) {
       error: err
     };
   }
+}
+
+function validPRNumber(prNumber) {
+  return (typeof prNumber === 'number' || typeof prNumber === 'string')
+    && /^\d+$/.test(String(prNumber)) && Number(prNumber) > 0 && Number.isSafeInteger(Number(prNumber));
+}
+
+function validRepository(upstream) {
+  return typeof upstream === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(upstream);
 }
 
 /**
@@ -99,6 +109,9 @@ export function getUsername() {
  * @returns {Object} { success: boolean, fork: string|null, alreadyExists: boolean, error: string|null }
  */
 export function forkRepo(upstream) {
+  if (!validRepository(upstream)) {
+    return { success: false, fork: null, alreadyExists: false, error: 'Repository must be in owner/repo format' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -191,6 +204,9 @@ export function createPR(title, body, labels = [], draft = false) {
  * @returns {Object} { success: boolean, status: Object|null, error: string|null }
  */
 export function getPRStatus(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, status: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -232,6 +248,9 @@ export function getPRStatus(prNumber) {
  * @returns {Object} { success: boolean, error: string|null }
  */
 export function commentOnPR(prNumber, comment) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -260,6 +279,9 @@ export function commentOnPR(prNumber, comment) {
  * @returns {Object} { success: boolean, hasPR: boolean, pr: Object|null, error: string|null }
  */
 export function checkPRExists(upstream) {
+  if (!validRepository(upstream)) {
+    return { success: false, hasPR: false, pr: null, error: 'Repository must be in owner/repo format' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -344,6 +366,9 @@ export function checkRateLimit() {
  * @returns {Object} { success: boolean, reviews: Array|null, error: string|null }
  */
 export function getPRReviews(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, reviews: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {
@@ -384,6 +409,9 @@ export function getPRReviews(prNumber) {
  * @returns {Object} { success: boolean, comments: Array|null, error: string|null }
  */
 export function getPRReviewComments(prNumber) {
+  if (!validPRNumber(prNumber)) {
+    return { success: false, comments: null, error: 'PR number must be a positive integer' };
+  }
   const authCheck = checkGhAuth();
   if (!authCheck.authenticated) {
     return {

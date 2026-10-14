@@ -89,9 +89,25 @@ const codexAdapter: VisionAdapter = {
   },
 };
 
-/** Quote one data value for an unquoted POSIX shell-template placeholder. */
-function quoteShellValue(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
+/** Paths enter the shell through environment expansion, never as shell source. */
+function visionCommand(template: string): string {
+  let quote = '';
+  return template.replace(/\\?\{(image|prompt_file|out)\}|\\[\s\S]|\$'|["'`]/g, (token, name: string | undefined) => {
+    if (name) {
+      if (quote) throw new Error('Vision command placeholders must be outside shell quotes');
+      if (token.startsWith('\\')) throw new Error('Vision command placeholders must not be escaped');
+      return `"$AIWG_VISION_${name.toUpperCase()}"`;
+    }
+    // Backslashes are literal inside POSIX single quotes, but escape the next
+    // character in double quotes and ANSI-C ($'...') quotes.
+    if (token.startsWith('\\')) {
+      if (quote === "'" && token[1] === "'") quote = '';
+      return token;
+    }
+    if (!quote) quote = token;
+    else if (quote === token || (quote === "$'" && token === "'") || (quote === "'" && token === "$'")) quote = '';
+    return token;
+  });
 }
 
 /**
@@ -100,10 +116,12 @@ function quoteShellValue(value: string): string {
  *   {image}        absolute image path
  *   {prompt_file}  path to a file containing the prompt
  *   {out}          path the command must write the transcription to
- * Placeholders must be unquoted; each expands to one shell-quoted argument.
- * e.g.  claude -p "$(cat {prompt_file})" --image {image} > {out}
+ * Placeholders must be unquoted and unescaped; each expands to a quoted
+ * AIWG_VISION_IMAGE / AIWG_VISION_PROMPT_FILE / AIWG_VISION_OUT variable.
+ * e.g.  vision-cli --prompt-file {prompt_file} --image {image} > {out}
  */
 function commandAdapter(template: string): VisionAdapter {
+  const cmd = visionCommand(template);
   return {
     name: 'command',
     transcribe(imagePath, prompt, ctx) {
@@ -111,12 +129,12 @@ function commandAdapter(template: string): VisionAdapter {
       const promptFile = path.join(dir, `.vision-prompt-${ctx.page}.txt`);
       const out = path.join(dir, `.vision-out-${ctx.page}.txt`);
       fs.writeFileSync(promptFile, prompt);
-      const values: Record<string, string> = { image: imagePath, prompt_file: promptFile, out };
-      // Substitute once so placeholder-like text inside paths stays data.
-      const cmd = template.replace(/\{(image|prompt_file|out)\}/g, (_match, key: string) => quoteShellValue(values[key]));
       try {
         // Same caller-controlled-timeout clamp as the codex adapter above.
-        const r = spawnSync('sh', ['-c', cmd], { timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000), encoding: 'utf8' });
+        const r = spawnSync('sh', ['-c', cmd], {
+          timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000), encoding: 'utf8',
+          env: { ...process.env, AIWG_VISION_IMAGE: imagePath, AIWG_VISION_PROMPT_FILE: promptFile, AIWG_VISION_OUT: out },
+        });
         let text: string | undefined;
         if (fs.existsSync(out)) text = fs.readFileSync(out, 'utf8');
         else if (r.status === 0 && r.stdout) text = r.stdout; // command wrote to stdout
@@ -142,7 +160,7 @@ export function resolveAdapter(opts: AdapterOptions = {}): VisionAdapter {
   const command = opts.command ?? process.env.AIWG_VISION_COMMAND;
   const provider = opts.provider ?? process.env.AIWG_VISION_PROVIDER ?? (command ? 'command' : 'codex');
   if (provider === 'command') {
-    if (!command) throw new Error("vision provider 'command' requires --command or AIWG_VISION_COMMAND (template with {image}/{prompt_file}/{out})");
+    if (!command) throw new Error("vision provider 'command' requires --command or AIWG_VISION_COMMAND (template with unquoted, unescaped {image}/{prompt_file}/{out} placeholders)");
     return commandAdapter(command);
   }
   if (provider === 'codex') return codexAdapter;
