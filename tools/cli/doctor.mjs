@@ -62,6 +62,18 @@ const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfi
   import.meta.url,
   'config/aiwg-config.js'
 );
+
+// Shared strict flag parsing (#3062). doctor.mjs is plain JS shipped to npm,
+// so this resolves through importImpl like every other src/ import above:
+// dist/src/cli/flag-parsing.js when installed, src/cli/flag-parsing.ts in a
+// checkout (Node's type stripping handles the erasable-syntax-only module).
+const {
+  requireFlagValue: requireDoctorFlagValue,
+  hasPositionalOrSwitch: hasDoctorFlagSwitch,
+  argsTerminatorIndex: doctorArgsTerminatorIndex,
+  valueTokenIndexes: doctorValueTokenIndexes,
+  MissingFlagValueError: DoctorMissingFlagValueError,
+} = await importImpl(import.meta.url, 'cli/flag-parsing.js');
 const { validateThreatAssessmentConfig } = await importImpl(
   import.meta.url,
   'security/threat-assessment-config.js'
@@ -147,35 +159,96 @@ const PROVIDER_AGENT_DIRS = {
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
 
-// Parse doctor-specific flags from process.argv (no commander dependency).
+// Parse doctor-specific flags through the shared strict parser
+// (src/cli/flag-parsing.ts, #3062) instead of a hand-rolled loop: value
+// flags accept `--flag value` and `--flag=value`, stop at a bare `--`
+// terminator, and a present-but-valueless flag is a usage error rather than
+// a silent default. Unknown `--flags` are rejected (exit 2, naming the
+// flag) instead of being silently ignored — previously an extra `--json`
+// was swallowed here with no effect.
+//
+// Known flags are the union of what this script parses and what `aiwg
+// doctor` (src/cli/handlers/utilities.ts) consumes upstream and passes
+// through: --deployment/--bundle/--scope/--user/--verbose/-v/--project-local/
+// --quiet/--help/-h never change this script's behavior but remain accepted
+// so existing invocations keep working.
+const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens'];
+const DOCTOR_KNOWN_FLAGS = new Set([
+  ...DOCTOR_VALUE_FLAGS,
+  '--all-providers', '--probe-workers', '--no-budget-check', '--strict-context', '--json',
+  '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+]);
+
+// Refuse the first unknown `--flag` before the `--` terminator, skipping
+// the consumed values of known value-taking flags. The `--flag=value`
+// one-token form can never collide with a separate token, so only its flag
+// part is checked.
+function assertNoUnknownDoctorFlags(argv) {
+  const consumed = doctorValueTokenIndexes(argv, DOCTOR_VALUE_FLAGS);
+  const limit = doctorArgsTerminatorIndex(argv);
+  for (let i = 0; i < limit; i += 1) {
+    if (consumed.has(i)) continue;
+    const token = argv[i];
+    if (token === undefined || !token.startsWith('-')) continue;
+    const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+    if (!DOCTOR_KNOWN_FLAGS.has(name) || (token.includes('=') && !DOCTOR_VALUE_FLAGS.includes(name))) {
+      throw new Error(`Unknown flag: ${name}. See 'aiwg doctor --help'.`);
+    }
+  }
+}
+
 function parseDoctorArgs(argv) {
   const out = {
     provider: null,
     allProviders: false,
     probeWorkers: false,
+    json: false,
     noBudgetCheck: false,
     strictContext: false,
     contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
     contextBudgetTokens: 200_000,
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--provider' && argv[i + 1]) { out.provider = argv[i + 1]; i += 1; continue; }
-    if (a.startsWith('--provider=')) { out.provider = a.slice('--provider='.length); continue; }
-    if (a === '--all-providers') { out.allProviders = true; continue; }
-    if (a === '--probe-workers') { out.probeWorkers = true; continue; }
-    if (a === '--no-budget-check') { out.noBudgetCheck = true; continue; }
-    if (a === '--strict-context') { out.strictContext = true; continue; }
-    if (a === '--context-baseline' && argv[i + 1]) { out.contextBaseline = argv[i + 1]; i += 1; continue; }
-    if (a.startsWith('--context-baseline=')) { out.contextBaseline = a.slice('--context-baseline='.length); continue; }
-    if (a === '--context-budget-tokens' && argv[i + 1]) {
-      out.contextBudgetTokens = Number(argv[i + 1]); i += 1; continue;
-    }
-    if (a.startsWith('--context-budget-tokens=')) {
-      out.contextBudgetTokens = Number(a.slice('--context-budget-tokens='.length)); continue;
-    }
+  // Strict value flags (#3062 review item 11): present without a usable
+  // value is a usage error, raised before any check, spawn, or write.
+  // --bundle/--scope are validated here for the same reason but otherwise
+  // handled upstream by `aiwg doctor --deployment` / `--scope user`.
+  try {
+    // Preserve the previous parser's last-occurrence-wins behavior.
+    const valueOptions = { rejectEmpty: true, precedence: 'last' };
+    out.provider = requireDoctorFlagValue(argv, valueOptions, '--provider') ?? null;
+    requireDoctorFlagValue(argv, valueOptions, '--bundle');
+    requireDoctorFlagValue(argv, valueOptions, '--scope');
+    const baseline = requireDoctorFlagValue(argv, valueOptions, '--context-baseline');
+    if (baseline !== undefined) out.contextBaseline = baseline;
+    const budget = requireDoctorFlagValue(argv, valueOptions, '--context-budget-tokens');
+    if (budget !== undefined) out.contextBudgetTokens = Number(budget);
+  } catch (error) {
+    if (error instanceof DoctorMissingFlagValueError) throw new Error(`${error.message}. See 'aiwg doctor --help'.`);
+    throw error;
+  }
+  out.allProviders = hasDoctorFlagSwitch(argv, '--all-providers', DOCTOR_VALUE_FLAGS);
+  out.probeWorkers = hasDoctorFlagSwitch(argv, '--probe-workers', DOCTOR_VALUE_FLAGS);
+  out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
+  out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
+  out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
+  assertNoUnknownDoctorFlags(argv);
+  // --json only shapes the worker-probe report; without --probe-workers
+  // there is nothing machine-readable to emit.
+  if (out.json && !out.probeWorkers) {
+    throw new Error('Unknown flag combination: --json requires --probe-workers. See \'aiwg doctor --help\'.');
   }
   return out;
+}
+
+// Parse-or-exit wrapper: usage errors name the flag on stderr and exit 2
+// (EXIT_CODES.USAGE), before any check, spawn, or write.
+function parseDoctorArgsOrExit(argv) {
+  try {
+    return parseDoctorArgs(argv);
+  } catch (error) {
+    process.stderr.write(`aiwg doctor: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
 }
 
 // ---- Skill listing budget check (#1150) -------------------------------
@@ -588,6 +661,74 @@ function check(name, status, message) {
   checks.push({ name, status, message });
 }
 
+// Empty-state guidance for the worker-probe report (#3066). Names the real
+// configuration command and key: `aiwg config set --project` writes dotted
+// keys into .aiwg/aiwg.config (src/config/cli.ts projectConfigSet), and
+// each parallelism.clis entry binds a provider adapter reference
+// (src/config/aiwg-config.ts validation).
+const WORKER_PROBE_EMPTY_MESSAGE =
+  `No worker CLIs are configured (parallelism.clis in .aiwg/aiwg.config is empty); add a complete cli entry, e.g. \`aiwg config set --project parallelism.clis.codex '{"adapter":"providers:codex","accountScope":"local-account","quotaScope":"local-quota"}'\`, then rerun with --probe-workers.`;
+const WORKER_PROBE_DISABLED_MESSAGE =
+  'Group dispatch is disabled (parallelism.worker_dispatch is not true); no version probes were run. Enable it with `aiwg config set --project parallelism.worker_dispatch true`, then rerun with --probe-workers.';
+
+// One machine-readable record per CLI for `aiwg doctor --probe-workers
+// --json`, mapped from the install-kind readiness finding (one per
+// configured cli, untruncated — see buildDirectWorkerDoctorSection's
+// installFindings):
+// - installed: the executable ran and produced output (a matched version,
+//   an out-of-range version, or an unmatched banner from something present);
+// - version: the identified version, or null when none was identified;
+// - inRange: true/false once a version was identified, else null;
+// - ready: true only for WORKER_DIRECT_READY;
+// - reason: the stable finding code (see src/models/worker-direct-readiness.ts).
+function toWorkerProbeRecord(finding) {
+  const version = finding.installedVersion ?? null;
+  return {
+    cli: finding.cli,
+    installed: version !== null || finding.code === 'WORKER_DIRECT_BANNER_UNMATCHED',
+    version,
+    inRange: finding.code === 'WORKER_DIRECT_READY' ? true : (version !== null ? false : null),
+    ready: finding.code === 'WORKER_DIRECT_READY',
+    reason: finding.code,
+  };
+}
+
+// Machine-readable worker-probe report (#3066). Prints exactly one JSON
+// document on stdout and nothing else: no announce lines (announce is
+// omitted), no buffered checks, no footer. Dispatch eligibility comes from
+// the binding-level fallback (no resolver snapshot is resolved here) — the
+// records only speak to installation readiness, so the snapshot would add
+// resolution cost without changing them.
+async function runWorkerProbeJson(projectDir) {
+  let workerConfig;
+  try {
+    workerConfig = await readAiwgConfig(projectDir);
+  } catch (error) {
+    process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  const parallelism = workerConfig?.parallelism;
+  const workerDispatch = parallelism?.worker_dispatch === true;
+  const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
+  const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
+  const section = await buildDirectWorkerDoctorSection({
+    parallelism,
+    registry: loadProviderModelCapabilities(),
+    probeWorkers: true,
+    projectRoot: projectDir,
+  });
+  const workers = section.installFindings.map(toWorkerProbeRecord);
+  const payload = {
+    probeWorkers: true,
+    workerDispatch,
+    workersConfigured: section.workersConfigured,
+    workers,
+  };
+  if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
+  else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 function hasSigningMaterial(signing) {
   return Boolean(signing && (signing.key || signing.key_file));
 }
@@ -703,6 +844,26 @@ async function checkOpenHumanHarnessTier2() {
 const BRAND_HEX = '#818CF8';
 
 async function runDoctor() {
+  // Usage errors (unknown flags, valueless value flags, --json without
+  // --probe-workers) exit 2 here, before any check, spawn, or write.
+  const {
+    provider: providerArg,
+    allProviders,
+    probeWorkers,
+    json: jsonMode,
+    noBudgetCheck,
+    strictContext,
+    contextBaseline,
+    contextBudgetTokens,
+  } = parseDoctorArgsOrExit(process.argv.slice(2));
+
+  // Machine-readable worker probes: exactly one JSON document on stdout
+  // and nothing else — the full diagnostic run (and its footer) is skipped.
+  if (jsonMode) {
+    await runWorkerProbeJson(process.cwd());
+    return;
+  }
+
   const isTTY = Boolean(process.stdout.isTTY);
   const mark = isTTY ? chalk.hex(BRAND_HEX)('◆') : '◆';
   const rule = isTTY ? chalk.dim('  ' + '─'.repeat(42)) : '  ' + '-'.repeat(42);
@@ -867,15 +1028,6 @@ async function runDoctor() {
   //   --provider <name>  → just that one
   //   --all-providers    → every supported provider
   //   (default)          → auto-detect deployed providers via PROVIDER_AGENT_DIRS
-  const {
-    provider: providerArg,
-    allProviders,
-    probeWorkers,
-    noBudgetCheck,
-    strictContext,
-    contextBaseline,
-    contextBudgetTokens,
-  } = parseDoctorArgs(process.argv.slice(2));
   let providersToCheck = [];
   if (providerArg) {
     providersToCheck = [providerArg];
@@ -2064,11 +2216,14 @@ async function runDoctor() {
   // eligibility only, and never claims a profile is "qualified" — profiles
   // stay unqualified until an authenticated smoke run (#3005). No workers
   // configured (explicitly or implicitly through a group member) means no
-  // section at all, and a failed/unavailable shared config read means this
-  // section stays silent too — it never adds its own warning on top of
-  // whatever the config read failure already surfaced above, so a project
-  // with no workers configured sees unchanged output even when the config
-  // has unrelated warnings or fails to load.
+  // section at all unless --probe-workers was passed (#3066: an explicit
+  // probe ask with nothing configured renders one visible line instead of
+  // silence, so an empty run cannot be mistaken for "all workers ready").
+  // A failed/unavailable shared config read means this section stays silent
+  // too — it never adds its own warning on top of whatever the config read
+  // failure already surfaced above, so a project with no workers configured
+  // sees unchanged output even when the config has unrelated warnings or
+  // fails to load.
   try {
     if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
     const directConfig = workerSectionsConfig;
@@ -2076,6 +2231,9 @@ async function runDoctor() {
     const directCliIds = new Set(Object.keys(directParallelism?.clis ?? {}));
     for (const group of Object.values(directParallelism?.groups ?? {})) {
       for (const member of group?.members ?? []) directCliIds.add(member.cli);
+    }
+    if (!directCliIds.size && probeWorkers) {
+      check('Direct Worker', 'info', WORKER_PROBE_EMPTY_MESSAGE);
     }
     if (directCliIds.size) {
       const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');

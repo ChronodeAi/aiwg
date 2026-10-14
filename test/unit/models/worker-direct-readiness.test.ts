@@ -430,4 +430,34 @@ describe('direct worker doctor section (#2894)', () => {
     expect(section.lines.length).toBeGreaterThan(0);
     for (const line of section.lines) expect(line.status).not.toBe('error');
   });
+
+  it('returns one untruncated install finding per cli for machine-readable surfaces (#3066)', async () => {
+    const probeCwd = await scratchDir('aiwg-direct-cwd-');
+    const section = await buildDirectWorkerDoctorSection({
+      parallelism: parallelismWith({ codex: codexCli(await fakeCli('codex-cli 0.161.0')) }),
+      registry: registry(), probeWorkers: true,
+      probe: (executable, argv, options) => probeDirectWorkerVersion(executable, argv, { ...options, cwd: probeCwd }),
+    });
+    expect(section.workersConfigured).toBe(true);
+    expect(section.installFindings).toHaveLength(1);
+    expect(section.installFindings[0]).toMatchObject({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_READY', installedVersion: '0.161.0', readiness: 'ready' });
+    const disabled = await buildDirectWorkerDoctorSection({
+      parallelism: { ...parallelismWith({ codex: codexCli('never-run') }), worker_dispatch: false },
+      registry: registry(), probeWorkers: true,
+      probe: () => { throw new Error('no probe when dispatch is disabled'); },
+    });
+    expect(disabled.installFindings).toHaveLength(1);
+    expect(disabled.installFindings[0]).toMatchObject({ cli: 'codex', kind: 'install',
+      code: 'WORKER_DIRECT_DISABLED', installedVersion: null, readiness: 'skipped',
+      eligibility: null, eligibilityDetail: null });
+  });
+
+  it('returns no install findings when no workers are configured (#3066)', async () => {
+    const section = await buildDirectWorkerDoctorSection({
+      parallelism: { worker_dispatch: true }, registry: registry(), probeWorkers: true,
+      probe: () => { throw new Error('no probe without workers'); },
+    });
+    expect(section).toMatchObject({ lines: [], probed: false, workersConfigured: false, installFindings: [] });
+  });
 });

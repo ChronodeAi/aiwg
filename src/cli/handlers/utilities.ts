@@ -19,6 +19,7 @@ import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { updateInstallation } from '../../update/service.mjs';
 import { useHandler as useFrameworkHandler } from './use.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { argsTerminatorIndex, hasPositionalOrSwitch, requireFlagValue, valueTokenIndexes } from '../flag-parsing.js';
 import {
   checkCollisions,
 } from '../../smiths/skillsmith/collision-detector.js';
@@ -542,7 +543,7 @@ Options:
   --user                Alias for --scope user
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
-  --json                Emit machine-readable deployment verification output
+  --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification)
   --verbose, -v         Include verbose diagnostics
   --help, -h            Show this help
 `;
@@ -571,29 +572,54 @@ export const doctorHandler: CommandHandler = {
   },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
-    if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
+    // Validate before any early-return mode: deployment and user-scope doctor
+    // never invoke doctor.mjs, so they must enforce the same flag contract.
+    const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens'];
+    const knownFlags = new Set([
+      ...valueFlags, '--all-providers', '--probe-workers', '--no-budget-check', '--strict-context', '--json',
+      '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
+    ]);
+    const hasSwitch = (name: string): boolean => hasPositionalOrSwitch(ctx.args, name, valueFlags);
+    const values = new Map<string, string | undefined>();
+    try {
+      for (const flag of valueFlags) {
+        values.set(flag, requireFlagValue(ctx.args, { rejectEmpty: true, precedence: 'last' }, flag));
+      }
+      const consumed = valueTokenIndexes(ctx.args, valueFlags);
+      for (let i = 0; i < argsTerminatorIndex(ctx.args); i += 1) {
+        const token = ctx.args[i]!;
+        if (consumed.has(i) || !token.startsWith('-')) continue;
+        const name = token.split('=')[0]!;
+        if (!knownFlags.has(name) || (token.includes('=') && !valueFlags.includes(name))) {
+          throw new Error(`Unknown flag: ${name}`);
+        }
+      }
+      if (hasSwitch('--json') && !hasSwitch('--probe-workers') && !hasSwitch('--deployment')) {
+        throw new Error('--json requires --probe-workers or --deployment');
+      }
+    } catch (error) {
+      return { exitCode: 2, message: `${error instanceof Error ? error.message : String(error)}. See 'aiwg doctor --help'.` };
+    }
+    if (hasSwitch('--help') || hasSwitch('-h')) {
       return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
     }
 
-    if (ctx.args.includes('--deployment')) {
-      const providerIndex = ctx.args.indexOf('--provider');
-      const bundleIndex = ctx.args.indexOf('--bundle');
-      const scopeIndex = ctx.args.indexOf('--scope');
-      const scopeValue = scopeIndex >= 0 ? ctx.args[scopeIndex + 1] : undefined;
+    if (hasSwitch('--deployment')) {
+      const scopeValue = values.get('--scope');
       if (scopeValue && scopeValue !== 'project' && scopeValue !== 'user') {
         return { exitCode: 2, message: `Invalid deployment verification scope: ${scopeValue}` };
       }
       const result = await verifyConfiguredDeployments(ctx.cwd || process.cwd(), {
-        provider: providerIndex >= 0 ? ctx.args[providerIndex + 1] : undefined,
-        bundle: bundleIndex >= 0 ? ctx.args[bundleIndex + 1] : undefined,
+        provider: values.get('--provider'),
+        bundle: values.get('--bundle'),
         scope: scopeValue as DeploymentScope | undefined,
       }, ctx.frameworkRoot);
       return {
         exitCode: result.exitCode,
-        message: ctx.args.includes('--json')
+        message: hasSwitch('--json')
           ? JSON.stringify(result, null, 2)
           : renderUseDeploymentResult(result),
-        rawOutput: ctx.args.includes('--json'),
+        rawOutput: hasSwitch('--json'),
       };
     }
 
@@ -603,10 +629,9 @@ export const doctorHandler: CommandHandler = {
     // their user-scope deployments from any cwd, including shells with no
     // project at all.
     const userScopeRequested =
-      ctx.args.includes('--user') ||
-      (ctx.args.includes('--scope') && ctx.args[ctx.args.indexOf('--scope') + 1] === 'user');
-    if (userScopeRequested) {
-      return await runUserScopeDoctor(ctx.args.includes('--verbose') || ctx.args.includes('-v'));
+      hasSwitch('--user') || values.get('--scope') === 'user';
+    if (userScopeRequested && !hasSwitch('--probe-workers')) {
+      return await runUserScopeDoctor(hasSwitch('--verbose') || hasSwitch('-v'));
     }
 
     const frameworkRoot = await getFrameworkRoot();
@@ -614,6 +639,11 @@ export const doctorHandler: CommandHandler = {
 
     // Run core doctor diagnostics
     const result = await runner.run('tools/cli/doctor.mjs', ctx.args, { cwd: ctx.cwd });
+    // Machine-readable worker probes (#3066): tools/cli/doctor.mjs already
+    // printed exactly one JSON document (or a usage error) on its own
+    // stdio — every section below writes human-readable text, so returning
+    // here keeps stdout to the JSON document alone.
+    if (hasSwitch('--json') || result.exitCode === 2) return result;
     let agentSkillsFailure = false;
 
     try {

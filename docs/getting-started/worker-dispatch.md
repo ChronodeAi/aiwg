@@ -84,6 +84,26 @@ Then confirm the CLIs AIWG would dispatch to are actually installed and launchab
 aiwg doctor --probe-workers
 ```
 
+For machine-readable output (one record per CLI with `cli`, `installed`, `version`, `inRange`,
+`ready`, `reason`, plus top-level `probeWorkers`/`workerDispatch`/`workersConfigured` fields),
+add `--json` — stdout holds exactly that JSON document and nothing else:
+
+```bash
+aiwg doctor --probe-workers --json
+```
+
+With no worker CLIs configured, the text run prints one `Direct Worker` line saying so and how
+to configure them; the JSON run reports `"workersConfigured": false` with the same guidance
+in `message`. Add a complete entry with the required adapter and account/quota scopes, for example:
+
+```bash
+aiwg config set --project parallelism.clis.codex '{"adapter":"providers:codex","accountScope":"local-account","quotaScope":"local-quota"}'
+```
+
+When dispatch is disabled, JSON still includes every configured CLI with reason
+`WORKER_DIRECT_DISABLED` and a message explaining that no probes ran.
+Unknown `aiwg doctor` flags exit non-zero naming the flag.
+
 ## How to turn it off
 
 ```bash
