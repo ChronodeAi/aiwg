@@ -89,12 +89,18 @@ const codexAdapter: VisionAdapter = {
   },
 };
 
+/** Quote one data value for an unquoted POSIX shell-template placeholder. */
+function quoteShellValue(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 /**
  * Generic command-template adapter (provider-neutral). Runs
  * `AIWG_VISION_COMMAND` (or the `--command` flag) with placeholders:
  *   {image}        absolute image path
  *   {prompt_file}  path to a file containing the prompt
  *   {out}          path the command must write the transcription to
+ * Placeholders must be unquoted; each expands to one shell-quoted argument.
  * e.g.  claude -p "$(cat {prompt_file})" --image {image} > {out}
  */
 function commandAdapter(template: string): VisionAdapter {
@@ -105,10 +111,9 @@ function commandAdapter(template: string): VisionAdapter {
       const promptFile = path.join(dir, `.vision-prompt-${ctx.page}.txt`);
       const out = path.join(dir, `.vision-out-${ctx.page}.txt`);
       fs.writeFileSync(promptFile, prompt);
-      const cmd = template
-        .replaceAll('{image}', JSON.stringify(imagePath))
-        .replaceAll('{prompt_file}', JSON.stringify(promptFile))
-        .replaceAll('{out}', JSON.stringify(out));
+      const values: Record<string, string> = { image: imagePath, prompt_file: promptFile, out };
+      // Substitute once so placeholder-like text inside paths stays data.
+      const cmd = template.replace(/\{(image|prompt_file|out)\}/g, (_match, key: string) => quoteShellValue(values[key]));
       try {
         // Same caller-controlled-timeout clamp as the codex adapter above.
         const r = spawnSync('sh', ['-c', cmd], { timeout: positiveTimeoutMs(ctx.timeoutSec * 1000, 240_000), encoding: 'utf8' });

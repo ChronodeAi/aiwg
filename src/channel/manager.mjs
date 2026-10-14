@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import os from 'os';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
-import { boundedExecFileSync, boundedExecSync } from '../process/bounded-child-process.mjs';
+import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
 import {
   assertCanonicalInstallation,
   createInstallationIdentity,
@@ -301,8 +301,8 @@ export async function switchToEdge() {
         const sparseConfig = path.join(config.edgePath, '.git', 'info', 'sparse-checkout');
         const hasSparse = await fs.access(sparseConfig).then(() => true).catch(() => false);
         if (!hasSparse) {
-          boundedExecSync('git sparse-checkout init --cone', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
-          boundedExecSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['sparse-checkout', 'init', '--cone'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+          boundedExecFileSync('git', ['sparse-checkout', 'set', '--no-cone', '/*', '!/.aiwg'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
         }
       } catch {
         // Sparse checkout is optional — older git may not support it
@@ -321,11 +321,11 @@ export async function switchToEdge() {
     await fs.mkdir(path.dirname(config.edgePath), { recursive: true });
     try {
       // Cloning the full repository; long tier (#3062).
-      boundedExecSync(`git clone --branch main ${REPO_URL} "${config.edgePath}"`, 'long', { stdio: 'inherit' });
+      boundedExecFileSync('git', ['clone', '--branch', 'main', REPO_URL, config.edgePath], 'long', { stdio: 'inherit' });
       // Exclude dogfooding artifacts from edge clones — users want framework source only
       try {
-        boundedExecSync('git sparse-checkout init --cone', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
-        boundedExecSync('git sparse-checkout set --no-cone "/*" "!/.aiwg"', 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecFileSync('git', ['sparse-checkout', 'init', '--cone'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
+        boundedExecFileSync('git', ['sparse-checkout', 'set', '--no-cone', '/*', '!/.aiwg'], 'quick', { cwd: config.edgePath, stdio: 'pipe' });
       } catch {
         // Sparse checkout is optional — older git versions may not support it
         console.log('Note: sparse checkout not available, .aiwg/ will be present in edge install.');
@@ -572,11 +572,11 @@ export async function getVersionInfo() {
   if (config.channel === 'edge') {
     // Get git info for edge channel
     try {
-      const gitHash = boundedExecSync('git rev-parse --short HEAD', 'quick', {
+      const gitHash = boundedExecFileSync('git', ['rev-parse', '--short', 'HEAD'], 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();
-      const gitBranch = boundedExecSync('git branch --show-current', 'quick', {
+      const gitBranch = boundedExecFileSync('git', ['branch', '--show-current'], 'quick', {
         cwd: config.edgePath,
         encoding: 'utf8',
       }).trim();
