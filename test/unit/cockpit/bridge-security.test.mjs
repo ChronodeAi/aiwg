@@ -151,10 +151,11 @@ const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), 
 const request = (bridge, path, { method = 'GET', body } = {}) => new Promise((resolve) => {
   const req = { method, async *[Symbol.asyncIterator]() { if (body !== undefined) yield Buffer.from(JSON.stringify(body)); }, url: path, socket: { encrypted: false }, headers: { host: '127.0.0.1:8140', authorization: `Bearer ${bridge.cockpitToken}` } };
   let status;
+  const responseHeaders = new Headers();
   bridge.emit('request', req, {
-    setHeader() {},
-    writeHead(value) { status = value; },
-    end(body) { resolve(new Response(body, { status })); },
+    setHeader(name, value) { responseHeaders.set(name, value); },
+    writeHead(value, headers) { status = value; for (const [name, header] of Object.entries(headers ?? {})) responseHeaders.set(name, header); },
+    end(body) { resolve(new Response(body, { status, headers: responseHeaders })); },
   });
 });
 
@@ -315,13 +316,13 @@ describe('Cockpit bridge outbound security', () => {
     }
   });
 
-  it('validates a PTY upgrade against its bridge instance and normalizes the loopback host', async () => {
+  it.each(['attach_url', 'pty_ws_url'])('validates a %s PTY upgrade against its bridge instance', async (field) => {
     const root = 'http://127.0.0.1:9234';
     const directory = await mkdtemp(join(tmpdir(), 'wp2-pty-upgrade-'));
     const tokenFile = join(directory, 'executor.token');
     await writeFile(tokenFile, 'synthetic-pty-token', { mode: 0o600 });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (target) => target.pathname === '/agents/instance/sessions'
-      ? jsonResponse({ sessions: [{ id: 'session', attach_url: 'ws://localhost:9234/agents/instance/sessions/session/attach' }] })
+      ? jsonResponse({ sessions: [{ id: 'session', [field]: field === 'pty_ws_url' ? 'wss://{host}/agents/instance/sessions/session/attach' : 'ws://localhost:9234/agents/instance/sessions/session/attach' }] })
       : jsonResponse({ error: 'not_found' }, 404));
     const bridge = createBridge({ executorUrl: root, executorTokenFile: tokenFile, allowMockExecutor: true });
     try {
@@ -339,6 +340,102 @@ describe('Cockpit bridge outbound security', () => {
       expect(outbound.mock.calls[0][1].headers.authorization).toBe('Bearer synthetic-pty-token');
       expect(socket.end).not.toHaveBeenCalled();
     } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['admin.unavailable', true], ['a'.repeat(64), true], ['Bad Code', false],
+    ['a'.repeat(65), false], ['', false], ['<private>', false], ['safe\n', false],
+  ])('projects only a safe degraded inventory code: %s', async (code, valid) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (target) => target.pathname === '/admin/instances'
+      ? jsonResponse({ code, status: 'private', title: 'private-title', detail: 'private-detail', error: 'private-error' }, 503)
+      : jsonResponse({ agents: [] }));
+    const bridge = createBridge({ executorUrl, allowMockExecutor: true });
+    const response = await request(bridge, '/api/inventory');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.admin_error).toEqual({ status: 503, ...(valid ? { code } : {}) });
+    expect(body.degraded_admin_inventory).toBe('/admin/instances returned 503');
+    expect(JSON.stringify(body)).not.toMatch(/private-/);
+  });
+
+  it.each([401, 403, 404, 405, 429, 500, 503])('logs each %i upstream response once with bounded redacted detail', async (status) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({
+      detail: 'operator-reason http://user:password@executor.example/path?token=query-secret',
+      token: 'nested-secret', diagnostic: 'x'.repeat(10000),
+    }, status));
+    const bridge = createBridge({ executorUrl, allowMockExecutor: true });
+    for (const path of ['/api/operations/operation', '/api/cost']) {
+      log.mockClear(); outbound.mockClear();
+      await request(bridge, path);
+      const entries = log.mock.calls.filter(([message]) => message === '[cockpit-bridge] upstream request failed');
+      expect(entries).toHaveLength(outbound.mock.calls.length);
+      expect(entries.length).toBeGreaterThan(0);
+      for (const [, entry] of entries) {
+        expect(entry.status).toBe(status);
+        expect(Buffer.byteLength(entry.body)).toBeLessThanOrEqual(4096);
+        expect(entry.body).toContain('operator-reason');
+        expect(entry.body).not.toMatch(/password|query-secret|nested-secret/);
+      }
+    }
+  });
+
+  it('logs a non-JSON upstream failure and a followed redirect once each', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('redirect diagnostic token=redirect-secret', { status: 307, headers: { location: '/last' } }))
+      .mockResolvedValueOnce(new Response('plain diagnostic Bearer text-secret', { status: 500 }));
+    await fetchJsonFirst([`${executorUrl}/first`], { executorUrl });
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(log.mock.calls)).toMatch(/redirect diagnostic/);
+    expect(JSON.stringify(log.mock.calls)).toMatch(/plain diagnostic/);
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/redirect-secret|text-secret/);
+  });
+
+  it.each([
+    [429, '120', '120'], [503, 'Wed, 21 Oct 2026 07:28:00 GMT', 'Wed, 21 Oct 2026 07:28:00 GMT'],
+    [503, 'not a date', null], [429, '-1', null], [429, '1.5', null],
+    [503, 'Wed, 99 Oct 2026 07:28:00 GMT', null], [500, '120', null], [503, null, null],
+  ])('forwards only valid Retry-After for status %i and value %s', async (status, value, expected) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const directory = await mkdtemp(join(tmpdir(), 'wp2-retry-after-'));
+    const mcpTokenFile = join(directory, 'mcp.token');
+    await writeFile(mcpTokenFile, 'synthetic-mcp', { mode: 0o600 });
+    const outbound = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status,
+      headers: { ...(value ? { 'retry-after': value } : {}), 'x-private-upstream': 'private' },
+    }));
+    const bridge = createBridge({ executorUrl, allowMockExecutor: true, mcpTokenFile, auditDir: directory });
+    try {
+      for (const [path, options] of [
+        ['/api/operations/operation', {}], ['/api/cost', {}],
+        ['/api/mcp', { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } }],
+        ['/api/instances/instance/start', { method: 'POST' }],
+      ]) {
+        log.mockClear(); outbound.mockClear();
+        const response = await request(bridge, path, options);
+        expect(log.mock.calls.filter(([message]) => message === '[cockpit-bridge] upstream request failed')).toHaveLength(outbound.mock.calls.length);
+        expect(outbound).toHaveBeenCalled();
+        expect(response.status, path).toBe(status);
+        expect(response.headers.get('retry-after'), path).toBe(expected);
+        expect(response.headers.has('x-private-upstream'), path).toBe(false);
+      }
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('projects managed Docker and version errors without logging a second time', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      message: 'refuses startup profiles that materialize raw credential refs', detail: 'private',
+    }, 422));
+    const managed = await fetchJsonFirst([`${executorUrl}/launch`], { executorUrl });
+    expect(managed.body.error).toBe('managed_docker_raw_credentials_rejected');
+    expect(log).toHaveBeenCalledTimes(1);
+    log.mockClear();
+    outbound.mockResolvedValue(jsonResponse({ code: 'version_not_supported', detail: 'private' }, 400));
+    const version = await fetchJsonFirst([`${executorUrl}/tasks`], { executorUrl });
+    expect(version.body).toEqual({ error: 'version_not_supported', code: 'version_not_supported', message: 'Bridge request failed.' });
+    expect(log).toHaveBeenCalledTimes(1);
   });
 
   it('returns generic errors and logs the original stack only on the server', async () => {

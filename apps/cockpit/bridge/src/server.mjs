@@ -118,6 +118,7 @@ async function executorFetch(target, init = {}, executorUrl = executorRequestCon
   let options = { ...init, headers, redirect: 'manual' };
   for (let redirects = 0; ; redirects++) {
     const response = await fetch(url, options);
+    if (!response.ok) await logUpstreamError(response);
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
     if (!location) return response;
@@ -575,8 +576,12 @@ export async function createUserIndexGraph(body, projectRoot = process.cwd()) {
   return { name, definition: config.index.graphs[name], config_path: configPath };
 }
 
+// Keep validated retry metadata local to the projected response, never in its JSON.
+const upstreamRetryAfter = new WeakMap();
+
 function json(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json' });
+  const retryAfter = [429, 503].includes(status) && body && upstreamRetryAfter.get(body);
+  res.writeHead(status, { 'content-type': 'application/json', ...(retryAfter ? { 'retry-after': retryAfter } : {}) });
   res.end(JSON.stringify(body));
 }
 
@@ -622,13 +627,36 @@ function bridgeErrorBody(err, code = err?.code ?? 'bridge_upstream_error') {
   return { error: code, message, ...(recovery ? { recovery } : {}) };
 }
 
-function upstreamErrorBody(status, body) {
-  const generic = bridgeErrorBody(new Error(JSON.stringify(redactAuditValue(body))), 'bridge_upstream_error');
+async function logUpstreamError(response) {
+  const text = await response.clone().text().catch(() => '');
+  let body;
+  try { body = JSON.stringify(redactAuditValue(JSON.parse(text))); }
+  catch { body = text; }
+  console.error('[cockpit-bridge] upstream request failed', {
+    status: response.status,
+    body: Buffer.from(redactErrorText(body)).subarray(0, 4096).toString('utf8').replace(/\uFFFD$/, ''),
+  });
+}
+
+function safeUpstreamError(status, body) {
+  const code = typeof body?.code === 'string' && body.code === body.code.trim() && /^[a-z0-9_.-]{1,64}$/.test(body.code) ? body.code : undefined;
+  return { ...(code ? { code } : {}), status };
+}
+
+function upstreamErrorBody(status, body, headers) {
   // Preserve only locally defined projections needed for recovery/negotiation.
   const managed = managedDockerLaunchError(status, body);
-  if (managed.body !== body) return managed.body;
-  if (isA2AVersionNotSupported(status, body)) return { ...generic, code: 'version_not_supported' };
-  return generic;
+  const generic = { error: 'bridge_upstream_error', message: 'Bridge request failed.' };
+  const projected = managed.body !== body ? managed.body
+    : isA2AVersionNotSupported(status, body) ? { ...generic, error: 'version_not_supported', code: 'version_not_supported' }
+    : generic;
+  const retryAfter = headers?.get('retry-after');
+  if ([429, 503].includes(status) && retryAfter && (
+    /^[0-9]+$/.test(retryAfter) ||
+    (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(retryAfter) &&
+      Number.isFinite(Date.parse(retryAfter)) && new Date(retryAfter).toUTCString() === retryAfter)
+  )) upstreamRetryAfter.set(projected, retryAfter);
+  return projected;
 }
 
 function redactAuditValue(value) {
@@ -694,7 +722,7 @@ async function proxy(res, method, target) {
     err.upstreamStatus = r.status;
     throw err;
   }
-  return json(res, r.status, r.ok ? body : upstreamErrorBody(r.status, body));
+  return json(res, r.status, r.ok ? body : upstreamErrorBody(r.status, body, r.headers));
 }
 
 const SAFE_FALLBACK_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -763,7 +791,7 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     }
     if (r.ok) return { target, status: r.status, body: responseBody };
     failures.push(`${target} -> ${r.status}`);
-    if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: upstreamErrorBody(r.status, responseBody), failures };
+    if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: upstreamErrorBody(r.status, responseBody, r.headers), adminError: safeUpstreamError(r.status, responseBody), failures };
   }
   if (refused && refused === candidates.length) throw executorAuthError('executor_target_refused', 'no allowed upstream candidates');
   throw new Error(failures.join('; ') || 'no upstream candidates');
@@ -945,7 +973,7 @@ async function proxyMcpRequest(req, res, executorUrl, mcpTokenFile) {
       method: rpcMethod,
       status,
     });
-    return json(res, status, response.ok ? responseBody : upstreamErrorBody(status, responseBody));
+    return json(res, status, response.ok ? responseBody : upstreamErrorBody(status, responseBody, response.headers));
   } catch (err) {
     await appendAudit('sandbox.mcp.proxy', {
       result: 'error',
@@ -2114,7 +2142,7 @@ async function getAgentBackedHostInventory(executorUrl, degradedDetail) {
 /** Normalize the executor's admin inventory into the Bridge's UI shape. */
 async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
   const bootstrapTrust = await getBootstrapTrustPosture(executorUrl, { requireSandboxMtls });
-  const { target, status, body } = await fetchJsonFirst([
+  const { target, status, body, adminError } = await fetchJsonFirst([
     `${executorUrl}/admin/instances`,
     `${executorUrl}/api/v2/admin/instances`,
   ]);
@@ -2134,7 +2162,7 @@ async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
         fetched_at: new Date().toISOString(),
         count: 0,
         degraded_admin_inventory: detail,
-        admin_error: body,
+        admin_error: adminError,
         bootstrap_trust: bootstrapTrust,
         instances: [],
       };
