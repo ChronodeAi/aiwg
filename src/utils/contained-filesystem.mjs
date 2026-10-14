@@ -116,9 +116,12 @@ async function pinnedArtifactRoot(store, write) {
     if (!write) throw new Error('Default artifact root has not been created');
     // Serialize first-write initialization so concurrent requests share one
     // identity. Creation still rejects symlinks and uses a project descriptor.
-    store.initialization ||= store.creationAnchor ? createMissingRoot(store) : createArtifactRoot(store);
+    store.initialization ||= store.creationAnchor ? initializeMissingRoot(store) : createArtifactRoot(store);
     await store.initialization;
   }
+  // All members of a storage cohort observe the same completed creation proof,
+  // including verification/close failures after identity has been recorded.
+  if (store.creationAnchor && store.initialization) await store.initialization;
   await verifyArtifactRoot(store);
   return store.root;
 }
@@ -449,8 +452,34 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
   }
 }
 
+// Only missing storage roots participate. Weak references do not keep unused
+// adapters alive, and entries disappear when creation settles. Existing roots
+// always take the normal fresh-pin path; this is not a process-wide trust cache.
+const missingStorageRoots = new Map();
+const forgottenStorageRoots = new FinalizationRegistry(({ key, reference }) => {
+  if (missingStorageRoots.get(key) === reference) missingStorageRoots.delete(key);
+});
+
+function missingStorageRootKey(configured, options) {
+  return JSON.stringify([configured, options.protectLocationPointer, options.rejectLinkedWrites]);
+}
+
+async function initializeMissingRoot(store) {
+  try {
+    await createMissingRoot(store);
+  } finally {
+    store.creationSettled = true;
+    if (missingStorageRoots.get(store.creationKey) === store.creationReference) {
+      missingStorageRoots.delete(store.creationKey);
+    }
+    forgottenStorageRoots.unregister(store.creationReference);
+  }
+}
+
 /** Pin the existing ancestor of a configured, not-yet-created storage root. */
 async function pinMissingRoot(configured, options) {
+  const key = missingStorageRootKey(configured, options);
+  const pending = missingStorageRoots.get(key)?.deref();
   let ancestor = configured;
   const components = [];
   while (true) {
@@ -459,15 +488,50 @@ async function pinMissingRoot(configured, options) {
     components.unshift(path.basename(ancestor));
     ancestor = path.dirname(ancestor);
   }
-  if (!components.length) throw new Error('Default artifact root is not a creatable directory');
+  if (!components.length) {
+    // Creation may have completed while this request was pinning an observed
+    // missing root. Only a cohort's own completed mkdir/identity proof permits
+    // joining it; an independently installed root still refuses.
+    const shared = pending || missingStorageRoots.get(key)?.deref();
+    if (!shared?.initialization) throw new Error('Default artifact root is not a creatable directory');
+    await shared.initialization;
+    await verifyArtifactRoot(shared);
+    return shared;
+  }
   const root = await fs.realpath(ancestor);
   const identity = await fs.stat(ancestor);
   assertIdentity(identity);
   if (!identity.isDirectory()) throw new Error('Artifact root must be a directory');
-  return {
+  const shared = pending || missingStorageRoots.get(key)?.deref();
+  if (shared && shared.root === path.join(root, ...components)) {
+    if (!shared.creationSettled && shared.creationAnchor.configured === ancestor && shared.creationAnchor.root === root
+      && shared.creationAnchor.identity.dev === identity.dev && shared.creationAnchor.identity.ino === identity.ino) {
+      return shared;
+    }
+    if (shared.initialization) {
+      // A partially created ancestor can shorten this pin's missing path.
+      // Wait for the exclusive final mkdir proof and retain this pin's own
+      // observed ancestor identity before joining the established boundary.
+      await shared.initialization;
+      const current = await fs.stat(ancestor);
+      assertIdentity(current);
+      if (await fs.realpath(ancestor) !== root || current.dev !== identity.dev || current.ino !== identity.ino) {
+        throw new Error('Artifact root changed since it was pinned');
+      }
+      await verifyArtifactRoot(shared);
+      return shared;
+    }
+  }
+  const store = {
     configured, root: path.join(root, ...components), identity: null, ...options,
     creationAnchor: { configured: ancestor, root, identity }, components,
+    creationKey: key,
   };
+  const reference = new WeakRef(store);
+  store.creationReference = reference;
+  missingStorageRoots.set(key, reference);
+  forgottenStorageRoots.register(store, { key, reference }, reference);
+  return store;
 }
 
 /** Create through the pinned ancestor; never adopt an installed final root. */

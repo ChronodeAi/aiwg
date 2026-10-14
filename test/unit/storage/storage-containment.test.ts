@@ -152,6 +152,101 @@ describe.each(['linux', 'darwin', 'win32'])('filesystem containment (%s access)'
     await expect(adapter.write('sentinel', 'changed')).rejects.toThrow();
     expect(await sentinel()).toEqual(before);
   });
+  it('coalesces independent adapter initialization and preserves every atomic append', async () => {
+    const missing = join(base, 'new/deep/store');
+    const adapters: FilesystemAdapter[] = [];
+    // Each adapter finishes pinning the missing root independently before use.
+    for (let index = 0; index < 10; index++) {
+      const instance = new FilesystemAdapter(missing);
+      expect(await instance.read('events')).toBeNull();
+      adapters.push(instance);
+    }
+    const before = await sentinel();
+    const records = adapters.map((_, index) => `record-${index}\n`);
+    await Promise.all(adapters.map((instance, index) => instance.append('events', records[index])));
+    expect((await fs.readFile(join(missing, 'events'), 'utf8')).trim().split('\n').sort())
+      .toEqual(records.map(record => record.trim()).sort());
+    expect(await sentinel()).toEqual(before);
+  });
+  it('joins initialization observed after only a root ancestor has been created', async () => {
+    const missing = join(base, 'progress/deep/store');
+    const first = new FilesystemAdapter(missing);
+    expect(await first.read('events')).toBeNull();
+    let entered!: () => void, release!: () => void;
+    const createdParent = new Promise<void>(resolve => { entered = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    const mkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, 'mkdir').mockImplementation(async (...args) => {
+      const result = await mkdir(...args as Parameters<typeof mkdir>);
+      if (String(args[0]).endsWith('/progress')) { entered(); await resume; }
+      return result;
+    });
+    const append = first.append('events', 'first\n');
+    try {
+      await createdParent;
+      const stat = fs.stat.bind(fs);
+      vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
+        const info = await stat(...args as Parameters<typeof stat>);
+        if (String(args[0]) === join(base, 'progress')) release();
+        return info;
+      });
+      const second = new FilesystemAdapter(missing);
+      await Promise.all([append, second.append('events', 'second\n')]);
+      expect((await fs.readFile(join(missing, 'events'), 'utf8')).trim().split('\n').sort())
+        .toEqual(['first', 'second']);
+    } finally { release(); await Promise.allSettled([append]); }
+  });
+  it.each(['directory', 'symlink'])('coalesced pins refuse a late %s root and preserve outside metadata', async kind => {
+    const missing = join(base, 'missing-shared');
+    const adapters = [new FilesystemAdapter(missing), new FilesystemAdapter(missing)];
+    await Promise.all(adapters.map(instance => instance.read('sentinel')));
+    if (kind === 'symlink') await fs.symlink(outside, missing, 'dir');
+    else { await fs.mkdir(missing); await fs.link(join(outside, 'sentinel'), join(missing, 'sentinel')); }
+    const before = await sentinel();
+    const results = await Promise.allSettled(adapters.map(instance => instance.append('sentinel', 'changed')));
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    expect(await sentinel()).toEqual(before);
+  });
+  it('shares own-creation proof with a previously pinned adapter without trusting a replacement', async () => {
+    const missing = join(base, 'created-shared');
+    const first = new FilesystemAdapter(missing), second = new FilesystemAdapter(missing);
+    await Promise.all([first.read('events'), second.read('events')]);
+    await first.append('events', 'first\n');
+    await second.append('events', 'second\n');
+    expect(await second.read('events')).toBe('first\nsecond\n');
+    await fs.rename(missing, join(base, 'held-shared'));
+    await fs.mkdir(missing); await fs.writeFile(join(missing, 'events'), 'legitimate new context\n');
+    const before = await sentinel();
+    for (const instance of [first, second]) await expect(instance.append('events', 'changed')).rejects.toThrow(/root changed/);
+    // A fresh context pins an initially existing legitimate replacement afresh.
+    const fresh = new FilesystemAdapter(missing);
+    await fresh.append('events', 'fresh\n');
+    expect(await fresh.read('events')).toBe('legitimate new context\nfresh\n');
+    expect(await fs.readFile(join(base, 'held-shared/events'), 'utf8')).toBe('first\nsecond\n');
+    expect(await sentinel()).toEqual(before);
+  });
+  it('does not persist missing-root creation trust across removal or ancestor replacement', async () => {
+    const missing = join(base, 'reusable/store');
+    const old = new FilesystemAdapter(missing);
+    expect(await old.read('events')).toBeNull();
+    await old.append('events', 'old\n');
+    await fs.rm(join(base, 'reusable'), { recursive: true });
+    const fresh = new FilesystemAdapter(missing);
+    expect(await fresh.read('events')).toBeNull();
+    await fresh.append('events', 'fresh\n');
+    expect(await fresh.read('events')).toBe('fresh\n');
+    await expect(old.append('events', 'changed')).rejects.toThrow();
+    // Replace a pinned missing-root ancestor before either cohort writes.
+    const parent = join(base, 'anchor'); await fs.mkdir(parent);
+    const pinned = new FilesystemAdapter(join(parent, 'store'));
+    expect(await pinned.read('events')).toBeNull();
+    await fs.rename(parent, join(base, 'held-anchor')); await fs.mkdir(parent);
+    const newContext = new FilesystemAdapter(join(parent, 'store'));
+    expect(await newContext.read('events')).toBeNull();
+    await newContext.append('events', 'new anchor\n');
+    await expect(pinned.append('events', 'changed')).rejects.toThrow(/root changed/);
+    expect(await newContext.read('events')).toBe('new anchor\n');
+  });
   it('refuses an unverifiable inode identity', async () => {
     const stat = fs.stat.bind(fs);
     vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
