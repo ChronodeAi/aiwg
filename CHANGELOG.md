@@ -383,7 +383,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   require an absolute edge path. **Behaviour change:** `AIWG_VISION_COMMAND` / `--command`
   templates map unquoted, unescaped `{image}`/`{prompt_file}`/`{out}` placeholders to
   `"$1"`/`"$2"`/`"$3"`, with paths passed as separate shell arguments. `AIWG_VISION_IMAGE`,
-  `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Command substitution,
+  `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Only `$1`, `$2`, `$3`,
+  `$AIWG_VISION_IMAGE`, `$AIWG_VISION_PROMPT_FILE`, and `$AIWG_VISION_OUT` may expand,
+  also in braced form. All other `$` parameter/variable expansions are rejected, including
+  `$SHELL`, `$IFS`, special parameters, arithmetic, and braced operators; `$` inside single
+  quotes is literal text and allowed. Command substitution,
   backticks, `eval`, nested shells (any shell word together with a short `-c` option cluster
   anywhere in the template), here-documents and
   here-strings (`<<`), `#` comments outside single quotes, and templates over 4096 characters are rejected. Use the quoted

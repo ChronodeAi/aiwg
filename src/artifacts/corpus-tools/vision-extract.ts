@@ -108,12 +108,17 @@ function visionCommand(template: string): string {
   // Conservatively reject a shell word together with any short -c option
   // cluster, regardless of order, wrappers, redirections or command boundaries.
   const words = syntax.split(/[\s;&|(){}<>]+/);
-  const hasShell = words.some(word => /^(?:sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|busybox|toybox)$/.test(word.slice(word.lastIndexOf('/') + 1)));
-  if (hasShell && words.some(word => /^-[A-Za-z]*c/.test(word))) reject('nested shell invocation (-c)');
+  const shellWords = words.map(word => word.slice(word.lastIndexOf('/') + 1)
+    .match(/^(?:sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|csh|tcsh|rbash|busybox|toybox)(?:$|(-[A-Za-z]*c))/));
+  const hasShell = shellWords.some(Boolean);
+  if (shellWords.some(word => word?.[1]) || (hasShell && words.some(word => /^-[A-Za-z]*c/.test(word)))) reject('nested shell invocation (-c)');
 
-  // Track quotes only to reject quoted/escaped placeholders and comments.
+  // Only contract-provided parameters may expand; match at each dollar without
+  // rescanning the remaining template. Braces must contain only the exact name.
+  const parameter = /\$(?:[123](?![0-9])|AIWG_VISION_(?:IMAGE|PROMPT_FILE|OUT)(?![A-Za-z0-9_])|\{(?:[123]|AIWG_VISION_(?:IMAGE|PROMPT_FILE|OUT))\})/y;
+  // Track quotes to reject quoted/escaped placeholders, expansions and comments.
   let quote = '';
-  return template.replace(/\\?\{(image|prompt_file|out)\}|\\[\s\S]|\$'|["'#]/g, (token, name: string | undefined) => {
+  return template.replace(/\\?\{(image|prompt_file|out)\}|\\[\s\S]|\$'|[$"'#]/g, (token, name: string | undefined, offset: number) => {
     if ((token === '#' || token === '\\#') && quote !== "'") reject('comments (# outside single quotes)');
     if (name) {
       if (quote) throw new Error(`Vision command placeholders must be outside shell quotes. ${guidance}`);
@@ -126,6 +131,13 @@ function visionCommand(template: string): string {
     if (token.startsWith('\\')) {
       if (quote === "'" && token[1] === "'") quote = '';
       return token;
+    }
+    if (token.startsWith('$')) {
+      if (quote !== "'") {
+        parameter.lastIndex = offset;
+        if (!parameter.test(template)) reject('parameter expansions other than the provided vision variables');
+      }
+      if (token === '$') return token;
     }
     if (!quote) quote = token;
     else if (quote === token || (quote === "$'" && token === "'") || (quote === "'" && token === "$'")) quote = '';
@@ -141,7 +153,8 @@ function visionCommand(template: string): string {
  *   {out}          "$3": path the command must write the transcription to
  * Placeholders must be unquoted and unescaped. AIWG_VISION_IMAGE /
  * AIWG_VISION_PROMPT_FILE / AIWG_VISION_OUT are also exported.
- * Command substitution, backticks, eval, nested shells with -c, <<, and #
+ * Only $1/$2/$3 and the exported vision variables (also braced) may expand.
+ * Other $ expansions, command substitution, backticks, eval, nested shells with -c, <<, and #
  * outside single quotes are rejected; use a wrapper script for complex logic.
  * e.g.  vision-cli --prompt-file {prompt_file} --image {image} > {out}
  */

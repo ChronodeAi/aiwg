@@ -285,7 +285,9 @@ process.stdout.write(fs.readFileSync(promptFile, 'utf8'));
     for (const quoted of [`"{${placeholder}}"`, `'{${placeholder}}'`, `$'{${placeholder}}'`, `$'escaped\\' {${placeholder}}'`]) {
       const command = `touch ${dollarMarker}; vision-probe ${quoted}`;
       expect(() => resolveAdapter({ provider: 'command', command }))
-        .toThrow('Vision command placeholders must be outside shell quotes');
+        .toThrow(quoted.startsWith('$')
+          ? 'Vision command rejects parameter expansions other than the provided vision variables'
+          : 'Vision command placeholders must be outside shell quotes');
     }
     expect(existsSync(capture)).toBe(false);
     expectNoExecution();
