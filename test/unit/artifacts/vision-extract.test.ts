@@ -65,7 +65,7 @@ describe('resolveAdapter (#1507)', () => {
     const whitespaceLines = `${' '.repeat(40)}\n`.repeat(99) + 'x {image} {out}';
     const started = Date.now();
     expect(resolveAdapter({ provider: 'command', command: whitespaceLines }).name).toBe('command');
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now() - started).toBeLessThan(200);
   });
   it('passes image, prompt and output paths as positional arguments in real shell templates (141)', () => {
     const marker = join(root, 'pwned');
@@ -126,7 +126,7 @@ describe('resolveAdapter (#1507)', () => {
     ['printf "%s" `cat "$2"`', 'backticks'],
     ['eval "$1"', 'eval'],
     ['e"val" "$1"', 'eval'],
-    ...['sh', 'bash', 'zsh', 'dash', 'ksh', 'busybox sh'].map(shell => [`${shell} -c "$1"`, 'nested shell']),
+    ...['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'yash', 'fish', 'busybox', 'toybox', 'busybox sh'].map(shell => [`${shell} -c "$1"`, 'nested shell']),
     ['env MODE=vision sh -c "$1"', 'nested shell'],
     ...['exec', 'command', 'nice -n 19', 'timeout 10', 'timeout 1.5s', 'env MODE=vision exec nice -n 19 timeout 10'].map(prefix => [`${prefix} /bin/sh -c "$1"`, 'nested shell']),
     ...[';', '|', '&&', '||', '&', '\n'].map(separator => [`printf x ${separator} sh -c "$1"`, 'nested shell']),
@@ -157,6 +157,43 @@ describe('resolveAdapter (#1507)', () => {
     expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
   });
 
+  it.each(['image', 'prompt_file', 'out'])('rejects nested shell prefix and option bypasses for {%s}', (placeholder) => {
+    const dir = join(root, 'x;:>PWNED;y -z');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    const payload = `'printf original:'{${placeholder}} > {out}`;
+    const commands = [
+      ...['MODE=x', 'MODE=vision', 'FOO=1', '/usr/bin/env', 'env -u HOME', '</dev/null', 'exec >/dev/null', 'nohup']
+        .map(prefix => `${prefix} sh -c ${payload}`),
+      `{ sh -c ${payload}; }`,
+      `(sh -c ${payload})`,
+      `if true; then sh -c ${payload}; fi`,
+      ...['-c', '-Cc', '-ec', '-xc', '-lc'].map(option => `sh ${option} ${payload}`),
+      `busybox ash -c ${payload}`,
+      `toybox sh -c ${payload}`,
+      `printf '%s' -c; /bin/sh ${payload}`,
+      // Option and command text joined into one word must not slip past the -c rule.
+      `sh -c"$1" ${payload}`,
+      `sh -c$1 ${payload}`,
+      `sh -xc"$1" ${payload}`,
+    ];
+    for (const command of commands) {
+      expect(() => {
+        const adapter = resolveAdapter({ provider: 'command', command: `cd '${root}'; ${command}` });
+        adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+      }, command).toThrow(/nested shell invocation \(-c\).*wrapper script/);
+      expect(existsSync(join(root, 'PWNED'))).toBe(false);
+      expect(existsSync(join(dir, 'PWNED'))).toBe(false);
+      expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
+    }
+  });
+
+  it.each(['-C', '--c', '--concise', '-1c'])('accepts sh with an option outside the lowercase -c cluster rule: %s', (option) => {
+    expect(resolveAdapter({ provider: 'command', command: `sh ./vision ${option} {image} {prompt_file} {out}` }).name)
+      .toBe('command');
+  });
+
   it.each(['image', 'prompt_file', 'out'])('rejects here-doc quote desync and here-strings for {%s}', (placeholder) => {
     const dir = join(root, 'x;:>PWNED;y  -z *');
     mkdirSync(dir);
@@ -179,7 +216,7 @@ describe('resolveAdapter (#1507)', () => {
     ['./vision.sh --scale', 'vision.sh', '--scale'],
     ['sh ./vision --concise', 'vision', '--concise'],
   ])('passes every hostile path as one argument to %s through a real shell', (command, script, option) => {
-    const dir = join(root, 'x;:>PWNED;y  -z *');
+    const dir = join(root, 'x;:>PWNED;y -z');
     mkdirSync(dir);
     const image = join(dir, 'page-001.png');
     writeFileSync(image, 'PNG');
@@ -190,6 +227,23 @@ describe('resolveAdapter (#1507)', () => {
     expect(result.ok).toBe(true);
     expect(result.text?.trimEnd().split('\n')).toEqual([
       '4', option, image, join(dir, '.vision-prompt-1.txt'), join(dir, '.vision-out-1.txt'),
+    ]);
+    expect(existsSync(join(root, 'PWNED'))).toBe(false);
+    expect(existsSync(join(dir, 'PWNED'))).toBe(false);
+  });
+
+  it('passes hostile paths literally through tool options and output redirection in a real shell', () => {
+    const dir = join(root, 'x;:>PWNED;y -z');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    writeFileSync(join(root, 'tool'), '#!/bin/sh\nprintf \'%s\\n\' "$#" "$@" "$AIWG_VISION_OUT"\n', { mode: 0o755 });
+    const adapter = resolveAdapter({ provider: 'command', command:
+      `cd '${root}' && PATH='${root}':"$PATH" tool --image {image} --prompt-file {prompt_file} > {out}` });
+    const result = adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+    expect(result.ok).toBe(true);
+    expect(result.text?.trimEnd().split('\n')).toEqual([
+      '4', '--image', image, '--prompt-file', join(dir, '.vision-prompt-1.txt'), join(dir, '.vision-out-1.txt'),
     ]);
     expect(existsSync(join(root, 'PWNED'))).toBe(false);
     expect(existsSync(join(dir, 'PWNED'))).toBe(false);

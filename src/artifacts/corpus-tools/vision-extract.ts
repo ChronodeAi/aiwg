@@ -105,10 +105,11 @@ function visionCommand(template: string): string {
   if (template.includes('`')) reject('backticks');
   if (/\beval\b/.test(syntax)) reject('eval');
   if (syntax.includes('<<')) reject('here-documents and here-strings (<<)');
-  // Redirection ampersands are not command separators. Match shell command
-  // words and short option clusters, not .sh filenames or long options.
-  const commandSyntax = syntax.replace(/\d*[<>]+&?\d*-?|>&|<&|&>/g, ' ');
-  if (/(?:^|[;&|\n])[ \t]*(?:(?:env|exec|command|nice|timeout)\s+(?:(?:-[^\s;&|]+|[a-zA-Z_]\w*=[^\s;&|]+|\d+(?:\.\d+)?[smhd]?)\s+)*)*(?:[^\s;&|]*\/)?(?:sh|bash|zsh|dash|ksh|busybox\s+sh)(?=\s|$)[^;&|\n]*?\s-[a-z]*c[a-z]*(?=\s|$)/.test(commandSyntax)) reject('nested shell invocation (-c)');
+  // Conservatively reject a shell word together with any short -c option
+  // cluster, regardless of order, wrappers, redirections or command boundaries.
+  const words = syntax.split(/[\s;&|(){}<>]+/);
+  const hasShell = words.some(word => /^(?:sh|bash|zsh|dash|ksh|ash|mksh|yash|fish|busybox|toybox)$/.test(word.slice(word.lastIndexOf('/') + 1)));
+  if (hasShell && words.some(word => /^-[A-Za-z]*c/.test(word))) reject('nested shell invocation (-c)');
 
   // Track quotes only to reject quoted/escaped placeholders and comments.
   let quote = '';
