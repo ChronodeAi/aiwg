@@ -16,8 +16,6 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import fs from 'fs/promises';
-import { constants } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerWriterProfileResources } from './tools/writer-profiles.mjs';
@@ -26,6 +24,7 @@ import { registerCommandRunTool } from './tools/command-run.mjs';
 import { registerInteractionTools } from './tools/interaction.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from './tools/subsystems.mjs';
 import { AIWG_ROOT, findProjectRoot, resolveProjectAiwgDir } from './helpers.mjs';
+import { pinContainedRoot as pinArtifactRoot, openContainedFile as openArtifact, readContainedFile, listContainedFiles, validateContainedPath } from '../utils/contained-filesystem.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,317 +33,6 @@ const FRAMEWORKS = {
   'sdlc-complete': path.join(AIWG_ROOT, 'agentic/code/frameworks/sdlc-complete'),
   'media-marketing-kit': path.join(AIWG_ROOT, 'agentic/code/frameworks/media-marketing-kit')
 };
-
-function assertArtifactContained(root, target) {
-  const relative = path.relative(root, target);
-  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error('Artifact path must stay beneath the artifact root');
-  }
-}
-
-function rootedArtifactAccess() {
-  return process.platform === 'linux' && constants.O_NOFOLLOW && constants.O_DIRECTORY;
-}
-
-/** A root pinned as missing must be created by us, never adopted later. */
-async function createArtifactRoot(store) {
-  let parent;
-  let directory;
-  let verified = false;
-  try {
-    let entry = store.configured;
-    if (rootedArtifactAccess()) {
-      parent = await fs.open(store.projectRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      if (await fs.realpath(`/proc/self/fd/${parent.fd}`) !== store.projectRoot) {
-        throw new Error('Project root changed during artifact creation');
-      }
-      entry = `/proc/self/fd/${parent.fd}/.aiwg`;
-    }
-    // EEXIST is a refusal, including a symlink or directory installed since pinning.
-    await fs.mkdir(entry);
-    const created = await fs.lstat(entry);
-    if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('Artifact root changed during creation');
-    // Windows cannot open directory handles through fs.open; its fallback
-    // uses static identity checks, as do the subsequent artifact operations.
-    if (process.platform !== 'win32') {
-      directory = await fs.open(entry, constants.O_RDONLY | (constants.O_DIRECTORY || 0) | (constants.O_NOFOLLOW || 0));
-    }
-    const opened = directory ? await directory.stat() : await fs.stat(entry);
-    const current = await fs.lstat(entry);
-    if (current.isSymbolicLink() || !opened.isDirectory()
-      || opened.dev !== created.dev || opened.ino !== created.ino
-      || opened.dev !== current.dev || opened.ino !== current.ino
-      || await fs.realpath(store.configured) !== store.root) {
-      throw new Error('Artifact root changed during creation');
-    }
-    store.identity = opened;
-    verified = true;
-  } finally {
-    const closed = await Promise.allSettled([...(directory ? [directory.close()] : []), ...(parent ? [parent.close()] : [])]);
-    const failure = closed.find(result => result.status === 'rejected');
-    if (verified && failure) throw failure.reason;
-  }
-}
-
-/** Pin an existing store once; only a missing local default may be bootstrapped. */
-async function pinArtifactRoot(configured, projectRoot) {
-  try {
-    const root = await fs.realpath(configured);
-    const identity = await fs.stat(root);
-    const store = { configured, projectRoot, root, identity };
-    await verifyArtifactRoot(store);
-    return store;
-  } catch (error) {
-    if (error.code === 'ENOENT' && configured === path.join(projectRoot, '.aiwg')) {
-      const existing = await fs.lstat(configured).catch(missing => {
-        if (missing.code !== 'ENOENT') throw missing;
-      });
-      if (!existing) return { configured, projectRoot, root: configured, identity: null };
-      // A symlink (or other unexpected node) present where the default root
-      // should be created must not become the containment root later.
-      return {
-        configured,
-        projectRoot,
-        root: configured,
-        error: new Error('Default artifact root is not a creatable directory'),
-      };
-    }
-    // Keep discovery available, but never adopt a store that was unavailable
-    // at startup (including a dangling alias) on a later request.
-    return { configured, projectRoot, root: configured, error };
-  }
-}
-
-async function verifyArtifactRoot(store) {
-  if (store.error) throw store.error;
-  const canonical = await fs.realpath(store.configured);
-  const current = await fs.stat(store.configured);
-  if (canonical !== store.root || !current.isDirectory()
-    || current.dev !== store.identity.dev || current.ino !== store.identity.ino) {
-    throw new Error('Artifact root changed since it was pinned');
-  }
-}
-
-async function pinnedArtifactRoot(store, write) {
-  if (store.error) throw store.error;
-  if (!store.identity) {
-    if (!write) throw new Error('Default artifact root has not been created');
-    // Serialize first-write initialization so concurrent requests share one
-    // identity. Creation still rejects symlinks and uses a project descriptor.
-    store.initialization ||= createArtifactRoot(store);
-    await store.initialization;
-  }
-  await verifyArtifactRoot(store);
-  return store.root;
-}
-
-/** Resolve existing aliases before creating anything; dangling symlinks fail closed. */
-async function resolveArtifactPath(store, artifactPath, { write = false } = {}) {
-  if (!artifactPath || path.isAbsolute(artifactPath) || path.win32.isAbsolute(artifactPath)
-    || /^[A-Za-z]:/.test(artifactPath)
-    || (process.platform === 'win32' && artifactPath.split(/[\\/]/).some(part => part !== '.'
-      && (/[<>:"|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part)
-        || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))))
-    || artifactPath.split(/[\\/]/).includes('..')) {
-    throw new Error('Artifact path must be relative and contain no .. segments');
-  }
-  if (write && artifactPath.split(/[\\/]/).some(part => /^\.aiwg-location[. ]*(?::.*)?$/i.test(part))) {
-    throw new Error('Refusing to write an artifact location pointer');
-  }
-  const root = await pinnedArtifactRoot(store, write);
-  const target = path.resolve(root, artifactPath);
-  assertArtifactContained(root, target);
-  if (!rootedArtifactAccess()) {
-    let componentPath = root;
-    for (const component of path.relative(root, target).split(path.sep)) {
-      componentPath = path.join(componentPath, component);
-      const info = await fs.lstat(componentPath).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-      if (info?.isSymbolicLink()) throw new Error('Refusing artifact symlink component');
-    }
-  }
-  let ancestor = path.dirname(target);
-  const missing = [];
-  while (true) {
-    try {
-      // lstat distinguishes a missing directory from a dangling symlink.
-      await fs.lstat(ancestor);
-      break;
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      missing.unshift(path.basename(ancestor));
-      ancestor = path.dirname(ancestor);
-    }
-  }
-  const realAncestor = await fs.realpath(ancestor);
-  if (realAncestor !== root) assertArtifactContained(root, realAncestor);
-  const fullPath = path.resolve(realAncestor, ...missing, path.basename(target));
-  assertArtifactContained(root, fullPath);
-  let info;
-  try {
-    info = await fs.lstat(fullPath);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  if (info) {
-    if (write && info.isSymbolicLink()) throw new Error('Refusing to write through an artifact symlink');
-    const realTarget = await fs.realpath(fullPath);
-    assertArtifactContained(root, realTarget);
-    if (!write) return { root, fullPath: realTarget };
-  }
-  return { root, fullPath };
-}
-
-/**
- * Linux procfs descriptor paths anchor each lookup to an opened directory.
- * Other platforms use static containment checks. Writes use a fresh inode;
- * failed verification closes handles without unsafe pathname cleanup.
- * Concurrent same-user relocation after verification is not a sandbox boundary.
- */
-async function openArtifact(store, artifactPath, { write = false } = {}) {
-  const { root, fullPath } = await resolveArtifactPath(store, artifactPath, { write });
-  if (!rootedArtifactAccess()) return openStaticArtifact(store, root, fullPath, { write });
-  const directories = [];
-  let file;
-  let transferred = false;
-  const descriptorPath = handle => `/proc/self/fd/${handle.fd}`;
-  async function verify(handle, { rootHandle = false, directory = false, entry } = {}) {
-    const actual = await fs.realpath(descriptorPath(handle));
-    if (rootHandle) {
-      if (actual !== root) throw new Error('Artifact root changed during access');
-    } else {
-      assertArtifactContained(root, actual);
-    }
-    const [opened, current] = await Promise.all([handle.stat(), fs.lstat(entry || actual)]);
-    if (rootHandle) {
-      await verifyArtifactRoot(store);
-      if (opened.dev !== store.identity.dev || opened.ino !== store.identity.ino) {
-        throw new Error('Artifact root changed since it was pinned');
-      }
-    }
-    if (current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino
-      || (directory ? !opened.isDirectory() : !opened.isFile())) {
-      throw new Error('Artifact changed during access or is not a regular file/directory');
-    }
-    if (!directory && (opened.nlink > 1 || current.nlink > 1)) {
-      throw new Error('Refusing multiply-linked artifact file');
-    }
-    return actual;
-  }
-  async function close() {
-    const closed = await Promise.allSettled([...(file ? [file.close()] : []), ...directories.map(handle => handle.close())]);
-    const failure = closed.find(result => result.status === 'rejected');
-    if (failure) throw failure.reason;
-  }
-  try {
-    let parent = await fs.open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    directories.push(parent);
-    await verify(parent, { rootHandle: true, directory: true });
-    const components = path.relative(root, fullPath).split(path.sep);
-    const name = components.pop();
-    for (const component of components) {
-      const entry = path.join(descriptorPath(parent), component);
-      let child;
-      try {
-        child = await fs.open(entry, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      } catch (error) {
-        if (!write || error.code !== 'ENOENT') throw error;
-        await verify(parent, { rootHandle: directories.length === 1, directory: true });
-        try {
-          await fs.mkdir(entry);
-        } catch (mkdirError) {
-          if (mkdirError.code !== 'EEXIST') throw mkdirError;
-        }
-        child = await fs.open(entry, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      }
-      directories.push(child);
-      await verify(child, { directory: true });
-      parent = child;
-    }
-    const parentOptions = { rootHandle: directories.length === 1, directory: true };
-    await verify(parent, parentOptions);
-    const destination = path.join(descriptorPath(parent), name);
-    async function verifyDestination() {
-      const info = await fs.lstat(destination).catch(error => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-      if (info && (info.isSymbolicLink() || !info.isFile())) {
-        throw new Error('Refusing to replace an artifact symlink or nonregular file');
-      }
-      return info;
-    }
-    const targetInfo = write ? await verifyDestination() : undefined;
-    const finalMode = targetInfo ? targetInfo.mode & 0o7777 : 0o666 & ~process.umask();
-    const entry = write ? path.join(descriptorPath(parent), `.aiwg-write-${randomUUID()}.tmp`) : destination;
-    file = await fs.open(entry,
-      (write ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL : constants.O_RDONLY)
-      | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
-    await verify(file, { entry });
-    transferred = true;
-    return {
-      handle: file,
-      fullPath,
-      close,
-      async commit() {
-        await verify(directories[0], { rootHandle: true, directory: true });
-        await verify(file, { entry });
-        await verify(parent, parentOptions);
-        await verifyDestination();
-        await file.chmod(finalMode);
-        await fs.rename(entry, destination);
-      },
-    };
-  } finally {
-    if (!transferred) await Promise.allSettled([close()]);
-  }
-}
-
-/** Static checks for platforms without Linux descriptor paths. */
-async function openStaticArtifact(store, root, fullPath, { write }) {
-  // Inspect the lexical path as well as the resolved path: contained aliases
-  // must not hide symlink components on this fallback.
-  async function check(target, { allowMissing = false } = {}) {
-    const relative = path.relative(root, target);
-    assertArtifactContained(root, target);
-    let current = root;
-    for (const component of relative.split(path.sep)) {
-      current = path.join(current, component);
-      const info = await fs.lstat(current).catch(error => {
-        if (!allowMissing || error.code !== 'ENOENT') throw error;
-      });
-      if (!info) continue;
-      if (info.isSymbolicLink()) throw new Error('Refusing artifact symlink component');
-      assertArtifactContained(root, await fs.realpath(current));
-    }
-  }
-  await check(fullPath, { allowMissing: write });
-  if (write) await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  const target = await fs.lstat(fullPath).catch(error => {
-    if (!write || error.code !== 'ENOENT') throw error;
-  });
-  if (target && (!target.isFile() || target.isSymbolicLink())) throw new Error('Artifact must be a regular file');
-  if (!write && target.nlink > 1) throw new Error('Refusing multiply-linked artifact file');
-  const entry = write ? path.join(path.dirname(fullPath), `.aiwg-write-${randomUUID()}.tmp`) : fullPath;
-  const finalMode = target ? target.mode & 0o7777 : 0o666 & ~process.umask();
-  const handle = await fs.open(entry, write ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL : constants.O_RDONLY, 0o600);
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.nlink > 1) throw new Error('Refusing nonregular or multiply-linked artifact file');
-    return {
-      handle, fullPath, close: () => handle.close(),
-      async commit() {
-        await verifyArtifactRoot(store);
-        await check(fullPath, { allowMissing: true });
-        await handle.chmod(finalMode);
-        await fs.rename(entry, fullPath);
-      },
-    };
-  } catch (error) {
-    await handle.close().catch(() => {});
-    throw error;
-  }
-}
 
 /**
  * Create and configure the AIWG MCP Server
@@ -364,7 +52,28 @@ export async function createServer() {
   //   discover, skill-list, skill-show, command-list, command-show,
   //   rule-list, rule-show, agent-show, template-list, template-show
   // ============================================
-  registerDiscoveryTools(server);
+  const corpusStore = await pinArtifactRoot(path.resolve(AIWG_ROOT));
+  registerDiscoveryTools(server, { corpusStore });
+  async function readCorpus(relative) {
+    const content = await readContainedFile(corpusStore, relative);
+    if (content === null) throw new Error('Corpus file not found');
+    return content;
+  }
+  function frameworkName(framework) {
+    validateContainedPath(framework);
+    return Object.hasOwn(FRAMEWORKS, framework) ? framework : 'sdlc-complete';
+  }
+  async function scanCorpusDirectory(relative, type) {
+    const entries = await listContainedFiles(corpusStore, `${relative}/`);
+    return entries.filter(entry => entry.path.endsWith('.md')).map(entry => {
+      const local = path.relative(relative, entry.path);
+      const name = path.basename(local, '.md');
+      return {
+        name, path: path.join(corpusStore.root, entry.path), uri: `aiwg://${type}/${name}`,
+        ...(path.dirname(local) !== '.' ? { category: local.split(path.sep)[0] } : {}),
+      };
+    });
+  }
   registerWriterProfileResources(server);
 
   // ============================================
@@ -544,12 +253,10 @@ export async function createServer() {
   }, async ({ template, variables = {} }) => {
     try {
       // Determine framework and template path
+      validateContainedPath(template);
       const [framework, ...pathParts] = template.split('/');
-      const frameworkPath = FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'];
-      const templatePath = path.join(frameworkPath, 'templates', ...pathParts);
-
-      // Read template
-      let content = await fs.readFile(templatePath, 'utf-8');
+      const relative = `agentic/code/frameworks/${frameworkName(framework)}/templates/${pathParts.join('/')}`;
+      let content = await readCorpus(relative);
 
       // Simple variable substitution
       for (const [key, value] of Object.entries(variables)) {
@@ -646,8 +353,7 @@ export async function createServer() {
       mimeType: 'application/json'
     },
     async () => {
-      const promptsDir = path.join(AIWG_ROOT, 'agentic/code/addons/aiwg-utils/prompts');
-      const catalog = await scanDirectory(promptsDir, 'prompts');
+      const catalog = await scanCorpusDirectory('agentic/code/addons/aiwg-utils/prompts', 'prompts');
       return {
         contents: [{
           uri: 'aiwg://prompts/catalog',
@@ -668,10 +374,9 @@ export async function createServer() {
     },
     async () => {
       const catalogs = {};
-      for (const [fw, fwPath] of Object.entries(FRAMEWORKS)) {
-        const templatesDir = path.join(fwPath, 'templates');
+      for (const fw of Object.keys(FRAMEWORKS)) {
         try {
-          catalogs[fw] = await scanDirectory(templatesDir, 'templates');
+          catalogs[fw] = await scanCorpusDirectory(`agentic/code/frameworks/${fw}/templates`, 'templates');
         } catch {
           catalogs[fw] = [];
         }
@@ -696,10 +401,9 @@ export async function createServer() {
     },
     async () => {
       const catalogs = {};
-      for (const [fw, fwPath] of Object.entries(FRAMEWORKS)) {
-        const agentsDir = path.join(fwPath, 'agents');
+      for (const fw of Object.keys(FRAMEWORKS)) {
         try {
-          catalogs[fw] = await scanDirectory(agentsDir, 'agents');
+          catalogs[fw] = await scanCorpusDirectory(`agentic/code/frameworks/${fw}/agents`, 'agents');
         } catch {
           catalogs[fw] = [];
         }
@@ -722,14 +426,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG prompt template'
     },
     async (uri, { category, name }) => {
-      const promptPath = path.join(
-        AIWG_ROOT,
-        'agentic/code/addons/aiwg-utils/prompts',
-        category,
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(promptPath, 'utf-8');
+        validateContainedPath(category); validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/addons/aiwg-utils/prompts/${category}/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -756,14 +455,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG template'
     },
     async (uri, { framework, category, name }) => {
-      const templatePath = path.join(
-        FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'],
-        'templates',
-        category,
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(templatePath, 'utf-8');
+        validateContainedPath(category); validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/frameworks/${frameworkName(framework)}/templates/${category}/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -790,13 +484,9 @@ export async function createServer() {
       description: 'Retrieve specific AIWG agent definition'
     },
     async (uri, { framework, name }) => {
-      const agentPath = path.join(
-        FRAMEWORKS[framework] || FRAMEWORKS['sdlc-complete'],
-        'agents',
-        `${name}.md`
-      );
       try {
-        const content = await fs.readFile(agentPath, 'utf-8');
+        validateContainedPath(name);
+        const content = await readCorpus(`agentic/code/frameworks/${frameworkName(framework)}/agents/${name}.md`);
         return {
           contents: [{
             uri: uri.href,
@@ -961,34 +651,6 @@ If retry fails, prepare structured escalation:
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
-
-/**
- * Scan directory for files
- */
-async function scanDirectory(dir, type) {
-  const results = [];
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const subResults = await scanDirectory(path.join(dir, entry.name), type);
-        results.push(...subResults.map(r => ({
-          ...r,
-          category: entry.name
-        })));
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        results.push({
-          name: entry.name.replace('.md', ''),
-          path: path.join(dir, entry.name),
-          uri: `aiwg://${type}/${entry.name.replace('.md', '')}`
-        });
-      }
-    }
-  } catch {
-    // Directory doesn't exist
-  }
-  return results;
-}
 
 /**
  * Start the MCP server with stdio transport

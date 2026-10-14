@@ -41,6 +41,26 @@ The default `aiwg mcp serve` surface currently registers 15 tools:
 
 `core` is always implicit. `all` expands to all opt-in toolsets. Unknown toolset names warn and are skipped rather than aborting server startup.
 
+## Filesystem containment (#3086)
+
+Artifact tools, template tools, and dynamic `aiwg://prompts`, `aiwg://templates`,
+and `aiwg://agents` resources share a pinned filesystem boundary. Templates accept
+corpus-relative, framework-relative, or default-template-relative names; absolute
+paths and `..` segments are refused. The configured corpus and artifact roots are
+pinned once per server, including valid aliases to external stores. Retargeting or
+replacing a pinned root refuses access.
+
+Linux uses directory descriptors through `/proc/self/fd`; unavailable descriptor
+paths refuse access. macOS and Windows use static component, canonical-path, and
+inode/device checks. Unknown identities and multiply-linked reads refuse access.
+Linux permits contained read symlinks; static access refuses symlink components.
+Artifact writes retain atomic replacement behavior, including replacing hardlinked
+destinations without writing their content. Opt-in storage tools inherit the
+stricter filesystem storage behavior described in [Storage and PKM](../getting-started/storage-and-pkm.md).
+
+Concurrent tree changes by the same user after final verification are outside this
+boundary. A failed write may leave a private `0o600` `.aiwg-write-*.tmp` file.
+
 ## CLI to MCP Coverage Matrix
 
 This re-audit keeps the default core lean and classifies the post-#1533 surfaces as follows:
