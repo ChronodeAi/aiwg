@@ -19,10 +19,11 @@
  */
 
 import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   loadWorkspaceData,
   updateWorkspaceStatus,
@@ -391,6 +392,38 @@ function showConflictOptions(conflicts, strategy) {
   console.log('');
 }
 
+/** Split EDITOR's executable and quoted arguments without invoking a shell. */
+function editorArgs(editor) {
+  const args = [];
+  let value = '';
+  let quote = '';
+  let started = false;
+  for (let i = 0; i < editor.length; i++) {
+    const char = editor[i];
+    if (char === '\\' && quote !== "'" && i + 1 < editor.length &&
+        /[\s\\"']/.test(editor[i + 1])) {
+      value += editor[++i];
+      started = true;
+    } else if (quote && char === quote) {
+      quote = '';
+    } else if (!quote && (char === '"' || char === "'")) {
+      quote = char;
+      started = true;
+    } else if (!quote && /\s/.test(char)) {
+      if (started) args.push(value);
+      value = '';
+      started = false;
+    } else {
+      value += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error('Unclosed quote in EDITOR');
+  if (started) args.push(value);
+  if (!args[0]) throw new Error('EDITOR must name an executable');
+  return args;
+}
+
 /**
  * Apply one numbered conflict-resolution choice (shared by the interactive
  * prompt and the headless `--on-conflict` path below). Choice `1` (open
@@ -409,17 +442,18 @@ function applyConflictChoice(choice, conflicts, strategy, cwd) {
     const editor = process.env.EDITOR || 'vi';
     console.log(`Opening ${firstFile} in ${editor}...`);
     try {
+      const [file, ...args] = editorArgs(editor);
       // sync-spawn: interactive conflict-editor-launch — opens $EDITOR on
       // the conflicted file; the user interacts with it directly (see
       // tools/testing/sync-spawn-allowlist.json). Callers of this function
       // only reach choice '1' when a terminal is attached (#3062) — see
       // `handleConflicts` below. Not a candidate for a bounded timeout.
-      execSync(`${editor} ${firstFile}`, { stdio: 'inherit', cwd });
+      execFileSync(file, [...args, firstFile], { stdio: 'inherit', cwd });
     } catch (err) {
       console.log(`${colors.red}✗${colors.reset} Failed to open editor`);
     }
   } else if (choice === '2') {
-    const diffResult = exec('git', ['diff', firstFile], { cwd });
+    const diffResult = exec('git', ['diff', '--', firstFile], { cwd });
     console.log(diffResult.stdout);
   } else if (choice === '3') {
     const abortArgs = [strategy === 'rebase' ? 'rebase' : 'merge', '--abort'];
@@ -737,7 +771,7 @@ async function main() {
 }
 
 // Run main function
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   main().catch(err => {
     console.error('Fatal error:', err.message);
     process.exit(1);

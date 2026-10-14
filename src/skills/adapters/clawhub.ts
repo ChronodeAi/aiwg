@@ -12,7 +12,8 @@
  * @see https://docs.openclaw.ai/tools/clawhub
  */
 
-import { execSync } from 'child_process';
+import { boundedExecFileSync } from '../../process/bounded-child-process.mjs';
+import { cliCommand } from '../../process/cli-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import type { RegistryAdapter, SkillResult, SkillDetails, InstallOptions } from '../types.js';
@@ -51,9 +52,10 @@ async function clawHubFetch(endpoint: string): Promise<any | null> {
 /**
  * Try clawhub CLI command
  */
-function runClawHub(args: string): string | null {
+function runClawHub(args: string[]): string | null {
   try {
-    return execSync(`clawhub ${args}`, {
+    const [file, argv] = cliCommand('clawhub', args);
+    return boundedExecFileSync(file, argv, 'quick', {
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -73,7 +75,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     if (this.available !== null) return this.available;
 
     // Check CLI
-    const cliAvailable = runClawHub('--version 2>/dev/null') !== null;
+    const cliAvailable = runClawHub(['--version']) !== null;
     if (cliAvailable) {
       this.available = true;
       return true;
@@ -102,7 +104,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     }
 
     // Try CLI
-    const cliOutput = runClawHub(`search "${query}" --json 2>/dev/null`);
+    const cliOutput = runClawHub(['search', query, '--json']);
     if (cliOutput) {
       try {
         const parsed = JSON.parse(cliOutput);
@@ -144,7 +146,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     }
 
     // Try CLI
-    const cliOutput = runClawHub(`info "${name}" --json 2>/dev/null`);
+    const cliOutput = runClawHub(['info', name, '--json']);
     if (cliOutput) {
       try {
         const parsed = JSON.parse(cliOutput);
@@ -181,7 +183,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     }
 
     // Try CLI
-    const cliOutput = runClawHub('list --json 2>/dev/null');
+    const cliOutput = runClawHub(['list', '--json']);
     if (cliOutput) {
       try {
         const parsed = JSON.parse(cliOutput);
@@ -222,9 +224,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     }
 
     // Try CLI install (downloads to a temp location, then we copy)
-    const cliResult = runClawHub(
-      `install "${name}" --output "${targetDir}" 2>/dev/null`
-    );
+    const cliResult = runClawHub(['install', name, '--output', targetDir]);
     if (cliResult !== null) return;
 
     // Try API download
@@ -277,7 +277,7 @@ export class ClawHubAdapter implements RegistryAdapter {
     }
 
     // Try CLI publish
-    const cliResult = runClawHub(`publish "${packageDir}" 2>/dev/null`);
+    const cliResult = runClawHub(['publish', packageDir]);
     if (cliResult !== null) return;
 
     throw new Error(

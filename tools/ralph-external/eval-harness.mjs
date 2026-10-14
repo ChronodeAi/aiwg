@@ -107,9 +107,13 @@ export class EvalHarness {
     // fixed shell executable, rather than building an outer shell command.
     this._run = opts.runner?.run || ((cmd, o) => {
       try {
-        const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
-        const args = process.platform === 'win32' ? ['/d', '/s', '/c', cmd] : ['-c', cmd];
-        const stdout = boundedExecFileSync(shell, args, 'long', { cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const windows = process.platform === 'win32';
+        const shell = windows ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
+        const args = windows ? ['/d', '/s', '/c', `"${cmd}"`] : ['-c', cmd];
+        const stdout = boundedExecFileSync(shell, args, 'long', {
+          cwd: o.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+          ...(windows ? { windowsVerbatimArguments: true } : {}),
+        });
         return { code: 0, stdout };
       } catch (err) {
         const captured = (err.stdout || '').toString() + (err.stderr || '').toString();

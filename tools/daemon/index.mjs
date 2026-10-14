@@ -827,7 +827,10 @@ Options:
 
             // Supply multiple command arguments so tmux directly executes the binary
             // even when no extra platform arguments were supplied.
-            boundedExecFileSync('tmux', ['new-session', '-d', '-s', tmuxName, '-x', String(cols), '-y', String(rows), '--', 'env', '--', bin, ...extraArgs], 'quick');
+            // tmux parses trailing semicolons as command separators even in argv.
+            const tmuxArgs = ['new-session', '-d', '-s', tmuxName, '-x', String(cols), '-y', String(rows), '--', 'env', '--', bin, ...extraArgs]
+              .map(arg => arg.replace(/;$/, '\\;'));
+            boundedExecFileSync('tmux', tmuxArgs, 'quick');
 
             // Get the PID of the shell/process running inside the tmux pane
             let pid = null;

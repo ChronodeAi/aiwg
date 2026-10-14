@@ -13,10 +13,10 @@
  */
 
 import { importImpl } from '../_resolve-impl.mjs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMain } from '../_is-main.mjs';
 
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 function parseArg(args, flag) {
   const idx = args.indexOf(flag);
@@ -35,14 +35,15 @@ export async function runDeploy(args = process.argv.slice(2)) {
   console.log(`Deploying: ${cmd}`);
 
   try {
-    boundedExecFileSync('aiwg', deployArgs, 'long', { stdio: 'inherit' });
+    const [file, argv] = cliCommand('aiwg', deployArgs);
+    boundedExecFileSync(file, argv, 'long', { stdio: 'inherit' });
   } catch (err) {
     console.error(`Deploy failed for '${framework}': ${err.message}`);
     process.exit(1);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   runDeploy().catch((err) => {
     console.error('Deploy error:', err.message);
     process.exit(1);

@@ -670,7 +670,10 @@ export class OpsRegistry {
       if (remote) {
         console.log(`  Pushing ${repoName} to ${remote}/${branch}...`);
         try {
-          boundedExecFileSync('git', ['push', remote, branch], 'network', {
+          if (remote.startsWith('-') || branch.startsWith('-')) {
+            throw new Error('Remote and branch must not start with "-"');
+          }
+          boundedExecFileSync('git', ['push', '--end-of-options', remote, branch], 'network', {
             cwd: repo.path,
             stdio: 'pipe',
           });

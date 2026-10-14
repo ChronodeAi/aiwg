@@ -10,6 +10,7 @@
  */
 
 import { boundedExecFileSync } from '../../process/bounded-child-process.mjs';
+import { cliCommand } from '../../process/cli-command.mjs';
 import fs from 'fs';
 import path from 'path';
 import type { RegistryAdapter, SkillResult, SkillDetails, InstallOptions } from '../types.js';
@@ -32,7 +33,8 @@ function resolveSkillFallbackPath(target: string, projectDir: string, name: stri
  */
 function runOpenClaw(args: string[]): string | null {
   try {
-    return boundedExecFileSync('openclaw', args, 'quick', {
+    const [file, argv] = cliCommand('openclaw', args);
+    return boundedExecFileSync(file, argv, 'quick', {
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -158,7 +160,8 @@ export class OpenClawAdapter implements RegistryAdapter {
     if (fs.existsSync(openclawDir)) return true;
 
     try {
-      boundedExecFileSync('openclaw', ['--version'], 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const [file, args] = cliCommand('openclaw', ['--version']);
+      boundedExecFileSync(file, args, 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
       return true;
     } catch {
       return false;

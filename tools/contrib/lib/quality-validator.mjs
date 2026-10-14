@@ -19,6 +19,9 @@
 import { boundedExecFileSync } from '../../../src/process/bounded-child-process.mjs';
 import fs from 'fs';
 import path from 'path';
+import { importImpl } from '../../_resolve-impl.mjs';
+
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 
 /**
  * Execute command and return structured result
@@ -30,7 +33,8 @@ import path from 'path';
 function exec(file, args, options = {}) {
   try {
     const tier = options.tier ?? 'quick';
-    const stdout = boundedExecFileSync(file, args, tier, {
+    const [command, argv] = cliCommand(file, args);
+    const stdout = boundedExecFileSync(command, argv, tier, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options

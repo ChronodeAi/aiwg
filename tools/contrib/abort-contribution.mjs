@@ -28,6 +28,7 @@ import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import {
   loadWorkspaceData,
   cleanWorkspace,
@@ -482,7 +483,7 @@ async function main() {
 }
 
 // Run main function
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   main().catch(err => {
     console.error('Fatal error:', err.message);
     process.exit(1);

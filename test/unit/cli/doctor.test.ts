@@ -44,20 +44,6 @@ vi.mock('../../../src/channel/manager.mjs', () => ({
 // ── File existence ───────────────────────────────────────────
 
 describe('tools/cli/doctor.mjs — file', () => {
-  it.each([
-    ["'aiwg', ['-version']", "stdio: ['pipe', 'pipe', 'ignore']"],
-    ["'git', ['remote']", 'cwd: versionInfo.edgePath'],
-    ["'git', ['fetch', 'upstream', '--dry-run']", 'cwd: versionInfo.edgePath'],
-    ["'git', ['rev-list', 'HEAD..upstream/main', '--count']", 'cwd: versionInfo.edgePath'],
-    ["'aiwg', ['--version']", "stdio: 'ignore'"],
-    ["'git', ['remote']", 'cwd: projectDir'],
-  ])('uses argv for the %s probe with %s', (command, option) => {
-    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
-    const calls = content.match(/boundedExecFileSync\([\s\S]*?\}\)/g) ?? [];
-    expect(calls.some(call => call.includes(command) && call.includes(option))).toBe(true);
-    expect(content).not.toContain('boundedExecSync(');
-  });
-
   it('exists at expected path', () => {
     expect(existsSync(DOCTOR_SCRIPT)).toBe(true);
   });

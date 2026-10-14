@@ -17,8 +17,7 @@
 import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import * as readline from 'readline';
 import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import { runAllGates, generateReport } from './lib/quality-validator.mjs';
 import { createPR } from './lib/github-client.mjs';
 import {
@@ -470,7 +469,7 @@ async function main() {
 }
 
 // Run main
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   main().catch(err => {
     console.error(`\nError: ${err.message}`);
     process.exit(1);

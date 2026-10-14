@@ -8,6 +8,7 @@ import { SnapshotManager } from '../../../tools/ralph-external/snapshot-manager.
 import { GiteaTracker } from '../../../tools/ralph-external/gitea-tracker.mjs';
 import { EvalHarness } from '../../../tools/ralph-external/eval-harness.mjs';
 import { MultiLoopStateManager } from '../../../tools/ralph/state-manager-sync.mjs';
+import { ProviderWatcher } from '../../../tools/daemon/provider-watcher.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 let root;
@@ -32,7 +33,7 @@ describe('remaining CodeQL shell callers in tools', () => {
     root = mkdtempSync(join(tmpdir(), 'aiwg-residual-tools-'));
     log = join(root, 'calls.jsonl');
     writeFileSync(log, '');
-    for (const tool of ['git', 'curl', 'tmux', 'instrument']) {
+    for (const tool of ['git', 'curl', 'tmux', 'instrument', 'npm']) {
       const binary = join(root, tool);
       copyFileSync(join(repoRoot, 'test/fixtures/codeql-residual/fake-tool.mjs'), binary);
       chmodSync(binary, 0o755);
@@ -53,9 +54,9 @@ describe('remaining CodeQL shell callers in tools', () => {
     expect(diffs).toEqual([{ path: payload, status: 'modified', diff: 'literal diff\n' }]);
     expect(manager.getCommitsSince(root, payload)).toEqual(['abc123 ralph: fixture']);
     expect(calls().map(call => call.args)).toEqual([
-      ['diff', '--name-status', `${payload}..end revision`],
-      ['diff', `${payload}..end revision`, '--', payload],
-      ['log', `${payload}..HEAD`, '--pretty=format:%H %s'],
+      ['diff', '--name-status', '--end-of-options', `${payload}..end revision`],
+      ['diff', '--end-of-options', `${payload}..end revision`, '--', payload],
+      ['log', '--pretty=format:%H %s', '--end-of-options', `${payload}..HEAD`],
     ]);
     expect(existsSync(join(root, 'injected'))).toBe(false);
   });
@@ -112,6 +113,31 @@ describe('remaining CodeQL shell callers in tools', () => {
     expect(runTool('tools/daemon/index.mjs', ['pty', 'start', payload, '--tmux'])).toContain('PTY session started in tmux:');
     expect(calls()[0].args.slice(8)).toEqual(['--', 'env', '--', payload]);
     expect(existsSync(join(root, 'injected'))).toBe(false);
+  });
+
+  it('escapes tmux command separators in custom platform names and trailing arguments', () => {
+    expect(runTool('tools/daemon/index.mjs', ['pty', 'start', 'platform;', '--tmux', '--', ';', 'value;', 'value;;', '\\;']))
+      .toContain('PTY session started in tmux:');
+    expect(calls()[0].args.slice(8)).toEqual(['--', 'env', '--', 'platform\\;', '\\;', 'value\\;', 'value;\\;', '\\\\;']);
+  });
+
+  it.each(['linux', 'win32'])('keeps npm watcher package names literal on %s', async platform => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    const watcher = new ProviderWatcher({ stateDir: join(root, 'watcher') });
+    const state = { lastSeenVersions: {} };
+    if (platform === 'win32') {
+      writeFileSync(join(root, 'npm.cmd'), '@ECHO off\n"%_prog%" "%dp0%\\npm" %*\n');
+      vi.stubEnv('PATH', root);
+    }
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try {
+      expect(await watcher.checkNpm('fixture', { url: payload }, state)).toEqual(expect.objectContaining({ newVersion: '1.2.3' }));
+      expect(calls()).toEqual([{ tool: 'npm', args: ['view', payload, 'version', 'dist-tags', '--json'], input: '' }]);
+      expect(state.lastSeenVersions[`npm:${payload}`]).toBe('1.2.3');
+      expect(existsSync(join(root, 'injected'))).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor);
+    }
   });
 
   it('passes the Ralph abort loop pattern as one git argument', () => {

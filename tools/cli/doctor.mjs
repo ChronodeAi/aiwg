@@ -11,8 +11,10 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+import { isMain } from '../_is-main.mjs';
 
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
@@ -843,7 +845,7 @@ async function checkOpenHumanHarnessTier2() {
 
 const BRAND_HEX = '#818CF8';
 
-async function runDoctor() {
+export async function runDoctor() {
   // Usage errors (unknown flags, valueless value flags, --json without
   // --probe-workers) exit 2 here, before any check, spawn, or write.
   const {
@@ -942,7 +944,8 @@ async function runDoctor() {
     check('AIWG Version', 'ok', `${versionInfo.version}${channelLabel}`);
   } catch {
     try {
-      const version = boundedExecFileSync('aiwg', ['-version'], 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+      const [file, args] = cliCommand('aiwg', ['-version']);
+      const version = boundedExecFileSync(file, args, 'quick', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
       check('AIWG Version', 'ok', version.split('\n')[0]);
     } catch {
       check('AIWG Version', 'warn', 'Could not determine version');
@@ -1513,7 +1516,8 @@ async function runDoctor() {
   // failure it prints shell-specific guidance and the `npx aiwg` fallback.
   // Doctor's exit code is not affected (PATH guidance is informational).
   try {
-    boundedExecFileSync('aiwg', ['--version'], 'quick', { stdio: 'ignore' });
+    const [file, args] = cliCommand('aiwg', ['--version']);
+    boundedExecFileSync(file, args, 'quick', { stdio: 'ignore' });
     // aiwg is callable — no PATH issue to report.
   } catch {
     const isTTY = Boolean(process.stdout.isTTY);
@@ -2732,7 +2736,9 @@ async function runDoctor() {
   console.log('');
 }
 
-runDoctor().catch(error => {
-  console.error('Doctor failed:', error.message);
-  process.exit(1);
-});
+if (isMain(import.meta.url)) {
+  runDoctor().catch(error => {
+    console.error('Doctor failed:', error.message);
+    process.exit(1);
+  });
+}

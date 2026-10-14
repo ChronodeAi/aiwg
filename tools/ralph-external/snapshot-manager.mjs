@@ -437,7 +437,7 @@ export class SnapshotManager {
 
     try {
       // Get list of changed files
-      const diffOutput = boundedExecFileSync('git', ['diff', '--name-status', `${fromCommit}..${toCommit}`], 'quick', {
+      const diffOutput = boundedExecFileSync('git', ['diff', '--name-status', '--end-of-options', `${fromCommit}..${toCommit}`], 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();
@@ -476,7 +476,7 @@ export class SnapshotManager {
         // Get actual diff for modified files
         if (status === 'modified') {
           try {
-            diff.diff = boundedExecFileSync('git', ['diff', `${fromCommit}..${toCommit}`, '--', filePath], 'quick', {
+            diff.diff = boundedExecFileSync('git', ['diff', '--end-of-options', `${fromCommit}..${toCommit}`, '--', filePath], 'quick', {
               cwd: projectRoot,
               encoding: 'utf8',
             });
@@ -506,7 +506,7 @@ export class SnapshotManager {
     }
 
     try {
-      const output = boundedExecFileSync('git', ['log', `${sinceCommit}..HEAD`, '--pretty=format:%H %s'], 'quick', {
+      const output = boundedExecFileSync('git', ['log', '--pretty=format:%H %s', '--end-of-options', `${sinceCommit}..HEAD`], 'quick', {
         cwd: projectRoot,
         encoding: 'utf8',
       }).trim();

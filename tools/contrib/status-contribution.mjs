@@ -10,8 +10,7 @@
  *   aiwg -contribute-status cursor-integration  # Show feature details
  */
 
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { isMain } from '../_is-main.mjs';
 import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
 import {
   listWorkspaces,
@@ -433,7 +432,7 @@ function main() {
 }
 
 // Run main
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   main();
 }
 

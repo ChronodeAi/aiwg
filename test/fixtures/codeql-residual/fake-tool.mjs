@@ -17,4 +17,8 @@ if (tool === 'git' && args[0] === 'diff') {
   process.stdout.write('{"number":42}\n');
 } else if (tool === 'instrument') {
   process.stdout.write('{"score":1,"pass_count":1,"total_count":1}\n');
+} else if (tool === 'npm') {
+  process.stdout.write('{"version":"1.2.3"}\n');
+} else if (tool === 'clawhub' || tool === 'clawhub.mjs') {
+  process.stdout.write('[]\n');
 }

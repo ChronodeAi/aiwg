@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
+const { execFile, editorExecFile } = vi.hoisted(() => ({ execFile: vi.fn(), editorExecFile: vi.fn() }));
 vi.mock('../../../src/process/bounded-child-process.mjs', () => ({ boundedExecFileSync: execFile }));
+vi.mock('child_process', () => ({ execFileSync: editorExecFile }));
 vi.mock('../../../tools/contrib/lib/github-client.mjs', () => ({
   checkGhAuth: () => ({ authenticated: true }),
   getUsername: () => ({ success: true, username: 'tester' }),
@@ -39,6 +40,7 @@ describe('contribution commands keep data in argv (#142)', () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), 'aiwg-contrib-argv-'));
     execFile.mockReset().mockReturnValue('');
+    editorExecFile.mockReset();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -152,7 +154,26 @@ describe('contribution commands keep data in argv (#142)', () => {
 
   it('shows a conflicted filename as one diff argument', () => {
     applyConflictChoice('2', ['file with spaces; echo injected'], 'merge', root);
-    expect(execFile).toHaveBeenLastCalledWith('git', ['diff', 'file with spaces; echo injected'], 'quick', options(root));
+    expect(execFile).toHaveBeenLastCalledWith('git', ['diff', '--', 'file with spaces; echo injected'], 'quick', options(root));
+  });
+
+  it('opens a literal conflicted path while preserving quoted EDITOR arguments', () => {
+    vi.stubEnv('EDITOR', '"/editor path/code" --wait --label "merge conflict"');
+    const firstFile = 'file with spaces; $(touch injected)';
+    applyConflictChoice('1', [firstFile], 'merge', root);
+    expect(editorExecFile).toHaveBeenCalledWith('/editor path/code', ['--wait', '--label', 'merge conflict', firstFile], { cwd: root, stdio: 'inherit' });
+    expect(existsSync(path.join(root, 'injected'))).toBe(false);
+  });
+
+  it('uses the default editor and reports malformed EDITOR quoting', () => {
+    vi.stubEnv('EDITOR', '');
+    applyConflictChoice('1', ['conflict.txt'], 'merge', root);
+    expect(editorExecFile).toHaveBeenCalledWith('vi', ['conflict.txt'], { cwd: root, stdio: 'inherit' });
+    editorExecFile.mockClear();
+    vi.stubEnv('EDITOR', '"unfinished');
+    applyConflictChoice('1', ['conflict.txt'], 'merge', root);
+    expect(editorExecFile).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to open editor'));
   });
 
   it.each(['rebase', 'merge'])('aborts %s through argv', (strategy) => {
@@ -188,6 +209,17 @@ describe('contribution commands keep data in argv (#142)', () => {
     expect(execFile).toHaveBeenLastCalledWith('npm', ['exec', 'markdownlint-cli2', '**/*.md'], 'network', options(root, 'network'));
     execFile.mockImplementationOnce(() => { throw failure('README.md:7 MD001 wrong heading'); });
     expect(runMarkdownLint(root)).toEqual({ passed: false, errors: 1, warnings: 0, details: [{ file: 'README.md', line: 7, message: 'MD001 wrong heading' }] });
+  });
+
+  it('runs the npm Windows shim through its Node entry point with a literal glob', () => {
+    const entry = path.join(root, 'node_modules/npm/bin/npm-cli.js');
+    mkdirSync(path.dirname(entry), { recursive: true });
+    writeFileSync(entry, '');
+    writeFileSync(path.join(root, 'npm.cmd'), '@ECHO off\n"%_prog%" "%dp0%\\node_modules\\npm\\bin\\npm-cli.js" %*\n');
+    vi.stubEnv('PATH', root);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    expect(runMarkdownLint(root).passed).toBe(true);
+    expect(execFile).toHaveBeenLastCalledWith(process.execPath, [entry, 'exec', 'markdownlint-cli2', '**/*.md'], 'network', options(root, 'network'));
   });
 
   it('passes a manifest-checker path containing spaces and shell characters as one argument', () => {

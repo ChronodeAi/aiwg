@@ -33,6 +33,7 @@ vi.mock('../../../src/cli/provider-resolution.js', () => ({
 import { OpsRegistry } from '../../../src/ops/registry.js';
 import { RuntimeDiscovery } from '../../../src/smiths/toolsmith/runtime-discovery.mjs';
 import { OpenClawAdapter } from '../../../src/skills/adapters/openclaw.js';
+import { ClawHubAdapter } from '../../../src/skills/adapters/clawhub.js';
 import { checkForUpdates } from '../../../src/update/checker.mjs';
 import { runtimeInfoHandler } from '../../../src/cli/handlers/runtime-info.js';
 
@@ -66,6 +67,7 @@ describe('bounded argv callers', () => {
     }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -101,11 +103,26 @@ describe('bounded argv callers', () => {
     mocks.workspace.mockResolvedValue({ members: [{ path: repoPath, allowed: ['push'], remotes: { primary: remote }, delivery: { default_branch: branch } }] });
     mocks.execFile.mockReturnValue(Buffer.alloc(0));
     await registry.pushWorkspace('test');
-    expect(mocks.execFile).toHaveBeenCalledWith('git', ['push', remote, branch], 'network', { cwd: repoPath, stdio: 'pipe' });
+    expect(mocks.execFile).toHaveBeenCalledWith('git', ['push', '--end-of-options', remote, branch], 'network', { cwd: repoPath, stdio: 'pipe' });
     mocks.execFile.mockImplementation(() => { throw new Error('push denied'); });
     await expect(registry.pushWorkspace('test')).resolves.toBeUndefined();
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('push failed — push denied'));
     expect(mocks.shell).not.toHaveBeenCalled();
+  });
+
+  it.each(['remote', 'branch'])('rejects a push %s beginning with a dash before invoking git', async operand => {
+    const home = join(dir, 'workspace'); const repoPath = join(home, 'repo');
+    mkdirSync(join(home, '.aiwg'), { recursive: true }); mkdirSync(repoPath);
+    await writeFile(join(home, '.aiwg', 'aiwg.config'), JSON.stringify({ repos: [] }));
+    const registry = new OpsRegistry(join(dir, 'config')); const data = await registry.load();
+    data.workspaces.test = { home, mode: 'single-repo', repos: { repo: { path: repoPath, remote: 'unused', extensions: ['sys'] } } };
+    await registry.save(data);
+    mocks.workspace.mockResolvedValue({ members: [{ path: repoPath, allowed: ['push'],
+      remotes: { primary: operand === 'remote' ? '--receive-pack=command' : 'origin' },
+      delivery: { default_branch: operand === 'branch' ? '--all' : 'main' } }] });
+    await registry.pushWorkspace('test');
+    expect(mocks.execFile).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Remote and branch must not start with "-"'));
   });
 
   it('looks up exact tool names, tries version flags, and reads man paths without shell parsing', async () => {
@@ -207,6 +224,67 @@ describe('bounded argv callers', () => {
       ['openclaw', ['--version']], ['openclaw', ['skills', 'list', '--json']],
       ['openclaw', ['skills', 'search', name, '--json']], ['openclaw', ['skills', 'info', name, '--json']],
       ['openclaw', ['skills', 'install', name]],
+    ]);
+    expect(mocks.shell).not.toHaveBeenCalled();
+  });
+
+  it('launches OpenClaw availability and skill commands through its Windows npm Node entry point', async () => {
+    const entry = join(dir, 'openclaw.mjs');
+    await writeFile(entry, '');
+    await writeFile(join(dir, 'openclaw.cmd'), '@ECHO off\n"%_prog%" "%dp0%\\openclaw.mjs" %*\n');
+    vi.stubEnv('PATH', dir);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    mocks.execFile.mockReturnValue('[]');
+    const adapter = new OpenClawAdapter();
+    expect(await adapter.isAvailable()).toBe(true);
+    await adapter.search('literal & query');
+    expect(mocks.execFile.mock.calls.map(call => [call[0], call[1]])).toEqual([
+      [process.execPath, [entry, '--version']],
+      [process.execPath, [entry, 'skills', 'search', 'literal & query', '--json']],
+    ]);
+    expect(mocks.shell).not.toHaveBeenCalled();
+  });
+
+  it('delegates every ClawHub command with literal arguments and no shell redirects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const name = `skill 'quoted';$(echo injected)`;
+    mocks.execFile.mockImplementation((_file, args) => {
+      if (args[0] === 'search' || args[0] === 'list') return JSON.stringify([{ name }]);
+      if (args[0] === 'info') return JSON.stringify({ name });
+      return '';
+    });
+    const adapter = new ClawHubAdapter();
+    expect(await adapter.isAvailable()).toBe(true);
+    expect(await adapter.search(name)).toEqual([expect.objectContaining({ name })]);
+    expect(await adapter.info(name)).toMatchObject({ name });
+    expect(await adapter.list()).toEqual([expect.objectContaining({ name })]);
+    await adapter.install(name, { projectDir: dir });
+    await adapter.publish(dir);
+    const calls = mocks.execFile.mock.calls.map(call => [call[0], call[1]]);
+    expect(calls.slice(0, 4)).toEqual([
+      ['clawhub', ['--version']], ['clawhub', ['search', name, '--json']],
+      ['clawhub', ['info', name, '--json']], ['clawhub', ['list', '--json']],
+    ]);
+    expect(calls[4]).toEqual(['clawhub', ['install', name, '--output', expect.any(String)]]);
+    expect(calls[5]).toEqual(['clawhub', ['publish', dir]]);
+    expect(mocks.shell).not.toHaveBeenCalled();
+  });
+
+  it('launches ClawHub availability and searches through its Windows npm Node entry point', async () => {
+    const entry = join(dir, 'clawhub.mjs');
+    await writeFile(entry, '');
+    await writeFile(join(dir, 'clawhub.cmd'), '@ECHO off\n"%_prog%" "%dp0%\\clawhub.mjs" %*\n');
+    vi.stubEnv('PATH', dir);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    mocks.execFile.mockReturnValue('[]');
+    const adapter = new ClawHubAdapter();
+    expect(await adapter.isAvailable()).toBe(true);
+    const query = '$(echo injected) & "literal"';
+    await adapter.search(query);
+    expect(mocks.execFile.mock.calls.map(call => [call[0], call[1]])).toEqual([
+      [process.execPath, [entry, '--version']],
+      [process.execPath, [entry, 'search', query, '--json']],
     ]);
     expect(mocks.shell).not.toHaveBeenCalled();
   });
