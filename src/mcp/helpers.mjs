@@ -150,11 +150,14 @@ function parseProjectArtifactLocation(contents) {
   return null;
 }
 
-export async function resolveProjectAiwgDir(projectDir) {
+// MCP artifact I/O resolves pointers and environment configuration when each
+// project is first trusted, then pins the resulting store.
+export async function resolveProjectAiwgDir(projectDir, { allowLocationPointer = true, env = process.env } = {}) {
   for (const key of ARTIFACT_PATH_ENV_ALIASES) {
-    const value = process.env[key];
+    const value = env[key];
     if (typeof value === 'string' && value.trim()) return expandProjectArtifactPath(value, projectDir);
   }
+  if (!allowLocationPointer) return path.resolve(projectDir, '.aiwg');
   try {
     const pointer = await fs.readFile(path.join(projectDir, PROJECT_AIWG_LOCATION_FILE), 'utf-8');
     const configured = parseProjectArtifactLocation(pointer);
