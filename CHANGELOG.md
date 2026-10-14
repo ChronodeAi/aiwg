@@ -365,6 +365,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   inventory codes and `Retry-After`
   metadata, and log each failed upstream response once with bounded, redacted details; the
   `workspace-status` HTTP server returns a fixed error instead of exception text.
+- Security test hygiene (#3097): pass subprocess arguments without a shell, serialize
+  generated fixtures safely, tighten identity/version assertions, restore TLS test
+  settings, and preserve literal data in comment and receipt-tampering checks.
+
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level

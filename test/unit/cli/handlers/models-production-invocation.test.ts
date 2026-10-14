@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { modelsHandler } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
@@ -70,8 +71,8 @@ async function productionFixture(adapterFrame = false) {
   adapter.invocation.versionArgv = [cli, '--qualification-version'];
   const args = (input: any, _profile: any, permissions: any) => [cli, '--model', input.selected.model, '--effort', input.selected.effort.value,
     '--sandbox', permissions.sandbox, '--approval', permissions.approval, '--final-output', input.finalPath];
-  const frameHook = adapterFrame ? ', buildWorkerStdinFrame: brief => JSON.stringify({ message: brief.toString() })' : '';
-  const source = `export const interfaceVersion = 1; export function register(factory) { const cli = ${JSON.stringify(cli)}; factory(${JSON.stringify(id)}, () => ({ getName: () => ${JSON.stringify(id)}, buildWorkerArgs: ${args.toString()}${frameHook} })); }`;
+  const source = await readFile(path.resolve('test/fixtures/production-worker-driver.mjs'), 'utf8');
+  await writeFile(path.join(installed, 'driver-config.json'), JSON.stringify({ cli, id, adapterFrame }), { mode: 0o644 });
   await writeFile(path.join(installed, 'driver.mjs'), source, { mode: 0o644 });
   await writeFile(path.join(installed, 'package.json'), JSON.stringify({ name: id, version: '1.0.0', type: 'module' }), { mode: 0o644 });
   class Owner extends ProviderAdapter { getName() { return id; } buildWorkerArgs = args; }
@@ -80,7 +81,7 @@ async function productionFixture(adapterFrame = false) {
     policy: initial.policy, permissions, effort: 'medium', requiredControls: controls, executable: process.execPath,
     cwd: workdir, workerWritableRoots: [cwd], inputRoots: [cwd], outputRoots: [cwd], boundary: binding.boundary,
     effectiveConfigDigest: qualificationDigest(initial.policy), accountScope: binding.accountScope,
-    runtimeFiles: [cli, protocol], environment: {}, modules: [{ reference: adapter.runtimeDriver, packageRoot: installed,
+    runtimeFiles: [cli, protocol, path.join(installed, 'driver-config.json')], environment: {}, modules: [{ reference: adapter.runtimeDriver, packageRoot: installed,
       packageName: id, packageVersion: '1.0.0', modulePath: 'driver.mjs', interfaceVersion: 1,
       sha256: `sha256:${createHash('sha256').update(source).digest('hex')}`, adapterIds: [id], platforms: ['linux'] }] };
   const scope = await owner.inspectWorkerInstallation(installation);
@@ -101,6 +102,23 @@ async function productionFixture(adapterFrame = false) {
 }
 
 describe('models resolve production installation loading', () => {
+  it.each([false, true])('loads literal fixture configuration (adapter frame: %s)', async adapterFrame => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
+    const cli = `path with spaces; '" \\ newline\n`;
+    const id = `adapter-'"; process.exit(9); //`;
+    await writeFile(path.join(root, 'driver.mjs'), await readFile(path.resolve('test/fixtures/production-worker-driver.mjs')));
+    await writeFile(path.join(root, 'driver-config.json'), JSON.stringify({ cli, id, adapterFrame }));
+    const driver = await import(pathToFileURL(path.join(root, 'driver.mjs')).href);
+    let adapter: any;
+    driver.register((name: string, factory: () => any) => { expect(name).toBe(id); adapter = factory(); });
+    expect(adapter.getName()).toBe(id);
+    expect(adapter.buildWorkerArgs({ selected: { model: 'm', effort: { value: 'medium' } }, finalPath: 'final' }, {},
+      { sandbox: 'workspace', approval: 'never' })).toEqual([cli, '--model', 'm', '--effort', 'medium',
+      '--sandbox', 'workspace', '--approval', 'never', '--final-output', 'final']);
+    if (adapterFrame) expect(JSON.parse(adapter.buildWorkerStdinFrame(Buffer.from(cli)))).toEqual({ message: cli });
+    else expect(adapter.buildWorkerStdinFrame).toBeUndefined();
+  });
+
   it('frames from the bound host store and policy despite worker cwd config changes, rejecting changed bindings', async () => {
     const f = await productionFixture(true);
     const storePath = path.join(f.configDir, 'worker-installations.json');

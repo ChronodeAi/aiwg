@@ -5,12 +5,17 @@
  * including skill directory discovery, deployment, and mode filtering.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFile, mkdir, rm, readFile, readdir } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { writeFile, mkdir, mkdtemp, rm, readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, join, basename } from 'path';
 import { tmpdir } from 'os';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 // Get the project root for accessing the deploy script
 const PROJECT_ROOT = resolve(__dirname, '../../..');
@@ -23,7 +28,7 @@ describe('SkillDeployer', () => {
 
   beforeEach(async () => {
     // Create isolated test directories
-    testDir = resolve(tmpdir(), `skill-deploy-test-${Date.now()}`);
+    testDir = await mkdtemp(join(tmpdir(), 'skill-deploy test;$literal-'));
     sourceRoot = join(testDir, 'source');
     targetDir = join(testDir, 'target');
 
@@ -420,11 +425,17 @@ Optional configuration via .aiwgrc.json
   });
 });
 
+function runDeploy(targetDir: string, args: string[]): string {
+  return execFileSync(process.execPath, [DEPLOY_SCRIPT, '--target', targetDir, ...args], {
+    encoding: 'utf-8', timeout: 30000,
+  });
+}
+
 describe('deploy-agents.mjs integration', () => {
   let targetDir: string;
 
   beforeEach(async () => {
-    targetDir = resolve(tmpdir(), `deploy-test-${Date.now()}`);
+    targetDir = await mkdtemp(join(tmpdir(), 'deploy test;$literal-'));
     await mkdir(targetDir, { recursive: true });
   });
 
@@ -434,12 +445,25 @@ describe('deploy-agents.mjs integration', () => {
     }
   });
 
+  it.each([
+    { site: 'writing deployment', flags: ['--mode', 'writing'] },
+    { site: 'voice skills', flags: ['--mode', 'writing'] },
+    { site: 'SDLC skills', flags: ['--mode', 'sdlc'] },
+    { site: 'marketing skills', flags: ['--mode', 'marketing'] },
+    { site: 'all skills', flags: ['--mode', 'all'] },
+    { site: 'provider restriction', flags: ['--provider', 'factory'] },
+  ])('preserves the deployment target for $site', ({ flags }) => {
+    const execute = vi.mocked(execFileSync);
+    execute.mockReturnValueOnce('Deploying skills');
+    expect(runDeploy(targetDir, [...flags, '--deploy-skills', '--dry-run'])).toBe('Deploying skills');
+    expect(execute).toHaveBeenLastCalledWith(process.execPath, [
+      DEPLOY_SCRIPT, '--target', targetDir, ...flags, '--deploy-skills', '--dry-run',
+    ], { encoding: 'utf-8', timeout: 30000 });
+  });
+
   it('should deploy skills with --deploy-skills flag', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --mode writing --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--mode', 'writing', '--deploy-skills', '--dry-run']);
 
       // Check output mentions skill deployment
       expect(result).toMatch(/Deploying.*skills/i);
@@ -454,10 +478,7 @@ describe('deploy-agents.mjs integration', () => {
 
   it('should deploy voice-framework skills for writing mode', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --mode writing --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--mode', 'writing', '--deploy-skills', '--dry-run']);
 
       expect(result).toMatch(/voice-framework skills/i);
     } catch (error) {
@@ -471,10 +492,7 @@ describe('deploy-agents.mjs integration', () => {
 
   it('should deploy SDLC skills for sdlc mode', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --mode sdlc --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--mode', 'sdlc', '--deploy-skills', '--dry-run']);
 
       expect(result).toMatch(/SDLC.*skills/i);
     } catch (error) {
@@ -487,10 +505,7 @@ describe('deploy-agents.mjs integration', () => {
 
   it('should deploy MMK skills for marketing mode', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --mode marketing --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--mode', 'marketing', '--deploy-skills', '--dry-run']);
 
       expect(result).toMatch(/MMK.*skills/i);
     } catch (error) {
@@ -503,10 +518,7 @@ describe('deploy-agents.mjs integration', () => {
 
   it('should deploy all skills for mode=all', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --mode all --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--mode', 'all', '--deploy-skills', '--dry-run']);
 
       // Should see multiple skill deployments
       expect(result).toMatch(/writing-quality skills/i);
@@ -525,10 +537,7 @@ describe('deploy-agents.mjs integration', () => {
 
   it('should show provider restriction message for non-Claude providers', async () => {
     try {
-      const result = execSync(
-        `node ${DEPLOY_SCRIPT} --target ${targetDir} --provider factory --deploy-skills --dry-run 2>&1`,
-        { encoding: 'utf-8', timeout: 30000 }
-      );
+      const result = runDeploy(targetDir, ['--provider', 'factory', '--deploy-skills', '--dry-run']);
 
       expect(result).toMatch(/Skills are currently only supported for Claude Code/i);
     } catch (error) {

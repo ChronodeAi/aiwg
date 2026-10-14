@@ -25,9 +25,10 @@ beforeEach(() => {
   savedHome = process.env.HOME;
   process.env.HOME = home;
   fs.mkdirSync(path.join(home, '.factory'), { recursive: true });
+  const serialized = JSON.stringify(operatorSettings, null, 2);
   fs.writeFileSync(
     settingsPath(),
-    `// operator settings\n${JSON.stringify(operatorSettings, null, 2).replace('{', '{ /* block */')}\n`,
+    `// operator settings\n${serialized.slice(0, 1)} /* block */${serialized.slice(1)}\n`,
   );
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -43,6 +44,13 @@ describe('stripJsonComments', () => {
   it('removes comments but keeps // and slash-star sequences inside strings', () => {
     const doc = '// note\n{ /* c */ "glob": "a/**/*.md", "url": "https://x.example/p", "q": "x\\"//y" }';
     expect(JSON.parse(stripJsonComments(doc))).toEqual({ glob: 'a/**/*.md', url: 'https://x.example/p', q: 'x"//y' });
+  });
+
+  it('round-trips comment delimiters in operator keys and values', () => {
+    const settings = { '/* key */': '<!-- value -->', ...operatorSettings };
+    const serialized = JSON.stringify(settings, null, 2);
+    const doc = `// note\n${serialized.slice(0, 1)} /* block */${serialized.slice(1)}\n`;
+    expect(JSON.parse(stripJsonComments(doc))).toEqual(settings);
   });
 });
 
