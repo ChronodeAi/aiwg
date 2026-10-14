@@ -59,6 +59,14 @@ describe('resolveAdapter (#1507)', () => {
     expect(() => resolveAdapter({ provider: 'command' })).toThrow(/requires --command/);
     expect(resolveAdapter({ provider: 'command', command: 'x {image} {out}' }).name).toBe('command');
   });
+  it('bounds template validation: rejects oversized templates and stays fast on whitespace-heavy input', () => {
+    expect(() => resolveAdapter({ provider: 'command', command: `x {image} {out}${' '.repeat(4096)}` }))
+      .toThrow(/longer than 4096 characters/);
+    const whitespaceLines = `${' '.repeat(40)}\n`.repeat(99) + 'x {image} {out}';
+    const started = Date.now();
+    expect(resolveAdapter({ provider: 'command', command: whitespaceLines }).name).toBe('command');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
   it('passes image, prompt and output paths as positional arguments in real shell templates (141)', () => {
     const marker = join(root, 'pwned');
     const backtickMarker = join(root, 'backtick-pwned');
@@ -118,8 +126,11 @@ describe('resolveAdapter (#1507)', () => {
     ['printf "%s" `cat "$2"`', 'backticks'],
     ['eval "$1"', 'eval'],
     ['e"val" "$1"', 'eval'],
-    ...['sh', 'bash', 'zsh', 'dash'].map(shell => [`${shell} -c "$1"`, 'nested shell']),
+    ...['sh', 'bash', 'zsh', 'dash', 'ksh', 'busybox sh'].map(shell => [`${shell} -c "$1"`, 'nested shell']),
     ['env MODE=vision sh -c "$1"', 'nested shell'],
+    ...['exec', 'command', 'nice -n 19', 'timeout 10', 'timeout 1.5s', 'env MODE=vision exec nice -n 19 timeout 10'].map(prefix => [`${prefix} /bin/sh -c "$1"`, 'nested shell']),
+    ...[';', '|', '&&', '||', '&', '\n'].map(separator => [`printf x ${separator} sh -c "$1"`, 'nested shell']),
+    ...['2>&1', '3<&0', '2>&-', '>&1', '<&0', '&>/dev/null', '2>>/dev/null'].map(redirection => [`sh ${redirection} -xc "$1"`, 'nested shell']),
     ['bash --noprofile "-xc" "$1"', 'nested shell'],
     ['bash -cl "$1"', 'nested shell'],
     ['s"h" -c "$1"', 'nested shell'],
@@ -130,6 +141,83 @@ describe('resolveAdapter (#1507)', () => {
     expect(() => resolveAdapter({ provider: 'command', command })).toThrow(construct);
     expect(() => resolveAdapter({ provider: 'command', command })).toThrow('"$1"/"$2"/"$3"');
     expect(() => resolveAdapter({ provider: 'command', command })).toThrow('wrapper script');
+  });
+
+  it.each(['image', 'prompt_file', 'out'])('rejects redirection-hidden nested shells for {%s}', (placeholder) => {
+    const dir = join(root, 'x;:>PWNED;y  -z');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    expect(() => {
+      const adapter = resolveAdapter({ provider: 'command', command:
+        `cd '${root}'; sh 2>&1 -c 'printf original:'{${placeholder}} > {out}` });
+      adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+    }).toThrow(/nested shell.*wrapper script/);
+    expect(existsSync(join(root, 'PWNED'))).toBe(false);
+    expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
+  });
+
+  it.each(['image', 'prompt_file', 'out'])('rejects here-doc quote desync and here-strings for {%s}', (placeholder) => {
+    const dir = join(root, 'x;:>PWNED;y  -z *');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    for (const command of [
+      `exec > {out}\ncat <<'EOF' >/dev/null\n"\nEOF\nprintf '<%s>' "{${placeholder}}"`,
+      `cat <<< {${placeholder}} > {out}`,
+    ]) {
+      expect(() => {
+        const adapter = resolveAdapter({ provider: 'command', command: `cd '${root}'; ${command}` });
+        adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+      }).toThrow(/here-documents and here-strings.*"\$1"\/"\$2"\/"\$3".*wrapper script/);
+      expect(existsSync(join(root, 'PWNED'))).toBe(false);
+      expect(existsSync(join(dir, '.vision-prompt-1.txt'))).toBe(false);
+    }
+  });
+
+  it.each([
+    ['./vision.sh --scale', 'vision.sh', '--scale'],
+    ['sh ./vision --concise', 'vision', '--concise'],
+  ])('passes every hostile path as one argument to %s through a real shell', (command, script, option) => {
+    const dir = join(root, 'x;:>PWNED;y  -z *');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    writeFileSync(join(root, script), '#!/bin/sh\nprintf \'%s\\n\' "$#" "$@" > "$4"\n', { mode: 0o755 });
+    const adapter = resolveAdapter({ provider: 'command', command:
+      `cd '${root}' && ${command} {image} {prompt_file} {out}` });
+    const result = adapter.transcribe(image, 'prompt', { root, page: 1, timeoutSec: 10 });
+    expect(result.ok).toBe(true);
+    expect(result.text?.trimEnd().split('\n')).toEqual([
+      '4', option, image, join(dir, '.vision-prompt-1.txt'), join(dir, '.vision-out-1.txt'),
+    ]);
+    expect(existsSync(join(root, 'PWNED'))).toBe(false);
+    expect(existsSync(join(dir, 'PWNED'))).toBe(false);
+  });
+
+  it.each([
+    'agentic/code/frameworks/research-complete/skills/vision-extract/SKILL.md',
+    'agentic/code/plugins/research/skills/vision-extract/SKILL.md',
+  ])('runs the documented wrapper example in %s with literal path arguments', (file) => {
+    const doc = readFileSync(file, 'utf8');
+    const command = doc.match(/--command '([^']+)'/)?.[1];
+    const script = doc.match(/```sh\n(#!\/bin\/sh\n[\s\S]*?)\n```/)?.[1];
+    expect(command).toBeDefined();
+    expect(script).toBeDefined();
+    expect(doc).toContain('Templates are trusted executable code');
+    expect(doc).toContain('must not re-parse path values');
+    const dir = join(root, 'x;:>PWNED;y  -z *');
+    mkdirSync(dir);
+    const image = join(dir, 'page-001.png');
+    writeFileSync(image, 'PNG');
+    writeFileSync(join(root, 'vision.sh'), script!, { mode: 0o755 });
+    writeFileSync(join(root, 'claude'), '#!/bin/sh\nprintf \'%s\\n\' "$#" "$@"\n', { mode: 0o755 });
+    const adapter = resolveAdapter({ provider: 'command', command:
+      `cd '${root}' && PATH='${root}':"$PATH" ${command}` });
+    const result = adapter.transcribe(image, 'prompt with spaces', { root, page: 1, timeoutSec: 10 });
+    expect(result.ok).toBe(true);
+    expect(result.text?.trimEnd().split('\n')).toEqual(['4', '-p', 'prompt with spaces', '--image', image]);
+    expect(existsSync(join(root, 'PWNED'))).toBe(false);
   });
 
   it.each([

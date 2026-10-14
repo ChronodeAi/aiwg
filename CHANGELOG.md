@@ -384,8 +384,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   templates map unquoted, unescaped `{image}`/`{prompt_file}`/`{out}` placeholders to
   `"$1"`/`"$2"`/`"$3"`, with paths passed as separate shell arguments. `AIWG_VISION_IMAGE`,
   `AIWG_VISION_PROMPT_FILE` and `AIWG_VISION_OUT` remain exported. Command substitution,
-  backticks, `eval`, nested shells with `-c`, and `#` comments outside single quotes are
-  rejected. Use the quoted positional parameters directly or a wrapper script for complex logic.
+  backticks, `eval`, nested shells with `-c` (including redirections), here-documents and
+  here-strings (`<<`), `#` comments outside single quotes, and templates over 4096 characters are rejected. Use the quoted
+  positional parameters directly or a wrapper script for complex logic. Templates are trusted
+  executable code and must not re-parse path values as shell source.
 - `aiwg doctor --probe-workers` now has machine-readable output, a visible empty state, and
   strict flags (#3066): `--probe-workers --json` prints exactly one JSON document on stdout (one
   record per CLI with `cli`, `installed`, `version`, `inRange`, `ready`, `reason`, plus top-level

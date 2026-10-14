@@ -90,17 +90,25 @@ const codexAdapter: VisionAdapter = {
 };
 
 /** Paths enter the shell as positional arguments, never as shell source. */
+const MAX_VISION_TEMPLATE_LENGTH = 4096;
+
 function visionCommand(template: string): string {
   const guidance = 'Use "$1"/"$2"/"$3" as data operands or move complex logic to a wrapper script';
   const reject = (construct: string): never => {
     throw new Error(`Vision command rejects ${construct}. ${guidance}`);
   };
+  // Bound the checks below; a vision command template is a short command line.
+  if (template.length > MAX_VISION_TEMPLATE_LENGTH) reject(`templates longer than ${MAX_VISION_TEMPLATE_LENGTH} characters`);
   // Recognize literal command names even when quoted or backslash-escaped.
   const syntax = template.replace(/\\\r?\n/g, '').replace(/\\([^\n])/g, '$1').replace(/["']/g, '');
   if (syntax.includes('$(')) reject('command substitution ($(...))');
   if (template.includes('`')) reject('backticks');
   if (/\beval\b/.test(syntax)) reject('eval');
-  if (/\b(?:sh|bash|zsh|dash)\b[^;&|]*?-[a-zA-Z]*c[a-zA-Z]*\b/.test(syntax)) reject('nested shell invocation (-c)');
+  if (syntax.includes('<<')) reject('here-documents and here-strings (<<)');
+  // Redirection ampersands are not command separators. Match shell command
+  // words and short option clusters, not .sh filenames or long options.
+  const commandSyntax = syntax.replace(/\d*[<>]+&?\d*-?|>&|<&|&>/g, ' ');
+  if (/(?:^|[;&|\n])[ \t]*(?:(?:env|exec|command|nice|timeout)\s+(?:(?:-[^\s;&|]+|[a-zA-Z_]\w*=[^\s;&|]+|\d+(?:\.\d+)?[smhd]?)\s+)*)*(?:[^\s;&|]*\/)?(?:sh|bash|zsh|dash|ksh|busybox\s+sh)(?=\s|$)[^;&|\n]*?\s-[a-z]*c[a-z]*(?=\s|$)/.test(commandSyntax)) reject('nested shell invocation (-c)');
 
   // Track quotes only to reject quoted/escaped placeholders and comments.
   let quote = '';
@@ -132,8 +140,8 @@ function visionCommand(template: string): string {
  *   {out}          "$3": path the command must write the transcription to
  * Placeholders must be unquoted and unescaped. AIWG_VISION_IMAGE /
  * AIWG_VISION_PROMPT_FILE / AIWG_VISION_OUT are also exported.
- * Command substitution, backticks, eval, nested shells with -c, and # outside
- * single quotes are rejected; use a wrapper script for complex logic.
+ * Command substitution, backticks, eval, nested shells with -c, <<, and #
+ * outside single quotes are rejected; use a wrapper script for complex logic.
  * e.g.  vision-cli --prompt-file {prompt_file} --image {image} > {out}
  */
 function commandAdapter(template: string): VisionAdapter {

@@ -27,14 +27,23 @@ aiwg corpus vision-extract --slug tufte-1983-visual-display --provider codex
 # Rasterize a PDF to page PNGs first (poppler pdftoppm), then transcribe
 aiwg corpus vision-extract --slug my-book --rasterize sources/pdfs/my-book.pdf --dpi 200 --provider codex
 
-# Provider-neutral: any vision CLI via a command template
+# Provider-neutral: any vision CLI via a wrapper script (see below)
+chmod +x ./vision.sh
 aiwg corpus vision-extract --slug my-book \
   --provider command \
-  --command 'claude -p "$(cat {prompt_file})" --image {image} > {out}'
+  --command './vision.sh {image} {prompt_file} {out}'
 
 # Resume (skips pages already marked complete); --force re-does them
 aiwg corpus vision-extract --slug my-book --start 20 --end 40
 aiwg corpus vision-extract --slug my-book --force
+```
+
+Save this wrapper as `vision.sh`; it receives the image, prompt file, and output
+paths as separate arguments:
+
+```sh
+#!/bin/sh
+claude -p "$(cat "$2")" --image "$1" > "$3"
 ```
 
 Outputs to `.aiwg/research/sources/text/<slug>-vision/`: per-page
@@ -55,8 +64,11 @@ arguments; `AIWG_VISION_IMAGE`, `AIWG_VISION_PROMPT_FILE`, and `AIWG_VISION_OUT`
 are also exported. For example: `vision-cli --image {image} --prompt-file {prompt_file} > {out}`.
 Templates may use the quoted positional parameters or environment variables directly.
 Command substitution (`$(`), backticks, `eval`, nested shell invocations with `-c`
-(including `env … sh -c`), and `#` outside single quotes are rejected. Put complex
-logic in a wrapper script that receives the paths as data arguments.
+(including redirections and `env … sh -c`), here-documents and here-strings (`<<`),
+and `#` outside single quotes are rejected. Put complex logic in a wrapper script
+that receives the paths as data arguments. Templates are trusted executable code
+and must not re-parse path values as shell source. Validation is defense in depth;
+keep path arguments quoted in the wrapper, as in the example above.
 
 ## Contract preserved from the source script
 
