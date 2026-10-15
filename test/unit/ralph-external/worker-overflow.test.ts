@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, constants, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, createReadStream, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { ChildProcessTransport } from '../../../src/mcp/tools/worker-invoke.mjs';
 import { stopOverflowWorker } from '../../../tools/ralph-external/lib/worker-overflow.mjs';
@@ -88,7 +87,11 @@ describe('MCP overflow stop authority', () => {
     expect(unitStatus).toHaveBeenCalledTimes(2);
   });
 
-  it.skipIf(process.platform !== 'linux').each([false, true])('overflow stays unconfirmed after group kill (escaped descendant: %s)', async escaped => {
+  it.skipIf(process.platform !== 'linux').each([
+    { escaped: false, contention: false },
+    { escaped: true, contention: false },
+    { escaped: false, contention: true },
+  ])('overflow stays unconfirmed after group kill (escaped descendant: $escaped, CPU contention: $contention)', async ({ escaped, contention }) => {
     const root = mkdtempSync(path.join(tmpdir(), 'aiwg-worker-overflow-')); roots.push(root);
     const script = path.join(root, 'worker.mjs');
     const pidFile = path.join(root, 'worker.pid');
@@ -101,9 +104,16 @@ describe('MCP overflow stop authority', () => {
     writeFileSync(script, `import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 process.on('SIGTERM', () => {});
+const output = () => {
+  // Keep a CPU-bound worker busy beyond the former five-second read deadline.
+  const deadline = Date.now() + ${contention ? 6000 : 0};
+  while (Date.now() < deadline) Math.sqrt(Math.random());
+  process.stdout.write(Buffer.alloc(12 * 1024 * 1024, 120));
+};
+${contention ? "process.once('SIGUSR2', output);" : ''}
 writeFileSync(process.argv[2], String(process.pid));
 spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);', process.argv[3]], { stdio: 'inherit', detached: ${escaped} });
-process.stdout.write(Buffer.alloc(12 * 1024 * 1024, 120));
+${contention ? '' : 'output();'}
 setInterval(() => {}, 1000);
 `);
     const child = spawn(process.execPath, [path.resolve('tools/ralph-external/lib/worker-isolation.mjs'),
@@ -113,6 +123,7 @@ setInterval(() => {}, 1000);
     const closed = new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
     let workerPid = 0;
     let descendantPid = 0;
+    let stdout: ReturnType<typeof createReadStream> | undefined;
     try {
       const deadline = Date.now() + 5000;
       while (!descendantPid && Date.now() < deadline) {
@@ -123,22 +134,18 @@ setInterval(() => {}, 1000);
       const groupPids = sampleWorkerGroup(workerPid)?.map((member: any) => member.pid);
       if (escaped) expect(groupPids).not.toContain(descendantPid);
       else expect(groupPids).toContain(descendantPid);
-      const stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+      // Let stream readiness drive reads; one FIFO chunk per timer tick can
+      // exhaust a wall-clock deadline before the frame reaches the transport.
+      stdout = createReadStream(fifo);
       const transport = new ChildProcessTransport({ stdout, once: child.once.bind(child) }, {
         terminate: () => stopOverflowWorker({ mode: 'degraded', child, transportSupervisor: true }),
       });
-      transport.onerror = vi.fn();
+      const overflow = new Promise<Error>(resolve => { transport.onerror = resolve; });
       await transport.start();
-      const overflowDeadline = Date.now() + 5000;
-      while (!transport._failure && Date.now() < overflowDeadline) {
-        const buffer = Buffer.alloc(64 * 1024);
-        try {
-          const size = readSync(reader, buffer, 0, buffer.length, null);
-          if (size) stdout.emit('data', buffer.subarray(0, size));
-        } catch (error: any) { if (error.code !== 'EAGAIN') throw error; }
-        await new Promise(resolve => setTimeout(resolve, 1));
-      }
-      expect(transport._failure?.code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
+      if (contention) process.kill(workerPid, 'SIGUSR2');
+      const failure = await overflow;
+      expect(failure).toMatchObject({ code: 'OG_WORKER_MCP_FRAME_TOO_LARGE' });
+      expect(transport._failure).toBe(failure);
       expect(await transport._termination).toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
       await closed;
       expect(sampleWorkerGroup(workerPid)).toEqual([]);
@@ -159,10 +166,11 @@ setInterval(() => {}, 1000);
       }
       expect(eof).toBe(true);
     } finally {
+      stdout?.destroy();
       closeSync(reader);
       for (const pid of [workerPid, descendantPid]) if (pid) { try { process.kill(pid, 'SIGKILL'); } catch { /* already exited */ } }
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       await closed;
     }
-  }, 10000);
+  }, 30000);
 });
