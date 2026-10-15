@@ -5,7 +5,8 @@
 # =============================================================================
 # Stage 1: Dependencies
 # =============================================================================
-FROM node:{{NODE_VERSION}}-alpine AS deps
+ARG NODE_VERSION=24
+FROM node:${NODE_VERSION}-alpine AS deps
 
 WORKDIR /app
 
@@ -25,7 +26,7 @@ RUN \
 # =============================================================================
 # Stage 2: Build (if needed)
 # =============================================================================
-FROM node:{{NODE_VERSION}}-alpine AS builder
+FROM node:${NODE_VERSION}-alpine AS builder
 
 WORKDIR /app
 
@@ -42,7 +43,7 @@ RUN \
 # =============================================================================
 # Stage 3: Production
 # =============================================================================
-FROM node:{{NODE_VERSION}}-alpine AS runner
+FROM node:${NODE_VERSION}-alpine AS runner
 
 WORKDIR /app
 

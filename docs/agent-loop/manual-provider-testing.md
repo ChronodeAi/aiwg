@@ -21,8 +21,8 @@ authenticated.
 - Loop entry point: `tools/ralph-external/index.mjs`
 - Runtime providers: `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`,
   `deepseek-harness`, `muse` (registered in `tools/ralph-external/lib/*-adapter.mjs`)
-- Pi runs headless as `--provider pi` (`pi --mode json --no-approve`, Node
-  22.19+ preflight, qualified-version preflight, `--model`/`--thinking`/`--tools`
+- Pi runs headless as `--provider pi` (`pi --mode json --no-approve`, Node 24
+  runtime, qualified-version preflight, `--model`/`--thinking`/`--tools`
   propagation, stdin closed, cancellation by bounded TERM/KILL). It never loads
   project-local Pi resources, so do not describe a Pi loop run as a test of
   deployed prompts or skills. Pi reads stdin commands only in `--mode rpc`; in
@@ -113,7 +113,7 @@ Expected: all tests pass (includes the resume, stop-semantics, unknown-budget, s
 ## Troubleshooting
 
 - **`Unknown provider '<name>'`** — the provider CLI adapter isn't registered; valid runtime providers are `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness`, `muse` (unless `AIWG_MUSE_RALPH_ENABLED=0`). `stub` is UAT-only.
-- **Pi adapter reports unavailable** — the Pi adapter preflights Node 22.19+
+- **Pi adapter reports unavailable** — use the required Node 24 runtime
   and a `pi` executable (`AIWG_PI_BIN` overrides the binary). Fix the runtime
   first; see [the Pi provider reference](../agents/providers/pi.md) for direct
   bounded Pi testing outside the loop.

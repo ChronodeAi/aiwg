@@ -1,6 +1,6 @@
 # `.gitea/workflows/` — CI Pinning Policy
 
-All container images and external actions referenced in this directory are pinned by immutable identifier — `@sha256:<digest>` for container images, `@<40-char-commit-SHA>` for GitHub Actions. **No mutable tags (`@v4`, `:latest`, `:20`) anywhere.** A trailing inline comment on each pinned line shows the resolved version (`# v4.3.1`, `# node 20.20.2`) so workflow diffs remain readable.
+All container images and external actions referenced in this directory are pinned by immutable identifier — `@sha256:<digest>` for container images, `@<40-char-commit-SHA>` for GitHub Actions. **No mutable tags (`@v4`, `:latest`, `:24`) anywhere.** A trailing inline comment on each pinned line shows the resolved version (`# v4.3.1`, `# node 24.15.0`) so workflow diffs remain readable.
 
 The pin manifest is at [`ci/digests.txt`](../../ci/digests.txt). Every active pin has a row there with the resolved version, the date the pin was set, and the rationale for the most recent update. Treat any digest/SHA change in a workflow file without a corresponding row update in that manifest as a red flag.
 

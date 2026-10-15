@@ -65,6 +65,13 @@ const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfi
   'config/aiwg-config.js'
 );
 
+export function checkNodeVersion(version) {
+  const major = parseInt(version.replace(/^v/, '').split('.')[0]);
+  return major >= 24
+    ? { status: 'ok', message: version }
+    : { status: 'warn', message: `${version} (requires >= 24)` };
+}
+
 // Shared strict flag parsing (#3062). doctor.mjs is plain JS shipped to npm,
 // so this resolves through importImpl like every other src/ import above:
 // dist/src/cli/flag-parsing.js when installed, src/cli/flag-parsing.ts in a
@@ -1542,13 +1549,8 @@ export async function runDoctor() {
   }
 
   // 7. Check Node.js version
-  const nodeVersion = process.version;
-  const major = parseInt(nodeVersion.slice(1).split('.')[0]);
-  if (major >= 18) {
-    check('Node.js', 'ok', nodeVersion);
-  } else {
-    check('Node.js', 'error', `${nodeVersion} (requires >= 18.0.0)`);
-  }
+  const nodeCheck = checkNodeVersion(process.version);
+  check('Node.js', nodeCheck.status, nodeCheck.message);
 
   // 8. Check MCP server — resolve the exact compiled entrypoint the
   // production launcher loads (bin/aiwg.mjs's resolveRouterPath always

@@ -67,7 +67,7 @@ responses once remains independent of this helper change.
 `SEC-RESPONSE-PARSE-TIME` directly exercises the production helper (an internal
 module export, also re-exported from `src/decision/index.ts`). Bodies are constructed before
 measurement, each is exactly 1,048,576 UTF-8 bytes, and each gets one warmup and
-three measured parses. The cheapest of the three samples must stay below 500 ms of this thread's CPU time (`process.threadCpuUsage`, Node 23.9 or later; older runtimes report the figure without asserting it);
+three measured parses. The cheapest of the three samples must stay below 500 ms of this thread's CPU time (`process.threadCpuUsage` on the required Node 24 runtime);
 the test prints all samples. Measurements include the defensive byte check,
 scan, key decoding, and full native parse, without transport/normalization work.
 The following samples were measured on Node v24.12.0 with the requested two-suite

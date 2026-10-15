@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     # Use the same container pin as the working ci.yml — Gitea Actions
     # runner expects a container that already has node+git available.
-    container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 5
     steps:
       - name: Checkout AIWG

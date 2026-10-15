@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:24-slim
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -87,7 +87,7 @@ spec:
       instruction: >-
         Summarize the inspection in ordinary language and propose the smallest safe
         plan. Reuse a healthy existing Node version manager. Do not stack managers.
-        AIWG requires Node 20 or newer; prefer the current Node LTS for a new install.
+        AIWG requires Node 24 or newer; use Node 24 for a new install.
         If Node is missing or unsuitable, offer an official version-manager path:
         nvm-sh for macOS, Linux, or WSL and nvm-windows for native Windows. Explain any
         required new shell or PATH refresh before proceeding. If development mode is

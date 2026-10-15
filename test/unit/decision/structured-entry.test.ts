@@ -161,29 +161,20 @@ describe('decision structured entry contract', () => {
     expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, memoryBytes: 1 })).toThrow(/memory-budget/);
   });
 
-  // Exercise both supported runtime paths explicitly: Node 20 uses the
-  // wall-clock fallback; Node >=22.19 can ignore scheduler-induced drift.
-  it.each([true, false])('handles wall-clock drift with thread CPU available: %s', threadCpuAvailable => {
-    const original = process.threadCpuUsage;
-    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
-    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
+  it('uses thread CPU for admission despite wall-clock drift', () => {
+    const cpuClock = vi.spyOn(process, 'threadCpuUsage').mockReturnValue({ user: 0, system: 0 });
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
-      if (threadCpuAvailable) {
-        expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
-        expect(parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toEqual({ entry: 'safe' });
-        expect(parseDecisionYaml('entry: safe\n')).toEqual({ entry: 'safe' });
-      } else {
-        expect(() => admitEntry({ entry: 'safe' })).toThrow(/time-budget/);
-        expect(() => parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toThrow(/time-budget/);
-        expect(() => parseDecisionYaml('entry: safe\n')).toThrow(/time-budget/);
-      }
-      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
+      expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
+      expect(parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toEqual({ entry: 'safe' });
+      expect(parseDecisionYaml('entry: safe\n')).toEqual({ entry: 'safe' });
+      expect(cpuClock).toHaveBeenCalled();
+      expect(nowSpy).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
-      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
+      cpuClock.mockRestore();
     }
   });
 
@@ -196,8 +187,7 @@ describe('decision structured entry contract', () => {
   // blocking wait, not a CPU-consuming spin) for a window that overlaps the
   // worker's burn. The admitting thread did essentially no work in that
   // window, so its own per-thread CPU reading must stay near zero
-  // regardless of how busy the other thread was. Older runtimes deliberately
-  // use wall time instead and must charge the blocked interval.
+  // regardless of how busy the other thread was.
   it('uses the runtime clock while another worker thread burns CPU', async () => {
     const worker = new Worker(CPU_BURN_WORKER, { workerData: { ms: 600 } });
     const workerDone = new Promise<void>((resolve, reject) => {
@@ -208,43 +198,18 @@ describe('decision structured entry contract', () => {
       // Give the worker a head start so it is actively burning CPU before
       // this thread reads its own baseline.
       await new Promise(resolve => setTimeout(resolve, 20));
-      const threadCpuAvailable = typeof process.threadCpuUsage === 'function';
       const started = admissionClockStart();
-      expect(typeof started === 'object').toBe(threadCpuAvailable);
+      expect(typeof started).toBe('object');
       const paused = new Int32Array(new SharedArrayBuffer(4));
       Atomics.wait(paused, 0, 0, 300); // blocks this thread; burns no CPU here
       const elapsed = elapsedAdmissionMs(started);
-      if (threadCpuAvailable) expect(elapsed).toBeLessThan(50);
-      else expect(elapsed).toBeGreaterThanOrEqual(250);
+      expect(elapsed).toBeLessThan(50);
       expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
     } finally {
       await workerDone;
       await worker.terminate();
     }
   }, 10_000);
-
-  // #3047 follow-up: on a runtime without `process.threadCpuUsage()` (this
-  // project's `engines.node` floor is `>=20.0.0`; the API was added in Node
-  // v22.19.0), admission must fall back to the pre-#3047 wall-clock guard --
-  // not silently stop enforcing a budget. Simulates that runtime by
-  // stubbing the feature away, then shows the exact wall-clock leap the
-  // thread-CPU path above tolerates now defeats the fallback, same as
-  // before #3047 on an unsupported runtime.
-  it('falls back to the wall-clock guard when process.threadCpuUsage is unavailable (stubbed away)', () => {
-    const original = process.threadCpuUsage;
-    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = undefined;
-    const nowSpy = vi.spyOn(performance, 'now');
-    let fakeNow = 0;
-    nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
-    try {
-      expect(() => admitEntry({ entry: 'safe' })).toThrow(/time-budget/);
-      expect(() => parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toThrow(/time-budget/);
-      expect(() => parseDecisionYaml('entry: safe\n')).toThrow(/time-budget/);
-    } finally {
-      nowSpy.mockRestore();
-      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
-    }
-  });
 
   // #3047 follow-up: the budget must still catch input that genuinely burns
   // thread CPU -- CPU-time accounting is not a free pass. A tiny budget

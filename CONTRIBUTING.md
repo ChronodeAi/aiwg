@@ -4,8 +4,8 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| **Node.js** | ≥ 18 (20 recommended) | CI runs on Node 20. Use [nvm](https://github.com/nvm-sh/nvm) to manage versions. |
-| **npm** | ≥ 8 | Bundled with Node 18+. |
+| **Node.js** | ≥ 24 | CI runs on Node 24. Use [nvm](https://github.com/nvm-sh/nvm) to manage versions. |
+| **npm** | ≥ 11.5 | Use the npm bundled with Node 24. |
 | **Git** | any | Standard source control. |
 | **C++ build tools** | — | Required by native modules (`better-sqlite3`, `hnswlib-node`). See below. |
 
@@ -99,7 +99,7 @@ chmod +x .git/hooks/pre-commit
 
 ## Markdown Lint
 
-Run `npm exec markdownlint-cli2 "**/*.md"` (Node ≥18) before PRs.
+Run `npm exec markdownlint-cli2 "**/*.md"` (Node ≥24) before PRs.
 
 ## Testing Requirements
 

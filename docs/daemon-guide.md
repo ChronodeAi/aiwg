@@ -915,7 +915,7 @@ The daemon works in Docker containers and CI environments:
 
 ```dockerfile
 # Dockerfile
-FROM node:20
+FROM node:24
 RUN npm install -g aiwg
 WORKDIR /app
 COPY . .

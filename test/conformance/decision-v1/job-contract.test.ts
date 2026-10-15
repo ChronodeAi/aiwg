@@ -73,12 +73,8 @@ describe('JOB offline contract (dispatch disabled)', () => {
     expect(() => validateDecisionJob(injected)).toThrow(DecisionJobContractError);
   });
 
-  // Node 20 uses the wall-clock fallback; newer runtimes use per-thread
-  // CPU time. Pin both contracts independently of the runner's Node version.
-  it.each([true, false])('JOB-008 handles wall-clock drift with thread CPU available: %s', threadCpuAvailable => {
-    const original = process.threadCpuUsage;
-    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
-    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
+  it('JOB-008 handles wall-clock drift using thread CPU', () => {
+    const cpuClock = vi.spyOn(process, 'threadCpuUsage').mockReturnValue({ user: 0, system: 0 });
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
@@ -88,13 +84,13 @@ describe('JOB offline contract (dispatch disabled)', () => {
       after.state = 'running'; after.items[0]!.state = 'running';
       after.summary.queued = 0; after.summary.running = 1;
       for (const operation of [() => validateDecisionJob(job), () => assertJobTransition(before, after)]) {
-        if (threadCpuAvailable) expect(operation).not.toThrow();
-        else expect(operation).toThrow(/job admission denied/);
+        expect(operation).not.toThrow();
       }
-      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
+      expect(cpuClock).toHaveBeenCalled();
+      expect(nowSpy).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
-      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
+      cpuClock.mockRestore();
     }
   });
 });

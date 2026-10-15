@@ -99,7 +99,7 @@ Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
 
 - Name: `aiwg`
 - Description: Reusable project context and specialist workflows for the AI tools you already use. AIWG places agents, skills, commands, and rules in provider-readable locations, with optional utilities for artifact memory, workflow orchestration, recovery, and discovery.
-- Runtime: `node >=20.0.0`
+- Runtime: `node >=24`
 
 ### Common Commands (source: [`package.json`](./package.json))
 

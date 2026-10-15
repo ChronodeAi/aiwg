@@ -242,9 +242,7 @@ export async function runDecisionLoadHarness(options: {
   const { manifest, clock, driver, sample } = options;
   const arrivals = decisionLoadArrivals(manifest, options.windowSeconds);
   const start = clock.now();
-  const threadCpu = (process as { threadCpuUsage?: (previous?: NodeJS.CpuUsage) => NodeJS.CpuUsage }).threadCpuUsage?.bind(process);
-  const cpuStart = threadCpu?.();
-  const wallStart = process.hrtime.bigint();
+  const cpuStart = process.threadCpuUsage();
   let rss = process.memoryUsage().rss;
   let heap = process.memoryUsage().heapUsed;
   const sampleMemory = (): void => {
@@ -296,8 +294,8 @@ export async function runDecisionLoadHarness(options: {
   while (!settled) await clock.advance(drainStep);
   const results = await all;
   sampleMemory();
-  const threadUsage = cpuStart && threadCpu ? threadCpu(cpuStart) : undefined;
-  const cpuMicros = threadUsage ? threadUsage.user + threadUsage.system : Number(process.hrtime.bigint() - wallStart) / 1000;
+  const threadUsage = process.threadCpuUsage(cpuStart);
+  const cpuMicros = threadUsage.user + threadUsage.system;
   const virtualDurationMs = Math.max(1, clock.now() - start);
 
   const shedReasons: Record<string, number> = {};
@@ -333,7 +331,7 @@ export async function runDecisionLoadHarness(options: {
       heapUsedMiB: Number((heap / 1_048_576).toFixed(1)),
       residentMemoryMiB: Number((rss / 1_048_576).toFixed(1)),
       cpuPercentOneCore: Number(((cpuMicros / 1000) / virtualDurationMs * 100).toFixed(3)),
-      cpuSource: threadUsage ? 'thread' : 'wall-clock-upper-bound',
+      cpuSource: 'thread',
     },
   };
 }

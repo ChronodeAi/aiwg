@@ -150,7 +150,7 @@ protocol](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/d
   structured-question, or daemon integration.
 - `pi --list-models` is parsed as the configured local catalog while preserving
   Pi backend/model identifiers; no model turn is used for discovery.
-- External Ralph has a dedicated Pi adapter with Node 22.19+ preflight,
+- External Ralph has a dedicated Pi adapter on the required Node 24 runtime,
   model/thinking/tool/session propagation, strict JSONL parsing, and bounded
   cancellation.
 

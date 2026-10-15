@@ -11,7 +11,7 @@ machine.
 
 ## Policy
 
-- Minimum AIWG runtime: Node.js 20.
+- Minimum AIWG runtime: Node.js 24.
 - New-user default: current Node.js LTS (Node 24 at the time this policy was
   written), not the Current release.
 - npm: use the version bundled with Node.js.

@@ -206,7 +206,7 @@ function createManifest(
     resources: [],
     prompts: [],
     dependencies: {
-      runtime: ['node >= 18.0.0'],
+      runtime: ['node >= 24'],
       external: [
         `${analyzerResult.metadata.sourceName}${analyzerResult.metadata.sourceVersion ? ' >= ' + analyzerResult.metadata.sourceVersion : ''}`
       ]

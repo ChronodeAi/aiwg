@@ -47,8 +47,7 @@ Run the normal suite with `npm test`, the interactive runner with
 ## Runtime prerequisite
 
 Vitest 4 itself supports Node 20, 22, and 24+, while its current Vite dependency
-requires Node 20.19+ or 22.12+. AIWG's published runtime remains Node 20+, but
-contributors running the test suite should use Node 20.19+, 22.12+, or 24+.
+requires Node 20.19+ or 22.12+. AIWG requires Node 24+ for both the published runtime and contributor tests.
 
 ## Migration verification
 

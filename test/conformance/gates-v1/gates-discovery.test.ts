@@ -103,28 +103,21 @@ describe('gate-pack bundle registry', () => {
       .toBe('aiwg:decision-engine/integrity-ceiling');
   });
 
-  // Node 20 uses the wall-clock fallback; newer runtimes use per-thread
-  // CPU time. Pin both contracts independently of the runner's Node version.
-  it.each([true, false])('discovers shipped packs with wall-clock drift and thread CPU available: %s', threadCpuAvailable => {
-    const original = process.threadCpuUsage;
-    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
-    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
+  it('discovers shipped packs with wall-clock drift using thread CPU', () => {
+    const cpuClock = vi.spyOn(process, 'threadCpuUsage').mockReturnValue({ user: 0, system: 0 });
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
       const registry = new GateRegistry(createCoreProviderRegistry());
-      if (threadCpuAvailable) {
-        expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
-        expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
-          .toBe('aiwg:decision-engine/integrity-ceiling');
-      } else {
-        expect(() => discoverShippedGatePacks(repoRoot, registry)).toThrow(/time-budget/);
-      }
-      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
+      expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
+      expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
+        .toBe('aiwg:decision-engine/integrity-ceiling');
+      expect(cpuClock).toHaveBeenCalled();
+      expect(nowSpy).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
-      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
+      cpuClock.mockRestore();
     }
   });
 });

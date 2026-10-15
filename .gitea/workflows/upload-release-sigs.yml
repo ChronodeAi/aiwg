@@ -63,7 +63,7 @@ jobs:
     name: Mirror release assets to Gitea release
     runs-on: ubuntu-latest
     # Same pinned container as the Gitea publish leg (see ci/digests.txt).
-    container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0
     timeout-minutes: 10
     defaults:
       run:
@@ -90,7 +90,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install jq + curl
-        # node:20-bookworm ships curl but not jq. Pull from apt; the
+        # node:24-bookworm ships curl but not jq. Pull from apt; the
         # base image is debian-bookworm so apt is available.
         run: |
           set -euo pipefail

@@ -503,9 +503,8 @@ and yank.
 - **npm 11.5+** is required for the `min-release-age` config to be
   honored. Earlier versions silently ignore the config (no error — but
   no gate either).
-- Node 20.20.2 / 22.x base images ship npm 10.x by default. CI workflows
-  and contributor machines must install npm@^11.5 before lockfile-
-  affecting operations for the gate to be active.
+- Node 24 is required for CI and contributor machines. Use its bundled npm
+  11.x, and ensure npm is at least 11.5 before lockfile-affecting operations.
 
 ```bash
 # One-time on a contributor machine (or pin in your shell rc)

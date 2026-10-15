@@ -36,7 +36,8 @@ const DOCTOR_SCRIPT = resolve(__dirname, '../../../tools/cli/doctor.mjs');
 const mockGetFrameworkRoot = vi.fn();
 const mockGetVersionInfo = vi.fn();
 
-vi.mock('../../../src/channel/manager.mjs', () => ({
+vi.mock('../../../src/channel/manager.mjs', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../src/channel/manager.mjs')>(),
   getFrameworkRoot: mockGetFrameworkRoot,
   getVersionInfo: mockGetVersionInfo,
 }));
@@ -251,27 +252,16 @@ describe('doctor: optional native feature builds', () => {
 // ── Node.js version check logic ────────────────────────────────
 
 describe('doctor: Node.js version check', () => {
-  function checkNodeVersion(version: string) {
-    const major = parseInt(version.slice(1).split('.')[0]);
-    if (major >= 18) {
-      return { status: 'ok' as const, message: version };
-    } else {
-      return { status: 'error' as const, message: `${version} (requires >= 18.0.0)` };
-    }
-  }
+  it.each(['v16.20.0', 'v18.20.8', 'v20.19.0', 'v22.19.0', 'v23.11.0'])(
+    'warns for unsupported runtime %s', async version => {
+      const { checkNodeVersion } = await import('../../../tools/cli/doctor.mjs');
+      expect(checkNodeVersion(version)).toEqual({ status: 'warn', message: `${version} (requires >= 24)` });
+    },
+  );
 
-  it('ok for Node 18', () => {
-    expect(checkNodeVersion('v18.0.0').status).toBe('ok');
-  });
-
-  it('ok for Node 22', () => {
-    expect(checkNodeVersion('v22.1.0').status).toBe('ok');
-  });
-
-  it('error for Node 16', () => {
-    const result = checkNodeVersion('v16.20.0');
-    expect(result.status).toBe('error');
-    expect(result.message).toContain('requires >= 18');
+  it.each(['v24.0.0', 'v24.12.0', 'v26.0.0'])('accepts supported runtime %s', async version => {
+    const { checkNodeVersion } = await import('../../../tools/cli/doctor.mjs');
+    expect(checkNodeVersion(version)).toEqual({ status: 'ok', message: version });
   });
 });
 

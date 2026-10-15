@@ -53,6 +53,6 @@
     "check": "npm run build:web && npm run test:web && npm run test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   }
 }

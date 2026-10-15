@@ -305,7 +305,7 @@ Add native Cursor Editor support with single-file .cursor/rules integration. Thi
 
 **Example:**
 - Cursor Editor 0.40+
-- Node.js 18.20.8+
+- Node.js 24.0.0+
 - Existing agent deployment infrastructure
 
 ## Success Criteria

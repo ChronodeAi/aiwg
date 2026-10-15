@@ -33,7 +33,7 @@ Complete reference for all `aiwg` CLI commands.
 >
 > Full rule: `agentic/code/addons/aiwg-utils/rules/cli-secondary.md` (#1272).
 
-**Prerequisites:** Node.js ≥20.0.0 and `npm install -g aiwg`
+**Prerequisites:** Node.js ≥24 and `npm install -g aiwg`
 
 ## Authentication
 
@@ -2252,7 +2252,7 @@ Available Tools:
 System Utilities:
   ✓ git v2.39.0
   ✓ jq v1.6
-  ✓ node v20.10.0
+  ✓ node v24.0.0
   ✓ npm v10.2.3
   ✗ gh (GitHub CLI not installed)
 

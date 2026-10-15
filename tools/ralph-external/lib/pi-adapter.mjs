@@ -1,5 +1,4 @@
 /** Pi Coding Agent adapter for headless External Ralph sessions. */
-import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
@@ -113,9 +112,6 @@ export class PiAdapter extends ProviderAdapter {
       rpcAbort: false };
   }
   async isAvailable() {
-    const node = spawnSync(process.execPath, ['-p', 'process.versions.node'], { encoding: 'utf8', timeout: 5000 });
-    const [major, minor] = String(node.stdout).trim().split('.').map(Number);
-    if (node.status !== 0 || major < 22 || (major === 22 && minor < 19)) return false;
     if (!await super.isAvailable()) return false;
     return isSupportedPiVersion(await this.getVersion());
   }

@@ -13,7 +13,7 @@ credentials being used to publish follow-on malicious versions.
 
 | Control | Recommended default | Why |
 |---|---|---|
-| Runtime version | Node 20+ for users; Node 24 for release workflows | Node 24 carries a current npm 11.x and matches npm's trusted-publishing examples |
+| Runtime version | Node 24+ for users; Node 24 for all workflows | Node 24 carries a current npm 11.x and matches npm's trusted-publishing examples |
 | npm CLI | npm 11.5+ before dependency updates | Required for `min-release-age` |
 | Release-age gate | `min-release-age=7` in repo `.npmrc` | Blocks versions published less than 7 days ago from entering the lockfile |
 | High-sensitivity gate | `--min-release-age=10` for major bumps or release-prep lockfile churn | Adds review time before sensitive publishes |

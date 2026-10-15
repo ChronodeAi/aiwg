@@ -38,7 +38,7 @@ CI preserves the adapter and cross-provider results independently at
 
 ## SQLite maintainer matrix and troubleshooting
 
-Required maintainer and CI verification uses Node 20 and `better-sqlite3` 12.x. Runtime consumers still
+Required maintainer and CI verification uses Node 24 and `better-sqlite3` 12.x. Runtime consumers still
 treat the SQLite peer as optional; CI explicitly installs the pinned test
 backend without placing deprecated native prebuild plumbing in the default
 lockfile. Verify the native module with `node -e "require('better-sqlite3')"`,

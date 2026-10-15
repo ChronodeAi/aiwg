@@ -183,7 +183,7 @@ kill -HUP $(cat .aiwg/daemon.pid)
 Use `--foreground` flag to run as PID 1 in containers:
 
 ```dockerfile
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 COPY . .
 CMD ["node", "tools/daemon/index.mjs", "start", "--foreground"]
