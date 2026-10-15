@@ -1,3 +1,4 @@
+import { copyNode } from '../../helpers/copy-node.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -51,6 +52,7 @@ async function setup(provider = 'codex') {
   for (const filename of [cli, protocol]) {
     await writeFile(path.join(packageRoot, path.basename(filename)), await readFile(filename), { mode: 0o644 });
   }
+  const executable = await copyNode(packageRoot);
   const installedCli = path.join(packageRoot, path.basename(cli));
   driver.fixtureCli = installedCli;
   driver.workerFlags = [];
@@ -71,7 +73,7 @@ async function setup(provider = 'codex') {
   }
   const controls = requiredWorkerControls({});
   const request: any = { adapter, profile: 'fixture-shell', cliVersion: '1.0.0', requiredControls: controls,
-    executable: process.execPath, platform: 'linux', cwd, workerWritableRoots: [cwd],
+    executable, platform: 'linux', cwd, workerWritableRoots: [cwd],
     modules: [{ reference: adapter.runtimeDriver, packageRoot, packageName: 'fixture-driver', packageVersion: '1.0.0',
       modulePath: 'driver.mjs', interfaceVersion: 1, sha256: digest(source), adapterIds: ['fixture'], platforms: ['linux'] }],
     runtimeFiles: [installedCli, path.join(packageRoot, path.basename(protocol))], effectiveConfigDigest: digest('fixture-config'), accountScope: 'synthetic-account',
@@ -91,7 +93,7 @@ async function preparedFixture(f: Awaited<ReturnType<typeof setup>>) {
   invocation.selected.profileRef = 'fixture-shell';
   Object.assign(invocation, { cwd: f.cwd, briefPath: path.join(f.cwd, 'brief'), stdoutPath: path.join(f.cwd, 'stdout'),
     stderrPath: path.join(f.cwd, 'stderr'), finalPath: path.join(f.cwd, 'final'), stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] });
-  invocation.argv = [process.execPath, ...driver.buildWorkerArgs(invocation)];
+  invocation.argv = [f.request.executable, ...driver.buildWorkerArgs(invocation)];
   f.request.invocation ??= structuredClone(invocation);
   const record = { ...f.request.evidence, scopeDigest: (await driver.inspectWorkerInstallation(f.request)).scopeDigest };
   f.request.evidence = record;
@@ -105,7 +107,23 @@ async function preparedFixture(f: Awaited<ReturnType<typeof setup>>) {
   return { invocation, qualification };
 }
 
+function nodePermissionFlag(flags: ReadonlySet<string> = process.allowedNodeEnvironmentFlags): string {
+  for (const flag of ['--permission', '--experimental-permission']) {
+    if (flags.has(flag)) return flag;
+  }
+  throw new Error('Node filesystem permission support is required for forbidden-effect fixtures');
+}
+
 describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
+  it('qualifies a private executable with explicit permissions independent of the runner Node', async () => {
+    const f = await setup();
+    const executable = await lstat(f.request.executable);
+    expect(f.request.executable).toBe(path.join(f.packageRoot, 'node'));
+    expect(executable.mode & 0o777).toBe(0o755);
+    expect(executable.nlink).toBe(1);
+    expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
+  });
+
   it.each(['claude', 'muse', 'hermes'])('#2956 rejects caller control waivers for %s', async provider => {
     const f = await setup(provider);
     f.request.requiredControls = ['model'];
@@ -248,6 +266,13 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
 });
 
 describe('T-OG-10/17 synthetic forbidden effects for every enabled profile and pinned boundary', () => {
+  it('selects supported Node 20 and Node 24 permission flags and fails closed without either', () => {
+    expect(nodePermissionFlag(new Set(['--experimental-permission']))).toBe('--experimental-permission');
+    expect(nodePermissionFlag(new Set(['--permission']))).toBe('--permission');
+    expect(nodePermissionFlag(new Set(['--permission', '--experimental-permission']))).toBe('--permission');
+    expect(() => nodePermissionFlag(new Set())).toThrow('filesystem permission support');
+  });
+
   it.each(['codex', 'muse', 'claude', 'hermes'].flatMap(provider => ['os', 'executor'].flatMap(kind => ['shell', 'mcp'].map(transport => [provider, kind, transport]))))('%s / %s / %s: denies sibling/home writes and observes a refused/blocked loopback connection', async (provider, kind, transport) => {
     const f = await setup(provider);
     f.request.boundary.kind = kind;
@@ -258,7 +283,7 @@ describe('T-OG-10/17 synthetic forbidden effects for every enabled profile and p
     const scenarioId = `T-OG-10-${provider}-${kind}-${transport}`;
     await writeFile(f.config, JSON.stringify({ scenarioId, recordPath, permissions: { writes: [allowed, sibling, home],
       endpoints: ['https://blocked.invalid', 'http://127.0.0.1:1', 'https://approved.invalid'], allowedEndpoints: ['https://approved.invalid'] } }));
-    const flags = ['--permission', '--allow-fs-read=*', `--allow-fs-write=${f.cwd}`];
+    const flags = [nodePermissionFlag(), '--allow-fs-read=*', `--allow-fs-write=${f.cwd}`];
     driver.workerFlags = flags;
     f.profile.controls.sandbox.mapping = JSON.stringify(flags);
     f.request.effectiveConfigDigest = digest(await readFile(f.config, 'utf8'));
@@ -270,7 +295,7 @@ describe('T-OG-10/17 synthetic forbidden effects for every enabled profile and p
       await exec('/bin/sh', ['-c', prepared.shellCommand], { cwd: f.cwd, timeout: 5_000, env: f.request.environment });
       expect(JSON.parse(await readFile(recordPath, 'utf8'))).toMatchObject({ scenarioId, permissions: expected });
     } else {
-      const child = spawn(process.execPath, [...flags, mcp], { cwd: f.cwd, env: f.request.environment, stdio: 'pipe' });
+      const child = spawn(f.request.executable, [...flags, mcp], { cwd: f.cwd, env: f.request.environment, stdio: 'pipe' });
       let output = '';
       child.stdout.on('data', chunk => { output += chunk.toString(); });
       const timer = setTimeout(() => child.kill('SIGKILL'), 5_000);
@@ -343,7 +368,7 @@ describe('round 1 security regressions', () => {
     vi.spyOn(driver, 'buildWorkerArgs').mockImplementation((value: any) =>
       value.finalPath === probe.finalPath ? build(value) : build(value).filter(arg => !['--sandbox', 'read-only'].includes(arg)));
     invocation.finalPath = path.join(f.cwd, 'another-final');
-    invocation.argv = [process.execPath, ...driver.buildWorkerArgs(invocation)];
+    invocation.argv = [f.request.executable, ...driver.buildWorkerArgs(invocation)];
     await expect(driver.prepareWorkerInvocation(invocation, qualification)).rejects.toThrow(/control.*argv/);
   });
 

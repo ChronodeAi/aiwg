@@ -161,25 +161,29 @@ describe('decision structured entry contract', () => {
     expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, memoryBytes: 1 })).toThrow(/memory-budget/);
   });
 
-  // #3047: admission's time budget must measure per-thread CPU time, not
-  // wall-clock elapsed time. A wall-clock budget is tripped by host
-  // scheduling contention (a busy neighbor preempts this thread between
-  // visits) even though the call itself never did more than a few
-  // milliseconds of real work -- that is a false positive, not a caught
-  // attack. This test pins that contract directly, without needing real
-  // host load.
-  it('never trips the time budget from wall-clock drift alone (host-load tolerant)', () => {
+  // Exercise both supported runtime paths explicitly: Node 20 uses the
+  // wall-clock fallback; Node >=22.19 can ignore scheduler-induced drift.
+  it.each([true, false])('handles wall-clock drift with thread CPU available: %s', threadCpuAvailable => {
+    const original = process.threadCpuUsage;
+    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
+    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
-    // Every read of the wall clock leaps far past the 1000ms budget, as a
-    // preempted thread under heavy host load would observe.
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
-      expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
-      expect(parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toEqual({ entry: 'safe' });
-      expect(parseDecisionYaml('entry: safe\n')).toEqual({ entry: 'safe' });
+      const operations = [
+        () => admitEntry({ entry: 'safe' }),
+        () => parseDecisionJson(JSON.stringify({ entry: 'safe' })),
+        () => parseDecisionYaml('entry: safe\n'),
+      ];
+      for (const operation of operations) {
+        if (threadCpuAvailable) expect(operation).not.toThrow();
+        else expect(operation).toThrow(/time-budget/);
+      }
+      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
     } finally {
       nowSpy.mockRestore();
+      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
     }
   });
 
@@ -192,8 +196,9 @@ describe('decision structured entry contract', () => {
   // blocking wait, not a CPU-consuming spin) for a window that overlaps the
   // worker's burn. The admitting thread did essentially no work in that
   // window, so its own per-thread CPU reading must stay near zero
-  // regardless of how busy the other thread was.
-  it('does not charge another thread\'s CPU time (real worker_threads, real threadCpuUsage)', async () => {
+  // regardless of how busy the other thread was. Older runtimes deliberately
+  // use wall time instead and must charge the blocked interval.
+  it('uses the runtime clock while another worker thread burns CPU', async () => {
     const worker = new Worker(CPU_BURN_WORKER, { workerData: { ms: 600 } });
     const workerDone = new Promise<void>((resolve, reject) => {
       worker.once('message', () => resolve());
@@ -203,10 +208,14 @@ describe('decision structured entry contract', () => {
       // Give the worker a head start so it is actively burning CPU before
       // this thread reads its own baseline.
       await new Promise(resolve => setTimeout(resolve, 20));
+      const threadCpuAvailable = typeof process.threadCpuUsage === 'function';
       const started = admissionClockStart();
+      expect(typeof started === 'object').toBe(threadCpuAvailable);
       const paused = new Int32Array(new SharedArrayBuffer(4));
       Atomics.wait(paused, 0, 0, 300); // blocks this thread; burns no CPU here
-      expect(elapsedAdmissionMs(started)).toBeLessThan(50);
+      const elapsed = elapsedAdmissionMs(started);
+      if (threadCpuAvailable) expect(elapsed).toBeLessThan(50);
+      else expect(elapsed).toBeGreaterThanOrEqual(250);
       expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
     } finally {
       await workerDone;

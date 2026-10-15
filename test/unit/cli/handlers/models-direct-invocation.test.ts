@@ -1,6 +1,7 @@
+import { copyNode } from '../../../helpers/copy-node.js';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, stat, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -108,6 +109,7 @@ async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider =
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
   const installationRoot = path.join(f.root, 'installed');
   await mkdir(installationRoot, { mode: 0o755 });
+  const executable = await copyNode(installationRoot);
   const source = 'export const interfaceVersion = 1; export function register(factory) {}';
   await writeFile(path.join(installationRoot, 'driver.mjs'), source, { mode: 0o644 });
   await writeFile(path.join(installationRoot, 'package.json'), JSON.stringify({ name: 'fixture-driver', version: '1.0.0', type: 'module' }), { mode: 0o644 });
@@ -130,13 +132,13 @@ async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider =
   const registry = new McpServerRegistry(path.join(f.root, 'registry'));
   let serverDigest: string | undefined;
   if (transport === 'mcp') {
-    await registry.add({ name: f.profile.mcp!.serverRef, type: 'stdio', command: process.execPath, args: [cli], cwd: f.request.workdir });
+    await registry.add({ name: f.profile.mcp!.serverRef, type: 'stdio', command: executable, args: [cli], cwd: f.request.workdir });
     serverDigest = workerServerDigest((await registry.get(f.profile.mcp!.serverRef))!);
     f.drivers[provider].mcpRegistry = registry;
   }
   const installation: any = { adapter: f.adapter, profile: f.binding.profile, cliVersion: '1.0.0',
     policy: initial.policy, permissions, effort: initial.selected.effort, requiredControls: controls,
-    executable: process.execPath, cwd: f.request.workdir, workerWritableRoots: [f.request.workdir],
+    executable, cwd: f.request.workdir, workerWritableRoots: [f.request.workdir],
     inputRoots: [f.root], outputRoots: [f.root], boundary: f.binding.boundary,
     effectiveConfigDigest: digest(initial.policy), accountScope: f.binding.accountScope, runtimeFiles: [cli, protocol],
     environment: {}, mcp: f.profile.mcp, mcpServerDigest: serverDigest,
@@ -151,7 +153,7 @@ async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider =
   f.drivers[provider].qualification.installation = installation;
   f.drivers[provider].prepareWorkerInvocation = owner.prepareWorkerInvocation.bind(owner);
   if (transport === 'shell') f.drivers[provider].buildInvocation = async input => ({
-    argv: [process.execPath, ...owner.buildWorkerArgs(input, f.profile, input.permissions)], stdin: 'closed', envNames: [] });
+    argv: [executable, ...owner.buildWorkerArgs(input, f.profile, input.permissions)], stdin: 'closed', envNames: [] });
   if (transport === 'mcp') await registry.recordWorkerQualification(f.profile.mcp!.serverRef, {
     adapter: f.adapter, profile: f.binding.profile, cliVersion: '1.0.0', requiredControls: controls,
     policy: initial.policy, permissions, effort: initial.selected.effort, boundary: f.binding.boundary,
@@ -163,6 +165,15 @@ async function installedFixture(transport: 'shell' | 'mcp' = 'shell', provider =
 }
 
 describe('S1 installation owner handoff (T-OG-15/17)', () => {
+  it('qualifies its own single-link executable with trusted permissions', async () => {
+    const f = await installedFixture();
+    const executable = await stat(f.installation.executable);
+    expect(f.installation.executable).toBe(path.join(f.installationRoot, 'node'));
+    expect(executable.mode & 0o777).toBe(0o755);
+    expect(executable.nlink).toBe(1);
+    expect((await f.call()).result.exitCode).toBe(0);
+  });
+
   it('renders a nonlaunching plan carrying rechecked installation qualification', async () => {
     const f = await installedFixture();
     const result = await f.call();

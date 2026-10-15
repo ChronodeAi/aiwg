@@ -1,5 +1,6 @@
+import { copyNode } from '../../../helpers/copy-node.js';
 import { createHash } from 'node:crypto';
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -65,6 +66,7 @@ async function productionFixture(adapterFrame = false) {
   const controls = requiredWorkerControls({ policy: initial.policy, permissions, effort: 'medium' });
   binding.boundary.controls = controls;
   for (const control of Object.values(profile.controls)) Object.assign(control, { support: 'external', mapping: 'host fixture boundary' });
+  const executable = await copyNode(installed);
   const cli = path.join(installed, 'ralph-worker-cli.mjs');
   const protocol = path.join(installed, 'ralph-worker-protocol.mjs');
   for (const filename of [cli, protocol]) await writeFile(filename, await readFile(path.resolve('test/fixtures', path.basename(filename))), { mode: 0o644 });
@@ -78,7 +80,7 @@ async function productionFixture(adapterFrame = false) {
   class Owner extends ProviderAdapter { getName() { return id; } buildWorkerArgs = args; }
   const owner = new Owner();
   const installation: any = { adapter, profile: binding.profile, cliVersion: binding.cliVersion, now: Date.parse(now),
-    policy: initial.policy, permissions, effort: 'medium', requiredControls: controls, executable: process.execPath,
+    policy: initial.policy, permissions, effort: 'medium', requiredControls: controls, executable,
     cwd: workdir, workerWritableRoots: [cwd], inputRoots: [cwd], outputRoots: [cwd], boundary: binding.boundary,
     effectiveConfigDigest: qualificationDigest(initial.policy), accountScope: binding.accountScope,
     runtimeFiles: [cli, protocol, path.join(installed, 'driver-config.json')], environment: {}, modules: [{ reference: adapter.runtimeDriver, packageRoot: installed,
@@ -102,6 +104,16 @@ async function productionFixture(adapterFrame = false) {
 }
 
 describe('models resolve production installation loading', () => {
+  it('qualifies its own single-link executable with trusted permissions', async () => {
+    const f = await productionFixture();
+    const executable = await stat(f.record.installation.executable);
+    expect(f.record.installation.executable).toBe(path.join(f.installed, 'node'));
+    expect(executable.mode & 0o777).toBe(0o755);
+    expect(executable.nlink).toBe(1);
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    expect((await f.call()).result.exitCode).toBe(0);
+  });
+
   it.each([false, true])('loads literal fixture configuration (adapter frame: %s)', async adapterFrame => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
     const cli = `path with spaces; '" \\ newline\n`;

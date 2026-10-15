@@ -36,8 +36,8 @@ export class DefaultScriptRunner implements ScriptRunner {
     const fullPath = path.join(this.frameworkRoot, scriptPath);
 
     return new Promise((resolve) => {
-      // When capture mode is enabled, stdout/stderr are piped back to the
-      // caller so that quiet-mode callers can suppress output. When not
+      // When capture mode is enabled, stdout/stderr are piped so that
+      // quiet-mode callers can suppress output. When not
       // capturing, stdio: 'inherit' lets subprocess output flow directly to
       // the terminal (verbose mode).
       const stdio = options.capture ? 'pipe' as const : 'inherit' as const;
@@ -47,10 +47,20 @@ export class DefaultScriptRunner implements ScriptRunner {
         env: { ...process.env, ...options.env },
       });
 
-      let capturedStderr = '';
+      // Always drain captured pipes, even after the diagnostic cap is reached.
+      // stdout is not part of HandlerResult; discard it. Retain only the first
+      // 1 MiB of stderr for failure messages, discarding any excess.
+      child.stdout?.resume();
+      const stderrLimit = 1024 * 1024;
+      const capturedStderr: Buffer[] = [];
+      let capturedStderrBytes = 0;
       if (options.capture && child.stderr) {
         child.stderr.on('data', (data: Buffer) => {
-          capturedStderr += data.toString();
+          const retained = data.subarray(0, stderrLimit - capturedStderrBytes);
+          if (retained.length > 0) {
+            capturedStderr.push(Buffer.from(retained));
+            capturedStderrBytes += retained.length;
+          }
         });
       }
 
@@ -88,10 +98,10 @@ export class DefaultScriptRunner implements ScriptRunner {
         if (timeoutId) clearTimeout(timeoutId);
         if (killEscalationId) clearTimeout(killEscalationId);
         // On failure in capture mode, surface the captured stderr
-        if (options.capture && code !== 0 && capturedStderr) {
+        if (options.capture && code !== 0 && capturedStderrBytes > 0) {
           resolve({
             exitCode: code ?? 1,
-            message: capturedStderr.trim(),
+            message: Buffer.concat(capturedStderr).toString().trim(),
           });
         } else {
           resolve({

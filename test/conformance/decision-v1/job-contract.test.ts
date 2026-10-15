@@ -73,28 +73,28 @@ describe('JOB offline contract (dispatch disabled)', () => {
     expect(() => validateDecisionJob(injected)).toThrow(DecisionJobContractError);
   });
 
-  // #3047: a valid job must not be denied admission because the host was
-  // busy. `validateDecisionJob` calls `admitEntry`, whose internal time
-  // budget (entry.ts) measures CPU time, not wall-clock elapsed time -- a
-  // wall-clock budget would be tripped by scheduling contention (a busy
-  // neighbor preempts this thread between visits) and surface here as the
-  // generic 'job admission denied' (job-crash-boundaries.test.ts observed
-  // this exact error on a fully valid restart-time job read, under load).
-  // Simulating a wall clock that leaps far past the 1s budget on every read
-  // reproduces that host-contention shape without needing real host load.
-  it('JOB-008 does not deny admission to a valid job when the wall clock alone has leapt (host-load tolerant)', () => {
+  // Node 20 uses the wall-clock fallback; newer runtimes use per-thread
+  // CPU time. Pin both contracts independently of the runner's Node version.
+  it.each([true, false])('JOB-008 handles wall-clock drift with thread CPU available: %s', threadCpuAvailable => {
+    const original = process.threadCpuUsage;
+    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
+    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
       const job = fixture();
-      expect(() => validateDecisionJob(job)).not.toThrow();
       const before = fixture(); const after = fixture();
       after.state = 'running'; after.items[0]!.state = 'running';
       after.summary.queued = 0; after.summary.running = 1;
-      expect(() => assertJobTransition(before, after)).not.toThrow();
+      for (const operation of [() => validateDecisionJob(job), () => assertJobTransition(before, after)]) {
+        if (threadCpuAvailable) expect(operation).not.toThrow();
+        else expect(operation).toThrow(/job admission denied/);
+      }
+      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
     } finally {
       nowSpy.mockRestore();
+      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
     }
   });
 });

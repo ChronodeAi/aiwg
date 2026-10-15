@@ -103,13 +103,27 @@ describe.skipIf(missingBuild)('CLI integration: basic lifecycle', () => {
   });
 
   it('aiwg version --json emits valid JSON', () => {
-    const r = runCli(['version', '--json'], { timeoutMs: 3_000 });
+    // Structured version output loads the compiled router; unlike --version,
+    // it is not a fast-path startup measurement.
+    const r = runCli(['version', '--json']);
+    expect(r.error).toBeUndefined();
     expect(r.status).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.version).toMatch(/\d{4}\.\d+\.\d+/);
     expect(parsed.invocation_id).toBeTruthy();
     expect(parsed.channel).toBeTruthy();
-  });
+  }, 35_000);
+
+  it('emits complete structured version output with non-TTY stdin', () => {
+    const r = runCli(['version', '--json'], { input: '' });
+    expect(r.error).toBeUndefined();
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual(expect.objectContaining({
+      version: expect.stringMatching(/\d{4}\.\d+\.\d+/),
+      invocation_id: expect.any(String),
+      channel: expect.any(String),
+    }));
+  }, 35_000);
 });
 
 describe.skipIf(missingBuild)('CLI namespace help routing (#2306, #2307)', () => {

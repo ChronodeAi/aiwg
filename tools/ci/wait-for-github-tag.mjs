@@ -27,6 +27,16 @@ function parseArgs(argv) {
 
 const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
+function redactTokens(message) {
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
+    const token = process.env[key]
+    if (token) message = message.replaceAll(token, '[REDACTED]')
+  }
+  return message
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g, '[REDACTED]')
+    .replace(/(authorization:\s*(?:bearer|token)\s+)\S+/gi, '$1[REDACTED]')
+}
+
 async function main() {
   let options
   try {
@@ -64,6 +74,15 @@ async function main() {
         throw new Error(`GitHub tag ${options.tag} is lightweight; refusing to create a release. Push the original signed annotated tag object.`)
       }
       throw new Error(`GitHub tag ${options.tag} references unexpected object type ${type ?? '<missing>'}`)
+    }
+
+    const diagnostic = `${result.stderr || ''}\n${result.stdout || ''}`
+    const httpStatus = diagnostic.match(/\bHTTP\s+(\d{3})\b/i)?.[1]
+    const notFound = httpStatus ? httpStatus === '404' : /\bNot Found\b/i.test(diagnostic)
+    if (result.error || result.status === null || !notFound) {
+      if (result.stderr) console.error(redactTokens(result.stderr.trim()))
+      else if (result.stdout) console.error(redactTokens(result.stdout.trim()))
+      throw new Error(redactTokens(`gh api failed while checking tag ${options.tag} on ${options.repo} (exit ${result.status ?? result.signal ?? 'unknown'})${result.error ? `: ${result.error.message}` : ''}`))
     }
 
     if (attempt < options.attempts) {

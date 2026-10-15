@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const BIN = path.join(REPO_ROOT, 'bin', 'aiwg.mjs');
@@ -47,7 +52,7 @@ function runUse(
   return {
     exitCode: result.status ?? 1,
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr: [result.stderr, result.error?.message, result.signal ? `Child terminated by ${result.signal}` : ''].filter(Boolean).join('\n'),
     payload: JSON.parse(result.stdout || '{}'),
   };
 }
@@ -81,7 +86,7 @@ function runUseHuman(projectRoot: string, homeRoot: string, providerArgs: string
   return {
     exitCode: result.status ?? 1,
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr: [result.stderr, result.error?.message, result.signal ? `Child terminated by ${result.signal}` : ''].filter(Boolean).join('\n'),
   };
 }
 
@@ -129,6 +134,22 @@ function runDiscover(projectRoot: string, homeRoot: string) {
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('human-output child failure diagnostics', () => {
+  it('retains timeout and signal when the child has no exit status', () => {
+    const error = Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1, output: [null, 'Building capability index…', ''],
+      stdout: 'Building capability index…', stderr: '', status: null,
+      signal: 'SIGTERM', error,
+    });
+    const result = runUseHuman(os.tmpdir(), os.tmpdir(), ['--provider', 'codex']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('Building capability index');
+    expect(result.stderr).toContain('ETIMEDOUT');
+    expect(result.stderr).toContain('SIGTERM');
+  });
 });
 
 describe.sequential('aiwg use self-verifying provider deployment (#2069)', () => {
@@ -236,7 +257,8 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     expect(result.stdout).not.toContain('reload rationale');
     expect(result.stdout).not.toMatch(/\x1b\[/);
     expect(result.stdout.split('\n').every((line) => line.length <= 80)).toBe(true);
-  }, 30_000);
+    // The child allows 180s; this output assertion is not a performance gate.
+  }, 210_000);
 
   it('verifies a native-skills provider deployment', () => {
     const projectRoot = isolatedRoot('aiwg-use-verify-cursor-project-');

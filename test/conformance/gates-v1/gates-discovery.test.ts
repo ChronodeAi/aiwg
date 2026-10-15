@@ -103,27 +103,28 @@ describe('gate-pack bundle registry', () => {
       .toBe('aiwg:decision-engine/integrity-ceiling');
   });
 
-  // #3047: shipped-pack loading must not fail under host load. Every shipped
-  // pack parses through `parseDecisionYaml` (entry.ts), whose admission time
-  // budget now measures CPU time, not wall-clock elapsed time -- a
-  // wall-clock budget would be tripped by scheduling contention (a busy
-  // neighbor preempts this thread mid-parse) and surface as
-  // 'shipped gate packs rejected: ... gate pack unparseable: ...: Decision
-  // entry rejected: time-budget' (driver.ts), exactly what
-  // gates-provider-isolation.test.ts observed loading these same shipped
-  // packs under load. Simulating a wall clock that leaps far past the 1s
-  // budget on every read reproduces that host-contention shape deterministically.
-  it('discovers every shipped pack even when the wall clock alone has leapt (host-load tolerant)', () => {
+  // Node 20 uses the wall-clock fallback; newer runtimes use per-thread
+  // CPU time. Pin both contracts independently of the runner's Node version.
+  it.each([true, false])('discovers shipped packs with wall-clock drift and thread CPU available: %s', threadCpuAvailable => {
+    const original = process.threadCpuUsage;
+    const cpuClock = vi.fn(() => ({ user: 0, system: 0 }));
+    (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = threadCpuAvailable ? cpuClock : undefined;
     const nowSpy = vi.spyOn(performance, 'now');
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
       const registry = new GateRegistry(createCoreProviderRegistry());
-      expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
-      expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
-        .toBe('aiwg:decision-engine/integrity-ceiling');
+      if (threadCpuAvailable) {
+        expect(() => discoverShippedGatePacks(repoRoot, registry)).not.toThrow();
+        expect(registry.getPack('aiwg:decision-engine/integrity-ceiling').metadata.id)
+          .toBe('aiwg:decision-engine/integrity-ceiling');
+      } else {
+        expect(() => discoverShippedGatePacks(repoRoot, registry)).toThrow(/time-budget/);
+      }
+      expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
     } finally {
       nowSpy.mockRestore();
+      (process as { threadCpuUsage?: typeof process.threadCpuUsage }).threadCpuUsage = original;
     }
   });
 });

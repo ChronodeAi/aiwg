@@ -7,6 +7,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- Drain captured script output to prevent pipe-buffer deadlocks during compound-memory previews; retain at most 1 MiB of stderr for failure diagnostics.
+- Retry GitHub tag polling only for HTTP 404 / Not Found responses; fail immediately on authentication and other `gh api` errors with token-redacted diagnostics.
+
 ## [2026.10.2] - 2026-10-14
 
 ### Fixed
