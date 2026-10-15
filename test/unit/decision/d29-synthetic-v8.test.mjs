@@ -368,43 +368,60 @@ describe('D29 v8 study wiring', () => {
 });
 
 describe('D29 generator routing', () => {
-  it('V8-10 prepares a fresh non-public seed with d29-synthetic/v8 on every entry path', async () => {
+  let fresh;
+  // Private preparation includes the full shortcut audit; share it with every entry path
+  // and V8-13 so scoring's two frozen-corpus regenerations have their own test budget.
+  beforeAll(async () => {
+    fresh = await preparedOnce('fresh-private-seed', () => prepare('fresh-private-seed'));
+  }, PREPARE_HOOK_TIMEOUT);
+
+  it('V8-10 routes fresh and pinned seeds to their generators and refuses mixed or unknown generators', async () => {
     expect(D29_LATEST_GENERATOR_ID).toBe(D29_V8_GENERATOR_ID);
     for (const seed of ['fresh-private-seed', 'operator-2026-10-run', 'd29-study-v9', 'd29-study-v80']) expect(d29GeneratorForSeed(seed), seed).toBe(D29_V8_GENERATOR_ID);
     expect(d29GeneratorForSeed('d29-study-v6')).toBe('d29-synthetic/v6');
     expect(d29GeneratorForSeed('d29-study-v7')).toBe('d29-synthetic/v7');
     expect(d29GeneratorForSeed('d29-study-v8')).toBe(D29_V8_GENERATOR_ID);
     expect(d29GeneratorForSeed('constructor')).toBe(D29_V8_GENERATOR_ID);
-    const fresh = await preparedOnce('fresh-private-seed', () => prepare('fresh-private-seed'));
-    expect(new Set(fresh.corpus.rows.map(row => row.provenance.generatorId))).toEqual(new Set([D29_V8_GENERATOR_ID]));
-    expect(fresh.corpus.provenance).toMatchObject({ seed: 'fresh-private-seed', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID) });
-    expect(fresh.analysis.native.planId).toBe('d29-synthetic-v8');
-    expect(fresh.preregistration.frozenAt).toBe(V8_DATASET_FROZEN_AT);
-    // Regression guard for the repeated-work this case used to do (#3033): `studyModule(null).prepare`
-    // is literally the same exported `prepare` function (see studyModule below), so this second entry
-    // path shares the `preparedOnce` cache instead of repeating the ~2000-row generation + shortcut audit.
-    const missesBeforeViaModule = preparedOnceMissCount();
-    const viaModule = await preparedOnce('fresh-private-seed', () => studyModule(null).prepare('fresh-private-seed'));
-    expect(preparedOnceMissCount(), 'studyModule(null).prepare must reuse the cached fresh-private-seed preparation').toBe(missesBeforeViaModule);
-    expect(heldoutDigest(viaModule.corpus)).toBe(heldoutDigest(fresh.corpus));
-    // Score regenerates with the generator the corpus rows record: a fresh v8 test-phase corpus
-    // passes the frozen-corpus check and reaches the calibration-context refusal.
-    const scoped = { ...fresh.corpus, rows: fresh.corpus.rows.filter(row => row.split === 'test') };
-    await expect(studyModule(null).score({ corpus: scoped, preregistration: fresh.preregistration, gold: fresh.gold, attempts: [],
-      integrity: { sample_n: 1500 }, approvedCalibration: null })).rejects.toThrow('approved-calibration');
     expect(d29CorpusGeneratorId(fresh.corpus)).toBe(D29_V8_GENERATOR_ID);
     expect(d29CorpusGeneratorId(v7.corpus)).toBe('d29-synthetic/v7');
     const mixed = { ...fresh.corpus, rows: [fresh.corpus.rows[0], v7.corpus.rows[0]] };
     expect(() => d29CorpusGeneratorId(mixed)).toThrow('corpus-generator');
     expect(() => d29CorpusGeneratorId({ rows: [{ provenance: { generatorId: 'd29-synthetic/v5' } }] })).toThrow('corpus-generator');
     await expect(prepareWithGenerator('d29-synthetic/v9', 'fresh-private-seed')).rejects.toThrow('generator');
+  });
+
+  it.each([
+    ['prepare', prepare],
+    ['studyModule(null).prepare', studyModule(null).prepare],
+  ])('V8-10 prepares a fresh non-public seed with d29-synthetic/v8 via %s', async (entry, make) => {
+    // Both entries expose the same function. Assert that identity so caching cannot hide routing drift.
+    expect(make).toBe(prepare);
+    const missesBefore = preparedOnceMissCount();
+    const viaEntry = await preparedOnce('fresh-private-seed', () => make('fresh-private-seed'));
+    expect(preparedOnceMissCount(), `${entry} must reuse the cached fresh-private-seed preparation`).toBe(missesBefore);
+    expect(new Set(viaEntry.corpus.rows.map(row => row.provenance.generatorId))).toEqual(new Set([D29_V8_GENERATOR_ID]));
+    expect(viaEntry.corpus.provenance).toMatchObject({ seed: 'fresh-private-seed', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID) });
+    expect(viaEntry.analysis.native.planId).toBe('d29-synthetic-v8');
+    expect(viaEntry.preregistration.frozenAt).toBe(V8_DATASET_FROZEN_AT);
+    expect(heldoutDigest(viaEntry.corpus)).toBe(heldoutDigest(fresh.corpus));
+  });
+
+  it('V8-10 scores a fresh v8 test-phase corpus through the calibration-context refusal', async () => {
+    // Score regenerates with the generator the corpus rows record: a fresh v8 test-phase corpus
+    // passes the frozen-corpus check and reaches the calibration-context refusal.
+    const scoped = { ...fresh.corpus, rows: fresh.corpus.rows.filter(row => row.split === 'test') };
+    await expect(studyModule(null).score({ corpus: scoped, preregistration: fresh.preregistration, gold: fresh.gold, attempts: [],
+      integrity: { sample_n: 1500 }, approvedCalibration: null })).rejects.toThrow('approved-calibration');
+  }, 120_000);
+
+  it('V8-10 reproduces an explicitly selected older generator from the shared preparation', async () => {
     // An explicitly selected older generator still reproduces its own frozen output, and (same guard
     // as above) reuses the beforeAll hook's identical (generator, seed) preparation rather than redoing it.
     const missesBeforeOlder = preparedOnceMissCount();
     const older = await preparedOnce(V7_PUBLIC_SEED_KEY, () => prepareWithGenerator('d29-synthetic/v7', 'd29-study-v7'));
     expect(preparedOnceMissCount(), 'prepareWithGenerator(v7, d29-study-v7) must reuse the beforeAll hook\'s cached preparation').toBe(missesBeforeOlder);
     expect(heldoutDigest(older.corpus)).toBe(heldoutDigest(v7.corpus));
-  }, 120_000);
+  });
 
   it('V8-11 refuses the public v8 seed and corpus for paid collection and leaves the v6/v7 generator pin unchanged', async () => {
     const bundle = { corpus: prepared.corpus, preregistration: prepared.preregistration, approval: prepared.approval };
