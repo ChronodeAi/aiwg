@@ -37,6 +37,31 @@ function redactTokens(message) {
     .replace(/(authorization:\s*)[^\r\n]*/gi, '$1[REDACTED]')
 }
 
+function responseStatus(result, diagnostic) {
+  const httpStatus = diagnostic.match(/\bHTTP\s+(\d{3})\b/i)?.[1]
+  if (httpStatus) return Number(httpStatus)
+  for (const output of [result.stdout, result.stderr]) {
+    for (const body of [output, ...(output || '').split('\n')]) {
+      try {
+        const status = JSON.parse(body)?.status
+        if (/^[1-5]\d{2}$/.test(String(status))) return Number(status)
+      } catch {
+        // gh may emit plain text diagnostics alongside the JSON body.
+      }
+    }
+  }
+  return /\bNot Found\b/i.test(diagnostic) ? 404 : undefined
+}
+
+function transientDelay(diagnostic, delaySeconds, attempt) {
+  const retryAfter = diagnostic.match(/^retry-after:\s*([^\r\n]+)/im)?.[1]?.trim()
+  if (retryAfter) {
+    const seconds = /^\d+$/.test(retryAfter) ? Number(retryAfter) : (Date.parse(retryAfter) - Date.now()) / 1000
+    if (Number.isFinite(seconds)) return Math.min(60, Math.max(0, seconds))
+  }
+  return Math.min(60, delaySeconds * 2 ** Math.min(attempt - 1, 1023))
+}
+
 async function main() {
   let options
   try {
@@ -77,15 +102,24 @@ async function main() {
     }
 
     const diagnostic = `${result.stderr || ''}\n${result.stdout || ''}`
-    const httpStatus = diagnostic.match(/\bHTTP\s+(\d{3})\b/i)?.[1]
-    const notFound = httpStatus ? httpStatus === '404' : /\bNot Found\b/i.test(diagnostic)
-    if (result.error || result.status === null || !notFound) {
+    const httpStatus = responseStatus(result, diagnostic)
+    const notFound = httpStatus === 404
+    const transient = httpStatus === 429 || (httpStatus >= 500 && httpStatus <= 599)
+    if (result.error || result.status === null || (!notFound && !transient)) {
       if (result.stderr) console.error(redactTokens(result.stderr.trim()))
       else if (result.stdout) console.error(redactTokens(result.stdout.trim()))
       throw new Error(redactTokens(`gh api failed while checking tag ${options.tag} on ${options.repo} (exit ${result.status ?? result.signal ?? 'unknown'})${result.error ? `: ${result.error.message}` : ''}`))
     }
 
-    if (attempt < options.attempts) {
+    if (transient) {
+      if (attempt === options.attempts) {
+        console.error(redactTokens(diagnostic.trim()))
+        throw new Error(`GitHub transient HTTP ${httpStatus} retry budget exhausted checking tag ${options.tag} on ${options.repo} after ${options.attempts} attempts`)
+      }
+      const delay = transientDelay(diagnostic, options.delaySeconds, attempt)
+      console.log(`GitHub returned HTTP ${httpStatus} (attempt ${attempt}/${options.attempts}); waiting ${delay}s before retrying.`)
+      await sleep(delay * 1000)
+    } else if (attempt < options.attempts) {
       console.log(`Tag ${options.tag} is not on GitHub yet (attempt ${attempt}/${options.attempts}); waiting ${options.delaySeconds}s for the operator push.`)
       await sleep(options.delaySeconds * 1000)
     }
