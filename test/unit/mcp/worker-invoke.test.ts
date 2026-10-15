@@ -166,6 +166,24 @@ describe('worker MCP stdout byte budgets', () => {
     expect(await transport._termination).toEqual({ termination: 'uncertain', diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
   });
 
+  it('records overflow before a racing child close while termination proof is pending', async () => {
+    let finish!: (result: unknown) => void;
+    const stopped = new Promise(resolve => { finish = resolve; });
+    const terminate = vi.fn(() => {
+      expect(transport._failure.code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
+      child.emit('close');
+      return stopped;
+    });
+    const { child, transport, emit } = await transportFixture({ terminate });
+    emit(Buffer.alloc(MAX_MCP_FRAME_BYTES + 1, 120));
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(transport.onerror).toHaveBeenCalledWith(transport._failure);
+    expect(transport.onclose).toHaveBeenCalledTimes(1);
+    await expect(transport.send({ jsonrpc: '2.0', method: 'notifications/test' })).rejects.toBe(transport._failure);
+    finish({ termination: 'confirmed' });
+    expect(await transport._termination).toEqual({ termination: 'confirmed' });
+  });
+
   it.each(['throw', 'reject'])('preserves a %s from the stop authority as unconfirmed termination', async failure => {
     const terminate = () => {
       if (failure === 'throw') throw new Error('stop refused');
