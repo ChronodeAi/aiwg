@@ -7,17 +7,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.10.3] - 2026-10-14
+
+> 2026.10.2 was tagged (`v2026.10.2`) but never published: its npm publish jobs failed
+> runner-specific tests. Its changes ship in 2026.10.3 together with the publish-job fixes below.
+
 ### Fixed
 
+- Make publish-job tests independent of the runner: worker-installation and model-invocation fixtures copy Node to a private single-link executable instead of reusing the runner's (often user-writable) binary, and clock-, deadline-, HOME- and network-sensitive tests are deterministic on GitHub's toolcache Node 24 and the Node 20 publish container.
 - Drain captured script output to prevent pipe-buffer deadlocks during compound-memory previews; retain at most 1 MiB of stderr for failure diagnostics.
 - Retry GitHub tag polling only for HTTP 404 / Not Found responses; fail immediately on authentication and other `gh api` errors with token-redacted diagnostics.
 - Wait for the MCP overflow error event with stream-driven FIFO reads in worker
   termination tests, preventing false failures under CI CPU contention (#3131).
-
-## [2026.10.2] - 2026-10-14
-
-### Fixed
-
 - Remaining CodeQL findings after the security sweep (#3093–#3097, #3099 follow-up): use argv for synchronous command callers, guard every nested configuration key, anchor and escape test hostname patterns, and replace generated runtime test code with static fixtures. Review follow-up (#3116) preserves Windows npm shim execution and symlinked script entry points, escapes tmux separators, retains Windows eval script quoting, rejects Git push option operands, and passes ClawHub queries, editor file paths, npm package names, and Git revision ranges safely. Windows command resolution honors explicit relative paths against the invocation directory and applies PATHEXT to dotted names with unrecognized extensions while preserving PATH directory precedence. `sync-upstream` prefers native editors and launches `.cmd`/`.bat` editors through ComSpec with separately quoted arguments and delayed expansion disabled.
 
 - Parse skill platform frontmatter with YAML to preserve comments and scalar restrictions,
