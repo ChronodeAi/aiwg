@@ -11,10 +11,10 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('npm run package:cli');
     expect(workflow).toContain('npm publish ./dist/packages/cli --provenance --access public');
     expect(workflow).toContain('verify_attestations @aiwg/cli');
-    expect(workflow).toContain('for attempt in $(seq 1 90)');
+    expect(workflow).toContain('for attempt in 1 2 3; do');
     expect(workflow).toContain('--json --prefer-online');
     expect(workflow).toContain("| jq -r '.dist.attestations // empty' || true");
-    expect(workflow).toContain('after 15 minutes');
+    expect(workflow).toContain('Report advisory npm registry checks');
     expect(workflow).toContain('bash tools/release/verify-npm-dist-tags.sh "$VERSION"');
     expect(workflow).toContain('[ "$NPM_TAG" = latest ]');
     expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
