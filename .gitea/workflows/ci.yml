@@ -24,7 +24,7 @@ jobs:
     # npm's registry-key rotation. Keep the signature hard gate on the same
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
