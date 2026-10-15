@@ -234,11 +234,12 @@ jobs:
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        # See #2521 — bound the full suite below this job's 15m cap so a hang is
-        # reported with a process tree rather than dying anonymously. Healthy
-        # Test runs measured 6.2-6.3 min end to end, so 10m is ~2x headroom on
-        # the whole job for a step that is only part of it.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm run test:ci
+        # See #2521 — bound the full suite below this job's 25m cap so a hang is
+        # reported with a process tree rather than dying anonymously. The unit
+        # pass alone reached 9.1-9.5 min under runner load by 2026-10-14 (UAT
+        # follows), so the former 10m bound tripped on healthy runs mid-UAT;
+        # 20m keeps ~2x headroom while still catching a genuine hang.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm run test:ci
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The

@@ -1,11 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { UseHandler } from '../../src/cli/handlers/use.js';
 
 let projectDir: string;
+let homeDir: string;
 
 function context(args: string[]) {
   return {
@@ -18,10 +19,22 @@ function context(args: string[]) {
 
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(os.tmpdir(), 'aiwg-compound-addon-'));
+  homeDir = await mkdtemp(path.join(os.tmpdir(), 'aiwg-compound-addon-home-'));
+  // Index rebuilds must not contend with other tests or use the operator cache.
+  vi.stubEnv('HOME', homeDir);
+  vi.stubEnv('USERPROFILE', homeDir);
+  vi.stubEnv('XDG_CACHE_HOME', path.join(homeDir, '.cache'));
+  vi.stubEnv('XDG_CONFIG_HOME', path.join(homeDir, '.config'));
+  vi.stubEnv('XDG_DATA_HOME', path.join(homeDir, '.local', 'share'));
+  vi.stubEnv('AIWG_CONFIG', path.join(homeDir, '.aiwg'));
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+  await Promise.all([
+    rm(projectDir, { recursive: true, force: true }),
+    rm(homeDir, { recursive: true, force: true }),
+  ]);
 });
 
 describe('compound-memory addon activation', () => {
@@ -64,6 +77,8 @@ describe('compound-memory addon activation', () => {
   }, 60_000);
 
   it('previews transitive activation without writing deployment artifacts', async () => {
+    const sentinel = path.join(projectDir, 'operator.txt');
+    await writeFile(sentinel, 'Existing operator file.\n');
     const result = await new UseHandler().execute(context([
       'compound-memory',
       '--target', projectDir,
@@ -74,6 +89,8 @@ describe('compound-memory addon activation', () => {
     expect(result.exitCode, result.message).toBe(0);
     expect(existsSync(path.join(projectDir, '.aiwg/cli-extensions.json'))).toBe(false);
     expect(existsSync(path.join(projectDir, '.claude/.aiwg/skills'))).toBe(false);
+    expect(await readdir(projectDir)).toEqual(['operator.txt']);
+    expect(await readFile(sentinel, 'utf8')).toBe('Existing operator file.\n');
   });
 
   it('activates over standalone line-memory and llm-wiki data without rewriting either store', async () => {

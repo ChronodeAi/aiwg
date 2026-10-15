@@ -8,6 +8,21 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PatternLibrary, AIPattern, PatternCategory, PatternSeverity, PatternFilter } from '../../../src/writing/pattern-library.ts';
 
+// A single wall-clock sample is at the mercy of scheduler stalls on a loaded
+// CI runner (one search measured 15 ms against a 10 ms bound). Performance
+// assertions use the median of repeated runs so a one-off pause cannot fail
+// a test while a genuine slowdown still does.
+function medianMs(operation: () => unknown, runs = 21): number {
+  const samples: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now();
+    operation();
+    samples.push(performance.now() - start);
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)];
+}
+
 describe('PatternLibrary', () => {
   let library: PatternLibrary;
 
@@ -820,9 +835,7 @@ Furthermore, it scales well.`;
     it('should detect patterns quickly for various text sizes', () => {
       // 1000-word text
       const text1k = 'It is important to note that caching improves performance. '.repeat(150);
-      const start1k = Date.now();
-      library.detectPatterns(text1k);
-      expect(Date.now() - start1k).toBeLessThan(100);
+      expect(medianMs(() => library.detectPatterns(text1k), 7)).toBeLessThan(100);
 
       // 10k-word text
       const text10k = 'It is important to note that caching helps. '.repeat(1000);
@@ -831,10 +844,7 @@ Furthermore, it scales well.`;
       expect(Date.now() - start10k).toBeLessThan(1000);
 
       // Initialize quickly
-      const newLibrary = new PatternLibrary();
-      const initStart = Date.now();
-      newLibrary.initialize();
-      expect(Date.now() - initStart).toBeLessThan(200);
+      expect(medianMs(() => new PatternLibrary().initialize(), 7)).toBeLessThan(200);
 
       // Concurrent operations
       const texts = [
@@ -843,47 +853,35 @@ Furthermore, it scales well.`;
         'Firstly, consider scalability.'
       ];
 
-      const concurrentStart = Date.now();
-      for (const text of texts) {
-        library.detectPatterns(text);
-      }
-      expect(Date.now() - concurrentStart).toBeLessThan(50);
+      expect(medianMs(() => {
+        for (const text of texts) {
+          library.detectPatterns(text);
+        }
+      })).toBeLessThan(50);
     });
 
     it('should perform search, filter, analyze, and compare operations quickly', () => {
-      // Filter
-      const filterStart = Date.now();
-      library.filterPatterns({
+      expect(medianMs(() => library.filterPatterns({
         categories: ['banned-phrases'],
         severities: ['critical'],
         minConfidence: 0.9
-      });
-      expect(Date.now() - filterStart).toBeLessThan(10);
+      }))).toBeLessThan(10);
 
-      // Search
-      const searchStart = Date.now();
-      library.searchPatterns('important');
-      expect(Date.now() - searchStart).toBeLessThan(10);
+      expect(medianMs(() => library.searchPatterns('important'))).toBeLessThan(10);
 
-      // Analyze
-      const analyzeStart = Date.now();
-      library.analyzeText('It is important to note that this works seamlessly. Moreover, it scales.');
-      expect(Date.now() - analyzeStart).toBeLessThan(50);
+      expect(medianMs(() => library.analyzeText(
+        'It is important to note that this works seamlessly. Moreover, it scales.'
+      ))).toBeLessThan(50);
 
-      // Compare
-      const compareStart = Date.now();
-      library.compareTexts(
+      expect(medianMs(() => library.compareTexts(
         'It is important to note that this works.',
         'This works well.'
-      );
-      expect(Date.now() - compareStart).toBeLessThan(50);
+      ))).toBeLessThan(50);
     });
 
     it('should export and maintain performance with added patterns', () => {
       // Export
-      const exportStart = Date.now();
-      library.exportPatterns('json');
-      expect(Date.now() - exportStart).toBeLessThan(100);
+      expect(medianMs(() => library.exportPatterns('json'))).toBeLessThan(100);
 
       // Add 100 patterns and test
       for (let i = 0; i < 100; i++) {
@@ -899,9 +897,7 @@ Furthermore, it scales well.`;
       }
 
       const text = 'It is important to note that this works.';
-      const detectStart = Date.now();
-      library.detectPatterns(text);
-      expect(Date.now() - detectStart).toBeLessThan(100);
+      expect(medianMs(() => library.detectPatterns(text))).toBeLessThan(100);
     });
   });
 });

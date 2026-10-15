@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 const root = resolve(import.meta.dirname, '../../..')
 const gate = join(root, 'tools/ci/wait-for-github-tag.mjs')
 const temporaryDirectories = new Set<string>()
+type GhMode = 'retry' | 'stdout-404' | 'not-found' | 'unauthorized' | 'server-error' | 'silent-error' | 'lightweight' | 'mismatch' | 'missing'
 
 afterEach(() => {
   for (const directory of temporaryDirectories) {
@@ -17,7 +18,7 @@ afterEach(() => {
   temporaryDirectories.clear()
 })
 
-function fakeGh(mode: 'retry' | 'lightweight' | 'mismatch' | 'missing') {
+function fakeGh(mode: GhMode) {
   const directory = mkdtempSync(join(tmpdir(), 'aiwg-gh-tag-'))
   temporaryDirectories.add(directory)
   const executable = join(directory, 'gh')
@@ -32,22 +33,28 @@ if [ "$1" != "api" ] || [ "$2" != "$EXPECTED_ENDPOINT" ]; then
   exit 64
 fi
 case "$MODE" in
-  retry) [ "$count" -lt 3 ] && exit 1; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
+  retry) if [ "$count" -lt 3 ]; then echo 'gh: Not Found (HTTP 404)' >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
+  stdout-404) if [ "$count" -lt 2 ]; then echo '{"message":"Not Found","status":"404"}'; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
+  not-found) if [ "$count" -lt 2 ]; then echo 'gh: Not Found' >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
+  unauthorized) echo "gh: Bad credentials (HTTP 401), token=$GH_TOKEN other=ghp_unconfiguredFakeToken" >&2; echo "Authorization: Basic dXNlcjpiYXNpY0ZpeHR1cmVQYXNz" >&2; exit 1 ;;
+  server-error) echo 'gh: Internal Server Error (HTTP 500)' >&2; exit 1 ;;
+  silent-error) exit 1 ;;
   lightweight) echo '{"object":{"type":"commit","sha":"def456"}}' ;;
   mismatch) echo '{"object":{"type":"tag","sha":"def456"}}' ;;
-  missing) exit 1 ;;
+  missing) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
 esac
 `)
   return { executable, counter, mode }
 }
 
-function runGate(mode: 'retry' | 'lightweight' | 'mismatch' | 'missing', attempts = 3) {
+function runGate(mode: GhMode, attempts = 3) {
   const fixture = fakeGh(mode)
   const result = spawnSync(process.execPath, [gate, '--repo', 'owner/repo', '--tag', 'v1.2.3', '--expected-sha', 'abc123', '--attempts', String(attempts), '--delay-seconds', '0'], { timeout: 60_000,
     encoding: 'utf8',
     env: {
       ...process.env,
       GH_BIN: fixture.executable,
+      GH_TOKEN: 'fixture-secret-token',
       COUNT_FILE: fixture.counter,
       MODE: fixture.mode,
       EXPECTED_ENDPOINT: 'repos/owner/repo/git/ref/tags/v1.2.3',
@@ -62,6 +69,37 @@ describe('GitHub mirror tag gate', () => {
     expect(result.status).toBe(0)
     expect(result.count).toBe(3)
     expect(result.stdout).toContain('Found annotated tag')
+  })
+
+  it.each(['stdout-404', 'not-found'] as const)('retries a %s response then succeeds', mode => {
+    const result = runGate(mode)
+    expect(result.status).toBe(0)
+    expect(result.count).toBe(2)
+    expect(result.stdout).toContain('Found annotated tag')
+  })
+
+  it('fails immediately on HTTP 401 with redacted gh diagnostics', () => {
+    const result = runGate('unauthorized')
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(1)
+    expect(result.stderr).toContain('Bad credentials (HTTP 401)')
+    expect(result.stderr).toContain('gh api failed while checking tag')
+    expect(result.stderr).toContain('token=[REDACTED] other=[REDACTED]')
+    expect(result.stderr).not.toContain('fixture-secret-token')
+    expect(result.stderr).not.toContain('ghp_unconfiguredFakeToken')
+    expect(result.stderr).toContain('Authorization: [REDACTED]')
+    expect(result.stderr).not.toContain('dXNlcjpiYXNpY0ZpeHR1cmVQYXNz')
+    expect(result.stderr).not.toContain('Timed out')
+    expect(result.stdout).not.toContain('waiting')
+  })
+
+  it.each(['server-error', 'silent-error'] as const)('fails immediately on %s', mode => {
+    const result = runGate(mode)
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(1)
+    expect(result.stderr).toContain('gh api failed while checking tag')
+    if (mode === 'server-error') expect(result.stderr).toContain('Internal Server Error (HTTP 500)')
+    expect(result.stderr).not.toContain('Timed out')
   })
 
   it('rejects a lightweight tag immediately', () => {

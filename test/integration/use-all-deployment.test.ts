@@ -8,7 +8,7 @@
  *   - New addons added to agentic/code/addons/ are auto-discovered
  */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs/promises';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
@@ -19,6 +19,11 @@ import {
   listOnDemandRuleFiles,
   onDemandRuleNames,
 } from '../../tools/agents/providers/base.mjs';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const BIN = path.join(REPO_ROOT, 'bin/aiwg.mjs');
@@ -51,14 +56,15 @@ function runAiwg(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 60_000,
+    timeout: 180_000,
+    // Full-corpus deployment/indexing can exceed a minute on shared runners.
     // Do not inherit the operator's ~/.aiwg/channel.json. A dev/edge pointer
     // can otherwise route this release-candidate test through another checkout.
     env: isolatedCliEnv(),
   });
   return {
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr: [result.stderr, result.error?.message, result.signal ? `Child terminated by ${result.signal}` : ''].filter(Boolean).join('\n'),
     exitCode: result.status ?? 1,
   };
 }
@@ -71,12 +77,12 @@ function runAiwgWithEnv(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 60_000,
+    timeout: 180_000,
     env: isolatedCliEnv(env),
   });
   return {
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr: [result.stderr, result.error?.message, result.signal ? `Child terminated by ${result.signal}` : ''].filter(Boolean).join('\n'),
     exitCode: result.status ?? 1,
   };
 }
@@ -128,6 +134,24 @@ async function makeProject(): Promise<string> {
 async function cleanProject(dir: string) {
   if (existsSync(dir)) await fs.rm(dir, { recursive: true, force: true });
 }
+
+describe('deployment child failure diagnostics', () => {
+  it.each(['default', 'custom-home'])('reports timeout and signal for the %s CLI helper', (helper) => {
+    const error = Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1, output: [null, 'Building capability index…', ''],
+      stdout: 'Building capability index…', stderr: '', status: null,
+      signal: 'SIGTERM', error,
+    });
+    const result = helper === 'default'
+      ? runAiwg(['use', 'all'])
+      : runAiwgWithEnv(['use', 'all'], os.tmpdir(), {});
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('Building capability index');
+    expect(result.stderr).toContain('ETIMEDOUT');
+    expect(result.stderr).toContain('SIGTERM');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Disallow-list unit-level integration
@@ -340,7 +364,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 210_000);
 
   it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
@@ -440,7 +464,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
   }, 30_000);
 
   // One bounded CLI child per case; each provider gets an isolated project and
-  // a distinct failure identity instead of sharing a 90s budget for two calls.
+  // a distinct failure identity. Leave time for child shutdown and assertions.
   it.each(['claude', 'codex'])('writes complete RULES-ONDEMAND indexes for %s after real aiwg use all (#1784)', async (provider) => {
     const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
     expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
@@ -463,7 +487,7 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     } else {
       expect(budgetDemoted).toEqual([]);
     }
-  }, 90_000);
+  }, 210_000);
 });
 
 // ---------------------------------------------------------------------------

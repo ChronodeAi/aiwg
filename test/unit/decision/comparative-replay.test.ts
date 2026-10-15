@@ -7,14 +7,12 @@ import { analyzeDecisionSensitivity } from '../../../src/decision/sensitivity/ru
 import { checkSensitivitySchema, sensitivityDigest } from '../../../src/decision/sensitivity/contract.js';
 import { buildComparativeReplayReport, validateComparativeReplayReport, type ComparativeReplayInput,
   type ComparativeReplayPreregistration } from '../../../src/decision/sensitivity/comparative.js';
-import { readReplayArtifacts, replayFrozenCorpus, replayInput, replayPreregistration, writeReplayStudy, buildReplayReviewPackets,
-  type ReplayCheckpoint } from '../../../tools/decision/comparative-replay.js';
+import { readReplayArtifacts, replayFrozenCorpus, replayInput, replayPreregistration, writeReplayStudy, buildReplayReviewPackets } from '../../../tools/decision/comparative-replay.js';
 import { validateReplayAssets, validateReplayFreeze, validateReplayReviewPackets } from '../../../tools/decision/comparative-replay-assets.js';
 import { REPLAY_CLOCK, type ReplayGold } from '../../../tools/decision/comparative-replay-corpus.js';
 
 const frozenAt = '2026-09-30T12:00:00.000Z';
 const accessedAt = '2026-09-30T12:00:01.000Z';
-const noopCheckpoint: ReplayCheckpoint = { reserve() {}, complete() {} };
 const state = () => ({ maxEntriesPerPrincipal: 600, reportsByWindow: new Map<string, number>(), pathCounts: new Map<string, number>() });
 const artifacts = readReplayArtifacts();
 let input: ComparativeReplayInput;
@@ -49,16 +47,22 @@ function perfectGateFixture(): ComparativeReplayInput {
   return candidate;
 }
 
+// Replays all 600 roots twice; give the same CI headroom as the durable
+// replay test below rather than the default 30s hook deadline.
 beforeAll(async () => {
   const transport = vi.fn(() => { throw new Error('provider dispatch forbidden'); });
   vi.stubGlobal('fetch', transport);
   try {
-    const run = await replayFrozenCorpus(artifacts, state(), noopCheckpoint);
+    const reserve = vi.fn();
+    const complete = vi.fn();
+    const run = await replayFrozenCorpus(artifacts, state(), { reserve, complete });
+    expect(reserve).toHaveBeenCalledTimes(artifacts.corpus.roots.length * 2);
+    expect(complete).toHaveBeenCalledTimes(artifacts.corpus.roots.length * 2);
     expect(run.stopped).toBe(false);
     expect(transport).not.toHaveBeenCalled();
     input = replayInput(artifacts, replayPreregistration(artifacts, frozenAt), run.roots, accessedAt);
   } finally { vi.unstubAllGlobals(); }
-}, 30_000);
+}, 120_000);
 
 describe('D23 comparative policy replay', () => {
   it('binds 600 unique synthetic roots and passes threshold equality while integrity stays HOLD', () => {
