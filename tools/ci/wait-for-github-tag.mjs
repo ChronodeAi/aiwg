@@ -34,7 +34,7 @@ function redactTokens(message) {
   }
   return message
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g, '[REDACTED]')
-    .replace(/(authorization:\s*(?:bearer|token)\s+)\S+/gi, '$1[REDACTED]')
+    .replace(/(authorization:\s*)[^\r\n]*/gi, '$1[REDACTED]')
 }
 
 async function main() {

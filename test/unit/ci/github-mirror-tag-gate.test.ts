@@ -36,7 +36,7 @@ case "$MODE" in
   retry) if [ "$count" -lt 3 ]; then echo 'gh: Not Found (HTTP 404)' >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
   stdout-404) if [ "$count" -lt 2 ]; then echo '{"message":"Not Found","status":"404"}'; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
   not-found) if [ "$count" -lt 2 ]; then echo 'gh: Not Found' >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
-  unauthorized) echo "gh: Bad credentials (HTTP 401), token=$GH_TOKEN other=ghp_unconfiguredFakeToken" >&2; exit 1 ;;
+  unauthorized) echo "gh: Bad credentials (HTTP 401), token=$GH_TOKEN other=ghp_unconfiguredFakeToken" >&2; echo "Authorization: Basic dXNlcjpiYXNpY0ZpeHR1cmVQYXNz" >&2; exit 1 ;;
   server-error) echo 'gh: Internal Server Error (HTTP 500)' >&2; exit 1 ;;
   silent-error) exit 1 ;;
   lightweight) echo '{"object":{"type":"commit","sha":"def456"}}' ;;
@@ -87,6 +87,8 @@ describe('GitHub mirror tag gate', () => {
     expect(result.stderr).toContain('token=[REDACTED] other=[REDACTED]')
     expect(result.stderr).not.toContain('fixture-secret-token')
     expect(result.stderr).not.toContain('ghp_unconfiguredFakeToken')
+    expect(result.stderr).toContain('Authorization: [REDACTED]')
+    expect(result.stderr).not.toContain('dXNlcjpiYXNpY0ZpeHR1cmVQYXNz')
     expect(result.stderr).not.toContain('Timed out')
     expect(result.stdout).not.toContain('waiting')
   })

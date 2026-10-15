@@ -171,14 +171,14 @@ describe('decision structured entry contract', () => {
     let fakeNow = 0;
     nowSpy.mockImplementation(() => { fakeNow += 10_000; return fakeNow; });
     try {
-      const operations = [
-        () => admitEntry({ entry: 'safe' }),
-        () => parseDecisionJson(JSON.stringify({ entry: 'safe' })),
-        () => parseDecisionYaml('entry: safe\n'),
-      ];
-      for (const operation of operations) {
-        if (threadCpuAvailable) expect(operation).not.toThrow();
-        else expect(operation).toThrow(/time-budget/);
+      if (threadCpuAvailable) {
+        expect(() => admitEntry({ entry: 'safe' })).not.toThrow();
+        expect(parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toEqual({ entry: 'safe' });
+        expect(parseDecisionYaml('entry: safe\n')).toEqual({ entry: 'safe' });
+      } else {
+        expect(() => admitEntry({ entry: 'safe' })).toThrow(/time-budget/);
+        expect(() => parseDecisionJson(JSON.stringify({ entry: 'safe' }))).toThrow(/time-budget/);
+        expect(() => parseDecisionYaml('entry: safe\n')).toThrow(/time-budget/);
       }
       expect(cpuClock.mock.calls.length > 0).toBe(threadCpuAvailable);
     } finally {
