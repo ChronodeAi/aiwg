@@ -53,6 +53,16 @@ aiwg mcp serve --toolsets=sandbox
 aiwg mcp serve --toolsets=all
 ```
 
+The explicit `workers` toolset (`--toolsets=workers`, excluded from `all`)
+exposes `worker-invoke` operations `run`, `status`, `cancel`,
+`reconcile_stopped`, and `reset_recovery_scope`. A `status` request without
+`invocation_id` lists unresolved reservations and intervention scopes, including
+their reasons and reset instructions. After restoring the qualified recovery
+probe, use `reset_recovery_scope` with the listed `scope_id`. Reset is
+idempotent, refuses scopes with active or unresolved executions, and preserves
+the cumulative task allowance. Use `reconcile_stopped` with `invocation_id`
+only after independently establishing that the worker stopped.
+
 The `sandbox` toolset exposes revisioned fleet inventory/admission/observation/
 reconciliation and governed activity coverage/timeline/export. Configure it with
 `AIWG_SANDBOX_MANAGEMENT_URL` and a mode-`0600` bearer file named by

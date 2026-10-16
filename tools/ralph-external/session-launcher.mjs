@@ -370,7 +370,37 @@ export async function materializeWorkerArtifacts(invocation, runDir) {
 }
 
 const _workerRecoverySubscriptions = new WeakMap();
+const _workerRecoveryReporters = new WeakMap();
 const _reportedRecoveryTransitions = new WeakSet();
+
+function subscribeWorkerRecovery(owner, breaker) {
+  if (typeof breaker?.on !== 'function') return;
+  let reporter = _workerRecoveryReporters.get(breaker);
+  if (!reporter) {
+    reporter = { owners: new Set() };
+    // The breaker owns this reporter, so a cohort's last completion still
+    // reports when every launcher with an operator listener has finished.
+    breaker.on('transition', event => {
+      if (_reportedRecoveryTransitions.has(event)) return;
+      const target = [...reporter.owners].find(candidate => candidate.listenerCount('recovery-transition'));
+      if (target) {
+        _reportedRecoveryTransitions.add(event);
+        target.emit('recovery-transition', event);
+      } else {
+        // Give an admission's explicit reporter the first chance to claim
+        // this event when the breaker is also shared with another surface.
+        queueMicrotask(() => {
+          if (_reportedRecoveryTransitions.has(event)) return;
+          _reportedRecoveryTransitions.add(event);
+          console.error(event.summary);
+        });
+      }
+    });
+    _workerRecoveryReporters.set(breaker, reporter);
+  }
+  reporter.owners.add(owner);
+  _workerRecoverySubscriptions.set(owner, () => reporter.owners.delete(owner));
+}
 
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
@@ -460,15 +490,7 @@ async function launchOneWorker(owner, options) {
       verifiedPreviousAttemptId, loadInputs, validate, inspect, clock, qualificationDigest, inputs, brief, stdinBytes });
   }
   const transitionBreaker = options.scopedBreaker ?? getDirectRecoveryBreaker();
-  if (typeof transitionBreaker?.on === 'function') {
-    const listener = event => {
-      if (!owner.listenerCount('recovery-transition') || _reportedRecoveryTransitions.has(event)) return;
-      _reportedRecoveryTransitions.add(event);
-      owner.emit('recovery-transition', event);
-    };
-    transitionBreaker.on('transition', listener);
-    _workerRecoverySubscriptions.set(owner, () => transitionBreaker.removeListener('transition', listener));
-  }
+  subscribeWorkerRecovery(owner, transitionBreaker);
   // #2915 final (one admission, step 3): invocation ids are minted BEFORE
   // admission, so the exact covering-key set that gated this attempt is the
   // same set `settleDirectWorker` later resolves against — no separate
@@ -712,12 +734,12 @@ async function launchOneWorker(owner, options) {
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
         checkDispatchGuard(dispatchGuard);
       } catch (error) {
-        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        try { admission.breaker.abortDispatch(admission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw error;
       }
       const committed = admission.breaker.commitDispatch(admission.token);
       if (!committed.ok) {
-        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        try { admission.breaker.abortDispatch(admission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw new Error(`Worker dispatch refused: ${committed.reason}`);
       }
     } : undefined;
@@ -3401,11 +3423,17 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
   // mutable field on this function's returned wrapper — so `beginDispatch`
   // later has an authoritative, breaker-owned value to compare against.
   const selectionDigest = selectionDigestFor(invocation);
+  try { checkDispatchGuard(dispatchGuard); } catch (error) {
+    return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: [], nextEligibleAt: null, reason: error.message } };
+  }
   let probeDiagnostic = null;
   let admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
   if (!admission.ok && admission.probeRequired?.length) {
     // Probe and task are separate dispatches against the same cumulative
     // allowance. Reserve atomically before any asynchronous probe work.
+    try { checkDispatchGuard(dispatchGuard); } catch (error) {
+      return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: [], nextEligibleAt: null, reason: error.message } };
+    }
     const probeId = `${invocationId}:probe:${randomUUID()}`;
     const reserved = breaker.admit({ invocationId: probeId, scopeKeys, selectionDigest, purpose: 'probe' });
     if (reserved.ok) {
@@ -3444,12 +3472,13 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
           relevant: result.relevant === true, evidenceSource: 'launcher', retryAfterSeconds: result.retryAfterSeconds ?? null,
           confirmedStop: result.termination === 'confirmed' };
       } catch (error) {
-        try { breaker.abortDispatch(reserved.token); } catch { /* no dispatch on preparation failure */ }
+        try { breaker.abortDispatch(reserved.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* no dispatch on preparation failure */ }
         if ([ALLOWANCE_EXHAUSTED_CODE, ALLOWANCE_POLICY_MISMATCH_CODE, LEDGER_RECORD_INVALID_CODE].includes(error?.code)) {
           return { gated: true, refused: { code: error.code, blockedBy: [], nextEligibleAt: null, reason: error.message } };
         }
       } finally {
-        breaker.settle(reserved.token, probeOutcome);
+        breaker.settle(reserved.token, { ...probeOutcome,
+          callerAborted: dispatchGuard.isCancelled?.() === true });
         if (probeLedger) await refundDirectWorkerAllowance(probeLedger);
       }
       if (probeDiagnostic?.operatorIntervention) {
@@ -3555,7 +3584,7 @@ export async function chargeDirectWorkerDiagnostic(admission, dispatchGuard) {
     dispatched = true;
   } finally {
     if (dispatched) admission.breaker.settle(reserved.token, { kind: 'succeeded', confirmedStop: true });
-    else admission.breaker.abortDispatch(reserved.token);
+    else admission.breaker.abortDispatch(reserved.token, { callerAborted: dispatchGuard?.isCancelled?.() === true });
     if (ledger) await refundDirectWorkerAllowance(ledger);
   }
 }
@@ -4871,12 +4900,12 @@ export function planDirectWorkerLaunch({
         if (borrowedAdmission.ledger) await debitDirectWorkerAllowance(borrowedAdmission.ledger);
         checkDispatchGuard(dispatchGuard);
       } catch (error) {
-        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token); } catch { /* best-effort */ }
+        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw error;
       }
       const committed = borrowedAdmission.breaker.commitDispatch(borrowedAdmission.token);
       if (!committed.ok) {
-        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token); } catch { /* best-effort */ }
+        try { borrowedAdmission.breaker.abortDispatch(borrowedAdmission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw new Error(`Worker dispatch refused: ${committed.reason}`);
       }
     };
@@ -4958,12 +4987,12 @@ export function planDirectWorkerLaunch({
         if (admission.ledger) await debitDirectWorkerAllowance(admission.ledger);
         checkDispatchGuard(standaloneGuard);
       } catch (error) {
-        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        try { admission.breaker.abortDispatch(admission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw error;
       }
       const committed = admission.breaker.commitDispatch(admission.token);
       if (!committed.ok) {
-        try { admission.breaker.abortDispatch(admission.token); } catch { /* best-effort */ }
+        try { admission.breaker.abortDispatch(admission.token, { callerAborted: dispatchGuard?.isCancelled?.() === true }); } catch { /* best-effort */ }
         throw new Error(`Worker dispatch refused: ${committed.reason}`);
       }
     };

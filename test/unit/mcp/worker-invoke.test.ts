@@ -946,6 +946,7 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
       operation: 'run', request_id: 'cancel-no-control', role: 'coding', task: 'implementation', group: 'workers',
       brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
     });
+    await waitFor(() => launchCalled);
     const [pendingEntry] = registry.values().filter((e: any) => e.requestId === 'cancel-no-control');
     const cancelResult = await call({ operation: 'cancel', invocation_id: pendingEntry.invocationId });
     const cancelBody = JSON.parse(cancelResult.content[0].text);
@@ -5519,7 +5520,9 @@ describe('registered worker recovery evidence and summaries (#2915)', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(4);
       // If a later outage has no relevant probe, the registered operator
       // surface must preserve the reason and the required repair action.
-      breaker.reconcileStopEvidence({ invocationId: response.invocationId, confirmedStop: true });
+      for (const invocation of [...bodies, response]) {
+        await call({ operation: 'reconcile_stopped', invocation_id: invocation.invocationId });
+      }
       installation.endpoints = [];
       for (let n = 0; n < 3; n++) {
         const { token } = breaker.admit({ invocationId: `no-profile-${n}`, scopeKeys: ['quota:shared-quota'] });
@@ -5538,15 +5541,172 @@ describe('registered worker recovery evidence and summaries (#2915)', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(4);
       expect(summaries.mock.calls.at(-1)?.[0]).toMatchObject({ scopeKey: 'quota:shared-quota', to: 'operator-intervention',
         summary: expect.stringContaining('then reset this scope') });
-      expect(breaker.reset('quota:shared-quota')).toEqual({ ok: true });
+      const status = JSON.parse((await call({ operation: 'status' })).content[0].text);
+      expect(status.unresolvedReservations).toEqual([]);
+      expect(status.interventionScopes).toEqual([{
+        scopeId: 'quota:shared-quota', reason: expect.stringContaining('probe-profile-unavailable'),
+        resetInstruction: { operation: 'reset_recovery_scope', scope_id: 'quota:shared-quota' },
+      }]);
+      expect(tools.get('worker-invoke').config.inputSchema.parse(status.interventionScopes[0].resetInstruction))
+        .toMatchObject(status.interventionScopes[0].resetInstruction);
+      const reset = () => call(status.interventionScopes[0].resetInstruction).then((result: any) => JSON.parse(result.content[0].text));
+      expect(await reset()).toMatchObject({ ok: true, scopeId: 'quota:shared-quota' });
+      expect(await reset()).toMatchObject({ ok: true });
+      expect(JSON.parse((await call({ operation: 'status' })).content[0].text).interventionScopes).toEqual([]);
       input.request_id = `operator-resumed-${transport}`;
       input.final_output = path.join(work, 'resumed.json');
       if (transport === 'mcp') await buildStructuredBrief(f, input);
       else await writeFile(brief, 'independent synthetic operator resumed task');
       const resumed = JSON.parse((await call(input)).content[0].text);
       expect(resumed.status, JSON.stringify(resumed)).toBe('completed');
+      await call({ operation: 'reconcile_stopped', invocation_id: resumed.invocationId });
+      expect(await reset()).toMatchObject({ ok: true });
+      // The same brief remains the same chain: reset must never restore its
+      // two-attempt allowance, even across repeated successful resets.
+      for (let n = 0; n < 2; n++) {
+        await rm(input.final_output, { force: true });
+        const retry = JSON.parse((await call({ ...input, request_id: `after-reset-${transport}-${n}` })).content[0].text);
+        expect(retry.status).toBe(n === 0 ? 'completed' : 'blocked');
+        if (n === 1) expect(retry.diagnostics.join(' ')).toMatch(/allowance exhausted/i);
+      }
       expect(breaker.getState('quota:shared-quota').state).toBe('closed');
       expect(fetchSpy).toHaveBeenCalledTimes(4);
+    } finally { breaker.destroy(); fetchSpy.mockRestore(); }
+  });
+});
+
+describe('registered recovery reset and cancellation guards (#2915 final review)', () => {
+  it('scoped reset refuses active and unresolved executions, survives registry pruning, and requires a scope', async () => {
+    const root = await tempRoot();
+    let time = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0,
+      policy: { distinctThreshold: 1, cooldownMs: 1 } });
+    const registry = createInvocationRegistry({ maxRetained: 0 });
+    const entry = registry.create({ recoveryBreaker: breaker, requestId: 'reset-owner' });
+    const tools = await captureTool(null, { projectRoot: root, registry });
+    const call = tools.get('worker-invoke').handler;
+    const reset = async () => JSON.parse((await call({ operation: 'reset_recovery_scope', scope_id: 'installation:codex' })).content[0].text);
+    try {
+      expect((await call({ operation: 'reset_recovery_scope' })).isError).toBe(true);
+      const first = breaker.admit({ invocationId: 'active-task', scopeKeys: ['installation:codex'] });
+      expect(first.ok).toBe(true);
+      expect(await reset()).toMatchObject({ ok: false, reason: expect.stringContaining('active or unresolved') });
+      breaker.settle(first.token, { kind: 'failed', reasonCode: 'AUTH', cli: 'codex', evidenceSource: 'resolver', confirmedStop: true });
+      time += 100;
+      completeSyntheticPreliminaryProbe(breaker, 'reset-probe');
+      const canary = breaker.admit({ invocationId: entry.invocationId, scopeKeys: ['installation:codex'] });
+      expect(breaker.beginDispatch(canary.token, { invocationId: entry.invocationId, selectionDigest: null }).ok).toBe(true);
+      expect(breaker.commitDispatch(canary.token).ok).toBe(true);
+      breaker.settle(canary.token, { kind: 'uncertain', confirmedStop: false });
+      expect(await reset()).toMatchObject({ ok: false });
+      await call({ operation: 'reconcile_stopped', invocation_id: entry.invocationId });
+      expect(registry.size).toBe(0);
+      breaker.requireOperatorIntervention(['installation:codex'], 'probe-profile-unavailable');
+      expect(JSON.parse((await call({ operation: 'status' })).content[0].text).interventionScopes).toHaveLength(1);
+      expect(await reset()).toMatchObject({ ok: true });
+      expect(await reset()).toMatchObject({ ok: true });
+    } finally { breaker.destroy(); }
+  });
+
+  it.each(['before-admission', 'before-probe-debit', 'canary'] as const)(
+    'live cancellation at %s spends only dispatched requests and does not increase cooldown', async cancelAt => {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work);
+      const brief = path.join(root, 'brief.md'); await writeFile(brief, 'cancelled recovery task');
+      const f = buildFixture(root, 'shell');
+      f.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
+      (f.drivers.codex.qualification as any).installation = { endpoints: ['https://provider.invalid/health'] };
+      let time = 1_000_000;
+      const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0,
+        policy: { distinctThreshold: 1, cooldownMs: 1 } });
+      const opening = breaker.admit({ invocationId: 'opening', scopeKeys: ['installation:codex'] });
+      breaker.settle(opening.token, { kind: 'failed', reasonCode: 'AUTH', cli: 'codex', evidenceSource: 'resolver', confirmedStop: true });
+      time += 100;
+      const initialCooldown = breaker.getState('installation:codex').episodeCooldownMs;
+      const registry = createInvocationRegistry();
+      let call: any;
+      let shouldCancel = true;
+      const cancel = () => call({ operation: 'cancel', invocation_id: registry.values().find((entry: any) => entry.terminalAt === null).invocationId });
+      const begin = breaker.beginDispatch.bind(breaker);
+      vi.spyOn(breaker, 'beginDispatch').mockImplementation((token: any, binding: any) => {
+        const result = begin(token, binding);
+        if (shouldCancel && cancelAt === 'before-probe-debit' && token.purpose === 'probe') void cancel();
+        return result;
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      let workers = 0;
+      const tools = await captureTool(null, { projectRoot: root, workerWorktreesRoot: work, registry, scopedBreaker: breaker,
+        now: () => new Date(f.now),
+        loadWorkerInputs: async () => {
+          if (shouldCancel && cancelAt === 'before-admission') await cancel();
+          return { snapshot: f.snapshot, drivers: f.drivers };
+        },
+        launchShellWorker: async (invocation: any, options: any) => {
+          if (shouldCancel && cancelAt === 'canary') {
+            await cancel();
+            return { launched: false, diagnostic: 'cancelled before spawn' };
+          }
+          const a = options.admission;
+          expect(a.breaker.beginDispatch(a.token, { invocationId: a.invocationId, selectionDigest: a.selectionDigest }).ok).toBe(true);
+          await sessionLauncherModule.debitDirectWorkerAllowance(a.ledger);
+          expect(a.breaker.commitDispatch(a.token).ok).toBe(true);
+          workers++;
+          await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+          return { launched: true, mode: 'degraded', child: closingChild(0) };
+        },
+      });
+      call = tools.get('worker-invoke').handler;
+      const input = { operation: 'run', request_id: 'cancel-recovery', role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: work, final_output: path.join(work, 'cancelled.json'), transport: 'shell' };
+      try {
+        const response = JSON.parse((await call(input)).content[0].text);
+        expect(response.status).toMatch(/blocked|cancelled/);
+        expect(workers).toBe(0);
+        const expectedProbes = cancelAt === 'canary' ? 1 : 0;
+        expect(fetchSpy).toHaveBeenCalledTimes(expectedProbes);
+        expect(breaker.getState('installation:codex').episodeCooldownMs).toBe(initialCooldown);
+        expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+        shouldCancel = false;
+        const resumed = JSON.parse((await call({ ...input, request_id: 'cancel-recovery-resume',
+          final_output: path.join(work, 'resumed.json') })).content[0].text);
+        expect(resumed.status, JSON.stringify(resumed)).toBe('completed');
+        expect(workers).toBe(1);
+        expect(fetchSpy).toHaveBeenCalledOnce();
+      } finally { breaker.destroy(); fetchSpy.mockRestore(); }
+    });
+
+  it('enforces the admission deadline before debiting or dispatching a preliminary probe', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'expired recovery task');
+    const f = buildFixture(root, 'shell');
+    (f.drivers.codex.qualification as any).installation = { endpoints: ['https://provider.invalid/health'] };
+    let time = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0,
+      policy: { distinctThreshold: 1, cooldownMs: 1 } });
+    const opening = breaker.admit({ invocationId: 'opening', scopeKeys: ['installation:codex'] });
+    breaker.settle(opening.token, { kind: 'failed', reasonCode: 'AUTH', cli: 'codex', evidenceSource: 'resolver', confirmedStop: true });
+    time += 100;
+    const admit = breaker.admit.bind(breaker);
+    vi.spyOn(breaker, 'admit').mockImplementation((input: any) => {
+      const result = admit(input);
+      if (input.purpose !== 'probe') time += 1_000_000;
+      return result;
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    const launch = vi.fn();
+    const tools = await captureTool(null, { projectRoot: root, workerWorktreesRoot: work, scopedBreaker: breaker,
+      now: () => new Date(f.now), loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), launchShellWorker: launch });
+    try {
+      const response = JSON.parse((await tools.get('worker-invoke').handler({ operation: 'run', request_id: 'expired-probe',
+        role: 'coding', task: 'implementation', group: 'workers', brief, workdir: work, final_output: path.join(work, 'final.json'),
+        transport: 'shell' })).content[0].text);
+      expect(response.status).toBe('blocked');
+      expect(response.diagnostics.join(' ')).toMatch(/deadline exceeded/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
     } finally { breaker.destroy(); fetchSpy.mockRestore(); }
   });
 });

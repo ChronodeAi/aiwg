@@ -12,13 +12,14 @@ import { SessionLauncher, RECOVERY_SCOPE_OPEN_CODE, resetInProcessAllowanceLedge
 
 const roots = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetInProcessAllowanceLedger();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
 describe('operator recovery transition summaries (#2915 T-OG-22)', () => {
-  it.each([false, true])('forwards one actionable summary across checks and refusals (overlapping launchers: %s)', async overlapping => {
+  it.each(['sequential', 'overlapping-attached', 'overlapping-finished'])('reports each transition once (%s)', async completionOrder => {
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     const root = await mkdtemp(path.join(os.tmpdir(), 'ralph-transition-'));
     roots.push(root);
@@ -46,6 +47,7 @@ describe('operator recovery transition summaries (#2915 T-OG-22)', () => {
     const breaker = new ScopedFailureBreaker({ nowMs: () => 1_000_000, jitterMs: () => 0 });
     const launcher = new SessionLauncher();
     const summaries = vi.fn();
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     launcher.on('recovery-transition', summaries);
     let seq = 0;
     const launch = async (owner = launcher, onLaunched = async () => {}) => {
@@ -68,48 +70,54 @@ describe('operator recovery transition summaries (#2915 T-OG-22)', () => {
       });
     };
     try {
-      if (overlapping) {
+      if (completionOrder !== 'sequential') {
         let entered = 0;
         let ready;
-        let release;
         const allEntered = new Promise(resolve => { ready = resolve; });
-        const continueLaunch = new Promise(resolve => { release = resolve; });
+        const releases = [];
         const active = Array.from({ length: 3 }, (_, index) => {
           const owner = new SessionLauncher();
           if (index > 0) owner.on('recovery-transition', summaries);
+          const continueLaunch = new Promise(resolve => { releases[index] = resolve; });
           return launch(owner, async () => { if (++entered === 3) ready(); await continueLaunch; });
         });
         await allEntered;
-        expect(breaker.listenerCount('transition')).toBe(3);
-        // One transition object is delivered to all attached launchers by
-        // EventEmitter; the operator surface must claim it only once.
-        breaker.emit('transition', { summary: 'host:test: pause covered launches' });
+        const synthetic = { summary: 'host:test: pause covered launches' };
+        breaker.emit('transition', synthetic);
+        breaker.emit('transition', synthetic);
         expect(summaries).toHaveBeenCalledOnce();
         summaries.mockClear();
-        release();
-        const outcomes = await Promise.all(active);
-        expect(outcomes).toHaveLength(3);
-        for (const outcome of outcomes) expect(outcome).toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
+        // Control settlement, rather than relying on child-process error
+        // ordering. In the regression case both subscribed owners detach
+        // before the unsubscribed launcher's failure opens the scope.
+        const order = completionOrder === 'overlapping-finished' ? [1, 2, 0] : [0, 1, 2];
+        for (const index of order) {
+          releases[index]();
+          await expect(active[index]).resolves.toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
+        }
       } else {
         for (let i = 0; i < 3; i++) {
           await expect(launch()).resolves.toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
-          expect(breaker.listenerCount('transition')).toBe(0);
+          expect(breaker.listenerCount('transition')).toBe(1);
         }
       }
-      expect(breaker.listenerCount('transition')).toBe(0);
-      expect(summaries).toHaveBeenCalledOnce();
-      const event = summaries.mock.calls[0][0];
-      expect(event).toMatchObject({ from: 'closed', to: 'open' });
-      expect(event.summary).toContain(event.scopeKey);
-      expect(event.summary).toMatch(/pause covered launches/);
-      expect(event.summary).toMatch(/wait \d+ms/);
+      const scope = breaker.snapshot().scopes.find(state => state.state === 'open');
+      expect(scope).toBeDefined();
+      const fallback = completionOrder === 'overlapping-finished';
+      expect(summaries).toHaveBeenCalledTimes(fallback ? 0 : 1);
+      expect(stderr).toHaveBeenCalledTimes(fallback ? 1 : 0);
+      const summary = fallback ? stderr.mock.calls[0][0] : summaries.mock.calls[0][0].summary;
+      expect(summary).toContain(scope.scopeKey);
+      expect(summary).toMatch(/closed -> open; pause covered launches/);
+      expect(summary).toMatch(/wait \d+ms/);
       for (let i = 0; i < 3; i++) {
         breaker.snapshot();
-        breaker.getState(event.scopeKey);
+        breaker.getState(scope.scopeKey);
         await expect(launch()).rejects.toMatchObject({ code: RECOVERY_SCOPE_OPEN_CODE });
-        expect(breaker.listenerCount('transition')).toBe(0);
+        expect(breaker.listenerCount('transition')).toBe(1);
       }
-      expect(summaries).toHaveBeenCalledOnce();
+      expect(summaries).toHaveBeenCalledTimes(fallback ? 0 : 1);
+      expect(stderr).toHaveBeenCalledTimes(fallback ? 1 : 0);
       const capture = JSON.parse(await readFile(path.join(root, 'run-3', 'exit.json'), 'utf8'));
       expect(capture).toMatchObject({ termination: 'confirmed' });
     } finally { breaker.destroy(); }

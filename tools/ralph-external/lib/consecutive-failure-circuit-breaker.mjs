@@ -836,7 +836,12 @@ export class ScopedFailureBreaker extends EventEmitter {
         continue;
       }
       rec.activeCanary = null;
-      if (kind === 'succeeded' && token.purpose === 'probe') {
+      if (outcome?.callerAborted === true && confirmedStop) {
+        // Caller cancellation is no evidence of a broken provider. Keep the
+        // existing cooldown and retain a successful probe for the next canary.
+        this._transition(rec, token.purpose === 'probe' ? 'open' : 'canary-ready',
+          'caller cancelled; retry recovery without increasing backoff');
+      } else if (kind === 'succeeded' && token.purpose === 'probe') {
         if (outcome.relevant === true && isTrustedRecoveryEvidence(outcome.evidenceSource) && confirmedStop) {
           this._transition(rec, 'canary-ready', 'probe succeeded; admit one task canary');
         } else { this._reopen(rec, now); }
@@ -1341,18 +1346,18 @@ export class ScopedFailureBreaker extends EventEmitter {
    * itself refused. Equivalent to `settle(token, { kind: 'uncertain',
    * confirmedStop: true })` — a PROVEN zero-dispatch exit, so a canary this
    * reservation held is treated exactly like any other unreported/aborted
-   * probe (reopened with backoff) and is never left with a stop-evidence
+   * probe (reopened with backoff unless explicitly caller-aborted) and is never left with a stop-evidence
    * marker, matching every other proven pre-spawn refusal in this module.
    * Refused once the reservation has actually reached `dispatched`: an
    * attempt that genuinely started must settle with its real outcome
    * through `settle()`, never a fabricated confirmed stop.
    */
-  abortDispatch(token) {
+  abortDispatch(token, { callerAborted = false } = {}) {
     const entry = this._reservations.get(token?.id);
     if (entry && entry.token === token && entry.phase === 'dispatched') {
       return { ok: false, reason: 'reservation already dispatched; use settle() instead' };
     }
-    return this.settle(token, { kind: 'uncertain', confirmedStop: true });
+    return this.settle(token, { kind: 'uncertain', confirmedStop: true, callerAborted });
   }
 
   /**
@@ -1494,7 +1499,7 @@ export class ScopedFailureBreaker extends EventEmitter {
    * scope as a canary, so `reset(A)` could silently drop scope B's own
    * still-relevant `activeCanary`/`blockingMarker` protection too. This
    * version never touches `_reservations` at all: if the targeted scope
-   * currently holds an `activeCanary` or `blockingMarker` (unresolved
+   * currently holds a covering reservation, `activeCanary` or `blockingMarker` (unresolved
    * execution — someone else's covering scopes are never even inspected,
    * let alone released), the whole call is refused with the reconcile
    * instruction and NOTHING is mutated; otherwise the scope record is
@@ -1514,7 +1519,7 @@ export class ScopedFailureBreaker extends EventEmitter {
    * `destroy()` method, intended for test/process-exit teardown only.
    */
   reset(scopeKey) {
-    if (!scopeKey || scopeKey === 'host:local') this._hostFailureFacts = [];
+    if (!scopeKey) this._hostFailureFacts = [];
     if (!scopeKey) {
       for (const [key, rec] of [...this._scopes]) {
         if (rec.activeCanary !== null || rec.blockingMarker !== null) continue; // keep execution ownership
@@ -1526,11 +1531,16 @@ export class ScopedFailureBreaker extends EventEmitter {
       return { ok: true };
     }
     const rec = this._scopes.get(scopeKey);
-    if (!rec) return { ok: true };
-    if (rec.activeCanary !== null || rec.blockingMarker !== null) {
-      return { ok: false, scopeKey,
-        reason: 'scope has unresolved execution (an active canary or an unresolved stop-evidence marker); reconcile stop evidence (reconcileStopEvidence) before resetting it' };
+    if (!rec) {
+      if (scopeKey === 'host:local') this._hostFailureFacts = [];
+      return { ok: true };
     }
+    if (rec.activeCanary !== null || rec.blockingMarker !== null
+      || [...this._reservations.values()].some(entry => entry.token.coveringKeys.includes(scopeKey))) {
+      return { ok: false, scopeKey,
+        reason: 'scope has active or unresolved execution (a reservation, active canary or unresolved stop-evidence marker); reconcile stop evidence (reconcileStopEvidence) before resetting it' };
+    }
+    if (scopeKey === 'host:local') this._hostFailureFacts = [];
     this._transition(rec, 'closed', 'operator reset; resume covered launches');
     rec.breaker.destroy();
     this._scopes.delete(scopeKey);

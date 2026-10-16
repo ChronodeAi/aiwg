@@ -1,7 +1,7 @@
 /**
  * AIWG MCP Worker-Invoke Bridge (#2892)
  *
- * MCP-only conductor: resolve and invoke a worker (run/status/cancel)
+ * MCP-only conductor: resolve and invoke a worker (run/status/cancel/reconcile_stopped/reset_recovery_scope)
  * WITHOUT any Mission/MC session, daemon, admission store, or activation
  * marker. Reuses, rather than reimplements, the existing Tier 0 primitives:
  *
@@ -507,6 +507,8 @@ export function createInvocationRegistry({
   return {
     prune,
     liveCount,
+    bindRecoveryOwner,
+    get recoveryOwner() { return recoveryOwner; },
     get size() { return entries.size; },
     /** Test/diagnostic only — not consulted by any admission decision. */
     get seenCount() { return seenRequestIds.size; },
@@ -1533,8 +1535,9 @@ const inputSchema = z.object({
   // #2915 round 8 (D4): `reconcile_stopped` is an explicit operator-
   // authorized reconciliation operation on this SAME handler (never a
   // mailbox file, never a new breaker) — see `reconcileStopped` below.
-  operation: z.enum(['run', 'status', 'cancel', 'reconcile_stopped']),
+  operation: z.enum(['run', 'status', 'cancel', 'reconcile_stopped', 'reset_recovery_scope']),
   invocation_id: z.string().uuid().optional(),
+  scope_id: z.string().min(1).max(512).optional(),
   request_id: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/).optional(),
   role: z.enum(['efficiency', 'coding', 'reasoning']).optional(),
   task: z.string().min(1).max(256).optional(),
@@ -1750,6 +1753,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     const dispatchGateEnabled = !!snapshot.config?.parallelism?.worker_dispatch;
     let admission;
     let recoveryModule;
+    let admissionGuard;
     if (!dispatchGateEnabled) {
       admission = { gated: false };
     } else {
@@ -1779,10 +1783,19 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // in-process reservation check -- but it is explicitly NOT
           // cross-process-safe: a second MCP server process, or a restart
           // of this one, starts the count over for the same task chain.
+          const breaker = options.scopedBreaker ?? recoveryModule.getDirectRecoveryBreaker();
+          registry.bindRecoveryOwner(breaker);
+          const startedAtMs = breaker.nowMs();
+          admissionGuard = {
+            nowMs: () => breaker.nowMs(),
+            deadlineAtMs: startedAtMs + Math.min(invocation.health?.hardTimeoutSeconds ?? Infinity,
+              invocation.limits.wallSeconds, invocation.transport === 'mcp' ? invocation.mcp.timeoutSeconds : Infinity) * 1000,
+            isCancelled: () => !!registry.get(entry.invocationId)?.cancelRequested,
+          };
           const taskChainDigest = await recoveryModule.stableTaskChainDigest(request, invocation.briefDigest ?? null);
           admission = await recoveryModule.admitDirectWorker({
             gateEnabled: dispatchGateEnabled, config: snapshot.config,
-            invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
+            invocation, invocationId: entry.invocationId, drivers, scopedBreaker: breaker, dispatchGuard: admissionGuard,
             taskChainDigest, maxAttempts: invocation.limits?.maxAttempts, onTransition,
           });
         }
@@ -1834,7 +1847,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     // Share reservation ownership; recovery accounting belongs only to the gated continuation.
     const ctx = { entry, request, root, snapshot, drivers, invocation, execution, cleanupReservation, markTerminal };
     if (admission.gated) {
-      return continueGated(ctx, { admission, recoveryModule, captureSettlementPromise });
+      return continueGated(ctx, { admission, recoveryModule, captureSettlementPromise, admissionGuard });
     }
     return continueBaseline(ctx);
   }
@@ -2038,7 +2051,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
    * previous worker's scattered `admission?.gated` conditionals are gone by
    * construction, not by review).
    */
-  async function continueGated(ctx, { admission, recoveryModule, captureSettlementPromise }) {
+  async function continueGated(ctx, { admission, recoveryModule, captureSettlementPromise, admissionGuard }) {
     const { entry, request, root, snapshot, drivers, invocation, execution, cleanupReservation, markTerminal } = ctx;
     // #2915 final: `recoverySettled`/`spawnAttempted` are function-scoped
     // (not inside the try block below) so the catch-all at the end of this
@@ -2099,7 +2112,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // diagnostic string, or `null`) — capture it instead of discarding
         // it, so `run()`'s wrapper above can await it and surface the
         // diagnostic in the result.
-        settlementPromise = recoveryModule.settleDirectWorker(admission, outcome);
+        settlementPromise = recoveryModule.settleDirectWorker(admission, {
+          ...outcome, callerAborted: !!registry.get(entry.invocationId)?.cancelRequested,
+        });
         captureSettlementPromise?.(settlementPromise);
       } catch { /* recovery accounting must never fail a run */ }
       settlementStarted();
@@ -2136,7 +2151,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // last bullet).
       const taskDeadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
       const deadlineClockNow = () => admission.breaker?.nowMs?.() ?? Date.now();
-      const deadlineCandidatesMs = [(admission.startedAtMs ?? deadlineClockNow()) + taskDeadlineMs];
+      const deadlineCandidatesMs = [admissionGuard?.deadlineAtMs ?? ((admission.startedAtMs ?? deadlineClockNow()) + taskDeadlineMs)];
       if (invocation.transport === 'mcp') deadlineCandidatesMs.push((admission.startedAtMs ?? deadlineClockNow()) + invocation.mcp.timeoutSeconds * 1000);
       if (admission.token?.canaryKeys?.length > 0) deadlineCandidatesMs.push(admission.token.deadlineMs);
       const deadlineAtMs = Math.min(...deadlineCandidatesMs);
@@ -2686,13 +2701,17 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // anything (`listUnresolvedStops` is a pure read accessor on the
       // breaker); this is the "reachable for every long-lived owner" route
       // C4 requires, surfaced here rather than printed-only.
-      const breakers = new Set();
+      const breakers = new Set(registry.recoveryOwner ? [registry.recoveryOwner] : []);
       for (const entry of registry.values()) if (entry.recoveryBreaker) breakers.add(entry.recoveryBreaker);
       const unresolvedReservations = [];
       for (const breaker of breakers) {
         if (typeof breaker.listUnresolvedStops === 'function') unresolvedReservations.push(...breaker.listUnresolvedStops());
       }
-      return { unresolvedReservations };
+      const interventionScopes = [...breakers].flatMap(breaker => (breaker.snapshot?.().scopes ?? [])
+        .filter(scope => scope.state === 'operator-intervention')
+        .map(scope => ({ scopeId: scope.scopeKey, reason: scope.operatorReason,
+          resetInstruction: { operation: 'reset_recovery_scope', scope_id: scope.scopeKey } })));
+      return { unresolvedReservations, interventionScopes };
     }
     const entry = registry.get(input.invocation_id);
     if (!entry) throw new Error('Unknown invocation_id');
@@ -2746,6 +2765,13 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     };
   }
 
+  async function resetRecoveryScope(input) {
+    if (!input.scope_id) throw new Error('reset_recovery_scope requires scope_id');
+    const breaker = registry.recoveryOwner;
+    if (!breaker) throw new Error('No recovery breaker owner is bound to this registry');
+    return { scopeId: input.scope_id, ...breaker.reset(input.scope_id) };
+  }
+
   async function cancel(input) {
     const entry = registry.get(input.invocation_id);
     if (!entry) throw new Error('Unknown invocation_id');
@@ -2775,13 +2801,14 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
 
   server.registerTool('worker-invoke', {
     title: 'Invoke or Observe a Direct-Handoff Worker',
-    description: "Run, check, cancel, or reconcile stop evidence for a qualified worker without any Mission/MC session — same policy/brief/claims path as the shell direct-handoff tier. Degraded isolation is a server-side operator setting only; there is no client-facing switch. Cancel delivery is not stop confirmation. 'status' with no invocation_id lists invocations still awaiting stop-evidence reconciliation; 'reconcile_stopped' applies that reconciliation for one invocation_id once the operator has independently established its worker actually stopped.",
+    description: "Run, check, cancel, or reconcile stop evidence for a qualified worker without any Mission/MC session — same policy/brief/claims path as the shell direct-handoff tier. Degraded isolation is a server-side operator setting only; there is no client-facing switch. Cancel delivery is not stop confirmation. 'status' with no invocation_id lists invocations still awaiting stop-evidence reconciliation; 'reconcile_stopped' applies that reconciliation for one invocation_id once the operator has independently established its worker actually stopped. 'status' also lists interventionScopes with their reason and reset instruction; 'reset_recovery_scope' requires scope_id and resets only that owning scope after all active or unresolved executions stop, preserving cumulative allowance.",
     inputSchema,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   }, async input => {
     try {
       if (input.operation === 'run') return mcpJson(publicStatus(await run(input), healthHook));
       if (input.operation === 'status') return mcpJson(await status(input));
+      if (input.operation === 'reset_recovery_scope') return mcpJson(await resetRecoveryScope(input));
       if (input.operation === 'reconcile_stopped') return mcpJson(await reconcileStopped(input));
       return mcpJson(await cancel(input));
     } catch (error) {
