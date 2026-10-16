@@ -127,6 +127,14 @@ describe('dataset-intelligence addon', () => {
     expect(map).toContain('`make this searchable` | dataset-intelligence')
   })
 
+  it('keeps the migration inventory link valid in the addon and synchronized docs copy', () => {
+    const target = 'https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/dataset-intelligence/deprecations/dataset-deprecations.v1.json'
+    const source = read('docs/migration-guide.md')
+    const copy = readFileSync(resolve('docs/addons/dataset-intelligence/migration-guide.md'), 'utf8')
+    expect(source).toContain(`[deprecation inventory](${target})`)
+    expect(copy).toContain(`[deprecation inventory](${target})`)
+  })
+
   it('binds documentation to CLI help, service actions, and conformance maturity', async () => {
     for (const name of ['task-guide.md', 'worked-examples.md', 'adapter-authoring.md', 'fortemi-boundaries.md', 'migration-guide.md', 'offline-troubleshooting.md']) {
       expect(files('docs')).toContain(`docs/${name}`)
