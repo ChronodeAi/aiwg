@@ -72,15 +72,19 @@ gh run list --repo jmagly/aiwg --limit 5
 gh run view <run-id> --repo jmagly/aiwg
 ```
 
-The GitHub job also owns everything after publication — stable `latest`
-dist-tag publication, cosign signing, SBOM generation, and uploading `SHA256SUMS`,
-`aiwg-*.tgz`, and `install.sh` to the GitHub release. A failure anywhere in
-that job leaves the packages on npm but the release without assets, which is
-what `publication_verify` in the release config checks for.
+The GitHub job creates or updates a normal release immediately after tag-identity
+and signed-tag verification, before build/test/publish; only stable versions are
+marked latest. Tests and package/security checks block npm publication. After all
+three npm publishes, it signs the locally packed tarball, generates and signs a
+CycloneDX SBOM of the built tree, and uploads the signed assets, `SHA256SUMS`, `aiwg-*.tgz`, and
+`install.sh`, independently of npm registry visibility.
 
-Recovery for a partial publish is `workflow_dispatch` on the GitHub workflow
-with `--ref <tag> -f tag_to_publish=<tag>`; the publish steps treat an
-already-published version as success and continue into the skipped work.
+npm visibility/provenance and stable dist-tag checks run last with short, bounded
+waits and are advisory: failures emit warnings and job-summary recovery commands
+without failing the job or preventing the subsequent Socket audit. Real npm
+publish failures still block; already-published versions count as success.
+Recovery for a partial publish or advisory failure uses the same tag:
+`gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>`.
 
 Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
 

@@ -591,7 +591,7 @@ is intentional; don't try to "unify" them.
 | `@aiwg/cli`     | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cli`     | Lightweight CLI/API runtime without the corpus; its version is exactly lockstep with `aiwg`. |
 | `@aiwg/cockpit` | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cockpit` | Opt-in Cockpit package.                                                                      |
 
-### Where each registry is published from
+### Publication surfaces
 
 - **npmjs.org (public) — GitHub Actions only.** `.github/workflows/npm-publish.yml`
   publishes all three packages via **OIDC trusted publishing + provenance** on tag push.
@@ -602,7 +602,31 @@ is intentional; don't try to "unify" them.
   Uses the `NPM_TOKEN` secret — a **Gitea API token (`gta_…`)** with `package:write`
   (despite the name, it is NOT an npmjs.org token).
 - **Releases:** Gitea release = `.gitea/workflows/gitea-release.yml`; GitHub release
-  - mirror push = `.gitea/workflows/github-mirror.yml`.
+  = `.github/workflows/npm-publish.yml` (the mirror workflow can also create it).
+
+The GitHub publish job creates or updates a normal GitHub release immediately
+after the tag-identity and signed-tag gates, before build/test/publish. It uses
+`docs/releases/v<version>-announcement.md`, falling back to the version's
+CHANGELOG section and then minimal notes. Only stable versions are marked latest.
+Tests, dependency-signature verification, and package-content audits remain
+blocking gates before all three npm publishes. The job then signs the locally
+packed tarball used for publication, generates and signs a CycloneDX SBOM of the
+built tree, and uploads the tarball, signatures, release manifest, `SHA256SUMS`, and `install.sh`.
+None of that asset work depends on npm registry visibility.
+
+npm visibility/provenance and stable dist-tag verification run **last and are
+advisory**: short, bounded checks emit warnings and job-summary recovery commands
+if npm is still validating a package or its metadata is incorrect. These checks
+do not fail the job or prevent the subsequent Socket audit. Actual publish
+failures still fail the job; already-published versions count as success on reruns.
+
+For a partial publish or advisory verification failure, re-check the packages'
+`dist.attestations`, `latest` version, and absence of the retired `next` alias,
+then rerun the GitHub job on the same tag:
+
+```bash
+gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>
+```
 
 Gitea's bundled npm registry stores AIWG packages but does not proxy packages
 from npmjs.org. A process-wide `--registry=<gitea>` install therefore sends
