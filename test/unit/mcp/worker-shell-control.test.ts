@@ -65,9 +65,9 @@ const collected = 'LoadState=not-found\nActiveState=inactive\nResult=\nExecMainS
 describe('async systemd status and command path', () => {
   it.each([
     [active, { termination: 'uncertain', exitCode: null }],
-    [success, { termination: 'confirmed', exitCode: 0 }],
-    [failed, { termination: 'confirmed', exitCode: 7 }],
-    [killed, { termination: 'confirmed', exitCode: 9, signalCode: 9 }],
+    [success, { termination: 'confirmed', exitCode: 0, nativeResult: 'success' }],
+    [failed, { termination: 'confirmed', exitCode: 7, nativeResult: 'exit-code' }],
+    [killed, { termination: 'confirmed', exitCode: 9, signalCode: 9, nativeResult: 'signal' }],
     [collected, { termination: 'confirmed', exitCode: null }],
   ])('parses recorded show properties: %s', (stdout, expected) => {
     expect(parseShellUnitStatus(stdout)).toEqual(expected);
@@ -88,7 +88,7 @@ describe('async systemd status and command path', () => {
     const abort = new AbortController();
     const outcome = await waitForUnitTermination('test.service', 80, { signal: abort.signal, exec,
       pollIntervalMs: 10, clock: () => clock, sleep: async (ms: number) => { clock += ms; } });
-    expect(outcome).toEqual({ termination: 'confirmed', exitCode: 0 });
+    expect(outcome).toEqual({ termination: 'confirmed', exitCode: 0, nativeResult: 'success' });
     expect(exec).toHaveBeenCalledTimes(3);
     for (const call of exec.mock.calls) {
       expect(path.isAbsolute(call[0])).toBe(true);
@@ -155,7 +155,7 @@ describe('async systemd status and command path', () => {
     const { root, binary } = stubConductorClientEnv();
     const exec = vi.fn(async () => ({ stdout: success }));
     expect(await waitForUnitTermination('test.service', 100, { exec }))
-      .toEqual({ termination: 'confirmed', exitCode: 0 });
+      .toEqual({ termination: 'confirmed', exitCode: 0, nativeResult: 'success' });
     expect(exec).toHaveBeenCalledOnce();
     const [invoked, args, options]: any[] = exec.mock.calls[0];
     expect(invoked).toBe(resolveSystemdClient('systemctl'));
@@ -182,6 +182,74 @@ describe('async systemd status and command path', () => {
 });
 
 describe('shell control lifetimes', () => {
+  it.each([true, false])('bounds a never-executed inactive unit with stop then recheck (stop accepted: %s)', async accepted => {
+    stubConductorClientEnv();
+    let now = 0;
+    const stdout = success.replace('ExecMainCode=1', 'ExecMainCode=0');
+    const exec = vi.fn(async () => ({ stdout }));
+    const stop = vi.fn(async () => ({ ok: accepted }));
+    const kill = vi.fn(async () => ({ ok: false }));
+    const onConfirmed = vi.fn();
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'never-exec.service' }, {
+      graceMs: 10, nowMs: () => now, stopUnit: stop, killUnit: kill, onConfirmed, recheckMaxAttempts: 0,
+      waitForUnit: (unit: string, ms: number, options: any) => waitForUnitTermination(unit, ms, {
+        ...options, exec, clock: () => now, pollIntervalMs: 1000, sleep: async (delay: number) => { now += delay; },
+      }),
+    });
+    try {
+      const outcome = await control.wait(1);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(exec.mock.calls.length).toBeGreaterThanOrEqual(2); // before stop and fresh recheck
+      if (accepted) {
+        expect(outcome).toMatchObject({ termination: 'confirmed', exitCode: null, neverExecuted: true, timedOut: true });
+        expect(onConfirmed).toHaveBeenCalledOnce();
+        expect(kill).not.toHaveBeenCalled();
+      } else {
+        expect(outcome).toMatchObject({ termination: 'uncertain', timedOut: true });
+        expect(onConfirmed).not.toHaveBeenCalled();
+        expect(kill).toHaveBeenCalledOnce();
+      }
+      expect(control.pollingStopped).toBe(true);
+    } finally { control.dispose(); }
+  });
+  it('rejects epoch deadlines without the matching clock before polling or stopping', async () => {
+    const observe = vi.fn();
+    const stop = vi.fn();
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'clock.service' },
+      { graceMs: 10, waitForUnit: observe, stopUnit: stop });
+    try {
+      await expect(control.wait(1000, { deadlineAtMs: Date.now() + 1000 })).rejects.toThrow(/same clock/);
+      await expect(waitForUnitTermination('clock.service', 1000, { deadlineAtMs: Date.now() + 1000 }))
+        .rejects.toThrow(/same clock/);
+      expect(observe).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    } finally { control.dispose(); }
+  });
+  it('accepts an epoch deadline with an explicitly matching clock', async () => {
+    const observe = vi.fn(async (_unit: string, _ms: number) => ({ termination: 'confirmed', exitCode: 0 }));
+    const now = Date.now();
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'clock.service' },
+      { graceMs: 10, waitForUnit: observe });
+    try {
+      await expect(control.wait(1000, { deadlineAtMs: now + 1000, nowMs: () => now }))
+        .resolves.toMatchObject({ termination: 'confirmed', exitCode: 0 });
+      expect(observe).toHaveBeenCalledOnce();
+      expect(observe.mock.calls[0][1]).toBe(1000);
+    } finally { control.dispose(); }
+  });
+  it('deadline escalation catches rejecting asynchronous stop and kill helpers and resolves uncertain', async () => {
+    const stop = vi.fn(async () => { throw new Error('stop rejected'); });
+    const kill = vi.fn(async () => { throw new Error('kill rejected'); });
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'rejecting.service' }, {
+      graceMs: 10, stopUnit: stop, killUnit: kill, recheckMaxAttempts: 0,
+      waitForUnit: async () => ({ termination: 'uncertain', exitCode: null, timedOut: true }),
+    });
+    try {
+      await expect(control.wait(0)).resolves.toMatchObject({ termination: 'uncertain', exitCode: null, timedOut: true });
+      expect(stop).toHaveBeenCalledOnce();
+      expect(kill).toHaveBeenCalledOnce();
+    } finally { control.dispose(); }
+  });
   it('uses the absolute recovery deadline despite a backward wall clock and gives stop its own grace', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let monotonic = 100;

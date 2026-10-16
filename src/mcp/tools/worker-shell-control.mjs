@@ -30,7 +30,7 @@ async function execCanonicalSystemctl(exec, args, options) {
 
 /** Parse only explicit stop proof. Missing/unknown properties are observation
  * failures, never evidence of termination. A collected unit has no exit result. */
-export function parseShellUnitStatus(stdout) {
+export function parseShellUnitStatus(stdout, { stopAccepted = false } = {}) {
   const fields = Object.fromEntries(String(stdout).split('\n').filter(line => line.includes('='))
     .map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
   if (fields.LoadState === 'not-found' && fields.ActiveState === 'inactive' && fields.MainPID === '0') {
@@ -42,19 +42,32 @@ export function parseShellUnitStatus(stdout) {
     || !/^\d+$/.test(fields.MainPID ?? '')) {
     throw new Error('worker status unavailable: missing or invalid systemd properties');
   }
-  if (!['inactive', 'failed'].includes(fields.ActiveState) || fields.MainPID !== '0'
-    || !['1', '2', '3'].includes(fields.ExecMainCode)) return uncertain();
+  if (!['inactive', 'failed'].includes(fields.ActiveState) || fields.MainPID !== '0') return uncertain();
+  // An inactive unit may still have a queued start. Only an accepted stop
+  // followed by this fresh observation can prove a never-executed unit ended.
+  if (fields.ExecMainCode === '0' && stopAccepted) {
+    return { termination: 'confirmed', exitCode: null, neverExecuted: true };
+  }
+  if (!['1', '2', '3'].includes(fields.ExecMainCode)) return uncertain();
   const signaled = ['2', '3'].includes(fields.ExecMainCode);
-  return { termination: 'confirmed', exitCode: fields.Result === 'success' && !signaled
+  return { termination: 'confirmed', nativeResult: fields.Result, exitCode: fields.Result === 'success' && !signaled
     ? Number(fields.ExecMainStatus) : Number(fields.ExecMainStatus) || 1,
   ...(signaled ? { signalCode: Number(fields.ExecMainStatus) } : {}) };
 }
 
+function boundedDeadline(deadlineMs, deadlineAtMs, now) {
+  if (deadlineAtMs !== undefined && (!Number.isFinite(deadlineAtMs)
+    || (deadlineAtMs >= 1e12) !== (now >= 1e12))) {
+    throw new RangeError('Worker deadlineAtMs must use the same clock as nowMs (or clock); supply the matching clock');
+  }
+  return Math.min(deadlineAtMs ?? Infinity, now + deadlineMs);
+}
+
 export async function waitForUnitTermination(unit, deadlineMs, { signal, pollIntervalMs = 2000,
   exec = execFileAsync, sleep = (ms, abortSignal) => delay(ms, undefined, { signal: abortSignal }),
-  clock = () => performance.now(), deadlineAtMs } = {}) {
+  clock = () => performance.now(), deadlineAtMs, stopAccepted = false } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) throw new Error('Worker isolation requires a unit-safe unit name');
-  const deadline = Math.min(deadlineAtMs ?? Infinity, clock() + deadlineMs);
+  const deadline = boundedDeadline(deadlineMs, deadlineAtMs, clock());
   while (!signal?.aborted && clock() < deadline) {
     try {
       const { stdout } = await execCanonicalSystemctl(exec,
@@ -63,7 +76,7 @@ export async function waitForUnitTermination(unit, deadlineMs, { signal, pollInt
         // overall grace/deadline even when a probe is still in flight.
         { timeout: Math.max(1000, Math.min(10000, deadline - clock())), signal });
       if (signal?.aborted) return uncertain();
-      const outcome = parseShellUnitStatus(stdout);
+      const outcome = parseShellUnitStatus(stdout, { stopAccepted });
       if (outcome.termination === 'confirmed') return outcome;
     } catch (error) {
       // systemctl may return nonzero for a collected unit while still showing
@@ -97,6 +110,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
   let stopTask;
   let delivery;
   let stopped = false;
+  let stopAccepted = false;
   let recheckTimer;
   let rechecks = 0;
   let disposed = false;
@@ -141,10 +155,10 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
     if (groupGone()) confirm({ termination: 'confirmed', exitCode, signalCode });
     else void control.stop(); // descendants outlived their leader
   }
-  function onError() {
+  function onError(error) {
     // A pid-bearing child error is an observation failure, not a deadline.
     // ENOENT has no pid and cannot have started a worker.
-    if (!child?.pid && launch.mode !== 'systemd-unit') confirm({ termination: 'confirmed', exitCode: null });
+    if (!child?.pid && launch.mode !== 'systemd-unit') confirm({ termination: 'confirmed', exitCode: null, errorCode: error?.code ?? 'SPAWN_ERROR' });
   }
   child?.once('close', onClose);
   child?.on('error', onError);
@@ -171,7 +185,8 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
   async function waitStopped(ms, deadline) {
     if (confirmed) return confirmed;
     if (launch.mode === 'systemd-unit') {
-      const outcome = await bounded(signal => waitForUnit(launch.unit, ms, { signal, ...(deadline ? { deadlineAtMs: deadline.at, clock: deadline.now } : {}) }), ms);
+      const outcome = await bounded(signal => waitForUnit(launch.unit, ms, { signal, stopAccepted,
+        ...(deadline ? { deadlineAtMs: deadline.at, clock: deadline.now } : {}) }), ms);
       return outcome.termination === 'confirmed' ? confirm(outcome) : outcome;
     }
     if (closed && groupGone()) return confirm({ termination: 'confirmed', exitCode, signalCode });
@@ -194,6 +209,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
       if (launch.mode === 'systemd-unit') {
         const result = await bounded(abortSignal => (signalName === 'SIGTERM' ? stopUnit : killUnit)(launch.unit,
           { signal: abortSignal, timeout: Math.max(1, budgetMs) }), budgetMs);
+        if (signalName === 'SIGTERM' && result.ok) stopAccepted = true;
         return !!result.ok;
       }
       if (ownedGroup) {
@@ -239,7 +255,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
       return confirmed ?? (stopTask ? await stopTask : uncertain());
     },
     wait: async (deadlineMs, { deadlineAtMs, nowMs: waitNow = nowMs } = {}) => {
-      const deadline = Math.min(deadlineAtMs ?? Infinity, waitNow() + deadlineMs);
+      const deadline = boundedDeadline(deadlineMs, deadlineAtMs, waitNow());
       let outcome;
       do {
         outcome = await waitStopped(Math.max(0, deadline - waitNow()), { at: deadline, now: waitNow });

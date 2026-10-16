@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -16,7 +16,26 @@ import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuit
 import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
+import { getWorkerRecoveryCapabilities as sourceRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
+import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+import { SessionLauncher, directRecoveryEligibility, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
+
 vi.mock('node:child_process', { spy: true });
+
+// Force separate direct-source and resolver-selected registries even without
+// dist/. CI selects dist before beforeEach forces src; both owners use WeakMaps.
+vi.mock('../../../tools/_resolve-impl.mjs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../tools/_resolve-impl.mjs')>();
+  return { ...actual, importImpl: (caller: string, name: string) => name === 'models/worker-installation.mjs'
+    ? import('../../../src/models/worker-installation.mjs?resolved-owner')
+    : actual.importImpl(caller, name) };
+});
+
+// Register with the owner captured by the launcher, before per-test env stubs.
+const { installation: { registerWorkerRecoveryCapabilities } } = await loadRecoveryModuleGraph();
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -115,6 +134,14 @@ function nodePermissionFlag(flags: ReadonlySet<string> = process.allowedNodeEnvi
 }
 
 describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
+  it('registers recovery capabilities with the launcher owner when direct source imports use a separate registry', () => {
+    const localDriver = registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false });
+    expect(sourceRecoveryCapabilities(localDriver)).toBeNull();
+    expect(directRecoveryEligibility({ gateEnabled: true, config: {},
+      invocation: { selected: { cli: 'codex' } }, drivers: { codex: localDriver } }))
+      .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+  });
+
   it('qualifies a private executable with explicit permissions independent of the runner Node', async () => {
     const f = await setup();
     const executable = await lstat(f.request.executable);
@@ -123,6 +150,80 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     expect(executable.nlink).toBe(1);
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
   });
+
+  it('T-OG-22 blocks endpoint-free recovery with actionable intervention until an operator resets the scope', async () => {
+    const f = await setup();
+    const inputs = workerResolutionFixture();
+    const adapter = inputs.snapshot.registry.providers.codex.workerAdapter!;
+    adapter.invocationProfiles['fixture-shell'].envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    adapter.invocation.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    adapter.invocationProfiles['fixture-shell'].health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl',
+      signalParser: 'fixture:jsonl', sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only',
+      fixtureRef: 'fixture:one-shot', qualifiedAt: inputs.request.now, statusOperation: null, cancelOperation: null };
+    // The fixture CLI is a real node process; under full CI load startup alone can exceed 5s (run 83892).
+    inputs.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 60, terminateGraceSeconds: 1 };
+    inputs.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
+    inputs.snapshot.installations.codex.boundary = f.request.boundary;
+    let time = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0 });
+    const scopeKey = `installation:codex:${f.request.boundary.digest}`;
+    const localDriver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
+      installation: f.request, boundary: f.request.boundary },
+      buildInvocation: async (input: any) => ({ argv: [f.request.executable, driver.fixtureCli, '--model', input.selected.model,
+        '--final-output', input.finalPath], stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
+      extractFinal: (text: string) => { try { return JSON.parse(text).result ?? null; } catch { return null; } } };
+    registerWorkerRecoveryCapabilities(localDriver, {
+      parseWorkerAttemptFinal: (output: any, options: any) => driver.parseWorkerAttemptFinal(output, { ...options, format: 'jsonl' }) });
+    const launcher = new SessionLauncher();
+    const summaries = vi.fn();
+    launcher.on('recovery-transition', summaries);
+    let dispatches = 0;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No upstream request allowed'));
+    vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', f.config);
+    const launch = async (n: number, onDispatch = async () => {}) => {
+      const brief = path.join(f.root, `brief-${n}.md`);
+      await writeFile(brief, `synthetic endpoint-free task ${n}`);
+      const plan = await resolveWorkerInvocation(inputs.snapshot, { role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: f.cwd, final_output: path.join(f.cwd, `final-${n}.json`) }, { codex: localDriver }, inputs.request.now);
+      expect(plan.invocation, JSON.stringify(plan.diagnostics)).toBeDefined();
+      const invocationPath = path.join(f.root, `plan-${n}.json`);
+      await writeFile(invocationPath, JSON.stringify(plan));
+      return launcher.launchWorker({ invocationPath, runDir: path.join(f.root, `run-${n}`), scopedBreaker: breaker,
+        inputs: { snapshot: inputs.snapshot, drivers: { codex: localDriver } }, now: inputs.request.now,
+        isolation: { mode: 'degraded', reason: 'synthetic manager' }, allowDegraded: true,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        launchIsolated: async ({ command, args, cwd, onDispatchCommit }: any) => {
+          await onDispatchCommit();
+          dispatches++;
+          await onDispatch();
+          return { mode: 'degraded', child: spawn(command, args, { cwd, detached: true,
+            env: f.request.environment, stdio: ['ignore', 'pipe', 'pipe'] }) };
+        } });
+    };
+    try {
+      // Actual ENOENT launches open the qualified installation scope.
+      // Restore identical binary bytes so the original qualification still binds.
+      await unlink(f.request.executable);
+      for (let n = 0; n < 3; n++) await expect(launch(n)).resolves.toMatchObject({ errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(breaker.getState(scopeKey).state).toBe('open');
+      await copyNode(f.packageRoot);
+      time = 120_000;
+      await expect(launch(3)).rejects.toMatchObject({ code: 'RECOVERY_OPERATOR_INTERVENTION',
+        message: expect.stringContaining('probe-profile-unavailable; restore a qualified scope-relevant probe') });
+      expect(breaker.getState(scopeKey).state).toBe('operator-intervention');
+      expect(summaries.mock.calls.at(-1)?.[0]).toMatchObject({ scopeKey, to: 'operator-intervention',
+        summary: expect.stringContaining('then reset this scope') });
+      expect(dispatches).toBe(3);
+      expect(breaker.reset(scopeKey)).toEqual({ ok: true });
+      const result = await launch(4);
+      expect(result.attemptOutcome, JSON.stringify(result, null, 2)).toBe('succeeded');
+      expect(breaker.getState(scopeKey).state).toBe('closed');
+      expect(dispatches).toBe(4);
+      expect(breaker.snapshot().attemptsObserved).toBe(4);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await readdir(f.root)).not.toContain('.aiwg');
+    } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
+  }, 180_000);
 
   it('rejects a writable executable with multiple hard links', async () => {
     const f = await setup();
