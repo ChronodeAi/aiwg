@@ -692,7 +692,9 @@ async function main() {
   if (args.includes('--launch-worker')) {
     const { SessionLauncher } = await import('./session-launcher.mjs');
     const worker = parseWorkerLaunchArgs(args);
-    const result = await new SessionLauncher().launchWorker(worker);
+    const launcher = new SessionLauncher();
+    launcher.on('recovery-transition', event => console.error(event.summary));
+    const result = await launcher.launchWorker(worker);
     console.log(JSON.stringify(result));
     process.exitCode = workerExitCode(result);
     return;

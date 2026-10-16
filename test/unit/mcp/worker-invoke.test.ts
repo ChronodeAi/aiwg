@@ -35,6 +35,16 @@ import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecut
 // @ts-expect-error — .mjs untyped
 import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
 
+/** These lifecycle fixtures start at canary execution. Complete the required
+ * relevant preliminary probe explicitly before entering that phase. */
+function completeSyntheticPreliminaryProbe(breaker: any, invocationId: string) {
+  const probe = breaker.admit({ invocationId, scopeKeys: ['installation:codex'], purpose: 'probe' });
+  expect(probe.ok).toBe(true);
+  expect(breaker.beginDispatch(probe.token, { invocationId, selectionDigest: null }).ok).toBe(true);
+  expect(breaker.commitDispatch(probe.token).ok).toBe(true);
+  breaker.settle(probe.token, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+}
+
 let recoveryGraph = await loadRecoveryModuleGraph();
 let { workerInvoke, launcher: sessionLauncherModule, isolation: workerIsolation } = recoveryGraph;
 let { registerWorkerRecoveryCapabilities } = recoveryGraph.installation;
@@ -718,7 +728,7 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     const absent = await sessionLauncher.admitDirectWorker({ gateEnabled: false, config: undefined,
       invocation, invocationId: 'inv-2', scopedBreaker: throwingBreaker });
     expect(absent).toEqual({ gated: false });
-    const refusingBreaker = { admit: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
+    const refusingBreaker = { nowMs: () => Date.now(), admit: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
     const on = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
       invocation, invocationId: 'inv-3', scopedBreaker: refusingBreaker });
     expect(on).toMatchObject({ gated: true, refused: { blockedBy: ['installation:codex'] } });
@@ -2024,6 +2034,7 @@ setInterval(() => {}, 1000);
     expect(opening.ok).toBe(true);
     breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
     clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    completeSyntheticPreliminaryProbe(breaker, 'preliminary-schema-drift');
     const result = await invoke(root, config, {}, { scopedBreaker: breaker, allowDegraded: true });
     const body = JSON.parse(result.content[0].text);
     expect(body.status, JSON.stringify(body)).toBe('blocked');
@@ -3130,6 +3141,7 @@ describe('timeout is never treated as success, independent of exit status (#2915
     const opening = breaker.admit({ invocationId: 'opener-c4-latch', scopeKeys: ['installation:codex'] });
     breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
     clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    completeSyntheticPreliminaryProbe(breaker, 'preliminary-c4-latch');
     // The instant SIGTERM is delivered (the stop escalation genuinely
     // starting), simulate the backward wall-clock movement and then a
     // clean close racing the escalation -- both happen synchronously
@@ -3707,6 +3719,7 @@ describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => 
     const opening = breaker.admit({ invocationId: `${invocationId}-opener`, scopeKeys: ['installation:codex'] });
     breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
     clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    completeSyntheticPreliminaryProbe(breaker, `${invocationId}-preliminary`);
     const admitted = breaker.admit({ invocationId, scopeKeys: ['installation:codex'] });
     expect(admitted.ok).toBe(true);
     const token = (admitted as any).token;
@@ -3821,6 +3834,7 @@ describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => 
     await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
       brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
     const refusingBreaker: any = {
+      nowMs: () => Date.now(),
       admit: () => ({ ok: false, blockedBy: ['reservation-capacity', 'blocking-markers:3'], nextEligibleAt: Date.now() }),
     };
     const tools = new Map<string, any>();
@@ -4028,6 +4042,37 @@ describe('review 9 bounded recovery regressions', () => {
       const body = JSON.parse((await p.call(p.input)).content[0].text);
       expect(body.status, JSON.stringify(body)).toBe('failed');
       expect(breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+    } finally { breaker.destroy(); }
+  });
+
+  it('a never-executed systemd unit releases breaker and invocation reservations after stop plus fresh status', async () => {
+    const client = systemdClientFixture();
+    roots.push(client.root);
+    vi.stubEnv('PATH', client.root);
+    let monotonic = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const stop = vi.fn(async () => ({ ok: true }));
+    const kill = vi.fn();
+    const exec = vi.fn(async () => ({ stdout: 'LoadState=loaded\nActiveState=inactive\nResult=resources\nExecMainStatus=0\nExecMainCode=0\nMainPID=0\n' }));
+    const p = await probe('shell', { scopedBreaker: breaker,
+      launchShellWorker: async (_inv: any, options: any) => {
+        await commit(options);
+        return { launched: true, mode: 'systemd-unit', unit: 'never-exec-unit' };
+      },
+      isolationStatus: () => ({ active: false, execMainCode: 0, result: 'resources', execMainStatus: 0 }),
+      stopWorkerUnit: stop, killWorkerUnit: kill,
+      waitForUnitTermination: (unit: string, duration: number, options: any) => waitForUnitTermination(unit, duration, {
+        ...options, exec, pollIntervalMs: 300_000, sleep: async (ms: number) => { monotonic += ms; },
+      }),
+    });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body).toMatchObject({ status: 'failed', termination: 'confirmed' });
+      expect(stop).toHaveBeenCalledOnce();
+      expect(exec.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(kill).not.toHaveBeenCalled();
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(p.registry.liveCount()).toBe(0);
     } finally { breaker.destroy(); }
   });
 

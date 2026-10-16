@@ -49,6 +49,8 @@ const sources = {
   "vscode-extension/schemas/aiwg.config.v1.json": "vscode-extension/schemas/aiwg.config.v1.json",
   "worker-installation.mjs": "src/models/worker-installation.mjs",
   "worker-invoke.mjs": "src/mcp/tools/worker-invoke.mjs",
+  "worker-shell-control.mjs": "src/mcp/tools/worker-shell-control.mjs",
+  "worker-stdin-runtime.mjs": "src/mcp/tools/worker-stdin-runtime.mjs",
   "worker-isolation.mjs": "tools/ralph-external/lib/worker-isolation.mjs"
 };
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));

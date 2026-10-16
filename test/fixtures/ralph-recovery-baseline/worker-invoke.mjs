@@ -177,8 +177,8 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mcpError, mcpJson } from '../../../src/mcp/helpers.mjs';
-import { buildShellStopControl, waitForUnitTermination } from '../../../src/mcp/tools/worker-shell-control.mjs';
-import { launchPreparedShellWorker, sweepWorkerStdin } from '../../../src/mcp/tools/worker-stdin-runtime.mjs';
+import { buildShellStopControl, waitForUnitTermination } from './worker-shell-control.mjs';
+import { launchPreparedShellWorker, sweepWorkerStdin } from './worker-stdin-runtime.mjs';
 
 const execFileAsync = promisify(execFile);
 

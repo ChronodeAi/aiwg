@@ -207,15 +207,10 @@ export class ConsecutiveFailureCircuitBreaker extends EventEmitter {
  *   known 429 reset/Retry-After); a failed canary doubles the cooldown,
  *   capped at 900s. Malformed resets fall back to this backoff with
  *   bounded jitter.
- * - canaryTimeoutMs (half-open canary, #2915D2): once a scope is open and
- *   due, `canLaunch` admits the NEXT real launch through the existing
- *   direct-dispatch surface as the single canary for every covering scope
- *   it is due for — there is no separate probe runner. The admission is a
- *   tracked reservation bounded by this deadline; an unreported/expired
- *   canary is accounted as failed and the expiry sweep reopens with
- *   backoff. A launcher-verified success on that same invocation recovers
- *   the scope; a launcher-verified failure reopens it. Unverified/worker
- *   evidence never recovers (`isTrustedRecoveryEvidence`).
+ * - probeTimeoutMs/probeMaxOutputBytes: a separate bounded relevant probe
+ *   precedes the one real task canary. An echo cannot recover an upstream
+ *   scope. Both dispatches consume the caller's existing allowance.
+ * - canaryTimeoutMs: bounds the single real task after a successful probe.
  * - maxTrackedScopes/maxChargedAttempts: explicit caps on retained scope
  *   and dedup-set state, with LRU eviction of inert entries, so a
  *   long-running process's bookkeeping never grows without bound (#2915
@@ -239,6 +234,8 @@ export const RecoveryPolicy = Object.freeze({
   minOutstanding: 2,
   cooldownMs: 120_000,
   maxCooldownMs: 900_000,
+  probeTimeoutMs: 10_000,
+  probeMaxOutputBytes: 65_536,
   canaryTimeoutMs: 300_000,
   backoffMultiplier: 2,
   maxJitterMs: 1_000,
@@ -270,6 +267,9 @@ export function validateRecoveryPolicy(policy) {
   positiveMs('cooldownMs', policy.cooldownMs);
   positiveMs('maxCooldownMs', policy.maxCooldownMs);
   if (policy.maxCooldownMs < policy.cooldownMs) fail('maxCooldownMs', 'must be >= cooldownMs');
+  positiveMs('probeTimeoutMs', policy.probeTimeoutMs);
+  if (policy.probeTimeoutMs > RecoveryPolicy.probeTimeoutMs) fail('probeTimeoutMs', 'cannot exceed 10s');
+  positiveInt('probeMaxOutputBytes', policy.probeMaxOutputBytes, 1, RecoveryPolicy.probeMaxOutputBytes);
   positiveMs('canaryTimeoutMs', policy.canaryTimeoutMs);
   if (!Number.isFinite(policy.backoffMultiplier) || policy.backoffMultiplier < 1) {
     fail('backoffMultiplier', `expected finite number >= 1, got ${policy.backoffMultiplier}`);
@@ -510,6 +510,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       ?? (() => Math.floor(Math.random() * (this.policy.maxJitterMs + 1)));
     this._scopes = new Map();
     this._outstanding = new Map();
+    this._hostFailureFacts = [];
     this._canarySeq = 0;
     this._observedInvocations = new Set();
     this.canariesObserved = 0;
@@ -578,7 +579,7 @@ export class ScopedFailureBreaker extends EventEmitter {
    * reservation (OPEN-scope protection always wins over admitting more
    * concurrent work).
    */
-  admit({ invocationId = null, scopeKeys = [], selectionDigest = null } = {}) {
+  admit({ invocationId = null, scopeKeys = [], selectionDigest = null, purpose = 'task' } = {}) {
     const now = this.nowMs();
     this._sweepReservations(now);
     this._sweepOutstanding(now);
@@ -626,6 +627,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       return rec && rec.status !== 'closed';
     });
     const canaryKeys = [];
+    const probeRequired = [];
     if (openKeys.length > 0) {
       const blockedBy = [];
       for (const scopeKey of openKeys) {
@@ -642,12 +644,15 @@ export class ScopedFailureBreaker extends EventEmitter {
         if (rec.activeCanary) { blockedBy.push(scopeKey); continue; }
         const dueFloor = Math.max(rec.nextProbeAtMs ?? 0, rec.resetAtMs ?? 0);
         if (now < dueFloor || !rec.breaker.canExecute()) { blockedBy.push(scopeKey); continue; }
+        if (purpose !== 'probe' && rec.status !== 'canary-ready') { probeRequired.push(scopeKey); continue; }
+        if (purpose === 'probe' && rec.status === 'canary-ready') continue;
         canaryKeys.push(scopeKey);
       }
-      if (blockedBy.length > 0) {
+      if (blockedBy.length > 0 || probeRequired.length > 0) {
         const nextEligibleAt = openKeys.reduce((max, key) => Math.max(max, this._scopes.get(key)?.nextProbeAtMs ?? 0), 0);
         for (const createdKey of reservedScopeKeys) this._releaseIfInert(createdKey);
-        return { ok: false, blockedBy, nextEligibleAt };
+        return { ok: false, blockedBy: [...blockedBy, ...probeRequired], nextEligibleAt,
+          probeRequired: blockedBy.length === 0 ? probeRequired : [] };
       }
     }
     if (this._reservations.size >= this.policy.maxOutstandingReservations) {
@@ -671,7 +676,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     // caller settles it, however long the real attempt legitimately runs
     // (#2915 final review risk: a canary-only deadline must never leak onto
     // ordinary long-running attempts).
-    const deadlineMs = canaryKeys.length > 0 ? now + this.policy.canaryTimeoutMs : Infinity;
+    const deadlineMs = canaryKeys.length > 0 ? now + (purpose === 'probe' ? this.policy.probeTimeoutMs : this.policy.canaryTimeoutMs) : Infinity;
     // `selectionDigest` (#2915 round 8, D3): stored on the FROZEN token
     // itself — never a separate mutable field on the outer `admitDirectWorker`
     // result — so `beginDispatch`'s identity check below has an authoritative,
@@ -680,7 +685,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     // actually compared (#2915 round 8 critique: "stored identity is only
     // useful if compared against the actual launch").
     const token = Object.freeze({ id, breaker: this, invocationId, selectionDigest, coveringKeys: Object.freeze(covering),
-      canaryKeys: Object.freeze(canaryKeys), mintedAtMs: now, deadlineMs });
+      canaryKeys: Object.freeze(canaryKeys), purpose, maxOutputBytes: purpose === 'probe' ? this.policy.probeMaxOutputBytes : null, mintedAtMs: now, deadlineMs });
     // `phase`/`stop` (#2915 round 8, D3): the reservation's own transition
     // state, `admitted -> committing -> dispatched`, and its stop-evidence
     // status, `none-needed -> unresolved -> confirmed`. Both start at their
@@ -696,8 +701,8 @@ export class ScopedFailureBreaker extends EventEmitter {
     for (const scopeKey of canaryKeys) {
       const rec = this._scopes.get(scopeKey);
       rec.activeCanary = { id, scopeKey, invocationId, reservedAtMs: now, deadlineMs };
-      rec.canariesObserved += 1;
-      this.canariesObserved += 1;
+      if (purpose !== 'probe') { rec.canariesObserved += 1; this.canariesObserved += 1; }
+      this._transition(rec, purpose === 'probe' ? 'half-open' : 'canary', purpose === 'probe' ? 'run one bounded relevant probe' : 'verify the one task canary');
       this._touch(rec);
     }
     return { ok: true, token };
@@ -830,7 +835,11 @@ export class ScopedFailureBreaker extends EventEmitter {
         continue;
       }
       rec.activeCanary = null;
-      if (kind === 'succeeded') {
+      if (kind === 'succeeded' && token.purpose === 'probe') {
+        if (outcome.relevant === true && isTrustedRecoveryEvidence(outcome.evidenceSource) && confirmedStop) {
+          this._transition(rec, 'canary-ready', 'probe succeeded; admit one task canary');
+        } else { this._reopen(rec, now); }
+      } else if (kind === 'succeeded') {
         this._recoverScope(rec, invocationId);
       } else if (kind === 'failed') {
         // A reset/Retry-After carried by THIS canary's own failure evidence
@@ -978,7 +987,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       rec.nextProbeAtMs = Math.max(now + rec.episodeCooldownMs, rec.resetAtMs ?? 0) + this._boundedJitter();
       rec.breaker.cooldownMs = rec.episodeCooldownMs;
       rec.breaker.recordFailure();
-      rec.status = 'open';
+      this._transition(rec, 'open', 'pause covered launches; wait for reset/cooldown then probe');
     }
   }
 
@@ -987,8 +996,22 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.episodeCooldownMs = this.policy.cooldownMs;
     rec.resetAtMs = null;
     rec.nextProbeAtMs = 0;
-    rec.status = 'closed';
+    rec.failures = [];
+    rec.cohort = null;
+    rec.cohortFrozenAt = null;
+    this._transition(rec, 'closed', 'canary succeeded; resume covered launches');
     rec.breaker.reset();
+  }
+
+  _transition(rec, to, action) {
+    const from = rec.status;
+    if (from === to) return;
+    rec.status = to;
+    this.emit('transition', { scopeKey: rec.scopeKey, from, to, action,
+      distinctFailures: new Set(rec.failures.map(failure => failure.invocationId)).size, reasons: [...rec.evidence.keys()],
+      nextEligibleAtMs: rec.nextProbeAtMs, resetAtMs: rec.resetAtMs,
+      summary: `${rec.scopeKey}: ${from} -> ${to}; ${action}; wait ${Math.max(0, rec.nextProbeAtMs - this.nowMs())}ms`,
+    });
   }
 
   /**
@@ -1187,6 +1210,19 @@ export class ScopedFailureBreaker extends EventEmitter {
     return entry.phase;
   }
 
+  _dispatchScopeRefusal(token, now) {
+    for (const key of token.coveringKeys) {
+      const rec = this._scopes.get(key);
+      if (!rec || rec.status === 'closed') continue;
+      if (rec.blockingMarker || (rec.activeCanary?.id !== token.id
+        && !(token.purpose === 'probe' && rec.status === 'canary-ready' && !rec.activeCanary))
+        || now < Math.max(rec.resetAtMs ?? 0, rec.nextProbeAtMs ?? 0)) {
+        return { ok: false, reason: `covering recovery scope changed before dispatch: ${key}` };
+      }
+    }
+    return null;
+  }
+
   /**
    * Begin the actual dispatch of one admitted reservation, exactly ONCE
    * (#2915 round 8, D3, replaces `claimLaunch`): `admitted -> committing`.
@@ -1247,6 +1283,8 @@ export class ScopedFailureBreaker extends EventEmitter {
     if (now >= token.deadlineMs) {
       return { ok: false, reason: 'reservation deadline has passed' };
     }
+    const refused = this._dispatchScopeRefusal(token, now);
+    if (refused) return refused;
     entry.phase = 'committing';
     return { ok: true };
   }
@@ -1280,6 +1318,8 @@ export class ScopedFailureBreaker extends EventEmitter {
     if (entry.revoked) {
       return { ok: false, reason: 'reservation was revoked while committing; call abortDispatch' };
     }
+    const refused = this._dispatchScopeRefusal(token, now);
+    if (refused) return refused;
     entry.phase = 'dispatched';
     return { ok: true };
   }
@@ -1398,6 +1438,39 @@ export class ScopedFailureBreaker extends EventEmitter {
     };
   }
 
+  /** Correlate launcher-observed host faults across resolved inference backends.
+   * Replay the first fault once corroborated, preserving the three-distinct
+   * threshold even when the first backend alone could not establish scope.
+   */
+  observeHostFailure({ invocationId, inferenceProvider, reasonCode } = {}) {
+    if (typeof invocationId !== 'string' || !invocationId || typeof inferenceProvider !== 'string'
+      || !inferenceProvider || !['RESOURCE', 'SANDBOX'].includes(reasonCode)) return [];
+    const now = this.nowMs();
+    this._hostFailureFacts = this._hostFailureFacts.filter(fact => now - fact.atMs < this.policy.windowMs);
+    if (!this._hostFailureFacts.some(fact => fact.invocationId === invocationId)) {
+      this._hostFailureFacts.push({ invocationId, inferenceProvider, reasonCode, atMs: now,
+        cohort: [...(this._outstanding.get('host:local')?.keys() ?? [])] });
+      if (this._hostFailureFacts.length > this.policy.maxOutstandingReservations) this._hostFailureFacts.shift();
+    }
+    const corroboratedBackends = [...new Set(this._hostFailureFacts.map(fact => fact.inferenceProvider))];
+    if (corroboratedBackends.length < 2) return [];
+    const rec = this._scopeRecordBounded(FailureScope.HOST, 'host:local');
+    const first = this._hostFailureFacts[0];
+    if (rec && (rec.cohortFrozenAt === null || now - rec.cohortFrozenAt >= this.policy.windowMs)) {
+      // The first fault could not yet establish host scope. Preserve who was
+      // actually outstanding then; later sequential attempts are not a cohort.
+      rec.cohort = new Set(first.cohort);
+      rec.cohortFrozenAt = first.atMs;
+    }
+    for (const fact of this._hostFailureFacts) {
+      if (rec?.failures.some(failure => failure.invocationId === fact.invocationId)) continue;
+      this._settleFailure({ invocationId: fact.invocationId, canaryKeys: [] }, {
+        reasonCode: fact.reasonCode, evidenceSource: 'launcher', hostId: 'local', corroboratedBackends,
+      }, fact.atMs);
+    }
+    return corroboratedBackends;
+  }
+
   /**
    * Reset ONE scope's failure history/backoff bookkeeping (#2915 round 8,
    * D3, replaces the prior whole-reservation-release behavior): resets
@@ -1430,9 +1503,11 @@ export class ScopedFailureBreaker extends EventEmitter {
    * `destroy()` method, intended for test/process-exit teardown only.
    */
   reset(scopeKey) {
+    if (!scopeKey || scopeKey === 'host:local') this._hostFailureFacts = [];
     if (!scopeKey) {
       for (const [key, rec] of [...this._scopes]) {
         if (rec.activeCanary !== null || rec.blockingMarker !== null) continue; // keep execution ownership
+        this._transition(rec, 'closed', 'operator reset; resume covered launches');
         rec.breaker.destroy();
         this._scopes.delete(key);
         this._outstanding.delete(key);
@@ -1445,6 +1520,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       return { ok: false, scopeKey,
         reason: 'scope has unresolved execution (an active canary or an unresolved stop-evidence marker); reconcile stop evidence (reconcileStopEvidence) before resetting it' };
     }
+    this._transition(rec, 'closed', 'operator reset; resume covered launches');
     rec.breaker.destroy();
     this._scopes.delete(scopeKey);
     this._outstanding.delete(scopeKey);
@@ -1452,6 +1528,7 @@ export class ScopedFailureBreaker extends EventEmitter {
   }
 
   destroy() {
+    this._hostFailureFacts = [];
     for (const rec of this._scopes.values()) rec.breaker.destroy();
     this._scopes.clear();
     this._outstanding.clear();
@@ -1644,6 +1721,7 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.nextProbeAtMs = Math.max(now + rec.episodeCooldownMs, rec.resetAtMs ?? 0) + this._boundedJitter();
     rec.breaker.cooldownMs = rec.episodeCooldownMs;
     rec.breaker.recordFailure();
+    this._transition(rec, 'open', 'probe/canary failed; wait for backoff then retry one probe');
     this._touch(rec);
   }
 }

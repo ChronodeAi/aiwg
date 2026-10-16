@@ -46,6 +46,7 @@ import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, 
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime, isSafeWorkerGroupTarget } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
+import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
@@ -367,6 +368,9 @@ export async function materializeWorkerArtifacts(invocation, runDir) {
   } catch (error) { await cleanup(); throw error; }
 }
 
+const _workerRecoverySubscriptions = new WeakMap();
+const _reportedRecoveryTransitions = new WeakSet();
+
 async function launchOneWorker(owner, options) {
   const { inspectWorkerPath: inspect, revalidateWorkerInvocationPlan: validate } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
   const { qualificationDigest } = await importImpl(import.meta.url, 'models/qualification-digest.mjs');
@@ -454,6 +458,16 @@ async function launchOneWorker(owner, options) {
     return launchOneWorkerBaseline(owner, options, { saved, invocation, runDir, runExists, paths, gate, isolation,
       verifiedPreviousAttemptId, loadInputs, validate, inspect, clock, qualificationDigest, inputs, brief, stdinBytes });
   }
+  const transitionBreaker = options.scopedBreaker ?? getDirectRecoveryBreaker();
+  if (typeof transitionBreaker?.on === 'function') {
+    const listener = event => {
+      if (!owner.listenerCount('recovery-transition') || _reportedRecoveryTransitions.has(event)) return;
+      _reportedRecoveryTransitions.add(event);
+      owner.emit('recovery-transition', event);
+    };
+    transitionBreaker.on('transition', listener);
+    _workerRecoverySubscriptions.set(owner, () => transitionBreaker.removeListener('transition', listener));
+  }
   // #2915 final (one admission, step 3): invocation ids are minted BEFORE
   // admission, so the exact covering-key set that gated this attempt is the
   // same set `settleDirectWorker` later resolves against — no separate
@@ -490,7 +504,7 @@ async function launchOneWorker(owner, options) {
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
       invocation, invocationId, drivers: inputs.drivers, scopedBreaker: options?.scopedBreaker,
-      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot });
+      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot, dispatchGuard });
   } catch (error) {
     // Fail closed, never fail open or leak a slot: an admission-time
     // exception (bad breaker state, a thrown import) is a refusal, not a
@@ -746,6 +760,29 @@ async function launchOneWorker(owner, options) {
     // `result.attemptOutcome` — never `result.termination` — so a genuinely
     // successful degraded attempt closes its scope instead of silently
     // reopening it forever (#2915 final review, finding 4).
+    await observeLauncherRecoveryOutcome({ invocation, result, breaker: admission.breaker,
+      installation: inputs.drivers[invocation.selected.cli]?.qualification?.installation,
+      timeoutMs: () => Math.min(10_000, dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? performance.now())),
+      beforeRequest: async () => {
+        // Diagnostics use the same cumulative allowance as worker attempts.
+        // No allowance identity means no independent upstream probe.
+        if (!admission.ledger) return false;
+        let probeLedger;
+        try {
+          checkDispatchGuard(dispatchGuard);
+          probeLedger = await reserveDirectWorkerAllowance({ captureRoot: admission.ledger.captureRoot,
+            taskChainDigest: admission.ledger.taskChainDigest, maxAttempts: admission.ledger.maxAttempts,
+            invocationId: randomUUID() });
+          checkDispatchGuard(dispatchGuard);
+          await debitDirectWorkerAllowance(probeLedger);
+          checkDispatchGuard(dispatchGuard);
+          return true;
+        } catch (error) {
+          if (probeLedger) await refundDirectWorkerAllowance(probeLedger).catch(() => {});
+          ledgerDiagnostics.push(`Recovery diagnostic skipped: ${error?.code ?? 'ALLOWANCE_UNAVAILABLE'}`);
+          return false;
+        }
+      } });
     await settleLedger(classifyAttemptForSettlement(invocation, result,
       { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
     // #2915 review 6 (finding 6, "changed disabled behavior"): origin/main's
@@ -3115,16 +3152,18 @@ export async function buildFailureAttribution(invocation, { reasonCode = null, e
 /**
  * Classify a launcher-observed attempt outcome into trusted recovery
  * evidence. Uses ONLY launcher-owned facts (spawn errors on the resolved
- * argv, waitpid exit/signal, timeout and termination flags) — never worker
+ * argv, native unit results, and independently queried qualified endpoints) — never worker
  * stderr/stdout text, structured worker output, or worker-writable records.
- * Post-spawn outcomes therefore attest only that THIS attempt failed, in
- * its own invocation scope; only a failure to execute the resolved CLI
- * binary itself (pre-spawn ENOENT/EACCES on argv[0]) implicates the
- * installation. 429/transport/auth signatures visible only in worker output
+ * Private endpoint observations may attest quota/provider failure; native
+ * resource failures require cross-backend corroboration. Other post-spawn
+ * outcomes attest only this invocation. Failure to execute the resolved CLI
+ * binary itself implicates its installation. Signatures visible only in worker output
  * are worker-sourced by definition and must not be passed here as
  * launcher evidence.
  */
 export function classifyLaunchOutcomeForRecovery(result) {
+  const observed = launcherRecoveryEvidence(result);
+  if (observed) return observed;
   if (result?.termination !== 'confirmed') return { reasonCode: null, evidenceSource: null };
   const code = result?.errorCode ?? null;
   if ((code === 'ENOENT' || code === 'EACCES' || code === 'SPAWN_ERROR') && !result?.sawExit && result?.exitCode == null) {
@@ -3329,12 +3368,16 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // posture as the breaker itself. `taskChainDigest`/`maxAttempts` are
   // required to reserve; omitting either (a caller with no resolved task,
   // e.g. a flat-option standalone planner call) simply skips the ledger.
-  taskChainDigest = null, maxAttempts = null, captureRoot = null } = {}) {
+  taskChainDigest = null, maxAttempts = null, captureRoot = null, dispatchGuard } = {}) {
   const eligibility = directRecoveryEligibility({ gateEnabled, config, invocation, drivers, scopedBreaker });
   if (!eligibility.gated) return eligibility;
   const cli = invocation?.selected?.cli ?? null;
   const breaker = scopedBreaker !== undefined ? scopedBreaker : getDirectRecoveryBreaker();
   if (!breaker) return { gated: false };
+  const startedAtMs = breaker.nowMs();
+  dispatchGuard ??= { nowMs: () => breaker.nowMs(), deadlineAtMs: startedAtMs + Math.min(
+    invocation?.health?.hardTimeoutSeconds ?? Infinity, invocation?.limits?.wallSeconds ?? Infinity,
+    invocation?.mcp?.timeoutSeconds ?? Infinity) * 1000 };
   const resolvedInstallationQualifier = installationQualifier
     ?? drivers?.[cli]?.qualification?.installation?.boundary?.digest ?? null;
   const resolvedQuotaAccount = quotaAccount ?? drivers?.[cli]?.qualification?.installation?.accountScope ?? null;
@@ -3346,9 +3389,60 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // mutable field on this function's returned wrapper — so `beginDispatch`
   // later has an authoritative, breaker-owned value to compare against.
   const selectionDigest = selectionDigestFor(invocation);
-  const admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
+  let probeDiagnostic = null;
+  let admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
+  if (!admission.ok && admission.probeRequired?.length) {
+    // Probe and task are separate dispatches against the same cumulative
+    // allowance. Reserve atomically before any asynchronous probe work.
+    const probeId = `${invocationId}:probe:${randomUUID()}`;
+    const reserved = breaker.admit({ invocationId: probeId, scopeKeys, selectionDigest, purpose: 'probe' });
+    if (reserved.ok) {
+      let probeLedger = null;
+      let probeOutcome = { kind: 'uncertain', confirmedStop: true };
+      try {
+        if (taskChainDigest == null || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
+          throw new Error('Recovery probe requires remaining task allowance');
+        }
+        checkDispatchGuard(dispatchGuard);
+        if (captureRoot != null) {
+          const writableRoots = [invocation?.cwd, ...(drivers?.[cli]?.qualification?.installation?.workerWritableRoots ?? [])].filter(Boolean);
+          for (const root of writableRoots) {
+            if (await realBeneath(root, captureRoot)) ledgerFail(LEDGER_RECORD_INVALID_CODE,
+              'ledger capture root is inside a worker-writable location');
+          }
+        }
+        probeLedger = await reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId: probeId, maxAttempts });
+        const began = breaker.beginDispatch(reserved.token, { invocationId: probeId, selectionDigest });
+        if (!began.ok) throw new Error(began.reason);
+        const { runRecoveryProbe } = await import('./lib/recovery-probe.mjs');
+        const result = await runRecoveryProbe({ driver: drivers[cli], invocation,
+          timeoutMs: Math.min(breaker.policy.probeTimeoutMs, reserved.token.deadlineMs - breaker.nowMs(),
+            dispatchGuard?.deadlineAtMs == null ? Infinity : dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? Date.now())), maxOutputBytes: breaker.policy.probeMaxOutputBytes,
+          onDispatch: async () => {
+            checkDispatchGuard(dispatchGuard);
+            await debitDirectWorkerAllowance(probeLedger);
+            checkDispatchGuard(dispatchGuard);
+            const committed = breaker.commitDispatch(reserved.token);
+            if (!committed.ok) throw new Error(committed.reason);
+          } });
+        probeDiagnostic = { reason: result.reason, ...(result.retainedPath ? { retainedPath: result.retainedPath, invocationId: probeId } : {}) };
+        probeOutcome = { kind: result.success ? 'succeeded' : 'failed',
+          relevant: result.relevant === true, evidenceSource: 'launcher', retryAfterSeconds: result.retryAfterSeconds ?? null,
+          confirmedStop: result.termination === 'confirmed' };
+      } catch (error) {
+        try { breaker.abortDispatch(reserved.token); } catch { /* no dispatch on preparation failure */ }
+        if ([ALLOWANCE_EXHAUSTED_CODE, ALLOWANCE_POLICY_MISMATCH_CODE, LEDGER_RECORD_INVALID_CODE].includes(error?.code)) {
+          return { gated: true, refused: { code: error.code, blockedBy: [], nextEligibleAt: null, reason: error.message } };
+        }
+      } finally {
+        breaker.settle(reserved.token, probeOutcome);
+        if (probeLedger) await refundDirectWorkerAllowance(probeLedger);
+      }
+      admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
+    } else admission = reserved;
+  }
   if (!admission.ok) {
-    return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt } };
+    return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt, ...(probeDiagnostic ? { probeDiagnostic } : {}) } };
   }
   let ledger = null;
   let ledgerDiagnostic = null;
@@ -3412,7 +3506,7 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
   // comparison (#2915 round 8, D3) happens inside `beginDispatch` against
   // the breaker's own frozen token fields, never against this object.
   return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier,
-    ledger, invocationId, selectionDigest, ledgerDiagnostic };
+    ledger, invocationId, selectionDigest, ledgerDiagnostic, startedAtMs };
 }
 
 /**
@@ -3483,9 +3577,9 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
  * or MCP attempt can never confirm even on genuine success). A `'failed'`
  * outcome attributes through the same launcher-only evidence
  * `classifyLaunchOutcomeForRecovery` always used, so post-spawn task
- * failures land in the invocation scope however loudly the worker blamed
- * the provider; only a launcher-observed pre-spawn missing-binary failure
- * implicates the installation.
+ * failures stay invocation-scoped unless independent launcher observations
+ * attest a qualified endpoint outage or a corroborated native host fault.
+ * Worker claims never widen scope.
  *
  * `confirmedStop` (#2915 review 5, "a second worker over unresolved
  * execution") is a SEPARATE fact from `kind`: whether THIS attempt's own
@@ -3504,8 +3598,8 @@ export function classifyAttemptForSettlement(invocation, result, { quotaAccount 
   const confirmedStop = result?.termination === 'confirmed';
   if (kind !== 'failed') return { kind, confirmedStop };
   const selected = invocation?.selected ?? {};
-  const { reasonCode, evidenceSource } = classifyLaunchOutcomeForRecovery(result);
-  return { kind, confirmedStop, reasonCode, evidenceSource, cli: selected.cli ?? null,
+  const evidence = classifyLaunchOutcomeForRecovery(result);
+  return { kind, confirmedStop, ...evidence, cli: selected.cli ?? null,
     inferenceProvider: selected.inferenceProvider ?? null, quotaAccount, installationQualifier };
 }
 
@@ -3609,7 +3703,11 @@ export class SessionLauncher extends EventEmitter {
     // `launchOneWorker` itself, gated on whether recovery actually admitted
     // this attempt (#2915 review 6, finding 6) — never here unconditionally.
     try { return await launchOneWorker(this, options); }
-    finally { this.workerLaunchPending = false; }
+    finally {
+      _workerRecoverySubscriptions.get(this)?.();
+      _workerRecoverySubscriptions.delete(this);
+      this.workerLaunchPending = false;
+    }
   }
 
   /** Explicit manual observation grants no signal authority, with or without scratch. */
@@ -4773,7 +4871,7 @@ export function planDirectWorkerLaunch({
       // a shared scope).
       admission = await admitDirectWorker({ gateEnabled: gate.enabled, config, invocation,
         invocationId: mintedInvocationId, scopedBreaker, drivers: drivers ?? {},
-        taskChainDigest, maxAttempts, captureRoot });
+        taskChainDigest, maxAttempts, captureRoot, dispatchGuard });
     } catch (error) {
       return { launched: false, blocked: true,
         diagnostic: `recovery admission failed closed: ${error?.message ?? String(error)}` };

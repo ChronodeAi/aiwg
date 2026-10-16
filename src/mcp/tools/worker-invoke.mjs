@@ -2052,8 +2052,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
     let settlementPromise;
     let settlementStarted;
     let cancelFollowUp;
+    let neverExecutedStop = false;
     const settlementReady = new Promise(resolve => { settlementStarted = resolve; });
-    const resolveEvidence = evidence => recoveryModule.resolveStopEvidence({
+    const resolveEvidence = evidence => neverExecutedStop && evidence?.isolationMode === 'systemd-unit'
+      && evidence.unitName === isolationEvidence?.unitName
+      ? Promise.resolve({ stop: 'confirmed', confirmedStop: true }) : recoveryModule.resolveStopEvidence({
       ...evidence, getStatus: options.isolationStatus, stopUnit: options.stopUnit,
       terminateChild: terminateChildImpl,
     });
@@ -2114,8 +2117,8 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       // last bullet).
       const taskDeadlineMs = Math.min(invocation.health?.hardTimeoutSeconds ?? invocation.limits.wallSeconds, invocation.limits.wallSeconds) * 1000;
       const deadlineClockNow = () => admission.breaker?.nowMs?.() ?? Date.now();
-      const deadlineCandidatesMs = [deadlineClockNow() + taskDeadlineMs];
-      if (invocation.transport === 'mcp') deadlineCandidatesMs.push(deadlineClockNow() + invocation.mcp.timeoutSeconds * 1000);
+      const deadlineCandidatesMs = [(admission.startedAtMs ?? deadlineClockNow()) + taskDeadlineMs];
+      if (invocation.transport === 'mcp') deadlineCandidatesMs.push((admission.startedAtMs ?? deadlineClockNow()) + invocation.mcp.timeoutSeconds * 1000);
       if (admission.token?.canaryKeys?.length > 0) deadlineCandidatesMs.push(admission.token.deadlineMs);
       const deadlineAtMs = Math.min(...deadlineCandidatesMs);
       // #2915 round 8 review 8 (C3): cancellation predicate, read from the
@@ -2256,7 +2259,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           stopUnit: options.stopWorkerUnit ?? options.stopUnit,
           killUnit: options.killWorkerUnit,
           graceMs: options.shellStopGraceMs ?? (invocation.health?.terminateGraceSeconds ?? 1) * 1000,
-          onConfirmed: async () => {
+          onConfirmed: async outcome => {
+            // The shell observer proved an accepted stop plus a fresh inactive
+            // unit that never exec'd; ExecMainCode alone cannot retain it.
+            neverExecutedStop = outcome.neverExecuted === true;
             const stopEvidence = await resolveEvidence({ ...isolationEvidence, stopFirst: false });
             confirmedStop = stopEvidence.confirmedStop;
             observeStop(Promise.resolve(), isolationEvidence);

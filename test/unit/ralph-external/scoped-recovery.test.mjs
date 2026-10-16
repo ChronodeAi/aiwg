@@ -157,6 +157,25 @@ function trustedQuotaFailure(id, cli, extra = {}) {
 // per the new design — see `abortDispatch`). `selectionDigest: null` matches
 // what `admit()` stores by default when a helper omits it (these scope/
 // correlation scenarios have no resolved selection identity to bind).
+// Existing canary/stop scenarios start after a successful synthetic probe.
+// Dedicated probe tests exercise production execution, charging and relevance.
+function completePreliminaryProbe(breaker, scopeKeys) {
+  const invocationId = `preliminary-${Math.random().toString(36).slice(2)}`;
+  const probe = breaker.admit({ invocationId, scopeKeys, purpose: 'probe' });
+  expect(probe.ok).toBe(true);
+  dispatchReservation(breaker, probe.token, invocationId);
+  breaker.settle(probe.token, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+}
+
+function admitAfterSuccessfulProbe(breaker, options) {
+  let admitted = breaker.admit(options);
+  if (!admitted.ok && admitted.probeRequired?.length) {
+    completePreliminaryProbe(breaker, options.scopeKeys);
+    admitted = breaker.admit(options);
+  }
+  return admitted;
+}
+
 function dispatchReservation(breaker, token, invocationId) {
   const began = breaker.beginDispatch(token, { invocationId, selectionDigest: null });
   if (!began.ok) return began;
@@ -165,7 +184,7 @@ function dispatchReservation(breaker, token, invocationId) {
 
 function probe(breaker, scopeKeys) {
   const invocationId = `probe-${Math.random().toString(36).slice(2)}`;
-  const admission = breaker.admit({ invocationId, scopeKeys });
+  const admission = admitAfterSuccessfulProbe(breaker, { invocationId, scopeKeys });
   if (admission.ok) {
     dispatchReservation(breaker, admission.token, invocationId);
     breaker.settle(admission.token, { kind: 'uncertain', confirmedStop: true });
@@ -174,7 +193,7 @@ function probe(breaker, scopeKeys) {
 }
 
 function fail(breaker, scopeKeys, invocationId, evidence = {}) {
-  const admission = breaker.admit({ invocationId, scopeKeys });
+  const admission = admitAfterSuccessfulProbe(breaker, { invocationId, scopeKeys });
   if (!admission.ok) return { admitted: false, blockedBy: admission.blockedBy };
   dispatchReservation(breaker, admission.token, invocationId);
   const watched = evidence.scopeKey ?? scopeKeys[0];
@@ -186,14 +205,14 @@ function fail(breaker, scopeKeys, invocationId, evidence = {}) {
 }
 
 function succeed(breaker, scopeKeys, invocationId) {
-  const admission = breaker.admit({ invocationId, scopeKeys });
+  const admission = admitAfterSuccessfulProbe(breaker, { invocationId, scopeKeys });
   if (!admission.ok) return { admitted: false, blockedBy: admission.blockedBy };
   dispatchReservation(breaker, admission.token, invocationId);
   return { admitted: true, settled: breaker.settle(admission.token, { kind: 'succeeded', confirmedStop: true }), token: admission.token };
 }
 
 function uncertain(breaker, scopeKeys, invocationId) {
-  const admission = breaker.admit({ invocationId, scopeKeys });
+  const admission = admitAfterSuccessfulProbe(breaker, { invocationId, scopeKeys });
   if (!admission.ok) return { admitted: false, blockedBy: admission.blockedBy };
   dispatchReservation(breaker, admission.token, invocationId);
   return { admitted: true, settled: breaker.settle(admission.token, { kind: 'uncertain', confirmedStop: true }), token: admission.token };
@@ -364,14 +383,14 @@ describe('ScopedFailureBreaker correlation', () => {
   });
 
   it('opens when all of two outstanding attempts fail, stays shut for two-of-five', () => {
-    const resA = breaker.admit({ invocationId: 'a', scopeKeys: [INSTALL] });
-    const resB = breaker.admit({ invocationId: 'b', scopeKeys: [INSTALL] });
+    const resA = admitAfterSuccessfulProbe(breaker, { invocationId: 'a', scopeKeys: [INSTALL] });
+    const resB = admitAfterSuccessfulProbe(breaker, { invocationId: 'b', scopeKeys: [INSTALL] });
     breaker.settle(resA.token, { kind: 'failed', ...installFailure('a') });
     expect(breaker.settle(resB.token, { kind: 'failed', ...installFailure('b') })).toEqual({ ok: true });
     expect(breaker.getState(INSTALL).state).toBe('open');
 
     breaker.reset(INSTALL);
-    const outstanding = ['c', 'd', 'e', 'f', 'g'].map((id) => breaker.admit({ invocationId: id, scopeKeys: [INSTALL] }));
+    const outstanding = ['c', 'd', 'e', 'f', 'g'].map((id) => admitAfterSuccessfulProbe(breaker, { invocationId: id, scopeKeys: [INSTALL] }));
     breaker.settle(outstanding[0].token, { kind: 'failed', ...installFailure('c') });
     breaker.settle(outstanding[1].token, { kind: 'failed', ...installFailure('d') });
     expect(breaker.getState(INSTALL).state).toBe('closed');
@@ -456,7 +475,7 @@ describe('ScopedFailureBreaker correlation', () => {
     expect(fail(breaker, [QUOTA], 'r3', trustedQuotaFailure('r3', 'codex')).opened).toBe(true);
     expect(breaker.getState(QUOTA).nextProbeAtMs).toBeGreaterThan(0);
     vi.advanceTimersByTime(120_000);
-    const canary = breaker.admit({ invocationId: 'r4', scopeKeys: [QUOTA] });
+    const canary = admitAfterSuccessfulProbe(breaker, { invocationId: 'r4', scopeKeys: [QUOTA] });
     expect(canary.ok).toBe(true);
     breaker.settle(canary.token, { kind: 'failed', ...trustedQuotaFailure('r4', 'codex', { retryAfterSeconds: 420 }) });
     const state = breaker.getState(QUOTA);
@@ -513,19 +532,19 @@ describe('ScopedFailureBreaker correlation', () => {
   });
 
   it('freezes cohort membership: late joiners neither open nor veto', () => {
-    const resA = breaker.admit({ invocationId: 'a', scopeKeys: [INSTALL] });
-    const resB = breaker.admit({ invocationId: 'b', scopeKeys: [INSTALL] });
+    const resA = admitAfterSuccessfulProbe(breaker, { invocationId: 'a', scopeKeys: [INSTALL] });
+    const resB = admitAfterSuccessfulProbe(breaker, { invocationId: 'b', scopeKeys: [INSTALL] });
     breaker.settle(resA.token, { kind: 'failed', ...installFailure('a') });
     // 'c' launches after the cohort froze: it never joins, so the unanimous
     // failure of the original pair still opens the scope...
-    const resC = breaker.admit({ invocationId: 'c', scopeKeys: [INSTALL] });
+    const resC = admitAfterSuccessfulProbe(breaker, { invocationId: 'c', scopeKeys: [INSTALL] });
     expect(breaker.settle(resB.token, { kind: 'failed', ...installFailure('b') })).toEqual({ ok: true });
     expect(breaker.getState(INSTALL).cohortSize).toBe(2);
     breaker.settle(resC.token, { kind: 'uncertain' });
   });
 });
 
-describe('half-open canary admission (#2915D2: the next real launch IS the probe)', () => {
+describe('half-open canary admission after a successful bounded probe', () => {
   let breaker;
 
   const openInstall = () => {
@@ -552,7 +571,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     vi.advanceTimersByTime(119_999);
     expect(probe(breaker, [INSTALL]).ok).toBe(false);
     vi.advanceTimersByTime(1);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     expect(admitted.token.canaryKeys).toEqual([INSTALL]);
     // One real attempt at a time: while that canary is outstanding, no
@@ -568,7 +587,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('a failed canary reopens immediately with doubled backoff, never waiting on the distinct-failure threshold', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     breaker.settle(admitted.token, { kind: 'failed', ...installFailure('canary-1') });
     expect(breaker.getState(INSTALL).state).toBe('open');
@@ -586,7 +605,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     vi.advanceTimersByTime(at);
     const cooldowns = [240_000, 480_000, 900_000, 900_000];
     for (const expected of cooldowns) {
-      const admitted = breaker.admit({ invocationId: `canary-${expected}`, scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: `canary-${expected}`, scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       breaker.settle(admitted.token, { kind: 'failed', ...installFailure(`canary-${expected}`) });
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(expected);
@@ -599,7 +618,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('an uncertain canary termination releases the reservation and reopens with backoff, never recovering', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     breaker.settle(admitted.token, { kind: 'uncertain' });
     expect(breaker.getState(INSTALL).state).toBe('open');
@@ -641,7 +660,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('expires a hung canary with backoff and a persistent blocking marker, never admitting a second worker while stop is unconfirmed', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     // Dispatched (begin+commit), exactly like the real D2 hook: only a
     // reservation that actually reached `dispatched` leaves a stop-evidence
@@ -681,7 +700,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('a settlement carrying confirmed-termination evidence clears the blocking marker and re-admits once due (no permanent deadlock)', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     expect(dispatchReservation(breaker, admitted.token, 'canary-1')).toEqual({ ok: true });
     vi.advanceTimersByTime(300_001);
@@ -707,7 +726,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
       fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
       vi.advanceTimersByTime(120_000);
-      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       expect(dispatchReservation(smallCapBreaker, admitted.token, 'canary-1')).toEqual({ ok: true });
       vi.advanceTimersByTime(300_001);
@@ -716,12 +735,12 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       // no separate marker cap and no auto-expiry were invented; it is
       // bounded by the SAME `maxOutstandingReservations` every other
       // reservation already counts against.
-      const unrelated = smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] });
+      const unrelated = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'unrelated', scopeKeys: [QUOTA] });
       expect(unrelated.ok).toBe(false);
       expect(unrelated.blockedBy).toContain('reservation-capacity');
       // Confirming the stop frees the slot.
       expect(smallCapBreaker.settle(admitted.token, { kind: 'uncertain', confirmedStop: true })).toEqual({ ok: true });
-      const afterwards = smallCapBreaker.admit({ invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
+      const afterwards = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
       expect(afterwards.ok).toBe(true);
     } finally {
       smallCapBreaker.destroy();
@@ -739,7 +758,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('an earlier unconfirmed settlement never forecloses a later confirmed one from clearing the marker', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     expect(dispatchReservation(breaker, admitted.token, 'canary-1')).toEqual({ ok: true });
     vi.advanceTimersByTime(300_001);
@@ -778,7 +797,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     try {
       for (const id of ['a', 'b', 'c']) fail(breaker, [INSTALL], id, installFailure(id));
       now += 120_000;
-      const admitted = breaker.admit({ invocationId: 'canary-never-dispatched', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-never-dispatched', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       expect(admitted.token.canaryKeys).toEqual([INSTALL]);
       // "Expired while queued": this exact reservation's own canary
@@ -810,11 +829,11 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
       fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
       vi.advanceTimersByTime(120_000);
-      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       expect(dispatchReservation(smallCapBreaker, admitted.token, 'canary-1')).toEqual({ ok: true });
       vi.advanceTimersByTime(300_001);
-      const refused = smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] });
+      const refused = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'unrelated', scopeKeys: [QUOTA] });
       expect(refused.ok).toBe(false);
       expect(refused.blockedBy).toContain('reservation-capacity');
       expect(refused.blockedBy).toContain('blocking-markers:1');
@@ -838,11 +857,11 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       fail(smallCapBreaker, [INSTALL], 'b', installFailure('b'));
       fail(smallCapBreaker, [INSTALL], 'c', installFailure('c'));
       vi.advanceTimersByTime(120_000);
-      const admitted = smallCapBreaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       expect(dispatchReservation(smallCapBreaker, admitted.token, 'canary-1')).toEqual({ ok: true });
       vi.advanceTimersByTime(300_001);
-      expect(smallCapBreaker.admit({ invocationId: 'unrelated', scopeKeys: [QUOTA] }).ok).toBe(false);
+      expect(admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'unrelated', scopeKeys: [QUOTA] }).ok).toBe(false);
       // A scoped reset while the marker is still unresolved is refused —
       // nothing is mutated: the marker, and the capacity it occupies, both
       // survive exactly as they were.
@@ -850,13 +869,13 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       expect(refused).toEqual({ ok: false, scopeKey: INSTALL, reason: expect.any(String) });
       expect(smallCapBreaker.getState(INSTALL).tracked).toBe(true);
       expect(smallCapBreaker.getState(INSTALL).blockingMarker).not.toBeNull();
-      expect(smallCapBreaker.admit({ invocationId: 'still-unrelated', scopeKeys: [QUOTA] }).ok).toBe(false);
+      expect(admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'still-unrelated', scopeKeys: [QUOTA] }).ok).toBe(false);
       // Reconciling the stop evidence releases the reservation (and its
       // marker); the scope's own tracking record is now safely resettable.
       expect(smallCapBreaker.reconcileStopEvidence({ invocationId: 'canary-1', confirmedStop: true })).toEqual({ released: 1 });
       expect(smallCapBreaker.reset(INSTALL)).toEqual({ ok: true });
       expect(smallCapBreaker.getState(INSTALL).tracked).toBe(false);
-      const afterwards = smallCapBreaker.admit({ invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
+      const afterwards = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'unrelated-2', scopeKeys: [QUOTA] });
       expect(afterwards.ok).toBe(true);
     } finally {
       smallCapBreaker.destroy();
@@ -881,12 +900,12 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       expect(multiBreaker.getState(INSTALL).state).toBe('open');
       expect(multiBreaker.getState(QUOTA).state).toBe('open');
       vi.advanceTimersByTime(120_000);
-      const admitted = multiBreaker.admit({ invocationId: 'canary-multi', scopeKeys: covering });
+      const admitted = admitAfterSuccessfulProbe(multiBreaker, { invocationId: 'canary-multi', scopeKeys: covering });
       expect(admitted.ok).toBe(true);
       expect(admitted.token.canaryKeys).toEqual(expect.arrayContaining([INSTALL, QUOTA]));
       expect(dispatchReservation(multiBreaker, admitted.token, 'canary-multi')).toEqual({ ok: true });
       vi.advanceTimersByTime(300_001);
-      expect(multiBreaker.admit({ invocationId: 'probe', scopeKeys: [INSTALL] }).ok).toBe(false); // sweeps the expiry
+      expect(admitAfterSuccessfulProbe(multiBreaker, { invocationId: 'probe', scopeKeys: [INSTALL] }).ok).toBe(false); // sweeps the expiry
       expect(multiBreaker.getState(INSTALL).blockingMarker).not.toBeNull();
       expect(multiBreaker.getState(QUOTA).blockingMarker).not.toBeNull();
       // Resetting INSTALL is refused and leaves BOTH scopes' markers intact
@@ -907,7 +926,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('reconcileStopEvidence releases a marker and its reservation by invocation id, idempotently', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-recon', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-recon', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     expect(dispatchReservation(breaker, admitted.token, 'canary-recon')).toEqual({ ok: true });
     vi.advanceTimersByTime(300_001);
@@ -945,7 +964,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       // its OWN distinct brand-new shared scope, race against it -- none of
       // them settle before the next admit() runs.
       const keys = ['p1', 'p2', 'p3', 'p4'].map((name) => scopeKeyFor.provider(name));
-      const admissions = keys.map((key, i) => smallCapBreaker.admit({ invocationId: `c-${i}`, scopeKeys: [key] }));
+      const admissions = keys.map((key, i) => admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: `c-${i}`, scopeKeys: [key] }));
       const admittedCount = admissions.filter((a) => a.ok).length;
       expect(admittedCount).toBe(1);
       for (const admission of admissions.filter((a) => !a.ok)) {
@@ -986,7 +1005,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       expect(smallCapBreaker.getState(INSTALL).state).toBe('open');
       const keyA = scopeKeyFor.provider('a');
       const keyB = scopeKeyFor.provider('b');
-      const admissionA = smallCapBreaker.admit({ invocationId: 'seq-a', scopeKeys: [keyA] });
+      const admissionA = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'seq-a', scopeKeys: [keyA] });
       expect(admissionA.ok).toBe(true);
       expect(smallCapBreaker.getState(keyA).tracked).toBe(true);
       // Both slots are now occupied (INSTALL open, keyA tracked). Settling
@@ -996,7 +1015,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       // DIFFERENT brand-new scope would have nowhere to go.
       expect(smallCapBreaker.settle(admissionA.token, { kind: 'succeeded' })).toEqual({ ok: true });
       expect(smallCapBreaker.getState(keyA).tracked).toBe(false);
-      const admissionB = smallCapBreaker.admit({ invocationId: 'seq-b', scopeKeys: [keyB] });
+      const admissionB = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'seq-b', scopeKeys: [keyB] });
       expect(admissionB.ok).toBe(true);
       expect(smallCapBreaker.getState(keyB).tracked).toBe(true);
     } finally {
@@ -1009,7 +1028,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('old-attempt-cannot-settle-canary', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const stale = breaker.admit({ invocationId: 'old-attempt', scopeKeys: [INSTALL] });
+    const stale = admitAfterSuccessfulProbe(breaker, { invocationId: 'old-attempt', scopeKeys: [INSTALL] });
     expect(stale.ok).toBe(true);
     // The stale attempt's own reservation is honored once...
     expect(breaker.settle(stale.token, { kind: 'succeeded' })).toEqual({ ok: true });
@@ -1026,7 +1045,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     fail(breaker, [INSTALL], 'z2', installFailure('z2'));
     fail(breaker, [INSTALL], 'z3', installFailure('z3'));
     vi.advanceTimersByTime(120_000);
-    const fresh = breaker.admit({ invocationId: 'fresh-attempt', scopeKeys: [INSTALL] });
+    const fresh = admitAfterSuccessfulProbe(breaker, { invocationId: 'fresh-attempt', scopeKeys: [INSTALL] });
     expect(fresh.ok).toBe(true);
     expect(breaker.settle(stale.token, { kind: 'succeeded' })).toEqual({ ok: false, reason: expect.any(String) });
     expect(breaker.getState(INSTALL).activeCanary).not.toBeNull(); // the FRESH canary, untouched by the stale settle
@@ -1038,7 +1057,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     // A single attempt covers THREE scopes at once (installation, quota,
     // host) — none of them individually open yet.
     const covering = [INSTALL, QUOTA, HOST];
-    const admission = breaker.admit({ invocationId: 'multi-1', scopeKeys: covering });
+    const admission = admitAfterSuccessfulProbe(breaker, { invocationId: 'multi-1', scopeKeys: covering });
     expect(admission.ok).toBe(true);
     expect(admission.token.coveringKeys).toEqual(expect.arrayContaining(covering));
     for (const key of covering) expect(breaker._outstanding.get(key)?.size).toBe(1);
@@ -1057,7 +1076,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     }
     expect(breaker.getState(HOST).state).toBe('open');
     vi.advanceTimersByTime(120_000);
-    const canary = breaker.admit({ invocationId: 'canary-multi', scopeKeys: covering });
+    const canary = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-multi', scopeKeys: covering });
     expect(canary.ok).toBe(true);
     expect(canary.token.canaryKeys.length).toBeGreaterThan(0);
     expect(breaker.settle(canary.token, { kind: 'succeeded' })).toEqual({ ok: true });
@@ -1067,14 +1086,14 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('deadline-reopens-before-readmission', () => {
     openInstall();
     vi.advanceTimersByTime(120_000);
-    const admitted = breaker.admit({ invocationId: 'canary-1', scopeKeys: [INSTALL] });
+    const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'canary-1', scopeKeys: [INSTALL] });
     expect(admitted.ok).toBe(true);
     expect(dispatchReservation(breaker, admitted.token, 'canary-1')).toEqual({ ok: true });
     // Past the canary's own deadline (300s), the NEXT admission call must
     // observe the sweep and reopen with backoff BEFORE considering any new
     // admission — never admitting an overlapping live canary.
     vi.advanceTimersByTime(300_001);
-    const overlapping = breaker.admit({ invocationId: 'overlapping', scopeKeys: [INSTALL] });
+    const overlapping = admitAfterSuccessfulProbe(breaker, { invocationId: 'overlapping', scopeKeys: [INSTALL] });
     expect(overlapping.ok).toBe(false); // reopened with doubled backoff, not yet due again
     expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
     expect(breaker.getState(INSTALL).blockingMarker).not.toBeNull();
@@ -1171,7 +1190,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
       // attempt and lose its eventual failure to `_scopeRecordBounded`
       // returning null.
       const overflowKey = scopeKeyFor.installation('overflow-cli-explicit');
-      const admission = smallCapBreaker.admit({ invocationId: 'overflow-explicit', scopeKeys: [overflowKey] });
+      const admission = admitAfterSuccessfulProbe(smallCapBreaker, { invocationId: 'overflow-explicit', scopeKeys: [overflowKey] });
       expect(admission.ok).toBe(false);
       expect(admission.blockedBy).toContain('scope-tracking-capacity');
       expect(smallCapBreaker.getState(overflowKey).tracked).toBe(false);
@@ -1187,7 +1206,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
       const oversizedKeys = Array.from({ length: 7 }, (_, n) => scopeKeyFor.installation(`cli-${n}`));
-      const admission = breaker.admit({ invocationId: 'oversized-1', scopeKeys: oversizedKeys });
+      const admission = admitAfterSuccessfulProbe(breaker, { invocationId: 'oversized-1', scopeKeys: oversizedKeys });
       expect(admission.ok).toBe(false);
       expect(admission.blockedBy).toContain('covering-set-too-large');
       // None of the would-be-trimmed keys were tracked either.
@@ -1210,7 +1229,7 @@ describe('half-open canary admission (#2915D2: the next real launch IS the probe
   it('settle() rejects a copied token with altered fields (exact token ownership)', () => {
     const b = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = b.admit({ invocationId: 'a1', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(b, { invocationId: 'a1', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       // A copy with every field reproduced, including `breaker` and `id`,
       // but a forged invocationId -- reference inequality alone refuses it.
@@ -1235,7 +1254,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
   it('beginDispatch refuses a second call on the same reservation (single-use, review 6 finding 1)', () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'begin-1', scopeKeys: [], selectionDigest: 'sel-1' });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'begin-1', scopeKeys: [], selectionDigest: 'sel-1' });
       expect(admitted.ok).toBe(true);
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'begin-1', selectionDigest: 'sel-1' })).toEqual({ ok: true });
       const second = breaker.beginDispatch(admitted.token, { invocationId: 'begin-1', selectionDigest: 'sel-1' });
@@ -1249,7 +1268,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
   it('beginDispatch refuses omitted (undefined) invocationId/selectionDigest bindings — never bypasses the check', () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'omit-1', scopeKeys: [], selectionDigest: 'sel-1' });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'omit-1', scopeKeys: [], selectionDigest: 'sel-1' });
       expect(admitted.ok).toBe(true);
       expect(breaker.beginDispatch(admitted.token, { selectionDigest: 'sel-1' }))
         .toEqual({ ok: false, reason: expect.stringMatching(/requires explicit/) });
@@ -1260,7 +1279,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
       // An explicit `null` (a legitimate value for a flat-option caller with
       // no resolved selection) is NOT the same as omitted, and must still be
       // validated against the stored binding rather than bypassing the check.
-      const noSelection = breaker.admit({ invocationId: 'omit-2', scopeKeys: [], selectionDigest: null });
+      const noSelection = admitAfterSuccessfulProbe(breaker, { invocationId: 'omit-2', scopeKeys: [], selectionDigest: null });
       expect(breaker.beginDispatch(noSelection.token, { invocationId: 'omit-2', selectionDigest: null })).toEqual({ ok: true });
     } finally {
       breaker.destroy();
@@ -1270,11 +1289,11 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
   it('beginDispatch refuses a mismatched invocationId or selectionDigest against the breaker-owned stored binding', () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const a = breaker.admit({ invocationId: 'match-1', scopeKeys: [], selectionDigest: 'sel-a' });
+      const a = admitAfterSuccessfulProbe(breaker, { invocationId: 'match-1', scopeKeys: [], selectionDigest: 'sel-a' });
       expect(a.ok).toBe(true);
       expect(breaker.beginDispatch(a.token, { invocationId: 'WRONG', selectionDigest: 'sel-a' }))
         .toEqual({ ok: false, reason: expect.stringMatching(/does not match/) });
-      const b = breaker.admit({ invocationId: 'match-2', scopeKeys: [], selectionDigest: 'sel-b' });
+      const b = admitAfterSuccessfulProbe(breaker, { invocationId: 'match-2', scopeKeys: [], selectionDigest: 'sel-b' });
       expect(b.ok).toBe(true);
       expect(breaker.beginDispatch(b.token, { invocationId: 'match-2', selectionDigest: 'WRONG' }))
         .toEqual({ ok: false, reason: expect.stringMatching(/does not match/) });
@@ -1292,7 +1311,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
     try {
       for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
       now += 120_000;
-      const admitted = breaker.admit({ invocationId: 'committing-1', scopeKeys: [INSTALL], selectionDigest: null });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'committing-1', scopeKeys: [INSTALL], selectionDigest: null });
       expect(admitted.ok).toBe(true);
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'committing-1', selectionDigest: null })).toEqual({ ok: true });
       // Past the canary's own deadline WHILE committing (beginDispatch
@@ -1303,7 +1322,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
       // this scope is still refused by ITS presence (not a marker: no
       // marker exists yet for a committing-phase reservation).
       expect(breaker.getState(INSTALL).activeCanary?.id).toBe(admitted.token.id);
-      const competing = breaker.admit({ invocationId: 'competing', scopeKeys: [INSTALL] });
+      const competing = admitAfterSuccessfulProbe(breaker, { invocationId: 'competing', scopeKeys: [INSTALL] });
       expect(competing.ok).toBe(false);
       // commitDispatch now observes the deadline has passed and refuses --
       // it must NEVER silently complete as if nothing happened.
@@ -1330,7 +1349,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
   it('abortDispatch refuses once a reservation has actually reached dispatched', () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'dispatched-1', scopeKeys: [], selectionDigest: null });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'dispatched-1', scopeKeys: [], selectionDigest: null });
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'dispatched-1', selectionDigest: null })).toEqual({ ok: true });
       expect(breaker.commitDispatch(admitted.token)).toEqual({ ok: true });
       const aborted = breaker.abortDispatch(admitted.token);
@@ -1347,7 +1366,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
     try {
       for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
       now += 120_000;
-      const admitted = breaker.admit({ invocationId: 'recon-active', scopeKeys: [INSTALL] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'recon-active', scopeKeys: [INSTALL] });
       expect(admitted.ok).toBe(true);
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'recon-active', selectionDigest: null })).toEqual({ ok: true });
       expect(breaker.commitDispatch(admitted.token)).toEqual({ ok: true });
@@ -1482,7 +1501,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
       // Proven by also admitting successfully right afterward on the SAME
       // scope/breaker -- a leaked reservation would otherwise still be
       // occupying a slot (observable via `maxOutstandingReservations: 1`).
-      const afterwards = breaker.admit({ invocationId: 'rollback-2', scopeKeys: [] });
+      const afterwards = admitAfterSuccessfulProbe(breaker, { invocationId: 'rollback-2', scopeKeys: [] });
       expect(afterwards.ok).toBe(true);
     } finally {
       realpathSpy.mockRestore();
@@ -1581,7 +1600,7 @@ describe('#2915 round 8 (D4): observeStandaloneUnitSettlement boundary behavior'
   it('settles immediately once the unit reports inactive, well before the bound', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'obs-early', scopeKeys: [] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'obs-early', scopeKeys: [] });
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'obs-early', selectionDigest: null })).toEqual({ ok: true });
       expect(breaker.commitDispatch(admitted.token)).toEqual({ ok: true });
       let now = 0;
@@ -1600,7 +1619,7 @@ describe('#2915 round 8 (D4): observeStandaloneUnitSettlement boundary behavior'
   it('at exactly the deadline, attempts a bounded stop before settling (never abandons without one)', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'obs-exact', scopeKeys: [] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'obs-exact', scopeKeys: [] });
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'obs-exact', selectionDigest: null })).toEqual({ ok: true });
       expect(breaker.commitDispatch(admitted.token)).toEqual({ ok: true });
       let now = 0;
@@ -1630,7 +1649,7 @@ describe('#2915 round 8 (D4): observeStandaloneUnitSettlement boundary behavior'
   it('just after the deadline, the same bounded-stop escalation runs (not a different, unguarded path)', async () => {
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
-      const admitted = breaker.admit({ invocationId: 'obs-after', scopeKeys: [] });
+      const admitted = admitAfterSuccessfulProbe(breaker, { invocationId: 'obs-after', scopeKeys: [] });
       expect(breaker.beginDispatch(admitted.token, { invocationId: 'obs-after', selectionDigest: null })).toEqual({ ok: true });
       expect(breaker.commitDispatch(admitted.token)).toEqual({ ok: true });
       let now = 0;
@@ -2339,6 +2358,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
     try {
       for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
       now += 120_000;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const admission = await admitDirectWorker({ gateEnabled: true, config: dispatchOnConfig,
         invocation: { selected: { cli: 'codex' } }, invocationId: 'expiring-1', scopedBreaker: breaker, drivers: {} });
       expect(admission.gated).toBe(true);
@@ -2395,6 +2415,7 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       for (const id of ['a', 'b', 'c']) failEvidence(breaker, installFailure(id));
       expect(breaker.getState(INSTALL).state).toBe('open');
       now += 120_000;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' }, stdin: 'closed' };
       // A real, fast-exiting child -- standalone, no `admission` borrowed,
       // and the caller (this test) deliberately never calls
@@ -2793,15 +2814,16 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       await expect(lstat(refusedRunDir)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(breaker.snapshot().attemptsObserved).toBe(3);
       // #2915D2: once due, the breaker admits the NEXT REAL launch through
-      // this exact `launchWorker` path as the half-open canary — there is
-      // no separate probe runner. The fixture binary still does not exist,
+      // this exact `launchWorker` path as the canary after a successful
+      // preliminary probe. The fixture binary still does not exist,
       // so this canary fails again at spawn: the scope stays open and the
       // backoff doubles (120s -> 240s), proving the retry really ran
       // through production dispatch rather than being skipped or stuck.
       now += 121_000;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const canaryAttempt = await launchOnce();
       expect(canaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
-      expect(breaker.snapshot().attemptsObserved).toBe(4);
+      expect(breaker.snapshot().attemptsObserved).toBe(5);
       expect(breaker.getState(INSTALL).state).toBe('open');
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(240_000);
       // Not due yet at +120s (doubled backoff): still refused, no spawn --
@@ -2829,11 +2851,12 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // launcher-verified success is proven directly in the "half-open
       // canary admission" suite above.)
       now += 120_000;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const secondCanaryAttempt = await launchOnce();
       expect(secondCanaryAttempt).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT' });
       expect(breaker.getState(INSTALL).state).toBe('open');
       expect(breaker.getState(INSTALL).episodeCooldownMs).toBe(480_000);
-      expect(breaker.snapshot().attemptsObserved).toBe(5);
+      expect(breaker.snapshot().attemptsObserved).toBe(7);
     } finally {
       resetDirectRecoveryBreaker();
       vi.unstubAllEnvs();
@@ -2879,6 +2902,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // itself throws synchronously BEFORE `captureOneWorker`'s own
       // `finish()` closure is even wired, escaping its normal
       // never-throws-just-resolves contract entirely.
+      completePreliminaryProbe(breaker, [INSTALL]);
       const throwingDriver = copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } });
       await expect(launchEnoent({ codex: throwingDriver })).rejects.toThrow('synthetic capture-setup failure');
       // Not leaked: the canary reservation WAS settled (uncertain) -- it is
@@ -2900,6 +2924,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       const invocationId = breaker.getState(INSTALL).blockingMarker.invocationId;
       expect(breaker.reconcileStopEvidence({ invocationId, confirmedStop: true })).toEqual({ released: 1 });
       expect(breaker.getState(INSTALL).blockingMarker).toBeNull();
+      completePreliminaryProbe(breaker, [INSTALL]);
       const nextCanary = await launchEnoent();
       expect(nextCanary).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
     } finally {
@@ -3068,6 +3093,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         expect(successPlan.invocation).toBeDefined();
         const successPlanPath = path.join(fx.root, `closes-plan-${attempt}.json`);
         await writeFile(successPlanPath, JSON.stringify(successPlan));
+        completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
           invocationPath: successPlanPath, runDir: path.join(fx.root, `closes-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
@@ -3160,6 +3186,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       const child = new EventEmitter();
       child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
       child.pid = 2147483645;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const canaryResult = await launcher.launchWorker({
         invocationPath: twinPlanPath, runDir: path.join(fx.root, `twin-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
@@ -3250,6 +3277,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         // still succeeds, so this isolates the exact residual review 5
         // flagged: a write failure discovered ONLY in the final publish.
         let exitJsonWrites = 0;
+        completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
           invocationPath: successPlanPath, runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
@@ -3656,6 +3684,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // attempt. With maxAttempts: 4, this is the 4th and last allowed
       // attempt for this task chain.
       now += 121_000;
+      completePreliminaryProbe(breaker, [INSTALL]);
       const canary = await launchOnce();
       expect(canary).toMatchObject({ termination: 'confirmed', errorCode: 'ENOENT', attemptOutcome: 'failed' });
       expect(spawns.count).toBe(4);
@@ -5892,11 +5921,11 @@ describe('review 9 bounded recovery regressions', () => {
   it('review 9 item 7: C8 accepts explicit null selection only for null-bound reservations and always requires invocation identity', () => {
     const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     try {
-      const flat = breaker.admit({ invocationId: 'flat', selectionDigest: null, scopeKeys: [] });
+      const flat = admitAfterSuccessfulProbe(breaker, { invocationId: 'flat', selectionDigest: null, scopeKeys: [] });
       expect(breaker.beginDispatch(flat.token, { invocationId: 'flat' }).ok).toBe(false);
       expect(breaker.beginDispatch(flat.token, { invocationId: null, selectionDigest: null }).ok).toBe(false);
       expect(breaker.beginDispatch(flat.token, { invocationId: 'flat', selectionDigest: null })).toEqual({ ok: true });
-      const selected = breaker.admit({ invocationId: 'selected', selectionDigest: 'resolved-selection', scopeKeys: [] });
+      const selected = admitAfterSuccessfulProbe(breaker, { invocationId: 'selected', selectionDigest: 'resolved-selection', scopeKeys: [] });
       for (const selectionDigest of [undefined, null, 'different-selection']) {
         expect(breaker.beginDispatch(selected.token, { invocationId: 'selected', selectionDigest }).ok).toBe(false);
       }
@@ -5935,7 +5964,7 @@ describe('review 9 bounded recovery regressions', () => {
     let now = 0;
     let terminal = false;
     const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
-    const token = breaker.admit({ invocationId: 'late-unit', selectionDigest: null, scopeKeys: [] }).token;
+    const token = admitAfterSuccessfulProbe(breaker, { invocationId: 'late-unit', selectionDigest: null, scopeKeys: [] }).token;
     breaker.beginDispatch(token, { invocationId: 'late-unit', selectionDigest: null });
     breaker.commitDispatch(token);
     const timers = [];
