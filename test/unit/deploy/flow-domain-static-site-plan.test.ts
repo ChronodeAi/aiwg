@@ -56,7 +56,7 @@ describe('Flow domain static deployment plan (#2125)', () => {
     const value = plan();
     const workflow = readFileSync(path.join(ROOT, value.spec.repositories[0].workflowTemplate), 'utf8');
     expect(workflow).toContain('actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5');
-    expect(workflow).toContain('node:20@sha256:');
+    expect(workflow).toContain('node:24@sha256:');
     expect(workflow).toContain('rsync -avzn --delete');
     expect(workflow).toContain('/home/roctinam/production-deploy/flow.aiwg.io/');
     expect(workflow).toContain('--data \'{"hosts":["flow.aiwg.io"]}\'');

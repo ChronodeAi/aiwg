@@ -5,7 +5,7 @@ install npm separately. You do not need pnpm to install or use AIWG.
 
 For a new setup, use the current **LTS** release of Node.js. LTS means
 “Long-Term Support”: it receives fixes for longer and is the safer default than
-the newest experimental/current release. AIWG requires Node.js 20 or newer; the
+the newest experimental/current release. AIWG requires Node.js 24 or newer; the
 recommended new-user line is currently Node.js 24 LTS.
 
 ## Before installing anything
@@ -17,7 +17,7 @@ node --version
 npm --version
 ```
 
-If both commands show versions and Node is version 20 or newer, you can usually
+If both commands show versions and Node is version 24 or newer, you can usually
 continue to [Install, Connect, and Verify AIWG](install-connect-verify.md).
 Do not replace a working installation merely to match this guide.
 
@@ -74,7 +74,7 @@ node --version
 npm --version
 ```
 
-Success means both commands work in a fresh terminal, Node is version 20 or
+Success means both commands work in a fresh terminal, Node is version 24 or
 newer, and neither command reports a missing file or permission error. Then
 continue to [Install, Connect, and Verify AIWG](install-connect-verify.md).
 

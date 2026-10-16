@@ -12,7 +12,7 @@ a Cursor Grok Bot team Admin API key is not required.
 ## Runner setup
 
 Use a disposable checkout on a runner image containing reviewed, pinned
-versions of Node (20+), AIWG and the official Grok Build CLI. Pin the image by
+versions of Node (24+), AIWG and the official Grok Build CLI. Pin the image by
 digest in the consuming CI configuration and update it through normal review.
 The setup below assumes those tools are already installed. It does not install
 packages, configure credentials or activate a repository workflow.

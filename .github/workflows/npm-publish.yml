@@ -481,7 +481,7 @@ jobs:
               echo "  If this is the first OIDC release, common causes:"
               echo "  - npmjs.org trusted-publisher not configured for jmagly/aiwg npm-publish.yml"
               echo "  - permissions: id-token: write not set on workflow"
-              echo "  - Node version below 22.14.0 (we pin 22.22.2 above; should not happen)"
+              echo "  - Node version below 22.14.0 (setup-node installs 24.x above; should not happen)"
               cat publish-output.txt
               exit 1
             fi

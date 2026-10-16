@@ -105,21 +105,18 @@ test('Pi adapter resolves transcripts inside the isolated session directory only
   assert.equal(manifest.sessionEnvironment, 'PI_CODING_AGENT_SESSION_DIR', 'adapter honors the fixture-pinned isolation variable');
 });
 
-test('Pi adapter availability fails closed on incompatible Node or a failing pi --version', async () => {
+test('Pi adapter availability fails closed on a failing or unqualified pi --version', async () => {
   const adapter = new PiAdapter();
   const { dir, cleanup } = scratch('pi-adapter-node-');
   try {
-    const fakeNode = join(dir, 'fake-node');
-    writeExecutableSync(fakeNode, `#!/bin/sh\nprintf '20.19.0\\n'\n`);
-    const execPath = process.execPath;
-    Object.defineProperty(process, 'execPath', { value: fakeNode, configurable: true, writable: true });
-    try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), false, 'Node < 22.19 is rejected before pi is probed'); }
-    finally { Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true }); }
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.isAvailable()), false, 'non-zero pi --version is unavailable');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.isAvailable()), false, 'a Pi outside the qualified range is unavailable even though --version exits 0 (#2550)');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.getVersion()), '0.86.0', 'the drifted version is still observable for diagnostics');
     assert.equal(await withEnv({ AIWG_PI_BIN: join(dir, 'missing-pi') }, () => adapter.isAvailable()), false, 'missing binary is unavailable');
-    assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), true);
+    const execPath = process.execPath;
+    Object.defineProperty(process, 'execPath', { value: join(dir, 'missing-node'), configurable: true, writable: true });
+    try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), true, 'availability probes Pi directly without a separate Node preflight'); }
+    finally { Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true }); }
     assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.getVersion()), manifest.upstreamVersion, 'observed version matches the pinned fixture contract');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.getVersion()), null);
   } finally { cleanup(); }

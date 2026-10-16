@@ -4,7 +4,7 @@
 
 - **Code to test**: `src/resources/web-release.ts`, the web-backed paths in
   `src/artifacts/query-engine.ts`, and `src/artifacts/cli.ts`.
-- **Testing framework**: Vitest on Node.js 20+.
+- **Testing framework**: Vitest on Node.js 24+.
 - **Coverage target**: at least 80% lines/statements, 75% branches, and 90%
   functions for the resolver; signature, digest, rollback, offline, and
   atomic-cache paths are critical.

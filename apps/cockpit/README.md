@@ -33,7 +33,7 @@ aiwg cockpit         # launch the local Bridge + web UI
 [![npm version](https://img.shields.io/npm/v/%40aiwg%2Fcockpit/latest?label=%40aiwg%2Fcockpit&color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/@aiwg/cockpit)
 [![base package](https://img.shields.io/npm/v/aiwg/latest?label=aiwg&color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/aiwg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://github.com/jmagly/aiwg/blob/main/LICENSE)
-[![Node Version](https://img.shields.io/badge/node-%E2%89%A518.0.0-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
+[![Node Version](https://img.shields.io/badge/node-%E2%89%A524-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
 [![Repository](https://img.shields.io/badge/source-jmagly%2Faiwg-black?logo=github&style=flat-square)](https://github.com/jmagly/aiwg/tree/main/apps/cockpit)
 
 [**Quick Start**](#quick-start) · [**What You Get**](#what-you-get) · [**Architecture**](#architecture) · [**Verify**](#verify) · [**Release Pattern**](https://github.com/jmagly/aiwg/blob/main/apps/cockpit/RELEASE.md)

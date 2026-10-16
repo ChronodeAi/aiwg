@@ -50,6 +50,6 @@ aiwg -update-warp      # update existing WARP.md with latest content
 
 Node.js requirement:
 
-- Node >= 18.20.8 (Latest LTS: Hydrogen)
+- Node >= 24.0.0
 - The installer checks your Node version and can attempt to install when `--auto-install-node` is used.
 - If automatic install is not possible, it prints instructions for NVM and NodeSource.

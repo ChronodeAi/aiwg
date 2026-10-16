@@ -12,6 +12,6 @@
     "smoke": "node src/smoke.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   }
 }

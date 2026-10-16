@@ -67,12 +67,12 @@ Before starting, ensure you have:
   gh auth login
   ```
 
-- **Node.js** - Version 18.20.8 or higher
+- **Node.js** - Version 24.0.0 or higher
 
   ```bash
   # Check version
   node --version
-  # Should output: v18.20.8 or higher
+  # Should output: v24.0.0 or higher
   ```
 
 - **Git** - Version 2.0 or higher
@@ -101,7 +101,7 @@ Before starting, ensure you have:
 ```bash
 # Check all required tools
 gh --version         # Should output: gh version 2.x.x
-node --version       # Should output: v18.20.8+
+node --version       # Should output: v24.0.0+
 git --version        # Should output: git version 2.x.x
 
 # Verify GitHub authentication
@@ -115,7 +115,7 @@ gh auth status
 
 When all checks pass:
 - ✓ gh version 2.x.x detected
-- ✓ node version 18.20.8+ detected
+- ✓ node version 24.0.0+ detected
 - ✓ git version 2.x.x detected
 - ✓ GitHub authentication active
 
@@ -261,7 +261,7 @@ Add native Cursor Editor support with single-file .cursor/rules integration.
 
 ## Dependencies
 - Cursor Editor 0.40+
-- Node.js 20.0.0+ (Node 24 recommended for release work)
+- Node.js 24+
 
 ## Success Criteria
 - Users can deploy agents with one command
@@ -888,7 +888,7 @@ Timeline: 1 week
 ```text
 ✓ Created intake: .aiwg/contrib/cursor-integration/intake.md
 ✓ Analyzed requirements
-✓ Identified dependencies: Node.js 20.0.0+, Cursor 0.40+
+✓ Identified dependencies: Node.js 24+, Cursor 0.40+
 ✓ Created implementation plan
 
 Next: Start Inception phase? [y/n]

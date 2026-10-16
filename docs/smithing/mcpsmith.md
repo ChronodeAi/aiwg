@@ -116,7 +116,7 @@ mcp:
 
 base_images:
   node_alpine:
-    image: "node:20-alpine"
+    image: "node:24-alpine"
     cached: true
 
 network:
@@ -158,7 +158,7 @@ outputs:
     description: "Parsed JSON data"
 
 docker:
-  base_image: "node:20-alpine"
+  base_image: "node:24-alpine"
   transport: stdio
   dependencies:
     - node-fetch

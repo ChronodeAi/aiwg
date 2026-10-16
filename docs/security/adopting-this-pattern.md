@@ -13,7 +13,7 @@ You're publishing an npm package. You want to:
 - Block known supply-chain attack vectors (recent malicious deps, git+http sources, etc.)
 
 You're willing to:
-- Bump your dev environment to Node 22.14+ or 24+ (npm 11.5+ requirement)
+- Bump your dev environment to Node 24+ (npm 11.5+ requirement)
 - Set up a GitHub Actions, GitLab CI/CD, CircleCI, or Gitea Actions workflow if you don't have one
 - Generate a maintainer signing key (gpg or ssh, your choice)
 
@@ -38,7 +38,7 @@ Plus dev-side:
 
 | Need | Why |
 |---|---|
-| Node 22.14+ or 24+ on your CI runner | npmjs.org trusted publishing requires npm 11.5+, which requires Node 22.14+. AIWG runs Node 24.x in CI. |
+| Node 24+ on your CI runner | npmjs.org trusted publishing requires npm 11.5+, which requires Node 22.14+. AIWG runs Node 24.x in CI. |
 | npm 11.5+ on your dev machine | The `min-release-age=7` gate fires on every `npm install`. Without npm 11.5+, the gate is silent. `npm install -g npm@^11.5` once. |
 | GitHub Actions, GitLab CI/CD, CircleCI, or Gitea Actions | OIDC trusted publishing requires a supported provider. Checked on **2026-05-14** against npm's trusted-publishers docs: GitHub Actions, GitLab CI/CD, and CircleCI are supported; **Gitea Actions is not listed**. If you use Gitea, publish to npmjs.org from a supported provider and use Gitea for the rest of the release flow. |
 | gpg or ssh key for tag signing | Your choice. gpg is more common; ssh works with hardware tokens (YubiKey, Nitrokey). |

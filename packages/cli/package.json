@@ -82,7 +82,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24"
   },
   "dependencies": {
     "@fortemi/core": "2026.7.15",

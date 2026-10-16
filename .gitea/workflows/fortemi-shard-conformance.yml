@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node -e "const major = Number(process.versions.node.split('.')[0]); if (major < 20) throw new Error('Node 20 or newer is required')"
+          node -e "const major = Number(process.versions.node.split('.')[0]); if (major < 24) throw new Error('Node 24 or newer is required')"
           git --version
           DOCKER_VERSION=27.5.1
           DOCKER_ARCHIVE=/tmp/docker.tgz

@@ -18,7 +18,7 @@ Verified against the npm and Node.js documentation on 2026-06-02:
   manager or changing npm's global prefix to a user-owned directory:
   <https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally/>
 - The Node.js download page lists Node 24 as the current LTS line on
-  2026-06-02. AIWG supports Node 20 or newer; new installs should use Node 24:
+  2026-06-02. AIWG requires Node 24 or newer; use Node 24:
   <https://nodejs.org/en/download>
 
 ## Recommended Path: nvm

@@ -63,8 +63,7 @@ For multi-repository work, see [Working Across Multiple Projects](guides/multi-p
 
 ## Prerequisites
 
-AIWG requires Node.js 20 or newer. New installs should use the current LTS Node
-line. Reuse a healthy version manager already present; do not stack managers.
+AIWG requires Node.js 24 or newer. Node 24 is the standard runtime. Reuse a healthy version manager already present; do not stack managers.
 When none is installed, prefer `nvm-sh` on macOS, Linux, and WSL, or
 `nvm-windows` on native Windows.
 

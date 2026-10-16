@@ -28,17 +28,13 @@ export class EntryAdmissionError extends Error {
 
 /**
  * An admission-budget clock reading: per-thread CPU time
- * (`process.threadCpuUsage()`) when the runtime supports it, or the
- * previous monotonic wall-clock reading (`performance.now()`) otherwise.
+ * (`process.threadCpuUsage()`) on the required Node 24 runtime.
  * Opaque to callers -- always pass it straight to `elapsedAdmissionMs`.
  */
-export type AdmissionClock = NodeJS.CpuUsage | number;
+export type AdmissionClock = NodeJS.CpuUsage;
 
 /**
- * Starts an admission-budget clock, feature-detecting
- * `process.threadCpuUsage()` once for this reading. `elapsedAdmissionMs`
- * below reads the *type* of what this returns rather than re-detecting the
- * feature, so one admission check always uses one clock end to end.
+ * Starts an admission-budget clock using per-thread CPU time.
  *
  * Per-thread CPU time measures only the work the admitting call itself did
  * on this thread, so it is immune both to host scheduling contention
@@ -47,23 +43,14 @@ export type AdmissionClock = NodeJS.CpuUsage | number;
  * other threads' or background GC's CPU time landing on this same process
  * (which a process-wide `process.cpuUsage()` clock would still charge here
  * -- not a safe substitute for the same reason `performance.now()` was not).
- *
- * `process.threadCpuUsage()` was added in Node v22.19.0 (per the installed
- * `@types/node` `@since` annotation) and is absent on this project's
- * `engines.node` floor (`>=20.0.0` in package.json) and on Node
- * 22.0.0-22.18.x. On a runtime without it, this falls back to the
- * pre-#3047 monotonic wall-clock guard as an explicitly documented
- * compatibility fallback: it restores the original host-load sensitivity on
- * those older runtimes, it does not resolve it there.
  */
 export function admissionClockStart(): AdmissionClock {
-  return typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : performance.now();
+  return process.threadCpuUsage();
 }
 
 /** Elapsed time since `start` (from `admissionClockStart`), in milliseconds. */
 export function elapsedAdmissionMs(start: AdmissionClock): number {
-  if (typeof start === 'number') return performance.now() - start;
-  const diff = process.threadCpuUsage!(start);
+  const diff = process.threadCpuUsage(start);
   return (diff.user + diff.system) / 1000;
 }
 

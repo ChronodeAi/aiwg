@@ -772,7 +772,7 @@ export class ExampleGenerator {
         postgresql: 'PostgreSQL 15',
         mysql: 'MySQL 8.0',
         mongodb: 'MongoDB 6.0',
-        node: 'Node.js 20',
+        node: 'Node.js 24',
         react: 'React 18',
         vue: 'Vue 3',
         angular: 'Angular 17'

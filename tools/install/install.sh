@@ -21,7 +21,7 @@ Options:
   --branch <name>  Branch to checkout (default: $BRANCH)
   --prefix <dir>   Install location (default: $PREFIX_DEFAULT)
   --alias-file <f> Shell RC/alias file to append (auto-detected if omitted)
-  --auto-install-node  Attempt to install Node.js >= 18.20.8 if missing/older
+  --auto-install-node  Attempt to install Node.js >= 24.0.0 if missing/older
   --force-reinstall    Delete existing installation and reinstall fresh
   --dry-run            Validate options and print what would be installed
 
@@ -124,7 +124,7 @@ ensure_git() {
 
 ensure_git
 
-MIN_NODE_VERSION="18.20.8"
+MIN_NODE_VERSION="24.0.0"
 
 ver_ge() { # returns 0 if $1 >= $2
   [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
@@ -133,18 +133,18 @@ ver_ge() { # returns 0 if $1 >= $2
 install_node() {
   echo "Attempting to install Node.js (>= $MIN_NODE_VERSION)..."
   if command -v apt-get >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt-get install -y nodejs
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs
   elif command -v dnf >/dev/null 2>&1; then
-    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo -E bash - && sudo dnf install -y nodejs
+    curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo -E bash - && sudo dnf install -y nodejs
   elif command -v yum >/dev/null 2>&1; then
-    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo -E bash - && sudo yum install -y nodejs
+    curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo -E bash - && sudo yum install -y nodejs
   elif command -v pacman >/dev/null 2>&1; then
     sudo pacman -Sy --noconfirm nodejs npm
   elif command -v zypper >/dev/null 2>&1; then
-    sudo zypper -n install nodejs npm || sudo zypper -n install nodejs18 npm18 || true
+    sudo zypper -n install nodejs npm || sudo zypper -n install nodejs24 npm24 || true
   elif command -v brew >/dev/null 2>&1; then
-    brew install node@18 || brew install node
-    brew link --overwrite node@18 || true
+    brew install node@24 || brew install node
+    brew link --overwrite node@24 || true
   else
     echo "No supported package manager detected for automatic Node.js install."
     return 1
@@ -166,10 +166,10 @@ ensure_node() {
       if [[ "$AUTO_INSTALL_NODE" == "1" ]]; then
         install_node || true
       else
-        echo "Please upgrade to Node $MIN_NODE_VERSION (LTS: Hydrogen) or higher. Suggestions:"
+        echo "Please upgrade to Node $MIN_NODE_VERSION or higher. Suggestions:"
         echo "  - NVM: curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \\
     . \"$HOME/.nvm/nvm.sh\" && nvm install v$MIN_NODE_VERSION && nvm use v$MIN_NODE_VERSION"
-        echo "  - NodeSource (Debian/Ubuntu): curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt-get install -y nodejs"
+        echo "  - NodeSource (Debian/Ubuntu): curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs"
         return
       fi
     fi
@@ -178,10 +178,10 @@ ensure_node() {
     if [[ "$AUTO_INSTALL_NODE" == "1" ]]; then
       install_node || true
     else
-      echo "Please install Node $MIN_NODE_VERSION (LTS: Hydrogen) or higher. Suggestions:"
+      echo "Please install Node $MIN_NODE_VERSION or higher. Suggestions:"
       echo "  - NVM: curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \\
     . \"$HOME/.nvm/nvm.sh\" && nvm install v$MIN_NODE_VERSION && nvm use v$MIN_NODE_VERSION"
-      echo "  - NodeSource (Debian/Ubuntu): curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt-get install -y nodejs"
+      echo "  - NodeSource (Debian/Ubuntu): curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs"
     fi
   fi
 }

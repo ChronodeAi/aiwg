@@ -112,6 +112,27 @@ function committed(target: DecisionLoadResultRecord['target']): DecisionLoadResu
 describe('offline D05 load harness', () => {
   afterEach(() => { vi.useRealTimers(); });
 
+  it('reports thread CPU independently of elapsed wall time', async () => {
+    vi.useFakeTimers();
+    const cpu = vi.spyOn(process, 'threadCpuUsage')
+      .mockReturnValueOnce({ user: 100, system: 200 })
+      .mockReturnValueOnce({ user: 2000, system: 1000 });
+    try {
+      const clock = fakeClock();
+      const driver: DecisionLoadDriver = async () => ({
+        attempts: 1, outcome: 'completed', queueDelaysMs: [], settledAtMs: clock.now(),
+      });
+      const run = await runDecisionLoadHarness({ manifest, clock, driver,
+        sample: () => ({ active: 0, queued: 0 }), windowSeconds: 0.01 });
+      expect(cpu).toHaveBeenCalledTimes(2);
+      expect(cpu).toHaveBeenLastCalledWith({ user: 100, system: 200 });
+      expect(run.resources.cpuSource).toBe('thread');
+      expect(run.resources.cpuPercentOneCore).toBe(Number((3 / run.observations.virtualDurationMs * 100).toFixed(3)));
+    } finally {
+      cpu.mockRestore();
+    }
+  });
+
   it('CNC-LOAD-001 pins the preregistered v2 manifest and its seeded arrivals', () => {
     expect(decisionLoadManifestDigest(manifestBytes)).toBe(MANIFEST_DIGEST);
     expect(manifest.passFail.liveServiceRequired).toBe(false);

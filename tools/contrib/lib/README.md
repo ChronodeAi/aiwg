@@ -200,7 +200,7 @@ if (!result.success) {
 
 ## Dependencies
 
-- **Node.js:** >= 18.20.8
+- **Node.js:** >= 24.0.0
 - **GitHub CLI (`gh`):** >= 2.0 (for github-client.mjs)
 - **Git:** >= 2.0 (for quality-validator.mjs)
 - **Existing lint tools:** `tools/lint/*.mjs` (for quality-validator.mjs)

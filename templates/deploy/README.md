@@ -84,7 +84,7 @@ secret broker and commit only interface names.
 |----------|-------------|---------|
 | `{{APP_NAME}}` | Application name | `my-api` |
 | `{{PORT}}` | Application port | `3000` |
-| `{{NODE_VERSION}}` | Node.js version | `20-alpine` |
+| `NODE_VERSION` build arg | Node.js version | `24` |
 | `{{PYTHON_VERSION}}` | Python version | `3.11` |
 | `{{ENTRY_POINT}}` | Application entry point | `dist/index.js` |
 | `{{IMAGE_REGISTRY}}` | Container registry | `ghcr.io/org` |
