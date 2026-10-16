@@ -1,10 +1,13 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: src/mcp/registry.ts. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: src/mcp/registry.ts at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
+import { tomlString } from '../../../../../src/mcp/toml-string.mjs';
 import { type Layering, isLowerLayerEntry, loadLayered, lowerEntryQualified, resolveConfigLayers, saveLayerData } from '../../../../../src/mcp/config-layers.mjs';
 import { assertConfigDestination, assertProjectCredentials, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from '../../../../../src/mcp/config-file.mjs';
 import { manageOmpMcp } from '../../../../../src/mcp/omp-config.mjs';
@@ -575,18 +578,6 @@ export function buildServerConfig(
     default:
       return {};
   }
-}
-
-/**
- * Build a TOML section for a server (Codex/OpenAI provider).
- */
-function tomlString(value: unknown): string {
-  if (typeof value !== 'string' || [...value].some(char => {
-    const point = char.codePointAt(0)!;
-    return point >= 0xd800 && point <= 0xdfff;
-  })) throw new Error('TOML values must be strings containing valid Unicode scalar values');
-  // JSON escapes align with TOML basic strings except DEL must also be escaped.
-  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
 }
 
 function tomlKey(value: unknown): string {

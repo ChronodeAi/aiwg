@@ -4,9 +4,12 @@
  * @implements Issue #22 - Claude Intelligence Layer
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ValidationAgent } from '../../../tools/ralph-external/lib/validation-agent.mjs';
 import { spawnSync } from 'child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock child_process
 vi.mock('child_process', () => ({
@@ -16,13 +19,23 @@ vi.mock('child_process', () => ({
 
 describe('ValidationAgent', () => {
   let agent;
+  let projectRoot;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    spawnSync.mockReturnValue({ stdout: '', status: 0 });
+    projectRoot = await mkdtemp(join(tmpdir(), 'aiwg-validation-agent-'));
+    await writeFile(join(projectRoot, 'package.json'), '{}');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await mkdir(join(projectRoot, 'node_modules'));
     agent = new ValidationAgent({
-      projectRoot: '/tmp/test-project',
+      projectRoot,
       verbose: false,
     });
-    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
   });
 
   describe('constructor', () => {
@@ -110,15 +123,14 @@ describe('ValidationAgent', () => {
   });
 
   describe('_checkDependencies', () => {
-    it('should detect missing node_modules', () => {
-      // Mock existsSync to return true for package.json, false for node_modules
-      const originalExistsSync = agent.constructor.prototype._checkDependencies;
+    it('should detect missing node_modules', async () => {
+      await rm(join(projectRoot, 'node_modules'), { recursive: true });
 
       const result = agent._checkDependencies();
 
-      // This is implementation-dependent
-      expect(result).toHaveProperty('packageJsonExists');
-      expect(result).toHaveProperty('nodeModulesExists');
+      expect(result.packageJsonExists).toBe(true);
+      expect(result.nodeModulesExists).toBe(false);
+      expect(result.issues).toMatchObject([{ type: 'missing_dependencies', severity: 'warning' }]);
     });
   });
 
@@ -187,8 +199,9 @@ describe('ValidationAgent', () => {
 
       const result = agent._checkBuild();
 
-      // Only runs if tsconfig.json exists
-      expect(result).toHaveProperty('ran');
+      expect(result.ran).toBe(true);
+      expect(result.success).toBe(true);
+      expect(spawnSync).toHaveBeenCalledWith('npx', ['tsc', '--noEmit'], expect.objectContaining({ cwd: projectRoot }));
     });
 
     it('should detect build errors', () => {
@@ -199,11 +212,19 @@ describe('ValidationAgent', () => {
 
       const result = agent._checkBuild();
 
-      if (result.ran) {
-        expect(result.success).toBe(false);
-        expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues[0].type).toBe('build_error');
-      }
+      expect(result.ran).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.issues.length).toBeGreaterThan(0);
+      expect(result.issues[0].type).toBe('build_error');
+    });
+
+    it('should skip builds without tsconfig and preserve the next check output', async () => {
+      await rm(join(projectRoot, 'tsconfig.json'));
+      spawnSync.mockReturnValueOnce({ stdout: '0 errors, 2 warnings', status: 0 });
+
+      expect(agent._checkBuild()).toEqual({ ran: false, success: false, issues: [] });
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(agent._runLint()).toMatchObject({ ran: true, errors: 0, warnings: 2 });
     });
   });
 

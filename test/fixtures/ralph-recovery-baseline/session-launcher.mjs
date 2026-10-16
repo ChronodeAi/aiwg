@@ -1,12 +1,10 @@
 /**
  * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
- * Source: `tools/ralph-external/session-launcher.mjs` at a4085b86a81d442e31d71bba1d9d193bbff532d6.
+ * Source: tools/ralph-external/session-launcher.mjs at 8c812250d6e8e139eb52f798b92934bab9350021.
  * Only import routing and this pin header differ from the baseline body.
- * Isolation, provider adapters, installation ownership, default loading and
- * every importing dependency that can reach installation ownership use
- * sibling fixtures. Unchanged dependencies use the repository source.
- * Regenerate the body with `git show a4085b86a:tools/ralph-external/session-launcher.mjs`,
- * then restore import routing and this header. Never import from production.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /**
@@ -240,7 +238,7 @@ async function launchOneWorker(owner, options) {
   const saved = JSON.parse(planBytes.toString('utf8'));
   const loadInputs = options.loadInputs ?? (options.inputs ? async () => options.inputs : async () =>
     (await import('./src/cli/handlers/models.ts')).loadWorkerInputs({
-      cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: fileURLToPath(new URL('../../', import.meta.url)) }));
+      cwd: process.cwd(), args: [], rawArgs: [], frameworkRoot: fileURLToPath(new URL('../../..', import.meta.url)) }));
   let inputs = await loadInputs();
   const clock = () => typeof options.now === 'function' ? options.now() : options.now ?? new Date().toISOString();
   const now = clock();
@@ -832,13 +830,13 @@ export class SessionLauncher extends EventEmitter {
     super();
     this.currentProcess = null;
     this.startTime = null;
-    /** @type {import('./lib/provider-adapter.mjs').ProviderAdapter|null} */
+    /** @type {import('./provider-adapter.mjs').ProviderAdapter|null} */
     this.providerAdapter = null;
   }
 
   /**
    * Set the provider adapter for CLI abstraction
-   * @param {import('./lib/provider-adapter.mjs').ProviderAdapter} adapter
+   * @param {import('./provider-adapter.mjs').ProviderAdapter} adapter
    */
   setProviderAdapter(adapter) {
     this.providerAdapter = adapter;
@@ -1009,10 +1007,14 @@ export class SessionLauncher extends EventEmitter {
       // (e.g. the launcher's own caller) reading stdoutPath/stderrPath
       // immediately after launch() resolves, and can hand back a truncated
       // file under I/O load (#2981).
+      // A failed write destroys the stream at once, but WriteStream emits
+      // 'error' only after its async fd close, so wait for 'close' (which
+      // follows both 'finish' and 'error') rather than returning early on
+      // `destroyed`; otherwise launch() can resolve before captureError lands.
       const finalizeCaptureStream = stream => new Promise(res => {
-        if (stream.destroyed || stream.writableFinished) { res(); return; }
-        stream.once('error', res);
-        stream.end(res);
+        if (stream.closed) { res(); return; }
+        stream.once('close', res);
+        if (!stream.destroyed && !stream.writableEnded) stream.end();
       });
 
       // Buffer for last portion of stdout (for quick analysis)
@@ -1116,6 +1118,7 @@ export class SessionLauncher extends EventEmitter {
         Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
           // A failed capture means stdoutPath/stderrPath are incomplete; report
           // it rather than hand back a truncated transcript as a result.
+          captureError ??= stdoutStream.errored ?? stderrStream.errored;
           if (captureError) {
             this.emit('error', captureError);
             reject(captureError);
@@ -1622,7 +1625,7 @@ export async function getClaudeVersion() {
  * @param {object} options
  * @param {string} [options.name] - Human-readable worker label for the unit name.
  * @param {number} options.memoryMaxGb - Resource ceiling for the isolated worker.
- * @param {import('../../src/mission-protocol/types.js').WorkerResolvedInvocation} [options.invocation] -
+ * @param {import('../../../src/mission-protocol/types.ts').WorkerResolvedInvocation} [options.invocation] -
  *   The resolved #2887 invocation to launch; supplies defaults for the flat
  *   options below when they are not given directly.
  * @param {string} [options.command] - Absolute path to the resolved worker binary
@@ -1646,7 +1649,7 @@ export async function getClaudeVersion() {
  *   `invocation.envNames`, then `['PATH', 'HOME']`).
  * @param {Record<string, string>} [options.env] - Source of allowlisted values
  *   (defaults to the conductor's own `process.env`; never forwarded wholesale).
- * @param {import('../../src/config/aiwg-config.js').AiwgConfig} [options.config] - Current effective config.
+ * @param {import('./src/config/aiwg-config.ts').AiwgConfig} [options.config] - Current effective config.
  * @param {string[]} [options.paths] - Filesystems to sample free disk on
  *   (defaults to the worker `cwd`/worktree, never the conductor's cwd).
  * @param {boolean} [options.allowDegraded] - Explicit opt-in to an unconfined launch
@@ -1686,6 +1689,7 @@ export function planDirectWorkerLaunch({
   proposeUnit,
   kind,
   attached = false,
+  ownedGroup = false, onSpawnAttempt,
   // #2892: forwarded only when explicitly given, so every existing caller
   // (which omits it) keeps #2895's own `attached` default (`stdin: 'closed'`
   // -> stdio[0] 'ignore') unchanged. An MCP stdio worker passes `'open'` to
@@ -1704,7 +1708,7 @@ export function planDirectWorkerLaunch({
   });
   if (!gate.ok) return { launched: false, blocked: true, failures: gate.failures ?? [], gate };
   return launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
-    gate, config, allowDegraded, attached,
+    gate, config, allowDegraded, attached, ownedGroup, onSpawnAttempt,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
     ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),

@@ -4622,8 +4622,10 @@ export function planDirectWorkerLaunch({
   // for the not-gated/disabled-CLI paths below, which must stay
   // synchronous and byte-for-byte legacy — passing `undefined` through to
   // `launchIsolatedWorker` is the dual-mode contract that keeps it so.
+  let dispatchAttempt;
   const launch = (onDispatchCommit) => launchIsolatedWorker({ name, memoryMaxGb, command, args, cwd, logFile, stdinPath, stdoutPath, stderrPath,
-    gate, config, allowDegraded, attached, ownedGroup, onSpawnAttempt,
+    gate, config, allowDegraded, attached, ownedGroup,
+    onSpawnAttempt: onDispatchCommit ? value => { dispatchAttempt = value; onSpawnAttempt?.(value); } : onSpawnAttempt,
     ...(envNames !== undefined ? { envNames } : {}), ...(env !== undefined ? { env } : {}),
     ...(isolation !== undefined ? { isolation } : {}), ...(spawn !== undefined ? { spawn } : {}),
     ...(spawnAsync !== undefined ? { spawnAsync } : {}), ...(proposeUnit !== undefined ? { proposeUnit } : {}),
@@ -4817,11 +4819,25 @@ export function planDirectWorkerLaunch({
       // a refund failure must reach the caller instead of being silently
       // discarded (mirroring `launchOneWorker`'s own `settleLedger`).
       const diagnostic = await settleDirectWorker(admission, { kind: 'uncertain' });
+      if (dispatchAttempt?.mode === 'systemd-unit' && dispatchAttempt.unit) {
+        observeStandaloneUnitSettlement(dispatchAttempt.unit, admission, {
+          isolationMode: dispatchAttempt.mode, getStatus: isolationStatus, stopUnit,
+          pollIntervalMs: unitSettlementPollMs, deadlineAtMs, nowMs: deadlineClockNow,
+        });
+      }
       if (diagnostic) error.ledgerDiagnostics = [...(error.ledgerDiagnostics ?? []), diagnostic];
       throw error;
     }
     if (!result?.launched) {
       const diagnostic = await settleDirectWorker(admission, { kind: 'uncertain' });
+      // A failed submission can leave a live owned unit. Keep its deadline
+      // and stop observer even though no successful launch was returned.
+      if (result?.dispatchState === 'submission-uncertain' && result.unit) {
+        observeStandaloneUnitSettlement(result.unit, admission, {
+          isolationMode: result.mode, getStatus: isolationStatus, stopUnit,
+          pollIntervalMs: unitSettlementPollMs, deadlineAtMs, nowMs: deadlineClockNow,
+        });
+      }
       return diagnostic ? { ...result, ledgerDiagnostics: [...(result.ledgerDiagnostics ?? []), diagnostic] } : result;
     }
     observeStandaloneUnitSettlement(result.unit ?? null, admission, {

@@ -1,8 +1,10 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: src/artifacts/index-builder.ts. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: src/artifacts/index-builder.ts at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /**
@@ -26,7 +28,6 @@ import { parseDecisionJson, parseDecisionYaml } from '../../../../../src/decisio
 import { validateGateDocument } from '../../../../../src/gates/schema.ts';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from '../../../../../src/artifacts/types.ts';
 import {
-  DEFAULT_INDEX_EXTENSIONS,
   INDEX_EXTRACTOR_VERSION,
   INDEX_VERSION,
   INDEX_DIR,
@@ -53,6 +54,7 @@ export interface BuildOptions {
   force?: boolean;
   verbose?: boolean;
   scope?: string;
+  includeIgnored?: boolean; // Include gitignored sources; runtime directories remain excluded
   outputDir?: string; // Override index output directory (default: <cwd>/.aiwg/.index/)
   graph?: GraphType;  // Target a specific graph (default: project for backward compat)
   explicit?: boolean; // true when graph was requested via --graph flag; false for auto-selected defaultBuild graphs
@@ -913,7 +915,7 @@ export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
 ): Promise<void> {
-  const { force = false, verbose = false, scope, outputDir, graph, explicit = true } = options;
+  const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
   const startTime = Date.now();
 
   // Ensure user-defined graphs are loaded
@@ -923,19 +925,15 @@ export async function buildIndex(
   // Determine scan directories based on graph type
   const graphConfig = graph ? GRAPH_CONFIGS[graph] : undefined;
   let scanDirs: string[];
-  let fileExtensions: string[];
 
   if (scope) {
     // Explicit scope overrides graph config
     scanDirs = [path.join(cwd, scope)];
-    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   } else if (graphConfig) {
     scanDirs = graphConfig.scanDirs.map(d => resolveGraphScanDir(cwd, d));
-    fileExtensions = graphConfig.extensions;
   } else {
     // Default: scan .aiwg/ (backward compatible)
     scanDirs = [resolveProjectAiwgDir(cwd)];
-    fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   }
 
   // Verify at least one scan directory exists
@@ -1023,9 +1021,7 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files = scope
-    ? existingDirs.flatMap(dir => findArtifactFiles(dir, fileExtensions))
-    : await collectGraphIndexFiles(cwd, graph);
+  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored });
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};

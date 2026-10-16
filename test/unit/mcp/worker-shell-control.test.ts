@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error — .mjs untyped
 import { buildShellStopControl, parseShellUnitStatus, waitForUnitTermination, defaultStopShellUnit, defaultKillShellUnit } from '../../../src/mcp/tools/worker-shell-control.mjs';
 // @ts-expect-error — .mjs untyped
-import { prepareWorkerStdin, sweepWorkerStdin } from '../../../src/mcp/tools/worker-stdin-runtime.mjs';
+import { prepareWorkerStdin, sweepWorkerStdin, launchPreparedShellWorker } from '../../../src/mcp/tools/worker-stdin-runtime.mjs';
 // @ts-expect-error — .mjs untyped
 import { resolveSystemdClient } from '../../../tools/ralph-external/lib/systemd-client.mjs';
 
@@ -71,6 +71,10 @@ describe('async systemd status and command path', () => {
     [collected, { termination: 'confirmed', exitCode: null }],
   ])('parses recorded show properties: %s', (stdout, expected) => {
     expect(parseShellUnitStatus(stdout)).toEqual(expected);
+  });
+  it('retains a loaded inactive unit without a terminal execution code', () => {
+    expect(parseShellUnitStatus(success.replace('ExecMainCode=1', 'ExecMainCode=0')))
+      .toEqual({ termination: 'uncertain', exitCode: null });
   });
   it.each(['', 'ActiveState=inactive', success.replace('ExecMainStatus=0', 'ExecMainStatus=bad'),
     collected.replace('ActiveState=inactive', 'ActiveState=active')])('rejects incomplete/unverified stop proof: %s', stdout => {
@@ -178,6 +182,36 @@ describe('async systemd status and command path', () => {
 });
 
 describe('shell control lifetimes', () => {
+  it('uses the absolute recovery deadline despite a backward wall clock and gives stop its own grace', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let monotonic = 100;
+    let wall = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    const observe = vi.fn((_unit: string, _ms: number, options: any) => new Promise(resolve => {
+      options.signal.addEventListener('abort', () => resolve({ termination: 'uncertain' }), { once: true });
+    }));
+    const stop = vi.fn(async () => ({ ok: true }));
+    const kill = vi.fn(async () => ({ ok: true }));
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'test.service' },
+      { graceMs: 10, nowMs: () => monotonic, waitForUnit: observe, stopUnit: stop, killUnit: kill, recheckMaxAttempts: 0 });
+    const pending = control.wait(1000, { deadlineAtMs: 110, nowMs: () => monotonic });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observe.mock.calls[0][1]).toBe(10);
+    expect(observe.mock.calls[0][2].deadlineAtMs).toBe(110);
+    wall -= 10_000; monotonic = 110;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(observe.mock.calls[1][1]).toBe(1000);
+    expect(observe.mock.calls[1][2]).not.toHaveProperty('deadlineAtMs');
+    wall -= 10_000; monotonic = 1110;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(kill).toHaveBeenCalledOnce();
+    monotonic = 2110;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ termination: 'uncertain', timedOut: true });
+    expect(vi.getTimerCount()).toBe(0);
+    control.dispose();
+  });
   it('retries observation failure without killing a healthy unit before its deadline', async () => {
     const observe = vi.fn().mockRejectedValueOnce(new Error('busy')).mockResolvedValueOnce({ termination: 'uncertain' })
       .mockResolvedValue({ termination: 'confirmed', exitCode: 0 });
@@ -365,5 +399,32 @@ describe('private stdin runtime', () => {
     await sweepWorkerStdin(root, { isAlive: (pid: number) => pid === 101 });
     expect((await readdir(root)).sort()).toEqual([path.basename(live), path.basename(fresh), path.basename(link)].sort());
     expect(await readFile(path.join(live, 'stdin'), 'utf8')).toBe('brief');
+  });
+});
+
+
+describe('prepared shell recovery authority', () => {
+  it('forwards the existing admission, invocation identity and deadline after audited stdin preparation', async () => {
+    const root = await tempRoot();
+    const brief = Buffer.from('conductor brief');
+    const { createHash } = await import('node:crypto');
+    const invocation = { briefPath: path.join(root, 'brief'), briefDigest: `sha256:${createHash('sha256').update(brief).digest('hex')}` };
+    const admission = Object.freeze({ gated: true, token: Object.freeze({ id: 'reserved' }) });
+    const dispatchGuard = { deadlineAtMs: 110, nowMs: () => 100 };
+    const plan = vi.fn(async (options: any) => {
+      expect(await readFile(options.stdinPath)).toEqual(brief);
+      expect((await stat(options.stdinPath)).mode & 0o777).toBe(0o600);
+      return { launched: false, blocked: true };
+    });
+    const result = await launchPreparedShellWorker(invocation,
+      { memoryMaxGb: 1, servedRoot: root, stdinRuntimeRoot: root, admission, invocationId: 'invocation', dispatchGuard },
+      { loadRalphExternal: async () => ({ planDirectWorkerLaunch: plan }), readBoundedFile: async () => brief,
+        importImpl: async () => ({ workerStdinBytes: () => brief }), describeGateFailures: () => 'refused' });
+    expect(plan).toHaveBeenCalledOnce();
+    expect(plan.mock.calls[0][0].admission).toBe(admission);
+    expect(plan.mock.calls[0][0].invocationId).toBe('invocation');
+    expect(plan.mock.calls[0][0].dispatchGuard).toBe(dispatchGuard);
+    expect(result).toMatchObject({ launched: false, launchAttempted: false });
+    expect(await readdir(root)).toEqual([]);
   });
 });

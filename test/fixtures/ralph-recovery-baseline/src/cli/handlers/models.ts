@@ -1,8 +1,10 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: src/cli/handlers/models.ts. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: src/cli/handlers/models.ts at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /**
@@ -47,11 +49,17 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
   const loader = new ConfigLoader(ctx.cwd);
   const models = await loader.load(config.parallelism);
   const catalog = await effectiveCatalog(ctx, ctx.cwd, false, parseArgs(['resolve']));
-  const { registry, installations, drivers } = await loadRecordedWorkerInstallations({
-    registry: loadProviderModelCapabilities(), cwd: ctx.cwd, policy: models.defaults.workerSelection,
+  const registry = loadProviderModelCapabilities();
+  // Let the resolver explain the dispatch gate before requiring host qualification (#3070).
+  if (!config.parallelism?.worker_dispatch) {
+    return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
+      registry, installations: {} }, drivers: {} };
+  }
+  const { registry: qualifiedRegistry, installations, drivers } = await loadRecordedWorkerInstallations({
+    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection,
   });
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
-    registry, installations }, drivers };
+    registry: qualifiedRegistry, installations }, drivers };
 }
 
 async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {

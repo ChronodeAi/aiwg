@@ -98,7 +98,7 @@ import {
 } from '../../../tools/ralph-external/session-launcher.mjs';
 import { inspectWorkerPath } from '../../../src/serve/worker-invocation.js';
 import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
-// #2915 round 8 (D6): the frozen `a4085b86a` reference fixture — see its
+// #2915 round 8 (D6): the frozen `8c812250d6` reference fixture — see its
 // own header comment. Used ONLY by the "baseline equivalence" describe
 // block below; never by production code.
 import { SessionLauncher as SessionLauncherBaseline, planDirectWorkerLaunch as planDirectWorkerLaunchBaseline }
@@ -2438,11 +2438,14 @@ describe('planDirectWorkerLaunch recovery gate', () => {
         return statusCalls < 3 ? { active: true } : { active: false, execMainCode: 1 };
       };
       const fakeSpawn = (cmd, args) => {
-        if (cmd === 'systemctl' && args[0] === '--user' && args[1] === 'show-environment') {
+        if (path.basename(cmd) === 'systemctl' && args[0] === '--user' && args[1] === 'show-environment') {
           return { error: null, status: 0, stdout: 'PATH=/usr/bin\n', stderr: '' };
         }
-        if (cmd === 'systemd-run') return { error: null, status: 0, stdout: '', stderr: '' };
-        if (cmd === 'systemctl' && args[0] === '--user' && args[1] === 'show') {
+        if (path.basename(cmd) === 'systemd-run') {
+          expect(path.isAbsolute(cmd)).toBe(true);
+          return { error: null, status: 0, stdout: '', stderr: '' };
+        }
+        if (path.basename(cmd) === 'systemctl' && args[0] === '--user' && args[1] === 'show') {
           return { error: null, status: 0, stdout: '4242\n', stderr: '' };
         }
         return { error: new Error(`unexpected spawn: ${cmd}`), status: 1, stdout: '', stderr: '' };
@@ -4669,7 +4672,7 @@ describe('allowance ledger: cross-instance probes', () => {
 
 // ---------------------------------------------------------------------------
 // #2915 round 8 (D6): equivalence tests for the attached launcher and the
-// standalone planner. The frozen `a4085b86a` fixture
+// standalone planner. The frozen `8c812250d6` fixture
 // (`test/fixtures/ralph-recovery-baseline/session-launcher.mjs`) has NO
 // admission/breaker/ledger/digest concept at all; the current branch, with
 // direct recovery not gated, must behave the same from an equivalent
@@ -4805,7 +4808,7 @@ async function equivFixtureRoot() {
     return { launcher, result, runDir: attempt.runDir };
   }
 
-describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the branch with direct recovery not gated', () => {
+describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the branch with direct recovery not gated', () => {
   // The two not-gated triggers a full real-invocation launch can exercise
   // without ALSO being refused by `revalidateWorkerInvocationPlan`'s own
   // re-resolution (see the describe-level comment above).
@@ -4896,7 +4899,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen a4085b86a vs the bran
       const options = { name: 'r10-disabled', command: process.execPath, args: [], cwd: process.cwd(), memoryMaxGb: 4,
         config: dispatchOnConfig, live: healthyLive, invocation: { selected: { cli: 'codex' } },
         isolation: { mode: 'systemd-unit' }, proposeUnit: () => 'r10-disabled-unit',
-        spawn: (command) => command === 'systemd-run' ? { status: 1, stderr: 'submission failed' } : { status: 0, stdout: '' },
+        spawn: (command) => path.basename(command) === 'systemd-run' ? { status: 1, stderr: 'submission failed' } : { status: 0, stdout: '' },
         ...disabled,
       };
       const baseline = planDirectWorkerLaunchBaseline(options);
@@ -6021,6 +6024,42 @@ describe('review 10 bounded recovery regressions', () => {
       expect(vi.getTimerCount()).toBe(0);
       expect(breaker.hasUnresolvedStop(unresolved.admission.invocationId)).toBe(true);
       expect(breaker.reconcileStopEvidence({ invocationId: unresolved.admission.invocationId, confirmedStop: true })).toEqual({ released: 1 });
+    } finally { breaker.destroy(); vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+});
+
+
+describe('rebased standalone submission ownership', () => {
+  it.each(['nonzero', 'throws'])('stops an uncertain %s submission at its absolute deadline and releases only after terminal unit evidence', async failure => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let monotonic = 0;
+    let terminal = false;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const stop = vi.fn(() => ({ ok: true }));
+    const status = vi.fn(() => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }));
+    try {
+      const pending = planDirectWorkerLaunch({ name: 'uncertain-submission', command: process.execPath, args: [], cwd: process.cwd(),
+        config: dispatchOnConfig, live: healthyLive, scopedBreaker: breaker, invocationId: 'uncertain-submission',
+        invocation: { selected: { cli: 'codex' } }, memoryMaxGb: 1, isolation: { mode: 'systemd-unit' },
+        isolationStatus: status, stopUnit: stop, unitSettlementBoundMs: 10, unitSettlementPollMs: 2,
+        spawn: command => {
+          if (path.basename(command) !== 'systemd-run') return { status: 0, stdout: '' };
+          if (failure === 'throws') throw new Error('submission uncertain');
+          return { status: 1, stderr: 'submission uncertain' };
+        },
+      });
+      if (failure === 'throws') await expect(pending).rejects.toThrow('submission uncertain');
+      else expect(await pending).toMatchObject({ launched: false, dispatchState: 'submission-uncertain' });
+      expect(breaker.hasUnresolvedStop('uncertain-submission')).toBe(true);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1);
+      monotonic = 10;
+      await vi.advanceTimersByTimeAsync(2);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(breaker.snapshot().reservationsOutstanding).toBe(1);
+      terminal = true;
+      await vi.advanceTimersByTimeAsync(2);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
     } finally { breaker.destroy(); vi.clearAllTimers(); vi.useRealTimers(); }
   });
 });

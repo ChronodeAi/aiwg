@@ -1,8 +1,10 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: src/serve/worker-invocation.ts. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: src/serve/worker-invocation.ts at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /** One nonlaunching typed renderer shared by models resolve and Ralph. */
@@ -204,7 +206,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     const worker = `env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')}`;
     const outputs = `> ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
     if (result.stdin === 'brief-json') {
-      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
+      const framer = fileURLToPath(new URL('../../../../../src/serve/worker-stdin-frame.mjs', import.meta.url));
       const frame = [process.execPath, framer, result.briefPath, result.selected.model, result.cwd].map(quote).join(' ');
       result.shellCommand = `cd ${quote(result.cwd)} && env -i ${frame} | ${worker} ${outputs}`;
     } else if (result.stdin === 'adapter-frame') {
@@ -212,7 +214,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
       if (!binding || !absolute(binding.storePath) || !/^sha256:[a-f0-9]{64}$/.test(binding.storeDigest)) {
         throw new Error('Adapter stdin framer requires a trusted installation binding');
       }
-      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
+      const framer = fileURLToPath(new URL('../../../../../src/serve/worker-stdin-frame.mjs', import.meta.url));
       const frame = [process.execPath, framer, '--adapter-frame', result.briefPath, result.cwd,
         result.selected.cli, qualification.adapterId, result.selected.qualificationDigest, result.briefDigest!,
         binding.storePath, binding.storeDigest, JSON.stringify(qualification.policy ?? null)].map(quote).join(' ');

@@ -1,8 +1,10 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: src/models/resolver.ts. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: src/models/resolver.ts at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /**
@@ -14,6 +16,7 @@
  */
 
 import { ConfigLoader } from './config-loader.ts';
+import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from './worker-dispatch-offer.ts';
 import {
   resolveWorkerGroupInstallation, resolveParallelism, validateWorkerGroupReferences, validateWorkerBudgetEnforcement,
   workerActivationDigests, workerConfigDigest,
@@ -477,7 +480,13 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   const block = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): void => {
     plan.diagnostics.push(diagnostic(code, pointer, message));
   };
-  if (!parallelism.worker_dispatch) { plan.status = 'disabled'; return plan; }
+  if (!parallelism.worker_dispatch) {
+    plan.status = 'disabled';
+    block('OG_CONFIG_REFERENCE', '/parallelism/worker_dispatch',
+      `Direct worker dispatch is off (parallelism.worker_dispatch). Enable with \`${WORKER_DISPATCH_ENABLE_COMMAND}\` `
+      + `(then check readiness with \`${WORKER_DISPATCH_READINESS_COMMAND}\`).`);
+    return plan;
+  }
   const now = new Date(request.now);
   if (!Number.isFinite(now.getTime())) block('OG_CONFIG_REFERENCE', '/request/now', 'A valid current clock is required');
   if (!request.context || typeof request.context.estimator !== 'string') block('OG_CONFIG_REFERENCE', '/request/context', 'A named, bounded context estimate is required');

@@ -1,8 +1,10 @@
 /**
- * FROZEN REFERENCE FIXTURE: a4085b86a81d442e31d71bba1d9d193bbff532d6.
- * Source: tools/ralph-external/lib/muse-adapter.mjs. Only import routing and this pin header differ.
- * Installation ownership and its importing dependencies stay within this
- * fixture graph; unchanged dependencies use the repository source.
+ * FROZEN REFERENCE FIXTURE -- NOT PRODUCTION CODE.
+ * Source: tools/ralph-external/lib/muse-adapter.mjs at 8c812250d6e8e139eb52f798b92934bab9350021.
+ * Only import routing and this pin header differ from the baseline body.
+ * Refresh with: node test/fixtures/ralph-recovery-baseline/refresh.mjs --ref=8c812250d6e8e139eb52f798b92934bab9350021
+ * Installation ownership and default input loading stay in this fixture graph.
+ * Other dependencies use repository source. Never import from production.
  */
 
 /**
@@ -85,7 +87,7 @@ import { classifyWorkerHealthFailure, healthEventMatchesBinding } from '../../..
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 
-const museEffortValues = JSON.parse(readFileSync(new URL('../../../agentic/code/providers/model-capabilities.v1.json', import.meta.url), 'utf8')).providers.muse.effortValues;
+const museEffortValues = JSON.parse(readFileSync(new URL('./agentic/code/providers/model-capabilities.v1.json', import.meta.url), 'utf8')).providers.muse.effortValues;
 
 // Syntax inspected only; neither help nor echo qualifies authenticated execution.
 export const MUSE_DIRECT_VERSION = '1.4.4-R5419.1';
