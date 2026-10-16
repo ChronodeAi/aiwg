@@ -18,6 +18,9 @@ import { createRequire } from 'module';
 import { importImpl } from '../../_resolve-impl.mjs';
 
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
+const { extractFrameworkSlug, sameSkillOwner, canDeploySkill, pruneRecordedSkillFiles, releaseSkillOwnership } =
+  await importImpl(import.meta.url, 'providers/skill-ownership.mjs');
+export { extractFrameworkSlug, sameSkillOwner, pruneRecordedSkillFiles, releaseSkillOwnership };
 
 // Use graceful-fs to prevent EMFILE crashes on systems with low ulimit.
 // graceful-fs queues open() calls when FD pressure is detected and retries
@@ -253,26 +256,6 @@ export function updateSidecarManifest(dir, deployedEntries, opts) {
   }
 
   writeSidecarManifest(dir, existing, dryRun);
-}
-
-// ============================================================================
-// Cross-Framework Collision Detection (#1169)
-// ============================================================================
-
-/**
- * Extract the framework slug from a source file path.
- *
- * Recognizes paths under `agentic/code/frameworks/<slug>/...` and
- * `agentic/code/addons/<slug>/...`. Returns null for paths outside
- * those namespaces (operator-authored bundles, addons under
- * `.aiwg/addons/`, etc.) — those don't get collision-tracked.
- */
-export function extractFrameworkSlug(srcPath) {
-  if (typeof srcPath !== 'string') return null;
-  // Normalize separators for cross-platform matching
-  const normalized = srcPath.replace(/\\/g, '/');
-  const m = normalized.match(/agentic\/code\/(?:frameworks|addons)\/([^/]+)\//);
-  return m ? m[1] : null;
 }
 
 // ============================================================================
@@ -1550,27 +1533,6 @@ export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
   return removed;
 }
 
-/** Remove only unchanged files listed in a skill receipt; preserve operator additions and edits. */
-function pruneRecordedSkillFiles(skillDir, managed, desired, opts) {
-  if (opts.dryRun) return;
-  for (const [relative, record] of Object.entries(managed || {})) {
-    if (desired.has(relative)) continue;
-    const target = path.resolve(skillDir, relative);
-    if (!target.startsWith(`${path.resolve(skillDir)}${path.sep}`)) continue;
-    try {
-      // Do not follow a replaced file or parent directory through a symlink.
-      if (fs.realpathSync(target) !== target || !fs.lstatSync(target).isFile()) continue;
-      if (`sha256:${contentHash(fs.readFileSync(target))}` !== record.hash) continue;
-      fs.unlinkSync(target);
-      let parent = path.dirname(target);
-      while (parent !== path.resolve(skillDir)) {
-        try { fs.rmdirSync(parent); } catch { break; }
-        parent = path.dirname(parent);
-      }
-    } catch { /* missing, modified, or unreadable files are left alone */ }
-  }
-}
-
 /** Source-scoped cleanup also works when a removed standard skill is absent from this deploy's input. */
 function pruneMissingStandardSkills(destDir, opts) {
   if (!destDir || !opts?.srcRoot || opts.dryRun || !fs.existsSync(destDir)) return 0;
@@ -1589,13 +1551,10 @@ function pruneMissingStandardSkills(destDir, opts) {
     } catch (error) {
       if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') continue;
     }
-    pruneRecordedSkillFiles(skillDir, receipt.managed, new Set(), opts);
-    // The receipt and marker were written by the copier itself. Any files
-    // left after this step belong to the operator and keep the directory alive.
-    fs.rmSync(path.join(skillDir, MANIFEST_FILENAME), { force: true });
-    fs.rmSync(path.join(skillDir, '.aiwg-managed'), { force: true });
-    try { fs.rmdirSync(skillDir); } catch { /* operator files remain */ }
-    pruned++;
+    if (releaseSkillOwnership(skillDir, {
+      frameworkSlug: receipt.managed['SKILL.md'].frameworkSlug,
+      skillSource: receipt.skillSource,
+    }, opts)) pruned++;
   }
   return pruned;
 }
@@ -1626,17 +1585,7 @@ export function deploySkillDir(skillDir, destDir, opts) {
   const destSkillDir = path.join(destDir, skillName);
   const previous = readSidecarManifest(destSkillDir);
   const frameworkSlug = extractFrameworkSlug(skillMdPath);
-  const existingOwner = previous?.managed?.['SKILL.md']?.frameworkSlug;
-  const sameOwner = frameworkSlug && existingOwner
-    ? frameworkSlug === existingOwner
-    : previous?.skillSource === path.resolve(skillDir);
-  if ((existingOwner || previous?.skillSource) && !sameOwner) {
-    console.warn(
-      `Skill deploy collision: '${skillName}' is owned by ${existingOwner || previous.skillSource}; ` +
-      `${frameworkSlug || skillDir} skipped`,
-    );
-    return;
-  }
+  if (!canDeploySkill(previous, skillDir, opts)) return;
   const managed = {};
   if (!dryRun) ensureDir(destSkillDir);
 

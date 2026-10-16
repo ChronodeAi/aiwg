@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   deploySkillDir,
+  sameSkillOwner,
   deploySkillsWithKernelRouting,
   readSidecarManifest,
   writeSidecarManifest,
@@ -30,42 +31,75 @@ describe('shared skill copier ownership and stale files (#3035)', () => {
     root = mkdtempSync(join(tmpdir(), 'aiwg-skill-copy-'));
     sources = join(root, 'sources');
     destination = join(root, 'deployed');
+    for (const name of ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) {
+      vi.stubEnv(name, join(root, name.toLowerCase()));
+    }
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
   });
 
-  for (const name of ['cleanup-audit', 'doc-sync', 'sdlc-accelerate']) {
-    it(`reports ${name} from aiwg-utils versus sdlc-complete and preserves the owner`, () => {
-      const addon = skill('addons', 'aiwg-utils', name);
-      const framework = skill('frameworks', 'sdlc-complete', name);
-      deploySkillDir(addon, destination, { provider: 'pi' });
-      const deployed = join(destination, name);
-      const receipt = readFileSync(join(deployed, '.aiwg-manifest.json'), 'utf8');
-      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      expect(readSidecarManifest(deployed).managed['SKILL.md'].frameworkSlug).toBe('aiwg-utils');
-      for (const options of [{}, { force: true }, { dryRun: true }]) {
-        deploySkillDir(framework, destination, options);
-        expect(warning).toHaveBeenLastCalledWith(
-          `Skill deploy collision: '${name}' is owned by aiwg-utils; sdlc-complete skipped`,
-        );
-        expect(readFileSync(join(deployed, 'references/recipe.md'), 'utf8')).toBe('aiwg-utils recipe\n');
-        expect(readFileSync(join(deployed, '.aiwg-manifest.json'), 'utf8')).toBe(receipt);
-      }
-    });
+  for (const name of ['cleanup-audit', 'doc-sync', 'sdlc-accelerate', 'doc-consolidate']) {
+    for (const frameworkFirst of [false, true]) {
+      it(`gives the framework precedence for ${name} (framework first: ${frameworkFirst})`, () => {
+        const addon = skill('addons', 'aiwg-utils', name);
+        const framework = skill('frameworks', 'sdlc-complete', name);
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const order = frameworkFirst ? [framework, addon] : [addon, framework];
+        for (const source of order) deploySkillDir(source, destination, { provider: 'pi' });
+        expect(readSidecarManifest(join(destination, name)).managed['SKILL.md'].frameworkSlug).toBe('sdlc-complete');
+        expect(readFileSync(join(destination, name, 'references/recipe.md'), 'utf8')).toBe('sdlc-complete recipe\n');
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining('Skill deploy collision:'));
+      });
+    }
   }
 
-  it('checks an existing manifest frameworkSlug even without the new source-directory record', () => {
-    const addon = skill('addons', 'aiwg-utils', 'demo');
-    deploySkillDir(addon, destination, {});
+  for (const group of ['frameworks', 'addons']) {
+    for (const reversed of [false, true]) {
+      it(`keeps existing peer ownership for ${group} (reversed: ${reversed})`, () => {
+        const first = skill(group, reversed ? 'sdlc-complete' : 'research-complete', 'research-cite');
+        const second = skill(group, reversed ? 'research-complete' : 'sdlc-complete', 'research-cite');
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        deploySkillDir(first, destination, {});
+        deploySkillDir(second, destination, {});
+        expect(readSidecarManifest(join(destination, 'research-cite')).skillSource).toBe(first);
+        expect(warning).toHaveBeenLastCalledWith(expect.stringContaining('skipped'));
+        deploySkillDir(second, destination, { force: true, dryRun: true });
+        expect(readSidecarManifest(join(destination, 'research-cite')).skillSource).toBe(first);
+        deploySkillDir(second, destination, { force: true });
+        expect(readSidecarManifest(join(destination, 'research-cite')).skillSource).toBe(second);
+        expect(warning).toHaveBeenLastCalledWith(expect.stringContaining('taking ownership'));
+      });
+    }
+  }
+
+  it('checks an existing manifest frameworkSlug even without a source-directory record', () => {
+    const framework = skill('frameworks', 'sdlc-complete', 'demo');
+    deploySkillDir(framework, destination, {});
     const receipt = readSidecarManifest(join(destination, 'demo'));
     delete receipt.skillSource;
     writeSidecarManifest(join(destination, 'demo'), receipt, false);
-    const framework = skill('frameworks', 'sdlc-complete', 'demo');
+    const addon = skill('addons', 'aiwg-utils', 'demo');
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    deploySkillDir(framework, destination, {});
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining('owned by aiwg-utils'));
+    deploySkillDir(addon, destination, {});
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('owned by sdlc-complete'));
+  });
+
+  it('matches moved legacy sources only when both lack slugs and their bundle-relative segments agree', () => {
+    const receipt = { skillSource: join(root, 'old/bundle/skills/demo'), managed: {} };
+    expect(sameSkillOwner(receipt, join(root, 'new/bundle/skills/demo'))).toBe(true);
+    expect(sameSkillOwner(receipt, join(root, 'new/other/skills/demo'))).toBe(false);
+    expect(sameSkillOwner(receipt, join(root, 'new/bundle/skills/other'))).toBe(false);
+    expect(sameSkillOwner(receipt, join(root, 'new/bundle/skills/demo'), 'foreign')).toBe(false);
+    const source = join(root, 'old/bundle/skills/demo');
+    write(join(source, 'SKILL.md'), 'old');
+    deploySkillDir(source, destination, {});
+    const moved = join(root, 'new/bundle/skills/demo');
+    write(join(moved, 'SKILL.md'), 'updated');
+    deploySkillDir(moved, destination, {});
+    expect(readFileSync(join(destination, 'demo/SKILL.md'), 'utf8')).toBe('updated');
   });
 
   it('detects a collision even when only the support assets differ', () => {
@@ -77,11 +111,11 @@ describe('shared skill copier ownership and stale files (#3035)', () => {
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('owned by sdlc-complete'));
   });
 
-  it('updates the same owner after its installation root moves', () => {
-    const addon = skill('addons', 'aiwg-utils', 'demo');
+  it('updates the same framework owner after its installation root moves', () => {
+    const addon = skill('frameworks', 'sdlc-complete', 'demo');
     deploySkillDir(addon, destination, {});
     sources = join(root, 'relocated');
-    const relocated = skill('addons', 'aiwg-utils', 'demo', 'updated');
+    const relocated = skill('frameworks', 'sdlc-complete', 'demo', 'updated');
     deploySkillDir(relocated, destination, {});
     expect(readFileSync(join(destination, 'demo/SKILL.md'), 'utf8')).toContain('updated');
     expect(readSidecarManifest(join(destination, 'demo')).skillSource).toBe(relocated);
@@ -113,13 +147,25 @@ describe('shared skill copier ownership and stale files (#3035)', () => {
     expect(readFileSync(join(destination, 'demo/.aiwg-manifest.json'), 'utf8')).toBe(receipt);
   });
 
-  it('does not follow a replaced support-directory symlink during cleanup', () => {
+  it('prunes stale files through a symlinked ancestor', () => {
+    const addon = skill('addons', 'aiwg-utils', 'demo');
+    const actual = join(root, 'actual');
+    mkdirSync(actual);
+    symlinkSync(actual, destination);
+    deploySkillDir(addon, destination, {});
+    rmSync(join(addon, 'references'), { recursive: true });
+    deploySkillDir(addon, destination, {});
+    expect(existsSync(join(actual, 'demo/references/recipe.md'))).toBe(false);
+  });
+
+  it.each(['file', 'directory'])('does not follow a replaced support %s symlink during cleanup', kind => {
     const addon = skill('addons', 'aiwg-utils', 'demo');
     deploySkillDir(addon, destination, {});
     const outside = join(root, 'outside');
     write(join(outside, 'recipe.md'), 'aiwg-utils recipe\n');
-    rmSync(join(destination, 'demo/references'), { recursive: true });
-    symlinkSync(outside, join(destination, 'demo/references'));
+    const replaced = join(destination, kind === 'file' ? 'demo/references/recipe.md' : 'demo/references');
+    rmSync(replaced, { recursive: true });
+    symlinkSync(kind === 'file' ? join(outside, 'recipe.md') : outside, replaced);
     rmSync(join(addon, 'references'), { recursive: true });
     deploySkillDir(addon, destination, {});
     expect(existsSync(join(outside, 'recipe.md'))).toBe(true);
@@ -146,7 +192,8 @@ describe('shared skill copier ownership and stale files (#3035)', () => {
     write(join(destination, 'legacy/SKILL.md'), 'operator or legacy skill');
     write(join(destination, 'legacy/.aiwg-managed'), 'aiwg\n');
     rmSync(addon, { recursive: true });
-    deploySkillsWithKernelRouting([], destination, null, options);
+    const result = deploySkillsWithKernelRouting([], destination, null, options);
+    expect(result.prunedFromStandardDir).toBe(0);
     expect(existsSync(join(destination, 'demo/SKILL.md'))).toBe(false);
     expect(readFileSync(join(destination, 'demo/local.txt'), 'utf8')).toBe('operator addition');
     expect(readFileSync(join(destination, 'demo/references/recipe.md'), 'utf8')).toBe('operator edit');

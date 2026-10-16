@@ -23,6 +23,8 @@ import { sessionHandler } from "./session.js";
 import { feedbackHandler } from "./feedback.js";
 import { handlerResultFromError } from "../errors.js";
 import { getProjectDir } from "../../config/aiwg-config.js";
+import { deployedSkillRoots } from "../../providers/deployed-skill-roots.js";
+import { releaseSkillOwnership } from "../../providers/skill-ownership.mjs";
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
@@ -740,7 +742,13 @@ async function removeUserScopeDeploy(args: ReadonlyArray<string>): Promise<Handl
           continue;
         }
         try {
-          await fs.rm(target, { recursive: true, force: true });
+          if (type === 'skills') {
+            const { resolveFrameworkDir } = await import('./use.js');
+            const released = releaseSkillOwnership(target, { frameworkSlug: resolveFrameworkDir(positional) ?? positional });
+            if (released === null) continue;
+          } else {
+            await fs.rm(target, { recursive: true, force: true });
+          }
           deletedHere++;
           totalDeleted++;
         } catch (err) {
@@ -869,6 +877,30 @@ export const removeHandler: CommandHandler = {
         const projectDir = getProjectDir({ cwd: ctx.cwd }, ctx.args);
         const config = await readAiwgConfig(projectDir);
         const entry = config?.installed?.[positionalArg];
+        if (config && entry && entry.source !== 'project-local') {
+          const fs = await import('node:fs/promises');
+          const { resolveFrameworkDir } = await import('./use.js');
+          const frameworkSlug = resolveFrameworkDir(positionalArg) ?? positionalArg;
+          const dryRun = ctx.args.includes('--dry-run');
+          const providers = Object.keys(entry.deployedTo).filter(p => !providerParse.provider || p === providerParse.provider);
+          if (providerParse.provider && providers.length === 0) {
+            return { exitCode: 1, message: `Error: '${positionalArg}' is not deployed for provider '${providerParse.provider}'.` };
+          }
+          let released = 0;
+          for (const provider of providers) {
+            for (const root of deployedSkillRoots(projectDir, provider)) {
+              for (const name of await fs.readdir(root).catch(() => [] as string[])) {
+                if (releaseSkillOwnership(path.join(root, name), { frameworkSlug }, { dryRun }) !== null) released++;
+              }
+            }
+            if (!dryRun && !ctx.args.includes('--keep-registry')) delete entry.deployedTo[provider];
+          }
+          if (!dryRun && !ctx.args.includes('--keep-registry')) {
+            if (Object.keys(entry.deployedTo).length === 0) delete config.installed[positionalArg];
+            await writeAiwgConfig(projectDir, config);
+          }
+          return { exitCode: 0, message: `${dryRun ? 'Would release' : 'Released'} ${released} skill ownership receipt(s); operator files preserved.` };
+        }
         if (config && entry?.source === 'project-local') {
           const force = ctx.args.includes('--force');
           const dryRun = ctx.args.includes('--dry-run');

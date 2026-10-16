@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { emptyConfig, readAiwgConfig, writeAiwgConfig } from '../../../../src/config/aiwg-config.js';
 
+const { afterDeploy } = vi.hoisted(() => ({ afterDeploy: vi.fn() }));
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PROVIDERS = [
   'pi', 'openclaw', 'opencode', 'copilot', 'muse', 'openhuman',
@@ -41,6 +43,7 @@ vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
         execFileSync(process.execPath, [join(REPO_ROOT, script), ...args], {
           cwd: args[targetIndex + 1], stdio: 'pipe', env: process.env, timeout: 60_000,
         });
+        await afterDeploy(args);
         return { exitCode: 0 };
       } catch (error) {
         const status = (error as { status?: unknown }).status;
@@ -282,6 +285,149 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it.each(['pi', 'grokbot'])('reconciles moved-install receipts and records native ownership for %s', { timeout: 60000 }, async provider => {
+    const sourceRoot = join(tempRoot, 'sources');
+    writeSources(sourceRoot);
+    const addon = join(sourceRoot, 'agentic/code/addons/decision-engine');
+    write(addon, 'skills/de-check/SKILL.md', '---\nname: de-check\nplatforms: [all]\n---\nUse [check](templates/check.md).\n');
+    write(addon, 'templates/check.md', 'reconciled asset');
+    const deployed = provider === 'pi' ? join(project, '.pi/.aiwg/skills/de-check')
+      : join(process.env.AIWG_GROKBOT_SKILLS_DIR!, '.aiwg/skills/de-check');
+    afterDeploy.mockImplementation(() => {
+      const receiptPath = join(deployed, '.aiwg-manifest.json');
+      if (!existsSync(receiptPath)) return;
+      const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      receipt.skillSource = receipt.skillSource.replace(sourceRoot, join(tempRoot, 'previous-install'));
+      writeFileSync(receiptPath, JSON.stringify(receipt));
+    });
+    await writeAiwgConfig(project, emptyConfig([provider]));
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['decision-engine', '--provider', provider, '--target', project,
+      ...(provider === 'grokbot' ? ['--scope', 'user'] : [])];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot: sourceRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    expect(readFileSync(join(deployed, 'templates/check.md'), 'utf8')).toBe('reconciled asset');
+    const receipt = JSON.parse(readFileSync(join(deployed, '.aiwg-manifest.json'), 'utf8'));
+    expect(receipt.managed['templates/check.md'].frameworkSlug).toBe('decision-engine');
+    if (provider === 'grokbot') {
+      const { readUserRegistry } = await import('../../../../src/config/user-registry.js');
+      expect((await readUserRegistry()).installed['decision-engine'].deployedTo.grokbot.skills).toBe(1);
+    }
+  });
+
+  it('forwards force and takes ownership of skill instructions, support assets, and receipt', { timeout: 60000 }, async () => {
+    const sourceRoot = join(tempRoot, 'sources');
+    writeSources(sourceRoot);
+    const addon = join(sourceRoot, 'agentic/code/addons/decision-engine');
+    write(addon, 'skills/sess-probe/SKILL.md', '---\nname: sess-probe\nplatforms: [all]\n---\nForced skill using [support](templates/forced.md).\n');
+    write(addon, 'templates/forced.md', 'forced support');
+    await writeAiwgConfig(project, emptyConfig(['pi']));
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    afterDeploy.mockImplementation((deployArgs: string[]) => {
+      if (!deployArgs.includes(addon)) return;
+      const receiptPath = join(project, '.pi/.aiwg/skills/sess-probe/.aiwg-manifest.json');
+      const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      receipt.skillSource = join(sourceRoot, 'agentic/code/addons/aiwg-utils/skills/sess-probe');
+      receipt.managed['SKILL.md'].frameworkSlug = 'aiwg-utils';
+      writeFileSync(receiptPath, JSON.stringify(receipt));
+    });
+    const args = ['decision-engine', '--provider', 'pi', '--target', project, '--force'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot: sourceRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    const deployed = join(project, '.pi/.aiwg/skills/sess-probe');
+    expect(readFileSync(join(deployed, 'SKILL.md'), 'utf8')).toContain('Forced skill');
+    expect(readFileSync(join(deployed, 'templates/forced.md'), 'utf8')).toBe('forced support');
+    expect(warning).toHaveBeenCalledWith("Skill deploy collision: 'sess-probe' is owned by aiwg-utils; decision-engine taking ownership");
+    expect(JSON.parse(readFileSync(join(deployed, '.aiwg-manifest.json'), 'utf8')).managed['SKILL.md'].frameworkSlug).toBe('decision-engine');
+  });
+
+  it('forwards force through the framework deployment argument filter', async () => {
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['sdlc', '--provider', 'pi', '--target', project, '--force', '--dry-run', '--no-utils', '--no-project-local'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    expect(afterDeploy).toHaveBeenCalledWith(expect.arrayContaining(['--force']));
+  });
+
+  it.each(['bundled', 'project-local', 'user'])('releases only receipt-owned skills on %s removal and permits a new framework owner', { timeout: 60000 }, async scope => {
+    vi.resetModules();
+    const { deploySkillDir } = await import('../../../../tools/agents/providers/base.mjs');
+    const { removeHandler } = await import('../../../../src/cli/handlers/subcommands.js');
+    const { hashBundleArtifacts } = await import('../../../../src/extensions/project-local-remove.js');
+    const source = scope === 'project-local' ? join(project, '.aiwg/addons/aiwg-utils')
+      : join(tempRoot, 'sources/agentic/code/addons/aiwg-utils');
+    const root = scope === 'user' ? join(process.env.HOME!, '.claude/.aiwg/skills')
+      : join(project, '.claude/.aiwg/skills');
+    for (const name of ['cleanup-audit', 'edited']) {
+      write(source, `skills/${name}/SKILL.md`, `---\nname: ${name}\n---\nUtils.\n`);
+      write(source, `skills/${name}/references/support.md`, 'managed');
+      deploySkillDir(join(source, 'skills', name), root, {});
+    }
+    write(root, 'edited/references/support.md', 'operator edit');
+    write(root, 'edited/SKILL.md', 'operator instructions');
+    write(root, 'edited/local.txt', 'operator addition');
+    const foreign = join(tempRoot, 'sources/agentic/code/frameworks/research-complete/skills/foreign');
+    write(foreign, 'SKILL.md', 'foreign owner');
+    deploySkillDir(foreign, root, {});
+    if (scope === 'user') {
+      const { recordUserDeploy } = await import('../../../../src/config/user-registry.js');
+      await recordUserDeploy({ framework: 'aiwg-utils', provider: 'claude', version: '1', source: 'bundled',
+        counts: { agents: 0, commands: 0, skills: 3, rules: 0 },
+        entries: { skills: ['../.aiwg/skills/cleanup-audit', '../.aiwg/skills/edited', '../.aiwg/skills/foreign'] } });
+    } else {
+      const config = emptyConfig(['claude']);
+      config.installed['aiwg-utils'] = { version: '1', source: scope, installedAt: new Date().toISOString(),
+        deployedTo: { claude: { agents: 0, commands: 0, skills: 2, rules: 0 } },
+        ...(scope === 'project-local' ? { localPath: '.aiwg/addons/aiwg-utils', localType: 'addon' as const,
+          artifactHashes: await hashBundleArtifacts(source) } : {}) };
+      await writeAiwgConfig(project, config);
+    }
+    const args = ['aiwg-utils', ...(scope === 'user' ? ['--scope', 'user'] : [])];
+    const result = await removeHandler.execute({ cwd: project, frameworkRoot: tempRoot, rawArgs: ['remove', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    expect(existsSync(join(root, 'cleanup-audit'))).toBe(false);
+    expect(existsSync(join(root, 'edited/.aiwg-manifest.json'))).toBe(false);
+    expect(readFileSync(join(root, 'edited/references/support.md'), 'utf8')).toBe('operator edit');
+    expect(readFileSync(join(root, 'edited/local.txt'), 'utf8')).toBe('operator addition');
+    expect(readFileSync(join(root, 'edited/SKILL.md'), 'utf8')).toBe('operator instructions');
+    expect(readFileSync(join(root, 'foreign/SKILL.md'), 'utf8')).toBe('foreign owner');
+    expect(result.message).not.toContain('skills/foreign');
+    const framework = join(tempRoot, 'sources/agentic/code/frameworks/sdlc-complete/skills/cleanup-audit');
+    write(framework, 'SKILL.md', 'SDLC version');
+    deploySkillDir(framework, root, {});
+    expect(readFileSync(join(root, 'cleanup-audit/SKILL.md'), 'utf8')).toBe('SDLC version');
+  });
+
+  it.each(['bundled', 'user'])('resolves framework aliases on %s removal', async scope => {
+    vi.resetModules();
+    const { deploySkillDir } = await import('../../../../tools/agents/providers/base.mjs');
+    const { removeHandler } = await import('../../../../src/cli/handlers/subcommands.js');
+    const source = join(tempRoot, 'agentic/code/frameworks/sdlc-complete/skills/demo');
+    const root = join(scope === 'user' ? process.env.HOME! : project, '.claude/.aiwg/skills');
+    write(source, 'SKILL.md', 'SDLC instructions');
+    deploySkillDir(source, root, {});
+    if (scope === 'user') {
+      const { recordUserDeploy } = await import('../../../../src/config/user-registry.js');
+      await recordUserDeploy({ framework: 'sdlc', provider: 'claude', version: '1', source: 'bundled',
+        counts: { agents: 0, commands: 0, skills: 1, rules: 0 }, entries: { skills: ['../.aiwg/skills/demo'] } });
+    } else {
+      const config = emptyConfig(['claude']);
+      config.installed.sdlc = { version: '1', source: 'bundled', installedAt: new Date().toISOString(),
+        deployedTo: { claude: { agents: 0, commands: 0, skills: 1, rules: 0 } } };
+      await writeAiwgConfig(project, config);
+    }
+    const args = ['sdlc', ...(scope === 'user' ? ['--scope', 'user'] : [])];
+    const context = { cwd: project, frameworkRoot: tempRoot, rawArgs: ['remove', ...args], args };
+    expect((await removeHandler.execute({ ...context, args: [...args, '--dry-run'] })).exitCode).toBe(0);
+    expect(existsSync(join(root, 'demo/.aiwg-manifest.json'))).toBe(true);
+    expect((await removeHandler.execute(context)).exitCode).toBe(0);
+    expect(existsSync(join(root, 'demo'))).toBe(false);
   });
 
 });

@@ -15,6 +15,7 @@ import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { canDeploySkill, sameSkillOwner, extractFrameworkSlug } from '../../providers/skill-ownership.mjs';
 import { resolveOmpPaths } from '../../providers/omp-paths.mjs';
 import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -78,7 +79,7 @@ import {
   normalizeProviderDefinitionId,
   type ProviderArtifactPathStrings,
 } from '../../providers/provider-definitions.js';
-import { resolveGrokbotSkillsDir } from '../../providers/grokbot-paths.js';
+import { deployedSkillRoots } from '../../providers/deployed-skill-roots.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
 // execute() per framework/provider) don't re-emit the warning each pass.
@@ -333,7 +334,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
 };
 
 /** Resolve actual framework directory name for a given user-facing name. */
-function resolveFrameworkDir(framework: string): string | undefined {
+export function resolveFrameworkDir(framework: string): string | undefined {
   return FRAMEWORK_DIR_MAP[framework];
 }
 
@@ -1178,18 +1179,6 @@ function resolveDeployPath(target: string, deployPath: string): string {
   return path.isAbsolute(deployPath) ? deployPath : path.join(target, deployPath);
 }
 
-/** Additional adapter write locations; shared definitions also govern existing removals and indexes. */
-function deployedSkillRoots(target: string, provider: string): string[] {
-  const roots = [getProviderPaths(provider).skills, getProviderKernelSkillsPath(provider)];
-  if (provider === 'muse') roots.push('.agents/.aiwg/skills');
-  if (provider === 'grok-build') roots.push('.grok/.aiwg/skills');
-  if (provider === 'grokbot') {
-    const root = resolveGrokbotSkillsDir();
-    if (root) roots.push(root, path.join(root, '.aiwg', 'skills'));
-  }
-  return [...new Set(roots.filter(Boolean).map(root => resolveDeployPath(target, root)))];
-}
-
 async function listBundleMdStems(bundlePath: string, subdir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(path.join(bundlePath, subdir));
@@ -1365,7 +1354,7 @@ async function reconcileDeployedSkillAssets(
   bundlePath: string,
   target: string,
   provider: string,
-  options: { strictReferences?: boolean; scope?: 'user' | 'project'; skipUndeployed?: boolean } = {},
+  options: { strictReferences?: boolean; scope?: 'user' | 'project'; skipUndeployed?: boolean; force?: boolean } = {},
 ): Promise<void> {
   const strictReferences = options.strictReferences ?? true;
   const skillsRoot = path.join(bundlePath, 'skills');
@@ -1386,22 +1375,29 @@ async function reconcileDeployedSkillAssets(
     const sourceSkillMd = path.join(sourceSkillDir, 'SKILL.md');
     let content: string;
     try { content = await fs.readFile(sourceSkillMd, 'utf8'); } catch { continue; }
-    // A reported cross-source collision keeps the first owner's entire skill,
-    // including support assets; reconciliation must not overwrite that decision.
-    let otherOwner: string | undefined;
+    // Check each deployed tier independently: a foreign mirror must not block
+    // support assets for a tier already owned by this source.
+    const ownedRoots: string[] = [];
     for (const root of deployRoots) {
+      const skillDir = path.join(root, skillName);
       try {
-        const receipt = JSON.parse(await fs.readFile(path.join(root, skillName, '.aiwg-manifest.json'), 'utf8'));
-        if (receipt.skillSource && receipt.skillSource !== path.resolve(sourceSkillDir)) {
-          otherOwner = receipt.managed?.['SKILL.md']?.frameworkSlug || receipt.skillSource;
+        const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
+        const receipt = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+        if (!canDeploySkill(receipt, sourceSkillDir, options)) continue;
+        if (!sameSkillOwner(receipt, sourceSkillDir)) {
+          receipt.skillSource = path.resolve(sourceSkillDir);
+          const slug = extractFrameworkSlug(sourceSkillMd);
+          for (const record of Object.values(receipt.managed ?? {}) as Array<{ frameworkSlug?: string }>) {
+            if (slug) record.frameworkSlug = slug;
+            else delete record.frameworkSlug;
+          }
+          await fs.writeFile(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
         }
       } catch { /* adapters without shared ownership receipts keep their own contract */ }
+      if (await fileExists(path.join(skillDir, 'SKILL.md'))) ownedRoots.push(root);
     }
-    if (otherOwner) {
-      console.warn(`Skill deploy collision: '${skillName}' is owned by ${otherOwner}; ${path.basename(bundlePath)} skipped`);
-      continue;
-    }
-    if (options.skipUndeployed && !(await Promise.all(deployRoots.map(root =>
+    if (ownedRoots.length === 0) continue;
+    if (options.skipUndeployed && !(await Promise.all(ownedRoots.map(root =>
       fileExists(path.join(root, skillName, 'SKILL.md'))))).some(Boolean)) continue;
     const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
     const declaredEntrypoint = frontmatter
@@ -1445,7 +1441,7 @@ async function reconcileDeployedSkillAssets(
       }
 
       let deployedSkillRoot: string | undefined;
-      for (const root of deployRoots) {
+      for (const root of ownedRoots) {
         // The deployer may select the bulk or kernel tier; use the tier that
         // actually contains this skill's transformed SKILL.md.
         if (await fileExists(path.join(root, skillName, 'SKILL.md'))) {
@@ -1558,6 +1554,7 @@ async function deployOneProjectLocalBundle(opts: {
       ...modelArgs,
     ];
     args.push(...collectUseScopeDeployArgs(ctx.args));
+    if (ctx.args.includes('--force')) args.push('--force');
     if (dryRun) args.push('--dry-run');
     if (verbose) args.push('--verbose');
     if (quiet && !verbose) args.push('--quiet');
@@ -1581,7 +1578,7 @@ async function deployOneProjectLocalBundle(opts: {
     exitCode = result.exitCode;
     if (exitCode === 0 && !dryRun) {
       try {
-        await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider);
+        await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider, { force: ctx.args.includes('--force') });
       } catch (error) {
         ui.warn(`Project-local skill asset deployment failed for '${bundle.id}': ${(error as Error).message}`);
         exitCode = 1;
@@ -2574,7 +2571,7 @@ async function recordNativeAddonDeploy(bundlePath: string, target: string, provi
       try {
         const receipt = JSON.parse(await fs.readFile(path.join(root, name, '.aiwg-manifest.json'), 'utf8'));
         const sourceDir = path.join(bundlePath, 'skills', names[names.length - 1]);
-        if (receipt.skillSource && receipt.skillSource !== path.resolve(sourceDir)) continue;
+        if (!sameSkillOwner(receipt, sourceDir)) continue;
       } catch { /* legacy adapters may not write a shared ownership receipt */ }
       entries.skills.push(path.relative(userPaths.skills, path.join(root, name)));
       break;
@@ -3436,6 +3433,7 @@ export class UseHandler implements CommandHandler {
         addonBaseArgs.push('--copy-all');
       }
       if (dryRunAddon) addonBaseArgs.push('--dry-run');
+      if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
 
       const kind = isExtension ? 'extension' : 'addon';
       const activationOrder = isAddon
@@ -3460,7 +3458,7 @@ export class UseHandler implements CommandHandler {
         }
         if (!dryRunAddon) {
           try {
-            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false });
+            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
           } catch (error) {
             return {
               exitCode: 1,
@@ -3503,7 +3501,7 @@ export class UseHandler implements CommandHandler {
 
       if (!dryRunAddon) {
         try {
-          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false });
+          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
         } catch (error) {
           return {
             exitCode: 1,
@@ -3726,7 +3724,7 @@ export class UseHandler implements CommandHandler {
     }
     if (scope === 'user' && !deployArgs.includes('--scope')) deployArgs.push('--scope', 'user');
     const filteredArgs = deployArgs.filter(
-      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
+      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
     );
     const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
 
