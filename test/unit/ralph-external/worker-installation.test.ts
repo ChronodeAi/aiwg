@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -122,6 +122,16 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     expect(executable.mode & 0o777).toBe(0o755);
     expect(executable.nlink).toBe(1);
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
+  });
+
+  it('rejects a writable executable with multiple hard links', async () => {
+    const f = await setup();
+    await link(f.request.executable, path.join(f.cwd, 'node-alias'));
+    const executable = await lstat(f.request.executable);
+    expect(executable.mode & 0o777).toBe(0o755);
+    expect(executable.nlink).toBeGreaterThan(1);
+    await expect(driver.inspectWorkerInstallation(f.request)).rejects.toThrow('Untrusted binary permissions');
+    expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
   });
 
   it.each(['claude', 'muse', 'hermes'])('#2956 rejects caller control waivers for %s', async provider => {

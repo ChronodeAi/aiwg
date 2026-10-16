@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 const root = resolve(import.meta.dirname, '../../..')
 const gate = join(root, 'tools/ci/wait-for-github-tag.mjs')
 const temporaryDirectories = new Set<string>()
-type GhMode = 'retry' | 'stdout-404' | 'not-found' | 'unauthorized' | 'server-error' | 'silent-error' | 'lightweight' | 'mismatch' | 'missing'
+type GhMode = 'rate-limit' | 'server-retry' | 'conflicting-status' | 'diagnostic' | 'retry' | 'stdout-404' | 'not-found' | 'unauthorized' | 'server-error' | 'silent-error' | 'lightweight' | 'mismatch' | 'missing'
 
 afterEach(() => {
   for (const directory of temporaryDirectories) {
@@ -37,6 +37,9 @@ case "$MODE" in
   stdout-404) if [ "$count" -lt 2 ]; then echo '{"message":"Not Found","status":"404"}'; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
   not-found) if [ "$count" -lt 2 ]; then echo 'gh: Not Found' >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
   unauthorized) echo "gh: Bad credentials (HTTP 401), token=$GH_TOKEN other=ghp_unconfiguredFakeToken" >&2; echo "Authorization: Basic dXNlcjpiYXNpY0ZpeHR1cmVQYXNz" >&2; exit 1 ;;
+  rate-limit|server-retry) if [ "$count" -lt 2 ]; then echo "gh: Temporary failure (HTTP $TRANSIENT_STATUS)" >&2; echo "Retry-After: $RETRY_AFTER" >&2; exit 1; fi; echo '{"object":{"type":"tag","sha":"abc123"}}' ;;
+  conflicting-status) echo '{"message":"Not Found","status":"500"}'; exit 1 ;;
+  diagnostic) echo "$DIAGNOSTIC" >&2; exit 1 ;;
   server-error) echo 'gh: Internal Server Error (HTTP 500)' >&2; exit 1 ;;
   silent-error) exit 1 ;;
   lightweight) echo '{"object":{"type":"commit","sha":"def456"}}' ;;
@@ -47,14 +50,16 @@ esac
   return { executable, counter, mode }
 }
 
-function runGate(mode: GhMode, attempts = 3) {
+function runGate(mode: GhMode, attempts = 3, environment: Record<string, string> = {}, delaySeconds = 0, recordTimers = false) {
   const fixture = fakeGh(mode)
-  const result = spawnSync(process.execPath, [gate, '--repo', 'owner/repo', '--tag', 'v1.2.3', '--expected-sha', 'abc123', '--attempts', String(attempts), '--delay-seconds', '0'], { timeout: 60_000,
+  const result = spawnSync(process.execPath, [...(recordTimers ? ['--import', 'data:text/javascript,' + encodeURIComponent('const original = globalThis.setTimeout; globalThis.setTimeout = (fn, ms) => { console.log(`timer=${ms}`); return original(fn, 0) }')] : []), gate, '--repo', 'owner/repo', '--tag', 'v1.2.3', '--expected-sha', 'abc123', '--attempts', String(attempts), '--delay-seconds', String(delaySeconds)], { timeout: 60_000,
     encoding: 'utf8',
     env: {
       ...process.env,
       GH_BIN: fixture.executable,
       GH_TOKEN: 'fixture-secret-token',
+      TRANSIENT_STATUS: mode === 'rate-limit' ? '429' : '503',
+      ...environment,
       COUNT_FILE: fixture.counter,
       MODE: fixture.mode,
       EXPECTED_ENDPOINT: 'repos/owner/repo/git/ref/tags/v1.2.3',
@@ -93,13 +98,84 @@ describe('GitHub mirror tag gate', () => {
     expect(result.stdout).not.toContain('waiting')
   })
 
-  it.each(['server-error', 'silent-error'] as const)('fails immediately on %s', mode => {
-    const result = runGate(mode)
+  it.each(['401', '403', '422'])('fails immediately on non-transient HTTP %s', status => {
+    const result = runGate('diagnostic', 3, { DIAGNOSTIC: `gh: Request rejected (HTTP ${status})` })
     expect(result.status).toBe(1)
     expect(result.count).toBe(1)
     expect(result.stderr).toContain('gh api failed while checking tag')
-    if (mode === 'server-error') expect(result.stderr).toContain('Internal Server Error (HTTP 500)')
+  })
+
+  it.each([401, '403', 422])('prefers structured status %s over Not Found text', status => {
+    const result = runGate('diagnostic', 3, { DIAGNOSTIC: JSON.stringify({ message: 'Not Found', status }) })
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(1)
+    expect(result.stderr).toContain('gh api failed while checking tag')
+    expect(result.stdout).not.toContain('waiting')
+  })
+
+  it('fails immediately on a silent error', () => {
+    const result = runGate('silent-error')
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(1)
+    expect(result.stderr).toContain('gh api failed while checking tag')
+  })
+
+  it.each(['rate-limit', 'server-retry'] as const)('retries %s then succeeds', mode => {
+    const result = runGate(mode, 3, { RETRY_AFTER: '0' })
+    expect(result.status).toBe(0)
+    expect(result.count).toBe(2)
+    expect(result.stdout).toContain('Found annotated tag')
+  })
+
+  it.each(['server-error', 'conflicting-status'] as const)('exhausts the transient budget for %s', mode => {
+    const result = runGate(mode)
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(3)
+    expect(result.stderr).toContain('transient HTTP 500 retry budget exhausted')
+    expect(result.stdout).not.toContain('operator push')
     expect(result.stderr).not.toContain('Timed out')
+  })
+
+  it('backs off exponentially within the shared attempt budget and caps each wait', () => {
+    const result = runGate('server-error', 5, {}, 10, true)
+    expect(result.status).toBe(1)
+    expect(result.count).toBe(5)
+    expect(result.stdout.match(/timer=\d+/g)).toEqual(['timer=10000', 'timer=20000', 'timer=40000', 'timer=60000'])
+  })
+
+  it.each([
+    ['2', 2000],
+    ['999999', 60000],
+    ['Thu, 01 Jan 1970 00:00:00 GMT', 0],
+    ['Thu, 01 Jan 2099 00:00:00 GMT', 60000],
+    ['invalid', 10000],
+  ])('honors capped Retry-After %s', (retryAfter, milliseconds) => {
+    const result = runGate('rate-limit', 3, { RETRY_AFTER: String(retryAfter) }, 10, true)
+    expect(result.status).toBe(0)
+    expect(result.count).toBe(2)
+    expect(result.stdout).toContain(`timer=${milliseconds}`)
+  })
+
+  it.each(['github_pat_', 'ghp_', 'gho_', 'ghs_', 'ghu_', 'ghr_'])('redacts %s credentials', prefix => {
+    const credential = `${prefix}unconfiguredFixture123`
+    const result = runGate('diagnostic', 3, { DIAGNOSTIC: `gh: HTTP 401 credential=${credential}` })
+    expect(result.stderr).toContain('credential=[REDACTED]')
+    expect(result.stderr).not.toContain(credential)
+  })
+
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])('redacts the %s environment value', key => {
+    const credential = `fixture-secret-for-${key}`
+    const result = runGate('diagnostic', 3, { [key]: credential, DIAGNOSTIC: `gh: HTTP 401 credential=${credential}` })
+    expect(result.stderr).toContain('credential=[REDACTED]')
+    expect(result.stderr).not.toContain(credential)
+  })
+
+  it.each(['Basic', 'Bearer', 'token'])('redacts the whole Authorization value with %s', scheme => {
+    const result = runGate('diagnostic', 3, { DIAGNOSTIC: `gh: HTTP 401\naUtHoRiZaTiOn: ${scheme} opaque-fixture-credential extra-value` })
+    expect(result.stderr).toContain('aUtHoRiZaTiOn: [REDACTED]')
+    expect(result.stderr).not.toContain(scheme)
+    expect(result.stderr).not.toContain('opaque-fixture-credential')
+    expect(result.stderr).not.toContain('extra-value')
   })
 
   it('rejects a lightweight tag immediately', () => {
