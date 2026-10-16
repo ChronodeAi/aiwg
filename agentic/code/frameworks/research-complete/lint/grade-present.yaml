@@ -3,7 +3,7 @@ name: GRADE assessment present
 description: Every research source should have a GRADE quality assessment in frontmatter
 severity: warn
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: frontmatter-required
     fields: [grade_rating]

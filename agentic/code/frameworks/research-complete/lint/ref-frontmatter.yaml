@@ -3,7 +3,7 @@ name: REF frontmatter completeness
 description: All REF-XXX notes must have required frontmatter fields
 severity: error
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: frontmatter-required
     fields: [title, authors, year, publication_type, tags, status]

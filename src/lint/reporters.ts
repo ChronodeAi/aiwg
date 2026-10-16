@@ -48,6 +48,14 @@ function formatFull(result: LintResult): string {
   lines.push(`Files checked: ${result.summary.filesChecked}`);
   lines.push(`Rules applied: ${result.summary.rulesApplied} of ${result.summary.rulesSelected}`);
   lines.push('');
+  if (result.summary.coverageMessage) lines.push(`! ${result.summary.coverageMessage}`);
+  if (result.ruleCoverage) {
+    lines.push('Rule coverage (files by rule):');
+    for (const [ruleId, files] of Object.entries(result.ruleCoverage)) {
+      lines.push(`  ${ruleId}: ${files.length ? files.join(', ') : '(no files)'}`);
+    }
+    lines.push('');
+  }
 
   // A target that excludes every rule produces the same clean output as a
   // target that passes them, which is how 34 findings stayed invisible across a
@@ -109,6 +117,10 @@ function formatSummary(result: LintResult): string {
   const lines: string[] = [];
   lines.push(`Lint: ${result.summary.filesChecked} files, ${result.summary.errors} errors, ${result.summary.warnings} warnings, ${result.summary.infos} info`);
   lines.push(`Rules applied: ${result.summary.rulesApplied} of ${result.summary.rulesSelected}`);
+  if (result.summary.coverageMessage) lines.push(`! ${result.summary.coverageMessage}`);
+  if (result.summary.inapplicableRules.length > 0) {
+    lines.push(`Inapplicable rules: ${result.summary.inapplicableRules.join(', ')}`);
+  }
   if (result.summary.rulesSelected > 0 && result.summary.rulesApplied === 0) {
     lines.push(`! No rule applies to this target — this is not a clean result (#2555).`);
   }

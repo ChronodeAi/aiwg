@@ -3,7 +3,9 @@ name: Source file existence
 description: If frontmatter references a PDF or source file path, that file must exist
 severity: error
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: file-exists
     field: pdf_location
+  - type: file-exists
+    field: source_text

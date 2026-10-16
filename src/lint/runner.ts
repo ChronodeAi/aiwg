@@ -13,6 +13,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
 import { minimatch } from 'minimatch';
+import { parse } from 'yaml';
 import type {
   LintCheck,
   LintDiagnostic,
@@ -26,18 +27,39 @@ import type {
  * Parse YAML-style frontmatter from a markdown file
  * Returns key-value pairs from the --- delimited block
  */
-function parseFrontmatter(content: string): Record<string, string> {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+function parseFrontmatter(content: string): Record<string, unknown> {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return {};
 
-  const result: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const kv = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
-    if (kv) {
-      result[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
-    }
+  try {
+    const parsed: unknown = parse(match[1]);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    // Invalid YAML cannot supply required metadata.
+    return {};
   }
-  return result;
+}
+
+function isPresent(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/** Resolve project-relative metadata from the nearest repository/workspace marker. */
+function findProjectRoot(targetDir: string): string {
+  let dir = path.resolve(targetDir);
+  while (true) {
+    if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.aiwg'))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return path.resolve(targetDir);
+    dir = parent;
+  }
 }
 
 const DEFAULT_REFERENCE_PATTERN = '\\bREF-\\d{3,}\\b';
@@ -239,8 +261,9 @@ function buildReferenceIndex(allFiles: string[]): Set<string> {
  * Preserve support for references stored outside the lint target when a rule
  * explicitly supplies basePath. Accept both exact and slugged filenames.
  */
-function resolvesFromBasePath(refId: string, targetDir: string, basePath: string): boolean {
+function resolvesFromBasePath(refId: string, targetDir: string, basePath: string, projectRoot: string): boolean {
   const candidateDirs = new Set([
+    path.resolve(projectRoot, basePath),
     path.resolve(targetDir, basePath),
     path.resolve(process.cwd(), basePath),
   ]);
@@ -265,11 +288,12 @@ function resolvesFromBasePath(refId: string, targetDir: string, basePath: string
 function runCheck(
   check: LintCheck,
   content: string,
-  frontmatter: Record<string, string>,
+  frontmatter: Record<string, unknown>,
   filePath: string,
   targetDir: string,
   allFiles: string[],
-  referenceIndex: Set<string>
+  referenceIndex: Set<string>,
+  projectRoot: string
 ): LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
 
@@ -277,7 +301,7 @@ function runCheck(
     case 'frontmatter-required': {
       if (!check.fields) break;
       for (const field of check.fields) {
-        if (!frontmatter[field] || frontmatter[field].trim() === '') {
+        if (!isPresent(frontmatter[field])) {
           diagnostics.push({
             ruleId: '',
             ruleName: '',
@@ -294,7 +318,7 @@ function runCheck(
     case 'frontmatter-format': {
       if (!check.field || !check.pattern) break;
       const value = frontmatter[check.field];
-      if (value && !new RegExp(check.pattern).test(value)) {
+      if (isPresent(value) && typeof value !== 'object' && !new RegExp(check.pattern).test(String(value))) {
         diagnostics.push({
           ruleId: '',
           ruleName: '',
@@ -317,7 +341,9 @@ function runCheck(
         let match;
         while ((match = regex.exec(lines[i])) !== null) {
           const refId = match[0];
-          const basePath = check.basePath || '.aiwg/research/findings';
+          const basePaths = check.basePath
+            ? [check.basePath]
+            : ['.aiwg/research/findings', 'findings', 'documentation/references', '.'];
           // A corpus documents its deliberate gaps ("REF-2464 remains
           // unallocated after deduplication"). Reading that sentence as a
           // dangling reference left only two ways to silence an error: delete
@@ -325,7 +351,8 @@ function runCheck(
           // absent (#2555).
           if (absence.some((re) => re.test(lines[i]))) continue;
 
-          if (!referenceIndex.has(refId) && !resolvesFromBasePath(refId, targetDir, basePath)) {
+          if (!referenceIndex.has(refId) && !basePaths.some(basePath =>
+            resolvesFromBasePath(refId, targetDir, basePath, projectRoot))) {
             diagnostics.push({
               ruleId: '',
               ruleName: '',
@@ -411,9 +438,12 @@ function runCheck(
     case 'file-exists': {
       if (!check.field) break;
       const refPath = frontmatter[check.field];
-      if (refPath) {
-        const resolved = path.resolve(targetDir, refPath);
-        if (!fs.existsSync(resolved)) {
+      if (isPresent(refPath)) {
+        // Project-root-relative is canonical (#3145); target-relative paths
+        // written for the legacy layout keep resolving.
+        const found = typeof refPath === 'string' &&
+          [projectRoot, targetDir].some(base => fs.existsSync(path.resolve(base, refPath)));
+        if (!found) {
           diagnostics.push({
             ruleId: '',
             ruleName: '',
@@ -517,17 +547,16 @@ async function runRule(
   rule: LintRule,
   targetDir: string,
   allFiles: string[],
-  referenceIndex: Set<string>
-): Promise<LintDiagnostic[]> {
+  referenceIndex: Set<string>,
+  projectRoot: string
+): Promise<{ diagnostics: LintDiagnostic[]; files: string[] }> {
   const diagnostics: LintDiagnostic[] = [];
-  RULE_APPLIED.delete(rule.id);
 
   // Filter files matching the rule's glob
   const ruleGlob = rule.appliesTo.glob;
   const matchingFiles = allFiles.filter(f => ruleAppliesToFile(ruleGlob, f, targetDir));
 
-  if (matchingFiles.length === 0) return diagnostics;
-  RULE_APPLIED.add(rule.id);
+  if (matchingFiles.length === 0) return { diagnostics, files: matchingFiles };
 
   // Handle id-unique check at the ruleset level
   const uniqueCheck = rule.checks.find(c => c.type === 'id-unique');
@@ -571,7 +600,8 @@ async function runRule(
         file,
         targetDir,
         allFiles,
-        referenceIndex
+        referenceIndex,
+        projectRoot
       );
       for (const d of checkDiagnostics) {
         d.ruleId = rule.id;
@@ -582,11 +612,8 @@ async function runRule(
     }
   }
 
-  return diagnostics;
+  return { diagnostics, files: matchingFiles };
 }
-
-/** Rule ids that selected at least one file in the current run (#2555). */
-const RULE_APPLIED = new Set<string>();
 
 /**
  * Collect all files under a target directory
@@ -676,20 +703,41 @@ function autoDetectRulesets(target: string, available: LintRuleset[]): LintRules
 export async function runLint(
   targetDir: string,
   rulesets: LintRuleset[],
-  options: { recursive?: boolean; failOn?: LintSeverity; respectGitignore?: boolean } = {}
+  options: { recursive?: boolean; failOn?: LintSeverity; respectGitignore?: boolean; ci?: boolean; allowEmpty?: boolean } = {}
 ): Promise<LintResult> {
   const recursive = options.recursive ?? true;
-  const allFiles = await collectFiles(targetDir, recursive, options.respectGitignore ?? true);
+  const targetStat = await fsp.stat(targetDir).catch(() => null);
+  const scanDir = targetStat?.isFile() ? path.dirname(targetDir) : targetDir;
+  const projectRoot = findProjectRoot(scanDir);
+  const respectGitignore = options.respectGitignore ?? true;
+  let allFiles: string[];
+  let targetMessage = '';
+  if (!targetStat) {
+    allFiles = [];
+    targetMessage = `Target does not exist or is inaccessible: ${targetDir}.`;
+  } else if (targetStat.isFile()) {
+    const file = path.basename(targetDir);
+    if (!/\.(md|yaml|yml|json)$/.test(file)) {
+      allFiles = [];
+      targetMessage = `Unsupported file type: ${file}. Expected .md, .yaml, .yml or .json.`;
+    } else {
+      allFiles = respectGitignore ? dropGitignored(scanDir, [file]) : [file];
+    }
+  } else {
+    allFiles = await collectFiles(scanDir, recursive, respectGitignore);
+  }
   const referenceIndex = buildReferenceIndex(allFiles);
   const allDiagnostics: LintDiagnostic[] = [];
   const inapplicableRules: string[] = [];
+  const ruleCoverage: Record<string, string[]> = {};
   let rulesSelected = 0;
 
   for (const ruleset of rulesets) {
     for (const rule of ruleset.rules) {
       rulesSelected += 1;
-      const diagnostics = await runRule(rule, targetDir, allFiles, referenceIndex);
-      if (!RULE_APPLIED.has(rule.id)) inapplicableRules.push(rule.id);
+      const { diagnostics, files } = await runRule(rule, scanDir, allFiles, referenceIndex, projectRoot);
+      ruleCoverage[rule.id] = files;
+      if (files.length === 0) inapplicableRules.push(rule.id);
       allDiagnostics.push(...diagnostics);
     }
   }
@@ -704,10 +752,19 @@ export async function runLint(
   if (failOn === 'warn' && (errors > 0 || warnings > 0)) passed = false;
   if (failOn === 'info' && allDiagnostics.length > 0) passed = false;
 
+  const rulesApplied = rulesSelected - inapplicableRules.length;
+  const coverageMessage = allFiles.length === 0
+    ? `No files checked. ${targetMessage || 'The target is empty, contains no supported files, or all files are ignored.'}`
+    : rulesApplied === 0
+      ? 'No rules applied. Check the target path and selected ruleset globs.'
+      : undefined;
+  if (options.ci && !options.allowEmpty && coverageMessage) passed = false;
+
   return {
     target: targetDir,
     rulesets: rulesets.map(r => r.id),
     diagnostics: allDiagnostics,
+    ruleCoverage,
     summary: {
       filesChecked: allFiles.length,
       errors,
@@ -717,8 +774,9 @@ export async function runLint(
       // A run where no rule selected a file must never read the same as a clean
       // run (#2555). Reporters surface this; callers can gate on it.
       rulesSelected,
-      rulesApplied: rulesSelected - inapplicableRules.length,
+      rulesApplied,
       inapplicableRules,
+      coverageMessage,
     },
     timestamp: new Date().toISOString(),
   };

@@ -3,7 +3,7 @@ name: Bidirectional cross-references
 description: Related/See Also references should exist in both directions between REF notes
 severity: info
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: cross-ref-bidirectional
     referencePattern: "REF-\\d{3}"
