@@ -247,6 +247,40 @@ describe.each(['linux', 'darwin', 'win32'])('filesystem containment (%s access)'
     await expect(pinned.append('events', 'changed')).rejects.toThrow(/root changed/);
     expect(await newContext.read('events')).toBe('new anchor\n');
   });
+  it('refuses a recreated missing root even when its inode is reused', async () => {
+    const missing = join(base, 'reused/store');
+    const old = new FilesystemAdapter(missing);
+    expect(await old.read('events')).toBeNull();
+    await old.append('events', 'old\n');
+    const original = await fs.stat(missing, { bigint: true });
+    await fs.rm(join(base, 'reused'), { recursive: true });
+    await fs.mkdir(missing, { recursive: true });
+    await fs.writeFile(join(missing, 'events'), 'fresh\n');
+    const replacement = await fs.stat(missing, { bigint: true });
+    function reusedIdentity<T extends { dev: number | bigint; ino: number | bigint }>(info: T): T {
+      if (BigInt(info.dev) === replacement.dev && BigInt(info.ino) === replacement.ino) {
+        Object.defineProperty(info, 'ino', { value: typeof info.ino === 'bigint' ? original.ino : Number(original.ino) });
+        // Force a distinct generation even on filesystems without birth times.
+        Object.defineProperty(info, 'birthtimeNs', { value: original.birthtimeNs + 1n });
+      }
+      return info;
+    }
+    for (const method of ['stat', 'lstat'] as const) {
+      const stat = fs[method].bind(fs);
+      vi.spyOn(fs, method).mockImplementation(async (...args) => reusedIdentity(await stat(...args as Parameters<typeof stat>)));
+    }
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, 'stat').mockImplementation(async (...args) => reusedIdentity(await stat(...args as Parameters<typeof stat>)));
+      return handle;
+    });
+    const fresh = new FilesystemAdapter(missing);
+    await fresh.append('events', 'accepted\n');
+    await expect(old.append('events', 'changed')).rejects.toThrow(/root changed/);
+    expect(await fresh.read('events')).toBe('fresh\naccepted\n');
+  });
   it('refuses an unverifiable inode identity', async () => {
     const stat = fs.stat.bind(fs);
     vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {

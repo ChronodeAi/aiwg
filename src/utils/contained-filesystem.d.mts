@@ -1,11 +1,11 @@
-import type { Stats } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 
 /** Opaque pinned filesystem boundary; configuration is captured only once. */
 export interface ContainedRoot {
   readonly configured: string;
   readonly root: string;
-  readonly identity?: Stats | null;
+  readonly identity?: BigIntStats | null;
   readonly error?: Error;
 }
 export interface ContainmentOptions {

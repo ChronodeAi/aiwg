@@ -12,10 +12,18 @@ function assertArtifactContained(root, target) {
   }
 }
 
+// Bigint stats preserve nanosecond birth times and exact device/inode values.
+// Platforms without birth time (zero/absent on both sides) fall back to dev+ino.
+function sameIdentity(a, b) {
+  return a.dev === b.dev && a.ino === b.ino
+    && (a.birthtimeNs || 0n) === (b.birthtimeNs || 0n);
+}
+
 function assertIdentity(info) {
-  if (!info || !Number.isSafeInteger(info.dev) || info.dev < 0
-    || !Number.isSafeInteger(info.ino) || info.ino <= 0
-    || !Number.isSafeInteger(info.nlink) || info.nlink <= 0) {
+  const integer = value => typeof value === 'bigint' || Number.isSafeInteger(value);
+  if (!info || !integer(info.dev) || info.dev < 0
+    || !integer(info.ino) || info.ino <= 0
+    || !integer(info.nlink) || info.nlink <= 0) {
     throw new Error('Artifact identity cannot be verified');
   }
 }
@@ -40,18 +48,18 @@ async function createArtifactRoot(store) {
     }
     // EEXIST is a refusal, including a symlink or directory installed since pinning.
     await fs.mkdir(entry);
-    const created = await fs.lstat(entry);
+    const created = await fs.lstat(entry, { bigint: true });
     if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('Artifact root changed during creation');
     // Windows cannot open directory handles through fs.open; its fallback
     // uses static identity checks, as do the subsequent artifact operations.
     if (process.platform !== 'win32') {
       directory = await fs.open(entry, constants.O_RDONLY | (constants.O_DIRECTORY || 0) | (constants.O_NOFOLLOW || 0));
     }
-    const opened = directory ? await directory.stat() : await fs.stat(entry);
-    const current = await fs.lstat(entry);
+    const opened = directory ? await directory.stat({ bigint: true }) : await fs.stat(entry, { bigint: true });
+    const current = await fs.lstat(entry, { bigint: true });
     if (current.isSymbolicLink() || !opened.isDirectory()
-      || opened.dev !== created.dev || opened.ino !== created.ino
-      || opened.dev !== current.dev || opened.ino !== current.ino
+      || !sameIdentity(opened, created)
+      || !sameIdentity(opened, current)
       || await fs.realpath(store.configured) !== store.root) {
       throw new Error('Artifact root changed during creation');
     }
@@ -69,7 +77,7 @@ async function createArtifactRoot(store) {
 async function pinArtifactRoot(configured, projectRoot, options = {}) {
   try {
     const root = await fs.realpath(configured);
-    const identity = await fs.stat(root);
+    const identity = await fs.stat(root, { bigint: true });
     const store = { configured, projectRoot, root, identity, ...options };
     await verifyArtifactRoot(store);
     return store;
@@ -79,7 +87,7 @@ async function pinArtifactRoot(configured, projectRoot, options = {}) {
       catch (missingError) { return { configured, projectRoot, root: configured, ...options, error: missingError }; }
     }
     if (error.code === 'ENOENT' && projectRoot && configured === path.join(projectRoot, '.aiwg')) {
-      const existing = await fs.lstat(configured).catch(missing => {
+      const existing = await fs.lstat(configured, { bigint: true }).catch(missing => {
         if (missing.code !== 'ENOENT') throw missing;
       });
       if (!existing) return { configured, projectRoot, root: configured, identity: null };
@@ -101,11 +109,11 @@ async function pinArtifactRoot(configured, projectRoot, options = {}) {
 async function verifyArtifactRoot(store) {
   if (store.error) throw store.error;
   const canonical = await fs.realpath(store.configured);
-  const current = await fs.stat(store.configured);
+  const current = await fs.stat(store.configured, { bigint: true });
   assertIdentity(current);
   assertIdentity(store.identity);
   if (canonical !== store.root || !current.isDirectory()
-    || current.dev !== store.identity.dev || current.ino !== store.identity.ino) {
+    || !sameIdentity(current, store.identity)) {
     throw new Error('Artifact root changed since it was pinned');
   }
 }
@@ -150,7 +158,7 @@ async function resolveArtifactPath(store, artifactPath, { write = false } = {}) 
     let componentPath = root;
     for (const component of path.relative(root, target).split(path.sep)) {
       componentPath = path.join(componentPath, component);
-      const info = await fs.lstat(componentPath).catch(error => {
+      const info = await fs.lstat(componentPath, { bigint: true }).catch(error => {
         if (error.code !== 'ENOENT') throw error;
       });
       if (info?.isSymbolicLink()) throw new Error('Refusing artifact symlink component');
@@ -161,7 +169,7 @@ async function resolveArtifactPath(store, artifactPath, { write = false } = {}) 
   while (true) {
     try {
       // lstat distinguishes a missing directory from a dangling symlink.
-      await fs.lstat(ancestor);
+      await fs.lstat(ancestor, { bigint: true });
       break;
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
@@ -178,7 +186,7 @@ async function resolveArtifactPath(store, artifactPath, { write = false } = {}) 
   assertArtifactContained(root, fullPath);
   let info;
   try {
-    info = await fs.lstat(fullPath);
+    info = await fs.lstat(fullPath, { bigint: true });
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -216,16 +224,16 @@ async function openArtifact(store, artifactPath, { write = false, append = false
     } else {
       assertArtifactContained(root, actual);
     }
-    const [opened, current] = await Promise.all([handle.stat(), fs.lstat(entry || actual)]);
+    const [opened, current] = await Promise.all([handle.stat({ bigint: true }), fs.lstat(entry || actual, { bigint: true })]);
     if (rootHandle) {
       await verifyArtifactRoot(store);
-      if (opened.dev !== store.identity.dev || opened.ino !== store.identity.ino) {
+      if (!sameIdentity(opened, store.identity)) {
         throw new Error('Artifact root changed since it was pinned');
       }
     }
     assertIdentity(opened);
     assertIdentity(current);
-    if (current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino
+    if (current.isSymbolicLink() || !sameIdentity(opened, current)
       || (directory ? !opened.isDirectory() : !opened.isFile())) {
       throw new Error('Artifact changed during access or is not a regular file/directory');
     }
@@ -268,7 +276,7 @@ async function openArtifact(store, artifactPath, { write = false, append = false
     await verify(parent, parentOptions);
     const destination = path.join(descriptorPath(parent), name);
     async function verifyDestination() {
-      const info = await fs.lstat(destination).catch(error => {
+      const info = await fs.lstat(destination, { bigint: true }).catch(error => {
         if (error.code !== 'ENOENT') throw error;
       });
       if (info && (info.isSymbolicLink() || !info.isFile())) {
@@ -301,11 +309,11 @@ async function openArtifact(store, artifactPath, { write = false, append = false
         await verify(directories[0], { rootHandle: true, directory: true });
         await verify(parent, parentOptions);
         const current = await verifyDestination();
-        if (!current || current.dev !== targetInfo.dev || current.ino !== targetInfo.ino) throw new Error('Artifact changed during access');
+        if (!current || !sameIdentity(current, targetInfo)) throw new Error('Artifact changed during access');
         await fs.unlink(destination);
       } };
     }
-    const finalMode = targetInfo ? targetInfo.mode & 0o7777 : 0o666 & ~process.umask();
+    const finalMode = targetInfo ? Number(targetInfo.mode) & 0o7777 : 0o666 & ~process.umask();
     const entry = write ? path.join(descriptorPath(parent), `.aiwg-write-${randomUUID()}.tmp`) : destination;
     file = await fs.open(entry,
       (write ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
@@ -349,7 +357,7 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
     let current = root;
     for (const component of relative.split(path.sep)) {
       current = path.join(current, component);
-      const info = await fs.lstat(current).catch(error => {
+      const info = await fs.lstat(current, { bigint: true }).catch(error => {
         if (!allowMissing || error.code !== 'ENOENT') throw error;
       });
       if (!info) continue;
@@ -361,15 +369,15 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
   if (listing) {
     const directory = path.dirname(fullPath);
     if (directory !== root) await check(directory);
-    const identity = await fs.lstat(directory);
+    const identity = await fs.lstat(directory, { bigint: true });
     assertIdentity(identity);
     if (!identity.isDirectory()) throw new Error('Artifact must be a directory');
     async function verifyDirectory() {
       await verifyArtifactRoot(store);
       if (directory !== root) await check(directory);
-      const current = await fs.lstat(directory);
+      const current = await fs.lstat(directory, { bigint: true });
       assertIdentity(current);
-      if (current.dev !== identity.dev || current.ino !== identity.ino) throw new Error('Artifact changed during access');
+      if (!sameIdentity(current, identity)) throw new Error('Artifact changed during access');
     }
     return { close: async () => {}, async entries() {
       await verifyDirectory();
@@ -380,7 +388,7 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
   }
   await check(fullPath, { allowMissing: create });
   if (create) await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  const target = await fs.lstat(fullPath).catch(error => {
+  const target = await fs.lstat(fullPath, { bigint: true }).catch(error => {
     if (!create || error.code !== 'ENOENT') throw error;
   });
   if (target && (!target.isFile() || target.isSymbolicLink())) throw new Error('Artifact must be a regular file');
@@ -390,37 +398,37 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
     return { close: async () => {}, async unlink() {
       await verifyArtifactRoot(store);
       await check(fullPath);
-      const current = await fs.lstat(fullPath);
+      const current = await fs.lstat(fullPath, { bigint: true });
       assertIdentity(current);
-      if (!current.isFile() || current.nlink > 1 || current.dev !== target.dev || current.ino !== target.ino) {
+      if (!current.isFile() || current.nlink > 1 || !sameIdentity(current, target)) {
         throw new Error('Refusing nonregular or multiply-linked artifact file');
       }
       await fs.unlink(fullPath);
     } };
   }
   const entry = write ? path.join(path.dirname(fullPath), `.aiwg-write-${randomUUID()}.tmp`) : fullPath;
-  const finalMode = target ? target.mode & 0o7777 : 0o666 & ~process.umask();
+  const finalMode = target ? Number(target.mode) & 0o7777 : 0o666 & ~process.umask();
   const handle = await fs.open(entry, (write ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
     : append ? constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT
     : constants.O_RDONLY) | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0), append ? 0o666 : 0o600);
   try {
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     assertIdentity(opened);
-    const current = await fs.lstat(entry);
+    const current = await fs.lstat(entry, { bigint: true });
     assertIdentity(current);
     await verifyArtifactRoot(store);
-    if (target && !write && (opened.dev !== target.dev || opened.ino !== target.ino)) throw new Error('Artifact changed during access');
-    if (opened.dev !== current.dev || opened.ino !== current.ino || current.isSymbolicLink()) throw new Error('Artifact changed during access');
+    if (target && !write && !sameIdentity(opened, target)) throw new Error('Artifact changed during access');
+    if (!sameIdentity(opened, current) || current.isSymbolicLink()) throw new Error('Artifact changed during access');
     if (!opened.isFile() || opened.nlink > 1) throw new Error('Refusing nonregular or multiply-linked artifact file');
     async function verifyFile() {
       await verifyArtifactRoot(store);
       await check(fullPath);
-      const current = await fs.lstat(entry);
-      const actual = await handle.stat();
+      const current = await fs.lstat(entry, { bigint: true });
+      const actual = await handle.stat({ bigint: true });
       assertIdentity(current); assertIdentity(actual);
       if (!current.isFile() || current.nlink > 1 || actual.nlink > 1
-        || current.dev !== actual.dev || current.ino !== actual.ino
-        || actual.dev !== opened.dev || actual.ino !== opened.ino) {
+        || !sameIdentity(current, actual)
+        || !sameIdentity(actual, opened)) {
         throw new Error('Refusing nonregular or multiply-linked artifact file');
       }
     }
@@ -430,18 +438,18 @@ async function openStaticArtifact(store, root, fullPath, { write, append, remove
       async commit() {
         await verifyArtifactRoot(store);
         await check(fullPath, { allowMissing: true });
-        const destination = await fs.lstat(fullPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+        const destination = await fs.lstat(fullPath, { bigint: true }).catch(error => { if (error.code !== 'ENOENT') throw error; });
         if (destination) {
           assertIdentity(destination);
           if (!destination.isFile()) throw new Error('Artifact must be a regular file');
           if (store.rejectLinkedWrites && destination.nlink > 1) throw new Error('Refusing multiply-linked artifact file');
         }
-        const temporary = await fs.lstat(entry);
-        const actual = await handle.stat();
+        const temporary = await fs.lstat(entry, { bigint: true });
+        const actual = await handle.stat({ bigint: true });
         assertIdentity(temporary); assertIdentity(actual);
         if (temporary.isSymbolicLink() || actual.nlink > 1 || temporary.nlink > 1
-          || actual.dev !== temporary.dev || actual.ino !== temporary.ino
-          || actual.dev !== opened.dev || actual.ino !== opened.ino) throw new Error('Artifact changed during access');
+          || !sameIdentity(actual, temporary)
+          || !sameIdentity(actual, opened)) throw new Error('Artifact changed during access');
         await handle.chmod(finalMode);
         await fs.rename(entry, fullPath);
       },
@@ -483,7 +491,7 @@ async function pinMissingRoot(configured, options) {
   let ancestor = configured;
   const components = [];
   while (true) {
-    const info = await fs.lstat(ancestor).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    const info = await fs.lstat(ancestor, { bigint: true }).catch(error => { if (error.code !== 'ENOENT') throw error; });
     if (info) break; // Includes dangling aliases: realpath below must refuse them.
     components.unshift(path.basename(ancestor));
     ancestor = path.dirname(ancestor);
@@ -499,13 +507,13 @@ async function pinMissingRoot(configured, options) {
     return shared;
   }
   const root = await fs.realpath(ancestor);
-  const identity = await fs.stat(ancestor);
+  const identity = await fs.stat(ancestor, { bigint: true });
   assertIdentity(identity);
   if (!identity.isDirectory()) throw new Error('Artifact root must be a directory');
   const shared = pending || missingStorageRoots.get(key)?.deref();
   if (shared && shared.root === path.join(root, ...components)) {
     if (!shared.creationSettled && shared.creationAnchor.configured === ancestor && shared.creationAnchor.root === root
-      && shared.creationAnchor.identity.dev === identity.dev && shared.creationAnchor.identity.ino === identity.ino) {
+      && sameIdentity(shared.creationAnchor.identity, identity)) {
       return shared;
     }
     if (shared.initialization) {
@@ -513,9 +521,9 @@ async function pinMissingRoot(configured, options) {
       // Wait for the exclusive final mkdir proof and retain this pin's own
       // observed ancestor identity before joining the established boundary.
       await shared.initialization;
-      const current = await fs.stat(ancestor);
+      const current = await fs.stat(ancestor, { bigint: true });
       assertIdentity(current);
-      if (await fs.realpath(ancestor) !== root || current.dev !== identity.dev || current.ino !== identity.ino) {
+      if (await fs.realpath(ancestor) !== root || !sameIdentity(current, identity)) {
         throw new Error('Artifact root changed since it was pinned');
       }
       await verifyArtifactRoot(shared);
@@ -540,19 +548,19 @@ async function createMissingRoot(store) {
   const handles = [];
   let parentPath = anchor.root;
   async function verifyAnchor() {
-    const current = await fs.stat(anchor.configured);
+    const current = await fs.stat(anchor.configured, { bigint: true });
     assertIdentity(current);
     if (await fs.realpath(anchor.configured) !== anchor.root || !current.isDirectory()
-      || current.dev !== anchor.identity.dev || current.ino !== anchor.identity.ino) {
+      || !sameIdentity(current, anchor.identity)) {
       throw new Error('Artifact root changed since it was pinned');
     }
   }
   async function verifyDirectory(handle, expected, entry) {
-    const opened = handle ? await handle.stat() : await fs.lstat(entry);
-    const current = await fs.lstat(entry);
+    const opened = handle ? await handle.stat({ bigint: true }) : await fs.lstat(entry, { bigint: true });
+    const current = await fs.lstat(entry, { bigint: true });
     assertIdentity(opened); assertIdentity(current);
     if (!opened.isDirectory() || current.isSymbolicLink()
-      || opened.dev !== current.dev || opened.ino !== current.ino
+      || !sameIdentity(opened, current)
       || await fs.realpath(handle ? `/proc/self/fd/${handle.fd}` : entry) !== expected) {
       throw new Error('Artifact root changed during creation');
     }
@@ -565,7 +573,7 @@ async function createMissingRoot(store) {
       parent = await fs.open(anchor.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       handles.push(parent);
       const opened = await verifyDirectory(parent, anchor.root, anchor.root);
-      if (opened.dev !== anchor.identity.dev || opened.ino !== anchor.identity.ino) throw new Error('Artifact root changed since it was pinned');
+      if (!sameIdentity(opened, anchor.identity)) throw new Error('Artifact root changed since it was pinned');
     }
     for (const [index, component] of store.components.entries()) {
       await verifyAnchor();
@@ -578,14 +586,14 @@ async function createMissingRoot(store) {
         // missing root is exclusive; pre-existing parents still need checks.
         if (error.code !== 'EEXIST' || index === store.components.length - 1) throw error;
       }
-      const created = await fs.lstat(entry);
+      const created = await fs.lstat(entry, { bigint: true });
       assertIdentity(created);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('Artifact root changed during creation');
       const child = rootedArtifactAccess()
         ? await fs.open(entry, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;
       if (child) handles.push(child);
       const opened = await verifyDirectory(child, expected, entry);
-      if (opened.dev !== created.dev || opened.ino !== created.ino) throw new Error('Artifact root changed during creation');
+      if (!sameIdentity(opened, created)) throw new Error('Artifact root changed during creation');
       parent = child; parentPath = expected;
       if (index === store.components.length - 1) store.identity = opened;
     }
