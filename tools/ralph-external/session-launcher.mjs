@@ -998,10 +998,14 @@ export class SessionLauncher extends EventEmitter {
       // (e.g. the launcher's own caller) reading stdoutPath/stderrPath
       // immediately after launch() resolves, and can hand back a truncated
       // file under I/O load (#2981).
+      // A failed write destroys the stream at once, but WriteStream emits
+      // 'error' only after its async fd close, so wait for 'close' (which
+      // follows both 'finish' and 'error') rather than returning early on
+      // `destroyed`; otherwise launch() can resolve before captureError lands.
       const finalizeCaptureStream = stream => new Promise(res => {
-        if (stream.destroyed || stream.writableFinished) { res(); return; }
-        stream.once('error', res);
-        stream.end(res);
+        if (stream.closed) { res(); return; }
+        stream.once('close', res);
+        if (!stream.destroyed && !stream.writableEnded) stream.end();
       });
 
       // Buffer for last portion of stdout (for quick analysis)
@@ -1105,6 +1109,7 @@ export class SessionLauncher extends EventEmitter {
         Promise.all([finalizeCaptureStream(stdoutStream), finalizeCaptureStream(stderrStream)]).then(() => {
           // A failed capture means stdoutPath/stderrPath are incomplete; report
           // it rather than hand back a truncated transcript as a result.
+          captureError ??= stdoutStream.errored ?? stderrStream.errored;
           if (captureError) {
             this.emit('error', captureError);
             reject(captureError);
