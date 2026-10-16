@@ -236,6 +236,27 @@ describe('canonical installation identity', () => {
     expect(status.drift).toContain('recorded manager executable cannot be invoked: spawn failed');
   });
 
+  it('probes a Windows manager path containing literal percent and metacharacters (#3117)', () => {
+    const root = packageRoot();
+    const manager = path.join(root, 'npm %PATH% & 100%.cmd');
+    fs.writeFileSync(manager, '');
+    fs.chmodSync(manager, 0o755);
+    const identity = createInstallationIdentity({ actualRoot: root, managerExecutable: manager });
+    const executeManager = vi.fn();
+
+    const status = inspectInstallation({
+      actualRoot: root, identity, probeManager: true, executeManager,
+      platform: 'win32', env: { ComSpec: 'cmd.exe' },
+    });
+
+    expect(status.managerProbe).toEqual({ state: 'usable' });
+    expect(executeManager).toHaveBeenCalledWith(
+      'cmd.exe',
+      ['/d', '/v:off', '/s', '/c', `"${root.replace(/ /g, '^ ')}${path.sep}npm^ ^%PATH^%^ ^&^ 100^%.cmd ^^^"--version^^^""`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, windowsVerbatimArguments: true },
+    );
+  });
+
   // Go/no-go review blocker 1B.
   it("resolving a method: 'source' identity's manager executable looks up `git` with only PATH, never the whole parent environment", () => {
     const previousSecret = process.env.AIWG_TEST_INSTALLATION_SECRET;

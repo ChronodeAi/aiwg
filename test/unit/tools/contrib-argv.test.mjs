@@ -180,7 +180,31 @@ describe('contribution commands keep data in argv (#142)', () => {
 
     expect(editorExecFile).toHaveBeenCalledWith(
       process.env.ComSpec,
-      ['/d', '/v:off', '/s', '/c', `""${executable}"${editor.includes('--wait') ? ' "--wait"' : ''} "file with spaces & %%PATH%%.txt""`],
+      ['/d', '/v:off', '/s', '/c', `"${executable} ${editor.includes('--wait') ? '^^^"--wait^^^" ' : ''}^^^"file^^^ with^^^ spaces^^^ ^^^&^^^ ^^^%PATH^^^%.txt^^^""`],
+      { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
+    );
+  });
+
+  it.each([
+    ['%PATH%', '^^^"^^^%PATH^^^%^^^"'],
+    ['100%.txt', '^^^"100^^^%.txt^^^"'],
+    ['!x!', '^^^"^^^!x^^^!^^^"'],
+    ['&', '^^^"^^^&^^^"'],
+    ['^', '^^^"^^^^^^^"'],
+    ['"', '^^^"\\^^^"^^^"'],
+    ['with spaces', '^^^"with^^^ spaces^^^"'],
+    ['', '^^^"^^^"'],
+  ])('opens a literal Windows conflict operand %j (#3117)', (firstFile, escaped) => {
+    const executable = path.join(root, 'code.cmd');
+    writeFileSync(executable, '@echo editor launcher');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('EDITOR', executable);
+    vi.stubEnv('ComSpec', 'cmd.exe');
+
+    applyConflictChoice('1', [firstFile], 'merge', root);
+
+    expect(editorExecFile).toHaveBeenCalledWith(
+      'cmd.exe', ['/d', '/v:off', '/s', '/c', `"${executable} ${escaped}"`],
       { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
     );
   });
@@ -216,7 +240,7 @@ describe('contribution commands keep data in argv (#142)', () => {
 
     expect(editorExecFile).toHaveBeenCalledWith(
       'custom-cmd.exe',
-      ['/d', '/v:off', '/s', '/c', `""${executable}" "--wait" "conflict!.txt""`],
+      ['/d', '/v:off', '/s', '/c', `"${executable} ^^^"--wait^^^" ^^^"conflict^^^!.txt^^^""`],
       { cwd: root, stdio: 'inherit', windowsVerbatimArguments: true },
     );
   });
