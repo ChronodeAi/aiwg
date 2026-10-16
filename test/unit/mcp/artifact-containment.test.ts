@@ -586,6 +586,25 @@ describe.skipIf(!linuxDescriptors)('descriptor artifact access', () => {
     expect(await fs.readFile(join(artifacts, 'file'), 'utf8')).toBe('replacement');
   });
 
+  it('refuses unknown root identity and preserves outside sentinel metadata on read refusal', async () => {
+    await fs.link(join(outside, 'secret'), join(artifacts, 'linked-read'));
+    const before = await fs.stat(join(outside, 'secret'));
+    expect((await call('artifact-read', 'linked-read')).isError).toBe(true);
+    const after = await fs.stat(join(outside, 'secret'));
+    expect({ dev: after.dev, ino: after.ino, nlink: after.nlink, mode: after.mode })
+      .toEqual({ dev: before.dev, ino: before.ino, nlink: before.nlink, mode: before.mode });
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
+      const info = await stat(...args as Parameters<typeof stat>);
+      if (String(args[0]) === artifacts) Object.defineProperty(info, 'ino', { value: 0 });
+      return info;
+    });
+    const result = await call('artifact-write', 'file');
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('identity cannot be verified') }]);
+    expect(await fs.readFile(join(outside, 'secret'), 'utf8')).toBe('outside content');
+  });
+
   it('never unlinks a pathname after exclusive-create verification fails', async () => {
     const open = fs.open.bind(fs);
     let temporary = '';

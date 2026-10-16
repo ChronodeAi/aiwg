@@ -10,17 +10,20 @@
  * @issue #956
  */
 
-import { existsSync } from 'fs';
-import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises';
-import { dirname, join, relative, resolve, sep } from 'path';
+import { resolve, sep } from 'path';
+import { pinContainedRoot, readContainedFile, writeContainedFile, appendContainedFile, deleteContainedFile, listContainedFiles, type ContainedRoot } from '../../utils/contained-filesystem.mjs';
 import type { StorageAdapter, StorageEntry, WriteMeta } from '../types.js';
 
 export class FilesystemAdapter implements StorageAdapter {
   /** Absolute path where this subsystem's content lives. */
   private readonly root: string;
+  private readonly store: Promise<ContainedRoot>;
 
   constructor(root: string) {
     this.root = resolve(root);
+    this.store = pinContainedRoot(this.root, undefined, {
+      createMissing: true, protectLocationPointer: false, rejectLinkedWrites: true,
+    });
   }
 
   /**
@@ -52,94 +55,29 @@ export class FilesystemAdapter implements StorageAdapter {
   }
 
   async read(path: string): Promise<string | null> {
-    const abs = this.resolveSafe(path);
-    if (!existsSync(abs)) return null;
-    return readFile(abs, 'utf-8');
+    this.resolveSafe(path);
+    return readContainedFile(await this.store, path);
   }
 
   async write(path: string, content: string, _meta?: WriteMeta): Promise<void> {
-    const abs = this.resolveSafe(path);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, content, 'utf-8');
+    this.resolveSafe(path);
+    await writeContainedFile(await this.store, path, content);
   }
 
-  /**
-   * Atomic append. Uses fs.appendFile, which opens with O_APPEND so the
-   * kernel guarantees atomicity for writes ≤ PIPE_BUF (4096 bytes on
-   * Linux). Concurrent appenders interleave at line granularity rather
-   * than racing read-then-write. See #976.
-   */
+  /** Append through a verified O_APPEND handle, without read/replace races. */
   async append(path: string, content: string): Promise<void> {
-    const abs = this.resolveSafe(path);
-    await mkdir(dirname(abs), { recursive: true });
-    await appendFile(abs, content, 'utf-8');
+    this.resolveSafe(path);
+    await appendContainedFile(await this.store, path, content);
   }
 
   async list(prefix: string): Promise<StorageEntry[]> {
-    // Empty prefix = list everything under root. A non-empty prefix
-    // restricts to entries whose subsystem-relative path starts with it
-    // (after path-normalizing the prefix itself).
-    if (typeof prefix !== 'string') {
-      throw new Error('storage(fs): list prefix must be a string');
-    }
-    if (prefix.length > 0) {
-      // resolveSafe also validates the prefix shape
-      this.resolveSafe(prefix);
-    }
-    if (!existsSync(this.root)) return [];
-
-    const out: StorageEntry[] = [];
-    await walkInto(this.root, this.root, prefix, out);
-    return out;
+    if (typeof prefix !== 'string') throw new Error('storage(fs): list prefix must be a string');
+    if (prefix) this.resolveSafe(prefix);
+    return listContainedFiles(await this.store, prefix);
   }
 
   async delete(path: string): Promise<void> {
-    const abs = this.resolveSafe(path);
-    if (!existsSync(abs)) return;
-    await rm(abs, { force: true });
-  }
-}
-
-async function walkInto(
-  root: string,
-  dir: string,
-  prefix: string,
-  out: StorageEntry[]
-): Promise<void> {
-  let entries: import('fs').Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries) {
-    const full = join(dir, e.name);
-    const rel = relative(root, full).split(sep).join('/');
-
-    if (e.isDirectory()) {
-      // Descend if the dir could contain matches
-      if (prefix === '' || rel.startsWith(prefix) || prefix.startsWith(rel + '/')) {
-        await walkInto(root, full, prefix, out);
-      }
-      continue;
-    }
-
-    if (!e.isFile()) continue;
-    if (prefix !== '' && !rel.startsWith(prefix)) continue;
-
-    let size: number | undefined;
-    let modifiedAt: Date | undefined;
-    try {
-      const s = await stat(full);
-      size = s.size;
-      modifiedAt = s.mtime;
-    } catch {
-      // ignore stat failures
-    }
-    const entry: StorageEntry = { path: rel };
-    if (size !== undefined) entry.size = size;
-    if (modifiedAt !== undefined) entry.modifiedAt = modifiedAt;
-    out.push(entry);
+    this.resolveSafe(path);
+    await deleteContainedFile(await this.store, path);
   }
 }

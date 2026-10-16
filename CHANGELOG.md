@@ -424,6 +424,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `aiwg doctor` flags (and valueless value flags, and `--json` without `--probe-workers`) exit 2
   naming the flag. Doctor flags are parsed through the shared strict parser from #3062 rather than
   a hand-rolled loop.
+- MCP template tools/resources and opt-in filesystem storage now share the pinned artifact
+  containment boundary, refusing path escapes, root retargets, and unsafe links while preserving
+  external stores, missing-file semantics, append behavior, and overwrite modes (#3086).
+
 - `aiwg models resolve` explains when `parallelism.worker_dispatch` is off with shared enable/readiness commands before checking installation qualification (#3070).
 - The OMP provider failed in an installed package: its deploy tool imported two modules by a path
   into the unshipped source tree, and `aiwg remove omp` imported that tool by a path that is one
