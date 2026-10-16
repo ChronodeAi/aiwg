@@ -3,6 +3,6 @@ name: REF identifier uniqueness
 description: No duplicate REF-XXX identifiers across the research corpus
 severity: error
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: id-unique

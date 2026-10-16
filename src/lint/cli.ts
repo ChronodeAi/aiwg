@@ -77,6 +77,8 @@ function parseArgs(args: string[]): LintOptions {
       options.format = args[++i] as LintOutputFormat;
     } else if (arg === '--ci') {
       options.ci = true;
+    } else if (arg === '--allow-empty') {
+      options.allowEmpty = true;
     } else if (arg === '--fail-on' && i + 1 < args.length) {
       options.failOn = args[++i] as LintSeverity;
     } else if (arg === '--dry-run') {
@@ -103,6 +105,14 @@ function parseArgs(args: string[]): LintOptions {
 export async function main(args: string[]): Promise<void> {
   const options = parseArgs(args);
   const cwd = process.cwd();
+
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: aiwg lint <target> [--ruleset <name>] [--format full|summary|json] [--ci] [--allow-empty] [--fail-on error|warn|info] [--no-gitignore]');
+    console.log('  --ci           Fail on lint violations, zero files checked or zero rules applied');
+    console.log('  --allow-empty  Allow zero files or zero applied rules under --ci');
+    console.log('  --list-rulesets | --list-rules <ruleset>');
+    return;
+  }
 
   // Discover available rulesets. `cwd` is where the user runs the lint (used
   // to find deployed `.aiwg/frameworks/*/lint/` overlays); `AIWG_ROOT` is the
@@ -133,7 +143,7 @@ export async function main(args: string[]): Promise<void> {
 
   // Require a target for actual linting
   if (!options.target) {
-    console.error('Usage: aiwg lint <target> [--ruleset <name>] [--format full|summary|json] [--ci] [--fail-on error|warn|info] [--no-gitignore]');
+    console.error('Usage: aiwg lint <target> [--ruleset <name>] [--format full|summary|json] [--ci] [--allow-empty] [--fail-on error|warn|info] [--no-gitignore]');
     console.error('       aiwg lint --list-rulesets');
     console.error('       aiwg lint --list-rules <ruleset>');
     process.exitCode = 1;
@@ -174,6 +184,8 @@ export async function main(args: string[]): Promise<void> {
   // Run lint
   const result = await runLint(targetDir, selectedRulesets, {
     recursive: options.recursive,
+    ci: options.ci,
+    allowEmpty: options.allowEmpty,
     failOn: options.failOn,
     respectGitignore: options.respectGitignore ?? true,
   });

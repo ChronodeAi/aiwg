@@ -16,6 +16,7 @@ function makeResult(overrides: Partial<LintResult> = {}): LintResult {
     target: '/tmp/test',
     rulesets: ['test'],
     diagnostics: [],
+    ruleCoverage: {},
     summary: {
       filesChecked: 5,
       errors: 0,
@@ -178,5 +179,28 @@ describe('rule applicability reporting (#2555)', () => {
     expect(full).toContain('0 of 11 selected rules matched any file here');
     expect(full).toContain('Lint a parent directory');
     expect(formatResult(result, 'summary')).toContain('this is not a clean result');
+  });
+});
+
+
+describe('coverage output', () => {
+  it('includes the empty-run explanation in every format and retains the roster', () => {
+    const result = makeResult();
+    result.summary.coverageMessage = 'No files checked. The target is empty.';
+    result.summary.inapplicableRules = ['test/rule'];
+    result.ruleCoverage = { 'test/rule': [] };
+    for (const format of ['full', 'summary', 'json'] as const) {
+      const output = formatResult(result, format);
+      expect(output).toContain(result.summary.coverageMessage);
+      expect(output).toContain('test/rule');
+    }
+  });
+
+  it('reports rule-by-file selections including rules with no matching files', () => {
+    const result = makeResult({ ruleCoverage: { 'test/applied': ['a.md', 'b.md'], 'test/unused': [] } });
+    expect(JSON.parse(formatResult(result, 'json')).ruleCoverage).toEqual(result.ruleCoverage);
+    const full = formatResult(result, 'full');
+    expect(full).toContain('test/applied: a.md, b.md');
+    expect(full).toContain('test/unused: (no files)');
   });
 });

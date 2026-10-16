@@ -3,7 +3,7 @@ name: Provenance record present
 description: Every research artifact should have a W3C PROV provenance record
 severity: warn
 applies-to:
-  glob: findings/REF-*.md
+  glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: frontmatter-required
     fields: [documented_date, acquisition_method]

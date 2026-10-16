@@ -180,6 +180,9 @@ export interface LintResult {
   /** All diagnostics */
   diagnostics: LintDiagnostic[];
 
+  /** Target-relative files selected by each rule, including empty selections. */
+  ruleCoverage: Record<string, string[]>;
+
   /** Summary counts */
   summary: {
     filesChecked: number;
@@ -193,6 +196,8 @@ export interface LintResult {
     rulesApplied: number;
     /** Rule ids whose glob matched no file in this target (#2555). */
     inapplicableRules: string[];
+    /** Explanation when no files or rules were covered. */
+    coverageMessage?: string;
   };
 
   /** Timestamp */
@@ -220,6 +225,9 @@ export interface LintOptions {
 
   /** CI mode — exit code reflects pass/fail */
   ci?: boolean;
+
+  /** Permit zero files or zero applied rules in CI mode. */
+  allowEmpty?: boolean;
 
   /** Fail threshold for CI mode */
   failOn?: LintSeverity;

@@ -2487,7 +2487,7 @@ Lint AIWG artifacts against declarative rule sets discovered from installed fram
 ```bash
 aiwg lint <target> [--ruleset <name>] [--format full|summary|json]
                    [--ci] [--fail-on error|warn|info] [--dry-run]
-                   [--no-gitignore]
+                   [--no-gitignore] [--allow-empty]
 aiwg lint --list-rulesets
 aiwg lint --list-rules <ruleset>
 ```
@@ -2500,7 +2500,8 @@ aiwg lint --list-rules <ruleset>
 
 - `--ruleset <name>` - Force a specific ruleset (otherwise auto-detected from path)
 - `--format full|summary|json` - Output format
-- `--ci` - CI-friendly output and exit codes
+- `--ci` - CI-friendly output and exit codes; fails when no files are checked or no rules apply
+- `--allow-empty` - Permit zero files checked or zero rules applied under `--ci`
 - `--fail-on error|warn|info` - Severity threshold for non-zero exit
 - `--dry-run` - Report what would run without executing rules
 - `--list-rulesets` - List all discovered rulesets
@@ -2511,9 +2512,18 @@ aiwg lint --list-rules <ruleset>
 **Output:**
 
 A run reports `Rules applied: N of M` and names any rule whose glob matched no
-file in the target. When no rule applies, the run says so explicitly — a target
-that excludes every rule is not a clean result, and rule globs are written from
-the project root, so lint a parent directory or check `--ruleset` (#2555).
+file in the target. JSON includes `ruleCoverage`, mapping each rule ID to its
+selected target-relative file paths (including empty lists); full output lists
+those paths too. `inapplicableRules` remains available in the JSON summary.
+Empty, nonexistent, unsupported-file and entirely ignored targets explain why
+no files were checked. Under `--ci`, zero files checked or zero rules applied
+fails unless `--allow-empty` is set. This opt-out does not suppress violations.
+
+Research rules cover both `documentation/references/REF-*.md` and legacy
+`findings/REF-*.md`, including when the target is a note or its containing
+directory. Frontmatter paths (`pdf_location`, `source_text`) resolve from the
+nearest ancestor containing `.git` (a directory or worktree file) or `.aiwg`.
+Without either marker, paths resolve from the target directory.
 
 **Capabilities:** cli, lint, validation, quality
 **Tools:** Bash, Read, Glob, Grep
