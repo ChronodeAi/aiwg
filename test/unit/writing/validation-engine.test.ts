@@ -12,6 +12,7 @@ import { WritingValidationEngine, ValidationResult } from '../../../src/writing/
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { medianMs } from '../../helpers/median-ms.ts';
 
 describe('WritingValidationEngine', () => {
   let engine: WritingValidationEngine;
@@ -317,11 +318,13 @@ Moreover, this solution integrates well with existing infrastructure.`;
       // Large file performance
       const largeContent = 'Valid content. '.repeat(10000); // ~150KB
       writeFileSync(join(testDir, 'large.md'), largeContent);
-      const start = Date.now();
       const largeResult = await engine.validateFile(join(testDir, 'large.md'));
-      const duration = Date.now() - start;
       expect(largeResult).toBeDefined();
-      expect(duration).toBeLessThan(2000); // Should complete in < 2s
+      expect(largeResult.issues.filter(issue => issue.severity !== 'info')).toEqual([]);
+      expect(largeResult.summary.totalIssues).toBe(largeResult.issues.length);
+      // Loaded Node 24 calibration: ~23 ms median; retain the 2s budget for
+      // slower CI disks/CPUs. Seven awaited samples reject isolated I/O stalls.
+      expect(await medianMs(() => engine.validateFile(join(testDir, 'large.md')), 7)).toBeLessThan(2000);
     });
   });
 
