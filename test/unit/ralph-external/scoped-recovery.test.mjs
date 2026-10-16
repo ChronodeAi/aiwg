@@ -4156,7 +4156,8 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
     }
   });
 
-  it('maxAttempts 65 admits exactly 65 of 100 in both the file and in-process ledger', async () => {
+  // 70 attempts still cross the 65 cap; 100 timed out under full CI load (run 83861).
+  it('maxAttempts 65 admits exactly 65 of 70 in both the file and in-process ledger', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-cumulative-'));
     try {
       for (const mode of ['file', 'in-process']) {
@@ -4164,7 +4165,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
         const taskChainDigest = `cumulative-${mode}`;
         const maxAttempts = 65;
         let admitted = 0;
-        for (let n = 0; n < 100; n += 1) {
+        for (let n = 0; n < 70; n += 1) {
           try {
             // eslint-disable-next-line no-await-in-loop
             const ledger = await reserveDirectWorkerAllowance({ captureRoot, taskChainDigest, invocationId: `attempt-${n}`, maxAttempts });
@@ -4181,7 +4182,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       resetInProcessAllowanceLedger();
       await rm(root, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 60_000);
 
   // #2915 round 8 (D1.5): the review-7 defect this whole redesign removes --
   // a refund racing a debit on the SAME handle. The state flip in

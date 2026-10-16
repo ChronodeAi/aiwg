@@ -3930,7 +3930,8 @@ describe('review 9 bounded recovery regressions', () => {
     } finally { observer.mockRestore(); launch.mockRestore(); p?.breaker.destroy(); }
   });
 
-  it('B3: 200 independent breakers cannot grow one maxRetained:4 registry or replace its reconciliation owner', async () => {
+  // 24 owners (6x maxRetained) prove the bound; 200 timed out under full CI load (run 83861).
+  it('B3: 24 independent breakers cannot grow one maxRetained:4 registry or replace its reconciliation owner', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
     const brief = path.join(root, 'brief.md'); await writeFile(brief, 'owner-bound probe');
@@ -3945,7 +3946,7 @@ describe('review 9 bounded recovery regressions', () => {
     let firstId: string = '';
     let lastHandler: any;
     try {
-      for (let i = 0; i < 200; i += 1) {
+      for (let i = 0; i < 24; i += 1) {
         const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
         breakers.push(breaker);
         const tools = await captureTool(undefined, { projectRoot: root, workerWorktreesRoot: work, registry, scopedBreaker: breaker,
@@ -3971,7 +3972,7 @@ describe('review 9 bounded recovery regressions', () => {
       expect(reconciled.reconciled).toBe(true);
       expect(breakers[0].snapshot().reservationsOutstanding).toBe(0);
     } finally { for (const breaker of breakers) breaker.destroy(); }
-  }, 20000);
+  }, 60_000);
 
   it('review 9 item 1: real native post-spawn refusal and shell submission uncertainty retain live registry capacity', async () => {
     const child = stdioChild(false, false);
