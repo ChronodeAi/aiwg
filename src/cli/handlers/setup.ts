@@ -596,6 +596,46 @@ export const setupHandler: CommandHandler = {
   category: 'project',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return {
+      exitCode: 0,
+      rawOutput: true,
+      message: `Usage: aiwg setup project [options]
+
+Options:
+  --target <dir>                  Project directory
+  --yes                           Confirm writes without prompting
+  --dry-run                       Preview the setup plan
+  --non-interactive               Disable prompts
+  --json                          Emit the plan as JSON
+  --primary <remote>              Primary repository remote
+  --issue-tracker <remote>        Internal issue tracker remote
+  --customer-issue-tracker <remote>  Customer issue tracker remote
+  --ci <remote>                   CI remote
+  --issue-provider <provider>     Internal tracker provider
+  --customer-issue-provider <provider>  Customer tracker provider
+  --delivery-mode <mode>          Delivery policy
+  --default-branch <branch>        Default branch
+  --require-ci-green <boolean>    Require passing CI
+  --auto-close-issues <boolean>   Close delivered issues
+  --issue-comment-on-cycle <boolean>  Report issue cycles
+  --force-push-policy <policy>    Force-push policy
+  --require-signed-commits <boolean>  Require signed commits
+  --committer-name <name>         Committer identity
+  --committer-email <email>       Committer email
+  --signing-format <format>       Signing format
+  --signing-key <key>             Signing key
+  --signing-enforce <commits|tags|all>  Signing enforcement
+  --tracker-actor-login <login>   Internal tracker actor
+  --tracker-actor-via <via>       Internal tracker access method
+  --customer-tracker-actor-login <login>  Customer tracker actor
+  --customer-tracker-actor-via <via>  Customer tracker access method
+  --worker-dispatch <choice>      Worker dispatch policy
+  --providers <ids>               Comma-separated provider IDs
+`,
+    };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const [subcommand] = ctx.args;
     if (subcommand && subcommand !== 'project' && !subcommand.startsWith('--')) {

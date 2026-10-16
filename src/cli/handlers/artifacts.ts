@@ -40,6 +40,10 @@ export const artifactsHandler: CommandHandler = {
   category: 'index',
   aliases: ['artifact'],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const action = ctx.args.find(arg => !arg.startsWith('-')) ?? 'help';
     if (action === 'help' || ctx.args.includes('--help') || ctx.args.includes('-h')) {

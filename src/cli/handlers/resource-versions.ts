@@ -204,6 +204,10 @@ export const versionsHandler: CommandHandler = {
   category: "index",
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     if (ctx.args[0] === "help" || ctx.args[0] === "--help" || ctx.args[0] === "-h") {
       console.log(usage());
