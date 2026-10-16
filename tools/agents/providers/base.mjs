@@ -1113,7 +1113,7 @@ export function deploySkillsWithKernelRouting(
   // Standard-dir cleanup (#1217): when we're NOT copying standard
   // skills, anything AIWG-named under standardDestDir is a legacy
   // mirror from a rc.13-or-earlier deploy. Prune to clean up.
-  let prunedFromStandardDir = 0;
+  let prunedFromStandardDir = pruneMissingStandardSkills(standardDestDir, opts);
   if (
     !copyStandardSkills &&
     standardDestDir &&
@@ -1550,6 +1550,56 @@ export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
   return removed;
 }
 
+/** Remove only unchanged files listed in a skill receipt; preserve operator additions and edits. */
+function pruneRecordedSkillFiles(skillDir, managed, desired, opts) {
+  if (opts.dryRun) return;
+  for (const [relative, record] of Object.entries(managed || {})) {
+    if (desired.has(relative)) continue;
+    const target = path.resolve(skillDir, relative);
+    if (!target.startsWith(`${path.resolve(skillDir)}${path.sep}`)) continue;
+    try {
+      // Do not follow a replaced file or parent directory through a symlink.
+      if (fs.realpathSync(target) !== target || !fs.lstatSync(target).isFile()) continue;
+      if (`sha256:${contentHash(fs.readFileSync(target))}` !== record.hash) continue;
+      fs.unlinkSync(target);
+      let parent = path.dirname(target);
+      while (parent !== path.resolve(skillDir)) {
+        try { fs.rmdirSync(parent); } catch { break; }
+        parent = path.dirname(parent);
+      }
+    } catch { /* missing, modified, or unreadable files are left alone */ }
+  }
+}
+
+/** Source-scoped cleanup also works when a removed standard skill is absent from this deploy's input. */
+function pruneMissingStandardSkills(destDir, opts) {
+  if (!destDir || !opts?.srcRoot || opts.dryRun || !fs.existsSync(destDir)) return 0;
+  const sourceRoot = path.resolve(opts.srcRoot);
+  let pruned = 0;
+  for (const entry of fs.readdirSync(destDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(destDir, entry.name);
+    const receipt = readSidecarManifest(skillDir);
+    if (!receipt?.skillSource || !receipt.managed?.['SKILL.md']) continue;
+    const relative = path.relative(sourceRoot, receipt.skillSource);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    try {
+      fs.statSync(path.join(receipt.skillSource, 'SKILL.md'));
+      continue;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') continue;
+    }
+    pruneRecordedSkillFiles(skillDir, receipt.managed, new Set(), opts);
+    // The receipt and marker were written by the copier itself. Any files
+    // left after this step belong to the operator and keep the directory alive.
+    fs.rmSync(path.join(skillDir, MANIFEST_FILENAME), { force: true });
+    fs.rmSync(path.join(skillDir, '.aiwg-managed'), { force: true });
+    try { fs.rmdirSync(skillDir); } catch { /* operator files remain */ }
+    pruned++;
+  }
+  return pruned;
+}
+
 /**
  * Deploy a skill directory (copy recursively).
  *
@@ -1574,6 +1624,20 @@ export function deploySkillDir(skillDir, destDir, opts) {
   }
 
   const destSkillDir = path.join(destDir, skillName);
+  const previous = readSidecarManifest(destSkillDir);
+  const frameworkSlug = extractFrameworkSlug(skillMdPath);
+  const existingOwner = previous?.managed?.['SKILL.md']?.frameworkSlug;
+  const sameOwner = frameworkSlug && existingOwner
+    ? frameworkSlug === existingOwner
+    : previous?.skillSource === path.resolve(skillDir);
+  if ((existingOwner || previous?.skillSource) && !sameOwner) {
+    console.warn(
+      `Skill deploy collision: '${skillName}' is owned by ${existingOwner || previous.skillSource}; ` +
+      `${frameworkSlug || skillDir} skipped`,
+    );
+    return;
+  }
+  const managed = {};
   if (!dryRun) ensureDir(destSkillDir);
 
   function copyRecursive(src, dest) {
@@ -1601,6 +1665,13 @@ export function deploySkillDir(skillDir, destDir, opts) {
           }
         }
 
+        const relative = path.relative(destSkillDir, destPath);
+        managed[relative] = {
+          hash: `sha256:${contentHash(srcContent)}`,
+          source: opts.deploySource || 'bundled',
+          version: opts.deployVersion || 'unknown',
+          ...(frameworkSlug ? { frameworkSlug } : {}),
+        };
         if (fs.existsSync(destPath)) {
           const destContent = fs.readFileSync(destPath, 'utf8');
           if (destContent === srcContent && !force) {
@@ -1620,6 +1691,8 @@ export function deploySkillDir(skillDir, destDir, opts) {
   }
 
   copyRecursive(skillDir, destSkillDir);
+  pruneRecordedSkillFiles(destSkillDir, previous?.managed, new Set(Object.keys(managed)), opts);
+  writeSidecarManifest(destSkillDir, { managed, skillSource: path.resolve(skillDir) }, dryRun);
 
   // Drop a `.aiwg-managed` marker so future cleanup runs can identify
   // AIWG-deployed skills regardless of frontmatter shape (some providers

@@ -14,6 +14,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
 import { resolveOmpPaths } from '../../providers/omp-paths.mjs';
 import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -77,6 +78,7 @@ import {
   normalizeProviderDefinitionId,
   type ProviderArtifactPathStrings,
 } from '../../providers/provider-definitions.js';
+import { resolveGrokbotSkillsDir } from '../../providers/grokbot-paths.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
 // execute() per framework/provider) don't re-emit the warning each pass.
@@ -1176,6 +1178,18 @@ function resolveDeployPath(target: string, deployPath: string): string {
   return path.isAbsolute(deployPath) ? deployPath : path.join(target, deployPath);
 }
 
+/** Additional adapter write locations; shared definitions also govern existing removals and indexes. */
+function deployedSkillRoots(target: string, provider: string): string[] {
+  const roots = [getProviderPaths(provider).skills, getProviderKernelSkillsPath(provider)];
+  if (provider === 'muse') roots.push('.agents/.aiwg/skills');
+  if (provider === 'grok-build') roots.push('.grok/.aiwg/skills');
+  if (provider === 'grokbot') {
+    const root = resolveGrokbotSkillsDir();
+    if (root) roots.push(root, path.join(root, '.aiwg', 'skills'));
+  }
+  return [...new Set(roots.filter(Boolean).map(root => resolveDeployPath(target, root)))];
+}
+
 async function listBundleMdStems(bundlePath: string, subdir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(path.join(bundlePath, subdir));
@@ -1245,17 +1259,10 @@ async function countDeployedBundleSkills(
   bundlePath: string,
   target: string,
   provider: string,
-  paths: ProviderArtifactPathStrings,
 ): Promise<number> {
   const skillCandidates = await listBundleSkillNameCandidates(bundlePath);
   if (skillCandidates.length === 0) return 0;
-  const candidateDirs = [
-    paths.skills,
-    getProviderKernelSkillsPath(provider),
-  ]
-    .filter(Boolean)
-    .map(dir => resolveDeployPath(target, dir));
-  const uniqueCandidateDirs = [...new Set(candidateDirs)];
+  const uniqueCandidateDirs = deployedSkillRoots(target, provider);
 
   let count = 0;
   for (const names of skillCandidates) {
@@ -1282,7 +1289,7 @@ async function countBundleDeployedArtifacts(
   return {
     agents: await countDeployedBundleFiles(bundlePath, 'agents', target, paths.agents, ['.md', '.toml']),
     commands: await countDeployedBundleFiles(bundlePath, 'commands', target, paths.commands, ['.md']),
-    skills: await countDeployedBundleSkills(bundlePath, target, provider, paths),
+    skills: await countDeployedBundleSkills(bundlePath, target, provider),
     rules: await countDeployedBundleFiles(bundlePath, 'rules', target, paths.rules, ['.md', '.mdc']),
   };
 }
@@ -1290,10 +1297,22 @@ async function countBundleDeployedArtifacts(
 const SKILL_SUPPORT_REFERENCE = /(?:^|[\s`('"\[])((?:templates|references|scripts|assets)\/[A-Za-z0-9._@/+\-]+)(?=$|[\s`)'"\],:;])/gm;
 
 /** Copy one support file, preserving its executable bit. */
-async function copySkillSupportFile(source: string, destination: string): Promise<void> {
+async function copySkillSupportFile(source: string, destination: string, skillDir?: string): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.copyFile(source, destination);
   await fs.chmod(destination, (await fs.stat(source)).mode & 0o777);
+  // Extend the shared copier's receipt for bundle-root assets too. Adapters
+  // without that receipt keep their own ownership and cleanup contract.
+  if (!skillDir) return;
+  const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
+  let manifest;
+  try { manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')); } catch { return; }
+  if (!manifest.skillSource || !manifest.managed?.['SKILL.md']) return;
+  manifest.managed[path.relative(skillDir, destination)] = {
+    ...manifest.managed['SKILL.md'],
+    hash: `sha256:${createHash('sha256').update(await fs.readFile(destination)).digest('hex')}`,
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 /**
@@ -1310,6 +1329,7 @@ async function copySkillSupportTree(
   sourceSkillMd: string,
   reference: string,
   deployFile: ((from: string, to: string) => void) | null,
+  skillDir?: string,
 ): Promise<void> {
   await fs.mkdir(destination, { recursive: true });
   const label = reference.replace(/\/+$/, '');
@@ -1323,7 +1343,7 @@ async function copySkillSupportTree(
       );
     }
     if (entry.isDirectory()) {
-      await copySkillSupportTree(from, to, sourceSkillMd, `${label}/${entry.name}`, deployFile);
+      await copySkillSupportTree(from, to, sourceSkillMd, `${label}/${entry.name}`, deployFile, skillDir);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -1331,7 +1351,7 @@ async function copySkillSupportTree(
       deployFile(from, to);
       continue;
     }
-    await copySkillSupportFile(from, to);
+    await copySkillSupportFile(from, to, skillDir);
   }
 }
 
@@ -1357,18 +1377,30 @@ async function reconcileDeployedSkillAssets(
   } catch {
     return;
   }
-  const paths = getProviderPaths(provider);
-  const kernelSkillsPath = getProviderKernelSkillsPath(provider);
   const deployRoots = provider === 'omp' && options.scope === 'user'
     ? [path.join(resolveOmpPaths({ cwd: target }).agentDir, 'skills')]
-    : [...new Set([paths.skills, kernelSkillsPath]
-      .filter((value): value is string => Boolean(value)).map(value => resolveDeployPath(target, value)))];
+    : deployedSkillRoots(target, provider);
 
   for (const skillName of skillDirs) {
     const sourceSkillDir = path.join(skillsRoot, skillName);
     const sourceSkillMd = path.join(sourceSkillDir, 'SKILL.md');
     let content: string;
     try { content = await fs.readFile(sourceSkillMd, 'utf8'); } catch { continue; }
+    // A reported cross-source collision keeps the first owner's entire skill,
+    // including support assets; reconciliation must not overwrite that decision.
+    let otherOwner: string | undefined;
+    for (const root of deployRoots) {
+      try {
+        const receipt = JSON.parse(await fs.readFile(path.join(root, skillName, '.aiwg-manifest.json'), 'utf8'));
+        if (receipt.skillSource && receipt.skillSource !== path.resolve(sourceSkillDir)) {
+          otherOwner = receipt.managed?.['SKILL.md']?.frameworkSlug || receipt.skillSource;
+        }
+      } catch { /* adapters without shared ownership receipts keep their own contract */ }
+    }
+    if (otherOwner) {
+      console.warn(`Skill deploy collision: '${skillName}' is owned by ${otherOwner}; ${path.basename(bundlePath)} skipped`);
+      continue;
+    }
     if (options.skipUndeployed && !(await Promise.all(deployRoots.map(root =>
       fileExists(path.join(root, skillName, 'SKILL.md'))))).some(Boolean)) continue;
     const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
@@ -1430,14 +1462,14 @@ async function reconcileDeployedSkillAssets(
         })()
         : null;
       if (sourceIsDirectory) {
-        await copySkillSupportTree(source, destination, sourceSkillMd, relative, deployFile);
+        await copySkillSupportTree(source, destination, sourceSkillMd, relative, deployFile, path.join(deployedSkillRoot, skillName));
         continue;
       }
       if (deployFile) {
         deployFile(source, destination);
         continue;
       }
-      await copySkillSupportFile(source, destination);
+      await copySkillSupportFile(source, destination, path.join(deployedSkillRoot, skillName));
     }
   }
 }
@@ -2525,6 +2557,48 @@ async function deployOmpUserSource(opts: {
       skills: entries.skills.length, rules: entries.rules.length }, entries });
 }
 
+/** Record native home writes without mirroring or changing user-scope removal roots. */
+async function recordNativeAddonDeploy(bundlePath: string, target: string, provider: string, bundle: string): Promise<void> {
+  const userPaths = USER_SCOPE_PATHS[provider];
+  const paths = getProviderPaths(provider);
+  const entries: Record<'agents' | 'commands' | 'skills' | 'rules', string[]> = {
+    agents: [], commands: [], skills: [], rules: [],
+  };
+  for (const names of await listBundleSkillNameCandidates(bundlePath)) {
+    for (const root of deployedSkillRoots(target, provider)) {
+      let name: string | undefined;
+      for (const candidate of names) {
+        if (await fileExists(path.join(root, candidate, 'SKILL.md'))) { name = candidate; break; }
+      }
+      if (!name) continue;
+      try {
+        const receipt = JSON.parse(await fs.readFile(path.join(root, name, '.aiwg-manifest.json'), 'utf8'));
+        const sourceDir = path.join(bundlePath, 'skills', names[names.length - 1]);
+        if (receipt.skillSource && receipt.skillSource !== path.resolve(sourceDir)) continue;
+      } catch { /* legacy adapters may not write a shared ownership receipt */ }
+      entries.skills.push(path.relative(userPaths.skills, path.join(root, name)));
+      break;
+    }
+  }
+  for (const kind of ['agents', 'commands', 'rules'] as const) {
+    if (!paths[kind] || !userPaths[kind]) continue;
+    for (const stem of await listBundleMdStems(bundlePath, kind)) {
+      const filename = `${stem}.md`;
+      const destination = path.join(resolveDeployPath(target, paths[kind]), filename);
+      if (await fileExists(destination)) entries[kind].push(path.relative(userPaths[kind], destination));
+    }
+  }
+  const manifestPath = path.join(bundlePath, 'manifest.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { version?: string };
+  const { recordUserDeploy } = await import('../../config/user-registry.js');
+  await recordUserDeploy({
+    framework: bundle, provider, version: manifest.version ?? (await getVersionInfo()).version,
+    source: 'bundled', manifestHash: await hashManifest(manifestPath), entries,
+    counts: { agents: entries.agents.length, commands: entries.commands.length,
+      skills: entries.skills.length, rules: entries.rules.length },
+  });
+}
+
 async function mirrorProjectLocalBundleToUserScope(opts: {
   bundle: ProjectLocalBundle;
   provider: string;
@@ -3477,6 +3551,14 @@ export class UseHandler implements CommandHandler {
           exitCode: 1,
           message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
         };
+      }
+
+      if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
+        try {
+          await recordNativeAddonDeploy(addonSource, target, provider, framework);
+        } catch (error) {
+          return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
+        }
       }
 
       // Persist the same lifecycle record frameworks and project-local bundles

@@ -887,7 +887,7 @@ export async function verifyProviderDeployment(
     }
     const requiredContext = [
       path.join(options.projectRoot, 'WORKSPACE.md'),
-      path.join(options.projectRoot, 'AIWG.md'),
+      ...(definition?.paths.contextFiles.aiwgMd === false ? [] : [path.join(options.projectRoot, 'AIWG.md')]),
       path.join(options.projectRoot, '.aiwg', 'AIWG.md'),
     ];
     for (const contextPath of requiredContext) {
