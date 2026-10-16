@@ -50,7 +50,7 @@ export function parseShellUnitStatus(stdout, { stopAccepted = false } = {}) {
   }
   if (!['1', '2', '3'].includes(fields.ExecMainCode)) return uncertain();
   const signaled = ['2', '3'].includes(fields.ExecMainCode);
-  return { termination: 'confirmed', exitCode: fields.Result === 'success' && !signaled
+  return { termination: 'confirmed', nativeResult: fields.Result, exitCode: fields.Result === 'success' && !signaled
     ? Number(fields.ExecMainStatus) : Number(fields.ExecMainStatus) || 1,
   ...(signaled ? { signalCode: Number(fields.ExecMainStatus) } : {}) };
 }
@@ -155,10 +155,10 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
     if (groupGone()) confirm({ termination: 'confirmed', exitCode, signalCode });
     else void control.stop(); // descendants outlived their leader
   }
-  function onError() {
+  function onError(error) {
     // A pid-bearing child error is an observation failure, not a deadline.
     // ENOENT has no pid and cannot have started a worker.
-    if (!child?.pid && launch.mode !== 'systemd-unit') confirm({ termination: 'confirmed', exitCode: null });
+    if (!child?.pid && launch.mode !== 'systemd-unit') confirm({ termination: 'confirmed', exitCode: null, errorCode: error?.code ?? 'SPAWN_ERROR' });
   }
   child?.once('close', onClose);
   child?.on('error', onError);

@@ -65,9 +65,9 @@ const collected = 'LoadState=not-found\nActiveState=inactive\nResult=\nExecMainS
 describe('async systemd status and command path', () => {
   it.each([
     [active, { termination: 'uncertain', exitCode: null }],
-    [success, { termination: 'confirmed', exitCode: 0 }],
-    [failed, { termination: 'confirmed', exitCode: 7 }],
-    [killed, { termination: 'confirmed', exitCode: 9, signalCode: 9 }],
+    [success, { termination: 'confirmed', exitCode: 0, nativeResult: 'success' }],
+    [failed, { termination: 'confirmed', exitCode: 7, nativeResult: 'exit-code' }],
+    [killed, { termination: 'confirmed', exitCode: 9, signalCode: 9, nativeResult: 'signal' }],
     [collected, { termination: 'confirmed', exitCode: null }],
   ])('parses recorded show properties: %s', (stdout, expected) => {
     expect(parseShellUnitStatus(stdout)).toEqual(expected);
@@ -88,7 +88,7 @@ describe('async systemd status and command path', () => {
     const abort = new AbortController();
     const outcome = await waitForUnitTermination('test.service', 80, { signal: abort.signal, exec,
       pollIntervalMs: 10, clock: () => clock, sleep: async (ms: number) => { clock += ms; } });
-    expect(outcome).toEqual({ termination: 'confirmed', exitCode: 0 });
+    expect(outcome).toEqual({ termination: 'confirmed', exitCode: 0, nativeResult: 'success' });
     expect(exec).toHaveBeenCalledTimes(3);
     for (const call of exec.mock.calls) {
       expect(path.isAbsolute(call[0])).toBe(true);
@@ -155,7 +155,7 @@ describe('async systemd status and command path', () => {
     const { root, binary } = stubConductorClientEnv();
     const exec = vi.fn(async () => ({ stdout: success }));
     expect(await waitForUnitTermination('test.service', 100, { exec }))
-      .toEqual({ termination: 'confirmed', exitCode: 0 });
+      .toEqual({ termination: 'confirmed', exitCode: 0, nativeResult: 'success' });
     expect(exec).toHaveBeenCalledOnce();
     const [invoked, args, options]: any[] = exec.mock.calls[0];
     expect(invoked).toBe(resolveSystemdClient('systemctl'));

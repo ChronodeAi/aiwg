@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // @ts-ignore - ESM import
-import { planDirectWorkerLaunch, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
+import { planDirectWorkerLaunch, settleDirectWorker, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import path from 'node:path';
@@ -149,6 +149,13 @@ describe('standalone recovery transition summaries', () => {
       }
       expect(summaries).toHaveBeenCalledTimes(3);
       expect(breaker.listenerCount('transition')).toBe(0);
+      expect(breaker.reset('quota:shared')).toEqual({ ok: true });
+      const resumed = await planDirectWorkerLaunch({ ...options, memoryMaxGb: 4,
+        isolation: { mode: 'systemd-unit', reason: 'synthetic manager' }, proposeUnit: () => 'operator-resumed',
+        spawn: ((binary: string) => ({ status: 0, stdout: path.basename(binary) === 'systemctl' ? '4242\n' : '', stderr: '', error: null })) as never });
+      expect(resumed).toMatchObject({ launched: true, mode: 'systemd-unit' });
+      await settleDirectWorker(resumed.admission, { kind: 'succeeded', confirmedStop: true });
+      expect(breaker.getState('quota:shared').state).toBe('closed');
     } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
   });
 });

@@ -16,7 +16,7 @@ import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuit
 import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
-import { probeWorkerInstallation, registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
 import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
@@ -130,7 +130,7 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
   });
 
-  it('T-OG-22 recovers an endpoint-free installation via its bounded local CLI probe then exactly one real canary', async () => {
+  it('T-OG-22 blocks endpoint-free recovery with actionable intervention until an operator resets the scope', async () => {
     const f = await setup();
     const inputs = workerResolutionFixture();
     const adapter = inputs.snapshot.registry.providers.codex.workerAdapter!;
@@ -150,10 +150,12 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
       buildInvocation: async (input: any) => ({ argv: [f.request.executable, driver.fixtureCli, '--model', input.selected.model,
         '--final-output', input.finalPath], stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
       extractFinal: (text: string) => { try { return JSON.parse(text).result ?? null; } catch { return null; } } };
-    const probe = vi.fn(options => probeWorkerInstallation(driver, f.request, options));
-    registerWorkerRecoveryCapabilities(localDriver, { probeInstallation: probe,
+    registerWorkerRecoveryCapabilities(localDriver, {
       parseWorkerAttemptFinal: (output: any, options: any) => driver.parseWorkerAttemptFinal(output, { ...options, format: 'jsonl' }) });
     const launcher = new SessionLauncher();
+    const summaries = vi.fn();
+    launcher.on('recovery-transition', summaries);
+    let dispatches = 0;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No upstream request allowed'));
     vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', f.config);
     const launch = async (n: number, onDispatch = async () => {}) => {
@@ -170,6 +172,7 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
         launchIsolated: async ({ command, args, cwd, onDispatchCommit }: any) => {
           await onDispatchCommit();
+          dispatches++;
           await onDispatch();
           return { mode: 'degraded', child: spawn(command, args, { cwd, detached: true,
             env: f.request.environment, stdio: ['ignore', 'pipe', 'pipe'] }) };
@@ -181,17 +184,20 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
       await unlink(f.request.executable);
       for (let n = 0; n < 3; n++) await expect(launch(n)).resolves.toMatchObject({ errorCode: 'ENOENT', attemptOutcome: 'failed' });
       expect(breaker.getState(scopeKey).state).toBe('open');
-      expect(probe).not.toHaveBeenCalled();
       await copyNode(f.packageRoot);
       time = 120_000;
-      const result = await launch(3, async () => {
-        expect(breaker.getState(scopeKey).state).toBe('canary');
-        expect(breaker.admit({ invocationId: 'second-canary', scopeKeys: [scopeKey] }).ok).toBe(false);
-      });
+      await expect(launch(3)).rejects.toMatchObject({ code: 'RECOVERY_OPERATOR_INTERVENTION',
+        message: expect.stringContaining('probe-profile-unavailable; restore a qualified scope-relevant probe') });
+      expect(breaker.getState(scopeKey).state).toBe('operator-intervention');
+      expect(summaries.mock.calls.at(-1)?.[0]).toMatchObject({ scopeKey, to: 'operator-intervention',
+        summary: expect.stringContaining('then reset this scope') });
+      expect(dispatches).toBe(3);
+      expect(breaker.reset(scopeKey)).toEqual({ ok: true });
+      const result = await launch(4);
       expect(result.attemptOutcome).toBe('succeeded');
-      expect(probe).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ timeoutMs: 5000, maxOutputBytes: 65_536 }));
       expect(breaker.getState(scopeKey).state).toBe('closed');
-      expect(breaker.snapshot().attemptsObserved).toBe(5); // three failures, one probe, one canary
+      expect(dispatches).toBe(4);
+      expect(breaker.snapshot().attemptsObserved).toBe(4);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(await readdir(f.root)).not.toContain('.aiwg');
     } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }

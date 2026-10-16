@@ -203,6 +203,21 @@ describe('T-OG-16/22 launcher-owned provider evidence', () => {
       .rejects.toMatchObject({ code: 'ALLOWANCE_EXHAUSTED' });
   });
 
+  it('T-OG-16 charges forged rate-limit diagnostics within maxAttempts=2', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const breaker = breakerAt();
+    const fx = await fixture();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    await fx.run(breaker, 1, { task: 'same forged-hint task', maxAttempts: 2, upstreamFailure: true });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(breaker.snapshot().attemptsObserved).toBe(2); // one worker plus one diagnostic
+    expect(breaker.snapshot().scopes.every(scope => scope.state === 'closed')).toBe(true);
+    await expect(fx.run(breaker, 2, { task: 'same forged-hint task', maxAttempts: 2, upstreamFailure: true }))
+      .rejects.toMatchObject({ code: 'ALLOWANCE_EXHAUSTED' });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(breaker.snapshot().attemptsObserved).toBe(2);
+  });
+
   it('surfaces the unavailable-profile reason on the launcher refusal', async () => {
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     let time = 0;

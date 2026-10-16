@@ -2110,7 +2110,10 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       await recoveryModule.observeLauncherRecoveryOutcome({ invocation, result, failureHint,
         installation: drivers[invocation.selected.cli]?.qualification?.installation, breaker: admission.breaker,
         timeoutMs: () => Math.min(10_000, recoveryDeadlineAtMs - admission.breaker.nowMs()),
-        beforeRequest: async () => !registry.get(entry.invocationId)?.cancelRequested });
+        beforeRequest: async () => !registry.get(entry.invocationId)?.cancelRequested,
+        onDispatch: () => recoveryModule.chargeDirectWorkerDiagnostic(admission, {
+          deadlineAtMs: recoveryDeadlineAtMs, nowMs: admission.breaker.nowMs,
+          isCancelled: () => !!registry.get(entry.invocationId)?.cancelRequested }) });
       settleRecovery({ ...recoveryModule.classifyAttemptForSettlement(invocation, result, admission),
         confirmedStop: result.confirmedStop });
     };

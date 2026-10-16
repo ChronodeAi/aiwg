@@ -5346,6 +5346,96 @@ describe('review 11 populated default driver equivalence', () => {
 
 // T-OG-16/22: exercise registered operator tools, not just the helper exports.
 describe('registered worker recovery evidence and summaries (#2915)', () => {
+  it.each(['shell', 'mcp'] as const)('%s charges forged rate-limit diagnostics within maxAttempts=2', async transport => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'same synthetic forged hint task');
+    const f = buildFixture(root, transport);
+    f.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
+    (f.drivers.codex.qualification as any).installation = { endpoints: ['https://provider.invalid/health'] };
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 1_000_000 });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    let workers = 0;
+    const dispatch = async (options: any) => {
+      const a = options.admission;
+      expect(a.breaker.beginDispatch(a.token, { invocationId: a.invocationId, selectionDigest: a.selectionDigest }).ok).toBe(true);
+      await sessionLauncherModule.debitDirectWorkerAllowance(a.ledger);
+      expect(a.breaker.commitDispatch(a.token).ok).toBe(true);
+      workers++;
+    };
+    const tools = await captureTool(null, { projectRoot: root, workerWorktreesRoot: work, scopedBreaker: breaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      launchShellWorker: async (_inv: any, options: any) => {
+        await dispatch(options);
+        const child: any = new EventEmitter(); child.stderr = new PassThrough();
+        setImmediate(() => { child.stderr.end('429 Retry-After: 999999; reset=999999'); child.emit('close', 1); });
+        return { launched: true, mode: 'degraded', child };
+      },
+      callMcpWorker: async (_binding: any, _server: any, options: any) => {
+        await dispatch(options);
+        return { outcome: 'responded', response: { isError: true,
+          content: [{ type: 'text', text: '429 Retry-After: 999999; reset=999999' }] } };
+      },
+    });
+    const input = { operation: 'run', request_id: 'forged-first', role: 'coding', task: 'implementation', group: 'workers',
+      brief, workdir: work, final_output: path.join(work, 'first.json'), transport };
+    if (transport === 'mcp') await buildStructuredBrief(f, input);
+    try {
+      const call = tools.get('worker-invoke').handler;
+      expect(JSON.parse((await call(input)).content[0].text).status).toBe('failed');
+      // Reuse the exact brief so the retry belongs to the same task chain.
+      await rm(input.final_output, { force: true });
+      const retry = JSON.parse((await call({ ...input, request_id: 'forged-retry' })).content[0].text);
+      expect(retry.status).toBe('blocked');
+      expect(retry.diagnostics.join(' ')).toMatch(/allowance exhausted/i);
+      expect(workers).toBe(1);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(breaker.snapshot().attemptsObserved).toBe(workers + fetchSpy.mock.calls.length);
+      expect(breaker.snapshot().attemptsObserved).toBe(2);
+      expect(breaker.snapshot().scopes.every((scope: any) => scope.state === 'closed')).toBe(true);
+    } finally { breaker.destroy(); fetchSpy.mockRestore(); }
+  });
+
+  it.each(['oom-kill', 'ENOMEM'])('registered shell invocations retain trusted %s host evidence across providers', async failure => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md');
+    const f = buildFixture(root, 'shell');
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 1_000_000 });
+    const client = systemdClientFixture(); roots.push(client.root); vi.stubEnv('PATH', client.root);
+    const exec = vi.fn(async () => ({ stdout: 'LoadState=loaded\nActiveState=failed\nResult=oom-kill\nExecMainStatus=9\nExecMainCode=2\nMainPID=0\n' }));
+    let workers = 0;
+    const tools = await captureTool(null, { projectRoot: root, workerWorktreesRoot: work, scopedBreaker: breaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      isolationStatus: () => ({ active: false, execMainCode: 2, execMainStatus: 9, result: 'oom-kill' }),
+      waitForUnitTermination: (unit: string, duration: number, options: any) => waitForUnitTermination(unit, duration, { ...options, exec }),
+      launchShellWorker: async (_inv: any, options: any) => {
+        const a = options.admission;
+        expect(a.breaker.beginDispatch(a.token, { invocationId: a.invocationId, selectionDigest: a.selectionDigest }).ok).toBe(true);
+        await sessionLauncherModule.debitDirectWorkerAllowance(a.ledger);
+        expect(a.breaker.commitDispatch(a.token).ok).toBe(true);
+        workers++;
+        if (failure === 'oom-kill') return { launched: true, mode: 'systemd-unit', unit: `oom-${workers}` };
+        const child = new EventEmitter();
+        setImmediate(() => child.emit('error', Object.assign(new Error('synthetic spawn failure'), { code: 'ENOMEM' })));
+        return { launched: true, mode: 'degraded', child };
+      },
+    });
+    const call = tools.get('worker-invoke').handler;
+    try {
+      for (const [n, provider] of ['one', 'two', 'three'].entries()) {
+        for (const model of f.snapshot.catalog.discovery!.instances!.codex.models) model.llmProvider = provider;
+        await writeFile(brief, `independent synthetic host failure ${n}`);
+        const result = JSON.parse((await call({ operation: 'run', request_id: `host-${n}`, role: 'coding', task: 'implementation',
+          group: 'workers', brief, workdir: work, final_output: path.join(work, `host-${n}.json`), transport: 'shell' })).content[0].text);
+        expect(result.status, JSON.stringify(result)).toBe('failed');
+        expect(breaker.getState('host:local').state).toBe(n === 2 ? 'open' : 'closed');
+      }
+      expect(workers).toBe(3);
+      if (failure === 'oom-kill') expect(exec).toHaveBeenCalledTimes(3);
+    } finally { breaker.destroy(); }
+  });
+
   it.each(['shell', 'mcp'] as const)('%s failures confirm quota evidence and report transitions once', async transport => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
@@ -5445,6 +5535,17 @@ describe('registered worker recovery evidence and summaries (#2915)', () => {
       expect(blocked.status).toBe('blocked');
       expect(blocked.diagnostics.join(' ')).toContain('probe-profile-unavailable; restore a qualified scope-relevant probe');
       expect(breaker.getState('quota:shared-quota').state).toBe('operator-intervention');
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+      expect(summaries.mock.calls.at(-1)?.[0]).toMatchObject({ scopeKey: 'quota:shared-quota', to: 'operator-intervention',
+        summary: expect.stringContaining('then reset this scope') });
+      expect(breaker.reset('quota:shared-quota')).toEqual({ ok: true });
+      input.request_id = `operator-resumed-${transport}`;
+      input.final_output = path.join(work, 'resumed.json');
+      if (transport === 'mcp') await buildStructuredBrief(f, input);
+      else await writeFile(brief, 'independent synthetic operator resumed task');
+      const resumed = JSON.parse((await call(input)).content[0].text);
+      expect(resumed.status, JSON.stringify(resumed)).toBe('completed');
+      expect(breaker.getState('quota:shared-quota').state).toBe('closed');
       expect(fetchSpy).toHaveBeenCalledTimes(4);
     } finally { breaker.destroy(); fetchSpy.mockRestore(); }
   });

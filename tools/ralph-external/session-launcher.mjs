@@ -768,7 +768,8 @@ async function launchOneWorker(owner, options) {
       timeoutMs: () => Math.min(10_000, dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? performance.now())),
       beforeRequest: async () => {
         try { checkDispatchGuard(dispatchGuard); return true; } catch { return false; }
-      } });
+      },
+      onDispatch: () => chargeDirectWorkerDiagnostic(admission, dispatchGuard) });
     await settleLedger(classifyAttemptForSettlement(invocation, result,
       { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
     // #2915 review 6 (finding 6, "changed disabled behavior"): origin/main's
@@ -3409,6 +3410,7 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
     const reserved = breaker.admit({ invocationId: probeId, scopeKeys, selectionDigest, purpose: 'probe' });
     if (reserved.ok) {
       let probeLedger = null;
+      let probeDispatched = false;
       let probeOutcome = { kind: 'uncertain', confirmedStop: true };
       try {
         if (taskChainDigest == null || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
@@ -3426,7 +3428,7 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
         const began = breaker.beginDispatch(reserved.token, { invocationId: probeId, selectionDigest });
         if (!began.ok) throw new Error(began.reason);
         const { runRecoveryProbe } = await import('./lib/recovery-probe.mjs');
-        const result = await runRecoveryProbe({ driver: drivers[cli], invocation, scopeKeys: reserved.token.canaryKeys,
+        const result = await runRecoveryProbe({ driver: drivers[cli], invocation,
           timeoutMs: Math.min(breaker.policy.probeTimeoutMs, reserved.token.deadlineMs - breaker.nowMs(),
             dispatchGuard?.deadlineAtMs == null ? Infinity : dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? Date.now())), maxOutputBytes: breaker.policy.probeMaxOutputBytes,
           onDispatch: async () => {
@@ -3435,9 +3437,10 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
             checkDispatchGuard(dispatchGuard);
             const committed = breaker.commitDispatch(reserved.token);
             if (!committed.ok) throw new Error(committed.reason);
+            probeDispatched = true;
           } });
-        probeDiagnostic = { reason: result.reason, operatorIntervention: result.operatorIntervention === true, ...(result.retainedPath ? { retainedPath: result.retainedPath, invocationId: probeId } : {}) };
-        probeOutcome = { kind: result.success ? 'succeeded' : 'failed',
+        probeDiagnostic = { reason: result.reason, operatorIntervention: result.operatorIntervention === true };
+        probeOutcome = { kind: probeDispatched ? (result.success ? 'succeeded' : 'failed') : 'uncertain',
           relevant: result.relevant === true, evidenceSource: 'launcher', retryAfterSeconds: result.retryAfterSeconds ?? null,
           confirmedStop: result.termination === 'confirmed' };
       } catch (error) {
@@ -3525,6 +3528,36 @@ async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocat
   // the breaker's own frozen token fields, never against this object.
   return { gated: true, breaker, token: admission.token, quotaAccount: resolvedQuotaAccount, installationQualifier: resolvedInstallationQualifier,
     ledger, invocationId, selectionDigest, ledgerDiagnostic, startedAtMs };
+}
+
+/** Charge a diagnostic at its request boundary against the worker's task chain.
+ * Its own reservation counts the request without attributing task failure to
+ * any shared scope or competing with an already admitted canary. */
+export async function chargeDirectWorkerDiagnostic(admission, dispatchGuard) {
+  if (!admission?.gated || !admission.ledger) throw new Error('Diagnostic requires remaining task allowance');
+  _requireLedgerHandleState(admission.ledger);
+  checkDispatchGuard(dispatchGuard);
+  const invocationId = `${admission.invocationId}:diagnostic:${randomUUID()}`;
+  const reserved = admission.breaker.admit({ invocationId, purpose: 'probe' });
+  if (!reserved.ok) throw new Error('Diagnostic recovery reservation refused');
+  let ledger;
+  let dispatched = false;
+  try {
+    ledger = await reserveDirectWorkerAllowance({ captureRoot: admission.ledger.captureRoot,
+      taskChainDigest: admission.ledger.taskChainDigest, maxAttempts: admission.ledger.maxAttempts, invocationId });
+    const began = admission.breaker.beginDispatch(reserved.token, { invocationId, selectionDigest: null });
+    if (!began.ok) throw new Error(began.reason);
+    checkDispatchGuard(dispatchGuard);
+    await debitDirectWorkerAllowance(ledger);
+    checkDispatchGuard(dispatchGuard);
+    const committed = admission.breaker.commitDispatch(reserved.token);
+    if (!committed.ok) throw new Error(committed.reason);
+    dispatched = true;
+  } finally {
+    if (dispatched) admission.breaker.settle(reserved.token, { kind: 'succeeded', confirmedStop: true });
+    else admission.breaker.abortDispatch(reserved.token);
+    if (ledger) await refundDirectWorkerAllowance(ledger);
+  }
 }
 
 /**

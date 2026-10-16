@@ -168,9 +168,15 @@ describe('T-OG-22 production probe and canary cumulative allowance', () => {
       }
       expect(summaries).toHaveBeenCalledTimes(reports);
       expect(globalThis.fetch).not.toHaveBeenCalled();
-      const unused = await reserveDirectWorkerAllowance({ taskChainDigest: admissionOptions.taskChainDigest,
-        invocationId: 'unused', maxAttempts: 2 });
-      await debitDirectWorkerAllowance(unused);
+      expect(breaker.reset('quota:shared')).toEqual({ ok: true });
+      const resumed = await admitDirectWorker({ ...admissionOptions, invocationId: 'operator-resumed', maxAttempts: 2 });
+      expect(resumed.refused).toBeUndefined();
+      expect(breaker.beginDispatch(resumed.token, { invocationId: resumed.invocationId, selectionDigest: resumed.selectionDigest }).ok).toBe(true);
+      await debitDirectWorkerAllowance(resumed.ledger);
+      expect(breaker.commitDispatch(resumed.token).ok).toBe(true);
+      await settleDirectWorker(resumed, { kind: 'succeeded', evidenceSource: 'launcher', confirmedStop: true });
+      expect(breaker.getState('quota:shared').state).toBe('closed');
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally { breaker.destroy(); }
   });
 

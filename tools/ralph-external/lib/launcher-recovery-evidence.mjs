@@ -19,10 +19,10 @@ export function launcherRecoveryEvidence(result) {
  * check only an endpoint already authorized by installation qualification.
  * HEAD sends no task, credentials or response body and never follows redirects.
  * Only upstream failure hints warrant this check; hints never attest an outage.
- * beforeRequest checks the remaining task deadline; refusal sends no request.
+ * beforeRequest checks the remaining task deadline; onDispatch charges allowance.
  */
 export async function observeLauncherRecoveryOutcome({ invocation, result, installation, breaker,
-  failureHint = '', beforeRequest, fetchImpl = globalThis.fetch, wallNowMs = Date.now, timeoutMs = 10_000 } = {}) {
+  failureHint = '', beforeRequest, onDispatch, fetchImpl = globalThis.fetch, wallNowMs = Date.now, timeoutMs = 10_000 } = {}) {
   if (!result || result.attemptOutcome !== 'failed' || result.cancelled) return;
   const backend = invocation?.selected?.inferenceProvider;
   if (HOST_ERRORS.has(result.errorCode) || HOST_RESULTS.has(result.nativeResult)) {
@@ -44,7 +44,7 @@ export async function observeLauncherRecoveryOutcome({ invocation, result, insta
     const requestTimeoutMs = remaining();
     if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) return;
     const observed = await runRecoveryProbe({ driver: { qualification: { installation } }, invocation: invocation ?? { transport: 'shell' },
-      timeoutMs: Math.min(10_000, requestTimeoutMs), maxOutputBytes: 65_536, fetchImpl, wallNowMs });
+      timeoutMs: Math.min(10_000, requestTimeoutMs), maxOutputBytes: 65_536, onDispatch, fetchImpl, wallNowMs });
     if (observed.reason === 'probe-rate-limited') {
       observations.set(result, { reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher',
         retryAfterSeconds: observed.retryAfterSeconds });
