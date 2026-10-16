@@ -29,9 +29,9 @@ const okSpawn = (binary: string) => (path.basename(binary) === 'systemd-run'
   : { status: 0, stdout: '255\n', error: null });
 
 describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () => {
-  it('never spawns when the host-resource gate blocks on synthetic over-threshold signals', () => {
+  it('never spawns when the host-resource gate blocks on synthetic over-threshold signals', async () => {
     let spawnCalls = 0;
-    const outcome = planDirectWorkerLaunch({
+    const outcome = await planDirectWorkerLaunch({
       name: 'blocked-demo', memoryMaxGb: 4, command: '/usr/bin/fixture-worker',
       config: dispatchOnConfig, live: hotLive,
       spawn: (() => { spawnCalls += 1; throw new Error('must not spawn: gate must refuse launch first'); }) as never,
@@ -42,9 +42,9 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
     expect(spawnCalls).toBe(0);
   });
 
-  it('is a no-op pass-through when worker_dispatch is off (legacy behaviour), regardless of host signals', () => {
+  it('is a no-op pass-through when worker_dispatch is off (legacy behaviour), regardless of host signals', async () => {
     let spawnCalls = 0;
-    const outcome = planDirectWorkerLaunch({
+    const outcome = await planDirectWorkerLaunch({
       name: 'legacy', memoryMaxGb: 2, command: '/usr/bin/fixture-worker', cwd: '/tmp/work', logFile: '/tmp/work/worker.log',
       config: { parallelism: { worker_dispatch: false } }, live: hotLive,
       isolation: { mode: 'systemd-unit', reason: 'fake' }, proposeUnit: () => 'aiwg-worker-legacy-1',
@@ -61,9 +61,9 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
     expect(spawnCalls).toBeGreaterThan(0);
   });
 
-  it('launches through systemd-run only after a passing dispatch gate, reusing its result as the launch gate', () => {
+  it('launches through systemd-run only after a passing dispatch gate, reusing its result as the launch gate', async () => {
     const calls: string[][] = [];
-    const outcome = planDirectWorkerLaunch({
+    const outcome = await planDirectWorkerLaunch({
       name: 'demo', memoryMaxGb: 4, command: '/usr/bin/fixture-worker', args: ['--role', 'coding'],
       cwd: '/tmp/work', logFile: '/tmp/work/worker.log',
       config: dispatchOnConfig, live: okLive,
@@ -81,8 +81,8 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
     expect(launchCall).toContain('MemorySwapMax=0');
   });
 
-  it('refuses a silent unconfined launch on a passing gate without a reachable systemd user manager', () => {
-    const outcome = planDirectWorkerLaunch({
+  it('refuses a silent unconfined launch on a passing gate without a reachable systemd user manager', async () => {
+    const outcome = await planDirectWorkerLaunch({
       name: 'degraded-demo', memoryMaxGb: 1, command: '/usr/bin/fixture-worker',
       config: dispatchOnConfig, live: okLive,
       spawn: (() => { throw new Error('spawn ENOENT: no systemd-run in this fixture'); }) as never,
@@ -91,17 +91,17 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
     expect((outcome as any).diagnostic).toContain('allowDegraded');
   });
 
-  it('detects isolation itself (no injected isolation) and still never spawns on a blocked gate', () => {
-    const outcome = planDirectWorkerLaunch({
+  it('detects isolation itself (no injected isolation) and still never spawns on a blocked gate', async () => {
+    const outcome = await planDirectWorkerLaunch({
       name: 'real-detect', memoryMaxGb: 1, command: '/usr/bin/fixture-worker',
       config: dispatchOnConfig, live: hotLive, spawn: okSpawn as never,
     });
     expect(outcome).toMatchObject({ launched: false, blocked: true });
   });
 
-  it('samples free disk on the worker worktree by default, failing closed without live signals', () => {
+  it('samples free disk on the worker worktree by default, failing closed without live signals', async () => {
     const seen: string[] = [];
-    const outcome = planDirectWorkerLaunch({
+    const outcome = await planDirectWorkerLaunch({
       name: 'disk-demo', memoryMaxGb: 1, command: '/usr/bin/fixture-worker', cwd: '/tmp/work',
       config: dispatchOnConfig,
       readers: {

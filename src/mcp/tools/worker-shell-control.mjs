@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
@@ -41,7 +42,8 @@ export function parseShellUnitStatus(stdout) {
     || !/^\d+$/.test(fields.MainPID ?? '')) {
     throw new Error('worker status unavailable: missing or invalid systemd properties');
   }
-  if (!['inactive', 'failed'].includes(fields.ActiveState) || fields.MainPID !== '0') return uncertain();
+  if (!['inactive', 'failed'].includes(fields.ActiveState) || fields.MainPID !== '0'
+    || !['1', '2', '3'].includes(fields.ExecMainCode)) return uncertain();
   const signaled = ['2', '3'].includes(fields.ExecMainCode);
   return { termination: 'confirmed', exitCode: fields.Result === 'success' && !signaled
     ? Number(fields.ExecMainStatus) : Number(fields.ExecMainStatus) || 1,
@@ -50,9 +52,9 @@ export function parseShellUnitStatus(stdout) {
 
 export async function waitForUnitTermination(unit, deadlineMs, { signal, pollIntervalMs = 2000,
   exec = execFileAsync, sleep = (ms, abortSignal) => delay(ms, undefined, { signal: abortSignal }),
-  clock = Date.now } = {}) {
+  clock = () => performance.now(), deadlineAtMs } = {}) {
   if (typeof unit !== 'string' || !/^[A-Za-z0-9:_.@-]+$/.test(unit)) throw new Error('Worker isolation requires a unit-safe unit name');
-  const deadline = clock() + deadlineMs;
+  const deadline = Math.min(deadlineAtMs ?? Infinity, clock() + deadlineMs);
   while (!signal?.aborted && clock() < deadline) {
     try {
       const { stdout } = await execCanonicalSystemctl(exec,
@@ -86,7 +88,8 @@ export async function waitForUnitTermination(unit, deadlineMs, { signal, pollInt
  * after leader reap to limit (not eliminate) the PGID reuse race. */
 export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermination,
   stopUnit = defaultStopShellUnit, killUnit = defaultKillShellUnit, graceMs,
-  onConfirmed, platform = process.platform, recheckMaxAttempts = 6, recheckDelayMs = 250 }) {
+  onConfirmed, platform = process.platform, recheckMaxAttempts = 6, recheckDelayMs = 250,
+  nowMs = () => performance.now() }) {
   let closed = false;
   let exitCode = null;
   let signalCode = null;
@@ -101,11 +104,21 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
   let resolveClose;
   const probes = new Set();
   const child = launch.child;
-  const ownedGroup = platform !== 'win32' && launch.ownedGroup && child?.pid;
+  const ownedGroup = platform !== 'win32' && launch.ownedGroup;
   const closeProof = new Promise(resolve => { resolveClose = resolve; });
 
+  function safeGroupTarget() {
+    if (!Number.isSafeInteger(child?.pid) || child.pid <= 1 || child.pid === process.pid) return false;
+    if (platform !== 'linux') return true;
+    try {
+      const stat = readFileSync('/proc/self/stat', 'utf8');
+      const pgid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[2]);
+      return Number.isSafeInteger(pgid) && child.pid !== pgid;
+    } catch { return false; }
+  }
   function groupGone() {
     if (!ownedGroup) return true;
+    if (!safeGroupTarget()) return false;
     try { process.kill(-child.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
   }
   function confirm(outcome) {
@@ -155,10 +168,10 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
       abort.abort(); // cancel a losing poll or execFile, including its sleep
     }
   }
-  async function waitStopped(ms) {
+  async function waitStopped(ms, deadline) {
     if (confirmed) return confirmed;
     if (launch.mode === 'systemd-unit') {
-      const outcome = await bounded(signal => waitForUnit(launch.unit, ms, { signal }), ms);
+      const outcome = await bounded(signal => waitForUnit(launch.unit, ms, { signal, ...(deadline ? { deadlineAtMs: deadline.at, clock: deadline.now } : {}) }), ms);
       return outcome.termination === 'confirmed' ? confirm(outcome) : outcome;
     }
     if (closed && groupGone()) return confirm({ termination: 'confirmed', exitCode, signalCode });
@@ -184,6 +197,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
         return !!result.ok;
       }
       if (ownedGroup) {
+        if (!safeGroupTarget()) return false;
         if ((closed || child.exitCode != null || child.signalCode != null) && groupSwept) return false;
         if (signalName === 'SIGKILL') groupSwept = true;
         process.kill(-child.pid, signalName);
@@ -205,15 +219,15 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
       if (stopTask) return delivery;
       stopped = true;
       const phaseMs = launch.mode === 'systemd-unit' ? Math.max(1000, graceMs) : graceMs;
-      let phaseEnd = Date.now() + phaseMs;
+      let phaseEnd = nowMs() + phaseMs;
       delivery = signal('SIGTERM', phaseMs);
       stopTask = (async () => {
         await delivery;
-        let outcome = await waitStopped(Math.max(0, phaseEnd - Date.now()));
+        let outcome = await waitStopped(Math.max(0, phaseEnd - nowMs()));
         if (outcome.termination !== 'confirmed') {
-          phaseEnd = Date.now() + phaseMs;
+          phaseEnd = nowMs() + phaseMs;
           await signal('SIGKILL', phaseMs);
-          outcome = await waitStopped(Math.max(0, phaseEnd - Date.now()));
+          outcome = await waitStopped(Math.max(0, phaseEnd - nowMs()));
         }
         if (outcome.termination !== 'confirmed') recheck();
         return outcome;
@@ -224,16 +238,16 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
       await control.stop();
       return confirmed ?? (stopTask ? await stopTask : uncertain());
     },
-    wait: async deadlineMs => {
-      const deadline = Date.now() + deadlineMs;
+    wait: async (deadlineMs, { deadlineAtMs, nowMs: waitNow = nowMs } = {}) => {
+      const deadline = Math.min(deadlineAtMs ?? Infinity, waitNow() + deadlineMs);
       let outcome;
       do {
-        outcome = await waitStopped(Math.max(0, deadline - Date.now()));
+        outcome = await waitStopped(Math.max(0, deadline - waitNow()), { at: deadline, now: waitNow });
         if (confirmed) return confirmed;
         // Observation failure alone never mandates a stop. Avoid a hot loop
         // when an injected/failed observer returns immediately.
-        if (!outcome.timedOut) await Promise.race([closeProof, delay(Math.min(50, Math.max(0, deadline - Date.now())))]);
-      } while (!disposed && !outcome.timedOut && Date.now() < deadline);
+        if (!outcome.timedOut) await Promise.race([closeProof, delay(Math.min(50, Math.max(0, deadline - waitNow())))]);
+      } while (!disposed && !outcome.timedOut && waitNow() < deadline);
       if (disposed) return uncertain();
       return { ...await control.stopAndConfirm(), timedOut: true };
     },

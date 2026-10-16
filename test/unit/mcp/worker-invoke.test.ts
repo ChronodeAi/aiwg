@@ -11,29 +11,53 @@
  */
 import { createHash } from 'node:crypto';
 import { spawnSync, spawn as nodeSpawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
+import { buildShellStopControl, waitForUnitTermination } from '../../../src/mcp/tools/worker-shell-control.mjs';
+import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../src/mcp/tools/subsystems.mjs';
 
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+// Frozen 8c812250d6 reference -- see that file's own header. Baseline
+// equivalence tests only; never a production import.
 // @ts-expect-error — .mjs untyped
-import * as workerInvoke from '../../../src/mcp/tools/worker-invoke.mjs';
+import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
 
-const {
+let recoveryGraph = await loadRecoveryModuleGraph();
+let { workerInvoke, launcher: sessionLauncherModule, isolation: workerIsolation } = recoveryGraph;
+let { registerWorkerRecoveryCapabilities } = recoveryGraph.installation;
+let { resetInProcessAllowanceLedger } = sessionLauncherModule;
+let {
   createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
   registerWorkerInvokeToolset: registerProductionToolset,
   WORKERS_TOOLSET_NAME, withServerQueue, __testOnlyMcpServerQueueCount,
   ChildProcessTransport, MAX_MCP_FRAME_BYTES,
 } = workerInvoke as any;
+
+// The bridge imports readers lazily. A reset in an earlier test invalidates
+// their private WeakMaps even when a top-level namespace is still retained.
+// Reacquire registration, readers and cleanup together before building drivers.
+beforeEach(async () => {
+  recoveryGraph = await loadRecoveryModuleGraph();
+  ({ workerInvoke, launcher: sessionLauncherModule, isolation: workerIsolation } = recoveryGraph);
+  ({ registerWorkerRecoveryCapabilities } = recoveryGraph.installation);
+  ({ resetInProcessAllowanceLedger } = sessionLauncherModule);
+  ({ createInvocationRegistry, resolveServerAllowDegraded, resolveServedProjectRoot,
+    registerWorkerInvokeToolset: registerProductionToolset, WORKERS_TOOLSET_NAME,
+    withServerQueue, __testOnlyMcpServerQueueCount } = workerInvoke);
+});
 
 /** A fixed, generous `readLiveHostResources()`-shaped sample (see
  * `tools/scripts/resource-preflight.mjs`), injected via the real
@@ -59,12 +83,23 @@ function registerWorkerInvokeToolset(server: any, options: Record<string, unknow
   return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
 }
 
+async function registerRecoveryCapabilities(driver: object, capabilities: { canVerifyAttempt?: boolean }) {
+  return registerWorkerRecoveryCapabilities(driver, capabilities);
+}
+
 const digest = (v: unknown) => `sha256:${createHash('sha256').update(JSON.stringify(v)).digest('hex')}`;
 const roots: string[] = [];
 // Some sandbox hosts refuse native child stdio pipes (EPERM). Framing unit
 // tests still run there; the supervised-process check needs actual pipes.
 const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8', timeout: 10000 }).stdout === 'ok';
-afterEach(async () => { vi.unstubAllEnvs(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
+// #2915 review 6 (finding 3): `run()` now actually debits the shared
+// in-process allowance ledger (previously it only reserved, never
+// charged), so distinct test cases that resolve to the SAME task-chain
+// digest (same role/task/group/brief content) would otherwise accumulate
+// real charges against each other across this file's many gated runs —
+// reset between tests so each test's own admission/allowance assertions
+// stay independent, exactly like `roots` is cleaned up below.
+afterEach(async () => { vi.unstubAllEnvs(); resetInProcessAllowanceLedger(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
 
 async function tempRoot() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
@@ -374,6 +409,10 @@ describe('production registration path pins the served root at registration time
       // against the stubbed `process.cwd()` (what a lazy resolution at first
       // request would have used) — resolution proceeds all the way to the
       // injected stop point instead of failing on path containment.
+      //
+      // The audited main baseline treats `loadWorkerInputs` throwing here as a
+      // PROVEN pre-spawn failure -- nothing launched, so capacity is freed
+      // (`blocked`), never left LIVE as `uncertain` forever.
       expect(body.status).toBe('blocked');
       expect(body.termination).toBe('confirmed');
       expect(body.diagnostics).toContain('stop-before-real-project-load');
@@ -598,6 +637,178 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(registry.canStart()).toBe(false); // capacity still held — NOT freed via markTerminal
   });
 
+  // #2915 P0: a pre-spawn exception from the scoped-recovery admission path
+  // (bad breaker state, a thrown import, a malformed `canLaunch` result) is
+  // NOT an uncertain worker outcome — no worker ever ran. It must fail
+  // CLOSED as an ordinary blocked/refused launch, freeing the capacity
+  // reservation, never falling through to the generic uncertain/LIVE path
+  // (#2915 review: a thrown admission error produced `status:'uncertain'`
+  // with one live slot retained and `canStart:false`, despite no launch).
+  it('a pre-spawn scoped-recovery admission error fails CLOSED and frees capacity, never leaking a live slot (#2915 P0)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const throwingBreaker = { canLaunch: () => { throw new Error('synthetic: admission exploded'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work, scopedBreaker: throwingBreaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'p0-admission-throw', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.termination).toBe('confirmed');
+    // Capacity was FREED (markTerminal), not leaked as a live "uncertain" slot.
+    expect(registry.canStart()).toBe(true);
+  });
+
+  // No worker exists yet: release both capacity and the private output reservation.
+  it('a pre-prefix-decision exception matches current main (blocked/confirmed, capacity released)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work,
+      // Throws well before the recovery gate is decided -- the data run()
+      // needs to even compute `recoveryGateEnabled` is never loaded.
+      loadWorkerInputs: async () => { throw new Error('synthetic: pre-admission data load failure'); },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'p2b-prespawn-throw', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.termination).toBe('confirmed');
+    expect(registry.canStart()).toBe(true);
+    expect(existsSync(finalOutput)).toBe(false);
+  });
+
+  // #2915 final (step 6, disabled-dispatch-is-inert): with
+  // `parallelism.worker_dispatch` off (or absent), `admitDirectWorker` must
+  // be completely inert — byte-for-byte what dispatch looked like before
+  // this feature existed — even with an injected breaker whose `admit`
+  // would throw if ever reached. Enabled, the same breaker IS reached and
+  // its admission result is honored.
+  it('disabled-dispatch-is-inert: admitDirectWorker never constructs/consults the breaker when the global flag is false or unset', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached while disabled'); } };
+    const invocation = { selected: { cli: 'codex', inferenceProvider: 'openai' } };
+    const off = await sessionLauncher.admitDirectWorker({ gateEnabled: false, config: { parallelism: { worker_dispatch: false } },
+      invocation, invocationId: 'inv-1', scopedBreaker: throwingBreaker });
+    expect(off).toEqual({ gated: false });
+    const absent = await sessionLauncher.admitDirectWorker({ gateEnabled: false, config: undefined,
+      invocation, invocationId: 'inv-2', scopedBreaker: throwingBreaker });
+    expect(absent).toEqual({ gated: false });
+    const refusingBreaker = { admit: () => ({ ok: false, blockedBy: ['installation:codex'] }) };
+    const on = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
+      invocation, invocationId: 'inv-3', scopedBreaker: refusingBreaker });
+    expect(on).toMatchObject({ gated: true, refused: { blockedBy: ['installation:codex'] } });
+  });
+
+  // #2915 follow-up: a CLI whose adapter can never verify a final (Warp,
+  // Copilot — `canVerifyAttempt: false`) is never eligible for
+  // recovery-breaker gating, even with dispatch enabled and a breaker that
+  // would otherwise admit.
+  it('a CLI that cannot verify any final is never eligible for recovery-breaker gating (not-gated)', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const admittingBreaker = { admit: () => { throw new Error('must never be reached: this CLI is not-gated'); } };
+    const invocation = { selected: { cli: 'warp', inferenceProvider: 'warp' } };
+    const result = await sessionLauncher.admitDirectWorker({ gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
+      invocation, invocationId: 'inv-warp-1', scopedBreaker: admittingBreaker, drivers: { warp: registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false }) } });
+    expect(result).toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+  });
+
+  // #2915 step 4: `retry_of` has no server-owned capture-root
+  // configuration on this bridge yet; it must refuse explicitly, before
+  // any capacity is reserved, rather than silently ignoring the conductor's
+  // retry declaration.
+  it('retry_of refuses explicitly before any capacity is reserved (MCP capture-root not yet configured)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'retry-of-refused', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      retry_of: '11111111-1111-1111-1111-111111111111',
+    });
+    expect(result.isError).toBe(true);
+    expect(registry.canStart()).toBe(true); // no capacity was ever reserved
+  });
+
+  // #2915 review 4 (finding 9), review 5 (finding 1c): the transport byte
+  // bound must be enforced BEFORE parsing -- an unterminated frame past the
+  // bound must refuse, never grow the buffer without limit -- AND the
+  // design's literal 10 MiB value, not merely "some bound". Review 5 found
+  // the prior bound was 11 MiB (one full MiB unbounded) and that overflow
+  // was not terminal: a later well-formed frame on the same connection still
+  // drained and reached `onmessage` normally.
+  it('ChildProcessTransport refuses an unterminated frame past the MCP transport byte bound, at the literal 10 MiB design value, terminally', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport, __testOnlyMcpTransportMaxBufferBytes: maxBytes } =
+      await import('../../../src/mcp/tools/worker-invoke.mjs');
+    // The design value is 10 MiB exactly -- not "whatever the constant
+    // currently says". A regression back to 11 MiB (or any other value)
+    // must fail this assertion, not just whatever `maxBytes` happens to be.
+    expect(maxBytes).toBe(10 * 1024 * 1024);
+    const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
+    const fakeChild: any = {
+      stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }), stderr: fakeStderr,
+      stdin: Object.assign(new EventEmitter(), { destroy: vi.fn() }), kill: vi.fn(() => true),
+      once(event: string, _handler: any) { return this; },
+    };
+    const transport = new (ChildProcessTransport as any)(fakeChild);
+    const errors: Error[] = [];
+    const messages: any[] = [];
+    transport.onerror = (error: Error) => errors.push(error);
+    transport.onmessage = (message: any) => messages.push(message);
+    await transport.start();
+    // One unterminated chunk already past the bound -- never newline-framed.
+    fakeChild.stdout.emit('data', Buffer.alloc(maxBytes + 1, 0x41));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: 'OG_WORKER_MCP_FRAME_TOO_LARGE' });
+    expect(fakeChild.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(fakeChild.stdout.destroy).toHaveBeenCalledOnce();
+    expect(transport._buffer).toBeUndefined(); // never retained past the bound
+    // Terminal, not transient: a SUBSEQUENT, perfectly well-formed
+    // newline-terminated JSON-RPC response arriving on the SAME connection
+    // must never reach `onmessage` -- the overflow refusal must outlive the
+    // one oversized chunk, closing off this transport for good rather than
+    // silently resuming on the next clean frame.
+    fakeChild.stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })}\n`));
+    expect(messages).toHaveLength(0);
+    expect(errors).toHaveLength(1); // terminal refusal reports once, even after more bytes
+  });
+
   // #2892 F2: cancellation must reference the worker's OWN actual in-flight
   // JSON-RPC request id (captured at the transport layer), never a
   // caller-supplied value with no relationship to the wire protocol
@@ -749,6 +960,81 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #2915 round 8 review 8 (C3): cancellation requested while admission/
+// preparation is still in flight must prevent the spawn, enforced at TWO
+// independent layers -- `defaultCallMcpWorkerGated`'s own pre-launch
+// `isCancelled()` check, AND the `dispatchGuard` (`{ deadlineAtMs, nowMs,
+// isCancelled }`) threaded all the way into the REAL `planDirectWorkerLaunch`
+// -> `launchIsolatedWorker` dispatch-commit hook. Verified directly (by
+// temporarily disabling each independently) that EITHER layer alone
+// catches this probe; the test below exercises the real pipeline end to
+// end, never a unit test of `checkDispatchGuard` in isolation.
+// ---------------------------------------------------------------------------
+describe('dispatch-commit hook enforces cancellation via dispatchGuard through the real launch pipeline (#2915 round 8 review 8, C3)', () => {
+  // MCP transport (attached, degraded-or-systemd-unit both fine -- the
+  // native MCP launch path always resolves a `memoryMaxGb` default, unlike
+  // the shell path, so this is host-isolation-mode-independent): proves the
+  // real pipeline refused the spawn, not merely that the outward result
+  // happens to read 'cancelled' -- the fixture worker's own record file is
+  // asserted to never exist at all, meaning the worker process was never
+  // started, not merely that its response was discarded.
+  it('cancellation requested while admission/preparation is still in flight prevents the real worker process from ever being spawned', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    const configPath = path.join(root, 'fixture-config.json');
+    await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
+    const f = buildFixture(root, 'mcp');
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+      // No `callMcpWorker` override -- this exercises the REAL
+      // `defaultCallMcpWorkerGated` -> `defaultLaunchMcpWorkerProcess` ->
+      // `planDirectWorkerLaunch` -> `launchIsolatedWorker` pipeline,
+      // including its dispatch-commit hook.
+    });
+    const call = tools.get('worker-invoke').handler;
+    const runPromise = call({
+      operation: 'run', request_id: 'dispatchguard-cancel-1', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    const [pendingEntry] = registry.values().filter((e: any) => e.requestId === 'dispatchguard-cancel-1');
+    // Races the real admission/brief-preparation chain (several real awaits:
+    // validatedRequest, loadWorkerInputs, resolveWorkerInvocation, the
+    // ledger reserve inside admitDirectWorker, the MCP structured-brief
+    // read/validate) with this single, nearly synchronous `cancel()` call --
+    // by the time the leaf dispatch-commit hook actually runs, deep inside
+    // the real `launchIsolatedWorker`, `cancelRequested` is already true.
+    await call({ operation: 'cancel', invocation_id: pendingEntry.invocationId });
+    const runBody = JSON.parse((await runPromise).content[0].text);
+    // 'blocked' with this exact diagnostic is the dispatch-commit hook's
+    // own refusal shape (`checkDispatchGuard` -> `_runDispatchCommit`'s
+    // `{ launched: false, blocked: true, failures: [{ signal:
+    // 'dispatch-commit', ... }] }` -> `describeGateFailures`) -- proving
+    // this was caught AT the leaf dispatch boundary, not merely that the
+    // outward result happened to read non-'completed' for some unrelated
+    // reason.
+    expect(runBody.status, JSON.stringify(runBody)).toBe('blocked');
+    expect(runBody.diagnostics.join(' ')).toMatch(/cancelled before process start/);
+    expect(runBody.cancelRequested).toBe(true);
+    // The real fixture worker process was never spawned at all -- it would
+    // have recorded at least a 'call' event into this file otherwise.
+    await expect(readFile(recordPath, 'utf8')).rejects.toThrow();
+  }, 20000);
+});
+
+// ---------------------------------------------------------------------------
 // #2892 M4: seenRequestIds (replay protection) is bounded, never evicting a
 // request id whose invocation is still live/uncertain/retained-terminal.
 // ---------------------------------------------------------------------------
@@ -845,6 +1131,47 @@ describe('invocation registry (#2892 defect 3)', () => {
     expect(registry.get(entry.invocationId)).toBeDefined();
     clock = 1500;
     expect(registry.get(entry.invocationId)).toBeUndefined();
+  });
+
+  // #2915 round 8 review 8 (C7): "reconciliation neither completes
+  // capacity cleanup nor survives registry eviction" -- the mapping from
+  // invocation id to its breaker must be retained while the breaker still
+  // reports an unresolved stop for it, independent of the ordinary
+  // terminal TTL/over-capacity sweep, so `status`/`reconcile_stopped`
+  // never answer "Unknown invocation_id" for a marker that demonstrably
+  // still exists.
+  it('retains a terminal entry past its TTL while its breaker still reports an unresolved stop, and evicts it once resolved', () => {
+    let clock = 0;
+    const registry = createInvocationRegistry({ maxActive: 10, maxRetained: 128, ttlMs: 1000, now: () => clock });
+    let unresolved = true;
+    const fakeBreaker = { hasUnresolvedStop: (_id: string) => unresolved };
+    const entry = registry.create({ requestId: 'unresolved-ttl-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: fakeBreaker });
+    registry.markTerminal(entry.invocationId, { status: 'uncertain', termination: 'uncertain' });
+    clock = 1500; // past the TTL
+    expect(registry.get(entry.invocationId), 'retained while unresolved, past its own TTL').toBeDefined();
+    unresolved = false; // reconciled
+    expect(registry.get(entry.invocationId), 'evicted once resolved and past TTL').toBeUndefined();
+  });
+
+  it('retains an unresolved entry even when it would otherwise be the oldest evicted under maxRetained pressure', () => {
+    let clock = 0;
+    const registry = createInvocationRegistry({ maxActive: 50, maxRetained: 3, ttlMs: Number.MAX_SAFE_INTEGER, now: () => clock });
+    const fakeBreaker = { hasUnresolvedStop: () => true };
+    const unresolvedEntry = registry.create({ requestId: 'unresolved-capacity-1' });
+    registry.update(unresolvedEntry.invocationId, { recoveryBreaker: fakeBreaker });
+    registry.markTerminal(unresolvedEntry.invocationId, { status: 'uncertain', termination: 'uncertain' });
+    clock += 1;
+    // Fill past maxRetained with ordinary (resolved) terminal entries --
+    // the unresolved entry above is strictly the OLDEST, so it would be
+    // the very first evicted by the ordinary oldest-terminal-first sweep.
+    for (let i = 0; i < 10; i++) {
+      const entry = registry.create({ requestId: `ordinary-${i}` });
+      registry.markTerminal(entry.invocationId, { status: 'completed', termination: 'confirmed' });
+      clock += 1;
+    }
+    expect(registry.get(unresolvedEntry.invocationId), 'the unresolved entry survives despite being the oldest').toBeDefined();
+    expect(registry.size).toBeLessThanOrEqual(3 + 1); // the exemption is bounded to the one unresolved entry
   });
 
   it('refuses to start when live concurrency is at maxActive, independent of history', () => {
@@ -1089,6 +1416,123 @@ function closingChild(exitCode: number) {
   return child;
 }
 
+// #2915 review 6 (finding 3, "MCP and standalone planner never debit"):
+// `run()` previously reserved allowance through `admitDirectWorker` but
+// never called `debitDirectWorkerAllowance` — five fresh requests for the
+// same task chain with `maxAttempts: 1` each dispatched and completed
+// through the real queue/admission/launch pipeline. These regression
+// tests drive the real `run()` handler (via `registerWorkerInvokeToolset`)
+// end to end, proving only the first of five requests for the SAME task
+// chain actually reaches the injected launcher on both transports this
+// bridge supports.
+describe('allowance ledger debits at the actual dispatch boundary (#2915 review 6, finding 3)', () => {
+  it('five fresh shell-transport requests with maxAttempts 1 dispatch exactly one', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const f = buildFixture(root, 'shell');
+    f.snapshot.config.parallelism.retry = { maxAttempts: 1 };
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    let dispatches = 0;
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      // #2915 round 8 (D2): this stub stands in for the WHOLE
+      // `defaultLaunchShellWorker` -> `planDirectWorkerLaunch` ->
+      // `launchIsolatedWorker` chain, so it must itself drive the same
+      // `beginDispatch` -> debit -> `commitDispatch` bracket the real D2
+      // dispatch-commit hook performs immediately before a real process
+      // would start — otherwise this test's own replacement silently
+      // bypasses the ledger entirely, proving nothing about debiting at
+      // the real dispatch boundary.
+      launchShellWorker: async (invocation: any, options: any) => {
+        const admission = options?.admission;
+        if (admission?.gated) {
+          const began = admission.breaker.beginDispatch(admission.token,
+            { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+          if (!began.ok) return { launched: false, blocked: true, diagnostic: began.reason };
+          if (admission.ledger) {
+            const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+            await sessionLauncher.debitDirectWorkerAllowance(admission.ledger);
+          }
+          admission.breaker.commitDispatch(admission.token);
+        }
+        dispatches += 1;
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const bodies: any[] = [];
+    for (let n = 0; n < 5; n += 1) {
+      const finalPath = path.join(work, `final-shell-${n}.json`);
+      // Same role/task/group/brief every time -- the same task-chain digest,
+      // exactly the "same task, retried" shape the allowance ledger governs.
+      const result = await call({
+        operation: 'run', request_id: `ledger-shell-${n}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+      });
+      bodies.push(JSON.parse(result.content[0].text));
+    }
+    expect(dispatches).toBe(1);
+    expect(bodies[0].status, JSON.stringify(bodies[0])).toBe('completed');
+    for (const body of bodies.slice(1)) {
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(body.diagnostics.join(' ')).toMatch(/ALLOWANCE_EXHAUSTED/);
+    }
+  });
+
+  it('five fresh native-MCP requests with maxAttempts 1 dispatch exactly one', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.config.parallelism!.retry = { maxAttempts: 1 };
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: config } }),
+    };
+    // `resolveWorkerInvocation` itself refuses (OG_PIN_MISMATCH) unless a
+    // structured brief's own `output.resultPath` equals the REQUEST's
+    // `final_output` exactly -- so, unlike the shell-transport test above,
+    // every one of these 5 calls must reuse the SAME `final_output` (the
+    // SAME brief bytes, hence the SAME task-chain digest). `reserveFinalOutput`
+    // exclusively creates that path on request 1 and is never released on a
+    // 'completed' run (mcp transport never writes through `finalPath`
+    // itself); removing the empty placeholder before each later call
+    // isolates the one thing this test actually probes -- ledger admission
+    // -- from that unrelated path-reservation mechanism.
+    const finalOutput = path.join(work, 'final.json');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+    });
+    const call = tools.get('worker-invoke').handler;
+    const bodies: any[] = [];
+    for (let n = 0; n < 5; n += 1) {
+      if (n > 0) await rm(finalOutput, { force: true });
+      const result = await call({
+        operation: 'run', request_id: `ledger-mcp-${n}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      });
+      bodies.push(JSON.parse(result.content[0].text));
+    }
+    expect(bodies[0].status, JSON.stringify(bodies[0])).toBe('completed');
+    for (const body of bodies.slice(1)) {
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(body.diagnostics.join(' ')).toMatch(/ALLOWANCE_EXHAUSTED/);
+    }
+  }, 20000);
+});
+
 // ---------------------------------------------------------------------------
 // T-OG-17: real fake stdio MCP worker — success, isError, disconnect, and
 // two concurrent tasks sharing no model/workspace/output state. Routed
@@ -1164,7 +1608,8 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     }
     try {
       const body = JSON.parse((await invoke(root, '')).content[0].text);
-      expect(body.status).toBe('uncertain');
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(body.termination).toBe('confirmed');
       expect(body.diagnostics.join('; ')).toMatch(failure === 'overflow-load' ? /mocking a module|overflow module unavailable/ : /client construction failed/);
       expect(launch).not.toHaveBeenCalled();
     } finally {
@@ -1222,13 +1667,14 @@ setInterval(() => {}, 1000);
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
     };
     for (let i = 0; i < 6; i++) {
+      resetInProcessAllowanceLedger();
       const registry = createInvocationRegistry({ maxActive: 1 });
       let pid: number | undefined;
       try {
         const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
         pid = Number(await readFile(pidPath, 'utf8'));
         const body = JSON.parse(result.content[0].text);
-        expect(body.status).toBe('uncertain');
+        expect(body.status, JSON.stringify(body)).toBe('uncertain');
         expect(body.termination).toBe('uncertain');
         expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
         const [entry] = registry.values();
@@ -1377,6 +1823,48 @@ setInterval(() => {}, 1000);
     expect(body.termination).toBe('confirmed');
   }, 20000);
 
+  // #2915 review 5 ("Production/ownership/fault tests"): the former
+  // disabled-dispatch test called `admitDirectWorker` directly -- a unit
+  // test of the helper, never proving anything about the real `run()`
+  // bridge. Both `worker_dispatch: false` and `clis[cli].enabled: false`
+  // ALSO disable the models RESOLVER itself for that CLI (confirmed:
+  // probing `resolveWorkerInvocation` directly with this exact config
+  // returns "Installation is disabled" exclusions, never a launchable
+  // plan) -- so `run()` refuses at the resolver stage, well BEFORE it ever
+  // reaches admission. That is itself the proof this test names: the
+  // throwing breaker is unreachable not by luck, but because the SAME
+  // config field both the resolver and `admitDirectWorker`'s own per-CLI
+  // check consult keeps this CLI out of candidate selection entirely.
+  it('per-CLI disabled dispatch refuses at the resolver stage through the real run() bridge, never touching the recovery breaker', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = mcpFixture(root, config);
+    f.snapshot.config.parallelism!.clis = { codex: { enabled: false,
+      adapter: 'providers:codex', accountScope: 'fixture-account', quotaScope: 'fixture-quota' } };
+    await writeFile(briefPath, 'placeholder-before-structured-brief');
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached: codex is per-CLI disabled'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: `mcp-percli-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    // Blocked at the resolver, not by a caught admission exception: if the
+    // throwing breaker HAD been reached, `admitDirectWorker`'s own
+    // try/catch would surface "recovery admission failed closed: ..." in
+    // diagnostics instead of the resolver's own unresolved-plan diagnostic.
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(JSON.stringify(body.diagnostics ?? [])).not.toMatch(/recovery admission failed closed/);
+  }, 20000);
+
   it.skipIf(!supportsCapturedWorkerStdio || process.platform !== 'linux')('isError scenario: failed, confirmed termination (never parsed as success)', async () => {
     const root = await tempRoot();
     const config = path.join(root, 'fixture-config.json');
@@ -1505,6 +1993,53 @@ setInterval(() => {}, 1000);
     await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // tools/call was never reached
   }, 20000);
 
+  // #2915 round 8 review 8 (C2, "stop evidence remains incorrectly
+  // classified across production paths"): the reviewer's exact probe --
+  // schema drift discovered AFTER a real MCP worker SERVER process was
+  // spawned (connect + tools/list both completed) must never be reported
+  // as a confirmed stop merely because the RESULT LABEL is 'blocked'. The
+  // process really was dispatched; `resolveStopEvidence` must be consulted
+  // for real evidence (degraded isolation: never confirmed), not a
+  // hardcoded `confirmedStop: true`. Proven two ways: (1) the settled
+  // reservation is left with an unresolved stop marker
+  // (`breaker.hasUnresolvedStop`), and (2) with the scope already open
+  // (so this attempt is the half-open canary), a SECOND canary admission
+  // over the same scope is refused rather than being let through over the
+  // still-unconfirmed first attempt's descendants.
+  it('a post-spawn schema-drift refusal never confirms stop evidence, so a second canary is refused over the unresolved execution (#2915 round 8 review 8, C2)', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'schema-change' }));
+    // Build a REAL breaker whose 'installation:codex' scope is already
+    // OPEN (one trusted failure, past its cooldown) before this attempt --
+    // exactly `openedCanaryReservation`'s own opening step, below, so the
+    // schema-drift attempt below is admitted as the half-open CANARY
+    // (`token.canaryKeys.length > 0`), not an ordinary admission. A
+    // deterministic injected clock avoids any real wall-clock wait.
+    const breaker = new ScopedFailureBreaker({ policy: { cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = 1_000_000;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: 'opener-schema-drift', scopeKeys: ['installation:codex'] });
+    expect(opening.ok).toBe(true);
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    const result = await invoke(root, config, {}, { scopedBreaker: breaker, allowDegraded: true });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/schema/i);
+    // Minimal fix proof: the reservation is retained, UNRESOLVED -- never
+    // released as a confirmed stop merely because the outcome label was
+    // 'blocked'.
+    expect(breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+    // The exact reviewer probe: a second canary admission over the SAME
+    // scope is refused by the blocking marker, never admitted over the
+    // still-unresolved first attempt's descendants.
+    const second = breaker.admit({ invocationId: 'second-canary-schema-drift', scopeKeys: ['installation:codex'] });
+    expect(second.ok).toBe(false);
+    expect((second as any).blockedBy).toContain('installation:codex');
+  }, 20000);
+
   // Proves `gateInputs` makes the gate deterministic, not absent: the REAL
   // `checkWorkerDispatch` still runs on every call above (see the
   // describe-block comment); this overrides `HEALTHY_GATE_LIVE` with one
@@ -1522,6 +2057,121 @@ setInterval(() => {}, 1000);
     expect(body.status, JSON.stringify(body)).toBe('blocked');
     expect(body.diagnostics.join(' ')).toMatch(/avail-mem/);
     await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // worker process was never launched
+  }, 20000);
+
+  // #2915 review 5 ("a second worker over unresolved execution"): native
+  // MCP previously always received the resolved invocation's full
+  // `mcp.timeoutSeconds` (observed 900s in production), regardless of
+  // whether this attempt is the breaker's own bounded canary -- a hung
+  // canary's MCP call could then run arbitrarily long past the 300s window
+  // the breaker itself uses to decide a canary is overdue.
+  it('clips the native MCP call timeout to the admitted canary deadline instead of the full task timeoutSeconds', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    let capturedTimeoutSeconds: number | undefined;
+    const fakeBreaker: any = {
+      nowMs: () => Date.now(),
+      admit: () => ({ ok: true, token: { id: 'fake-canary', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: Date.now(), deadlineMs: Date.now() + 50 } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, {
+      scopedBreaker: fakeBreaker,
+      callMcpWorker: async (mcpBinding: any) => { capturedTimeoutSeconds = mcpBinding.timeoutSeconds; return { outcome: 'blocked', diagnostic: 'test-capture-only' }; },
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    // The fixture's own uncapped `mcp.timeoutSeconds` is 30 (buildFixture);
+    // a ~50ms-remaining canary must clip it to roughly 0.05s, never 30.
+    expect(capturedTimeoutSeconds).toBeDefined();
+    expect(capturedTimeoutSeconds!).toBeLessThan(1);
+    expect(capturedTimeoutSeconds!).toBeGreaterThanOrEqual(0);
+  }, 20000);
+
+  // #2915 round 8 critique (D5) / review 7 finding 4's last bullet: "run()
+  // clips the duration to remaining canary time, then defaultCallMcpWorker()
+  // adds that shortened duration to the original mint time, subtracting
+  // preparation time twice." The ONE absolute `deadlineAtMs` threaded to
+  // `callMcpWorker` must equal the canary token's own `deadlineMs` exactly —
+  // never re-derived (and thereby shrunk again) from `mintedAtMs` plus an
+  // already-clipped duration.
+  it('the ONE absolute deadline passed to callMcpWorker equals the canary token deadline exactly -- no double subtraction of preparation time', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    let capturedDeadlineAtMs: number | undefined;
+    const fixedDeadlineMs = Date.now() + 50;
+    const fakeBreaker: any = {
+      nowMs: () => Date.now(),
+      admit: () => ({ ok: true, token: { id: 'fake-canary-nodouble', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: Date.now(), deadlineMs: fixedDeadlineMs } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, {
+      scopedBreaker: fakeBreaker,
+      callMcpWorker: async (_mcpBinding: any, _server: any, options: any) => {
+        capturedDeadlineAtMs = options.deadlineAtMs;
+        return { outcome: 'blocked', diagnostic: 'test-capture-only' };
+      },
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(capturedDeadlineAtMs).toBe(fixedDeadlineMs);
+  }, 20000);
+
+  // #2915 review 5: a serialized/per-instance MCP queue may hold an
+  // already-admitted call long enough that its canary reservation's own
+  // deadline has since passed -- an expired admission must never launch,
+  // even though the registry-definition requalification (F5, above) alone
+  // would have let it through.
+  it('refuses a queued launch whose admission expired while waiting, instead of launching on a stale reservation', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'success' }));
+    const fakeBreaker: any = {
+      nowMs: () => 1_000_000,
+      admit: () => ({ ok: true, token: { id: 'already-expired', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: 500_000, deadlineMs: 700_000 } }),
+      settle: () => ({ ok: true }),
+    };
+    const result = await invoke(root, config, {}, { scopedBreaker: fakeBreaker });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/admission expired while queued/);
+    await expect(readFile(recordPath, 'utf8')).rejects.toThrow(); // worker process was never launched
+  }, 20000);
+
+  // #2915 review 6 (finding 4, "stop evidence on every settlement"): the
+  // same expired-while-queued admission above used to settle `uncertain`
+  // with no `confirmedStop` evidence at all -- for a CANARY reservation
+  // that already passed its own deadline (exactly this scenario), that
+  // leaves a PERMANENT blocking marker behind for an attempt that launched
+  // zero workers. Reproduced and fixed by passing `confirmedStop: true`
+  // from this exact "never launched" settlement.
+  it('settles with confirmedStop: true, proving zero dispatch for the same expired-while-queued admission', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    await writeFile(config, JSON.stringify({ recordPath, scenario: 'success' }));
+    const settledOutcomes: any[] = [];
+    const fakeBreaker: any = {
+      nowMs: () => 1_000_000,
+      admit: () => ({ ok: true, token: { id: 'expired-queued-4', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: 500_000, deadlineMs: 700_000 } }),
+      settle: (_token: any, outcome: any) => { settledOutcomes.push(outcome); return { ok: true }; },
+    };
+    const result = await invoke(root, config, {}, { scopedBreaker: fakeBreaker });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/admission expired while queued/);
+    expect(settledOutcomes).toHaveLength(1);
+    expect(settledOutcomes[0]).toMatchObject({ kind: 'uncertain', confirmedStop: true });
   }, 20000);
 });
 
@@ -1633,6 +2283,42 @@ describe('mcp transport requires a structured WorkerDirectBrief (#2892 F4)', () 
     // out from under an admission that proved it structured.
     expect(body.status, JSON.stringify(body)).toBe('failed');
     expect(body.diagnostics).toEqual(['OG_BRIEF_EVIDENCE_CONFLICT']);
+  });
+
+  // #2915 round 8 review 8 (A/D2 leftovers): a PRE-DISPATCH exit (here, the
+  // OG_BRIEF_NOT_STRUCTURED refusal above, which settles the admission
+  // before any launch) must still AWAIT `settleDirectWorker`'s returned
+  // promise and fold any diagnostic it carries into the result --
+  // `run()`'s own `captureSettlementPromise`/wrapper mechanism, verified
+  // here by spying on the real `settleDirectWorker` to resolve a
+  // synthetic refund-failure diagnostic string.
+  it('a pre-dispatch exit awaits settlement and surfaces its diagnostic in the result', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    await writeFile(briefPath, 'hello worker'); // plain text -- OG_BRIEF_NOT_STRUCTURED, pre-dispatch
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    const settle = vi.spyOn(sessionLauncherModule, 'settleDirectWorker')
+      .mockResolvedValue('synthetic allowance refund failed: injected for this test');
+    const tools = new Map<string, any>();
+    try {
+      await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+        projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      });
+      const call = tools.get('worker-invoke').handler;
+      const result = await call({
+        operation: 'run', request_id: 'f4-settlement-diagnostic', role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+      });
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('blocked');
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(body.diagnostics).toEqual(['OG_BRIEF_NOT_STRUCTURED', 'synthetic allowance refund failed: injected for this test']);
+    } finally {
+      settle.mockRestore();
+    }
   });
 });
 
@@ -2003,8 +2689,12 @@ describe('shell worker termination and launch preparation', () => {
     try {
       const pending = h.run();
       await waitFor(() => h.registry.values()[0]?.control != null);
-      const timerIndex = setTimer.mock.calls.findIndex(c => c[1] === 1000);
-      expect(timerIndex).toBeGreaterThanOrEqual(0);
+      // Preparation consumes part of the one-second absolute budget.
+      // Identify its longest pending timer, allowing fractional remaining ms.
+      const timerCalls = setTimer.mock.calls.map((call, index) => ({ ms: Number(call[1]), index }))
+        .filter(call => call.ms > 0 && call.ms <= 1000);
+      expect(timerCalls.length).toBeGreaterThan(0);
+      const timerIndex = timerCalls.reduce((longest, call) => call.ms > longest.ms ? call : longest).index;
       child.emit(event, event === 'error' ? new Error('lost observation') : 0);
       if (event === 'error') expect(child.kill).not.toHaveBeenCalled();
       const result = await pending;
@@ -2200,7 +2890,10 @@ setInterval(() => {}, 20);`);
         : { termination: 'uncertain', exitCode: null }, stopWorkerUnit: stop, killWorkerUnit: kill });
     await installJsonWorker(h);
     const result = await h.run();
-    expect(result.status).toBe('uncertain');
+    expect(result.status).toBe('blocked');
+    expect(result.termination).toBe('uncertain');
+    expect(h.registry.get(result.invocationId).terminalAt).toBeNull();
+    expect(h.registry.get(result.invocationId).control).not.toBeNull();
     expect(spawn.mock.calls.filter(c => c[0] === client.binary)).toHaveLength(1);
     expect(unit).not.toBe('');
     expect(stdinPath).not.toBe('');
@@ -2282,5 +2975,2326 @@ setInterval(() => {}, 20);`);
     expect(spawnAsync).not.toHaveBeenCalled();
     expect(h.registry.canStart()).toBe(true);
     await expect(stat(h.input.final_output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 review 5 ("a second worker over unresolved execution"): a hung
+// canary's execution must actually be stopped at its own deadline, never
+// merely reported as an unconfirmed timeout while it keeps running.
+// ---------------------------------------------------------------------------
+describe('bounded stop escalation on canary-deadline timeout (#2915 review 5)', () => {
+  it('terminateChildWithGrace resolves confirmed without SIGKILL when SIGTERM alone stops the child', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const signals: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signals.push(sig);
+      if (sig === 'SIGTERM') { child.exitCode = 0; child.signalCode = null; queueMicrotask(() => child.emit('exit')); }
+    };
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 20 });
+    expect(result).toEqual({ terminated: true });
+    expect(signals).toEqual(['SIGTERM']);
+  });
+
+  it('terminateChildWithGrace escalates to SIGKILL after the bounded grace window when SIGTERM alone does not stop the child', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const signals: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signals.push(sig);
+      if (sig === 'SIGKILL') { child.exitCode = null; child.signalCode = 'SIGKILL'; }
+    };
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result).toEqual({ terminated: true });
+  });
+
+  it('terminateChildWithGrace reports not terminated when neither signal produced an observable exit', async () => {
+    const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = () => {};
+    const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
+    expect(result).toEqual({ terminated: false });
+  });
+
+  it('shell stop control issues a stop and re-checks status once the deadline elapses, instead of returning an unconfirmed timeout unattended', async () => {
+    const { buildShellStopControl } = await import('../../../src/mcp/tools/worker-shell-control.mjs');
+    let active = true;
+    let stopCalls = 0;
+    const killUnit = vi.fn();
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'fake-unit' }, {
+      graceMs: 10, recheckMaxAttempts: 0,
+      waitForUnit: async () => active ? { termination: 'uncertain', exitCode: null, timedOut: true }
+        : { termination: 'confirmed', exitCode: 0 },
+      stopUnit: async () => { stopCalls += 1; active = false; return { ok: true }; },
+      killUnit,
+    });
+    try {
+      const result = await control.wait(10);
+      expect(stopCalls).toBe(1);
+      expect(killUnit).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ termination: 'confirmed', timedOut: true });
+    } finally { control.dispose(); }
+  });
+
+  it('shell stop control reports uncertain when the stop escalation does not actually stop the unit', async () => {
+    const { buildShellStopControl } = await import('../../../src/mcp/tools/worker-shell-control.mjs');
+    let stopCalls = 0;
+    const killUnit = vi.fn(async () => ({ ok: false }));
+    const control = buildShellStopControl({ launched: true, mode: 'systemd-unit', unit: 'fake-unit' }, {
+      graceMs: 10, recheckMaxAttempts: 0,
+      waitForUnit: async () => ({ termination: 'uncertain', exitCode: null, timedOut: true }),
+      stopUnit: async () => { stopCalls += 1; return { ok: false }; },
+      killUnit,
+    });
+    try {
+      const result = await control.wait(10);
+      expect(stopCalls).toBe(1);
+      expect(killUnit).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ termination: 'uncertain', timedOut: true });
+    } finally { control.dispose(); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 review 6 ("MCP-path findings"): false recovery after timeout, a
+// pre-spawn capacity leak on native-MCP requalification, one absolute MCP
+// deadline, stop evidence on every settlement, and disabled-dispatch
+// equivalence with origin/main.
+// ---------------------------------------------------------------------------
+
+describe('timeout is never treated as success, independent of exit status (#2915 review 6, finding 1)', () => {
+  it('a systemd-unit worker force-stopped at its own deadline with exitCode 0 settles failed, never completed, even with a strictly valid final claim', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async invocation => {
+        // The worker legitimately finished writing its final output right
+        // before the forced stop fired -- this is exactly the scenario a
+        // naive exitCode-based completion check would misclassify as a
+        // genuine success.
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'systemd-unit', unit: 'fake-unit-false-recovery' };
+      },
+      // Simulates the real `waitForUnitTermination`'s own deadline-stop
+      // escalation outcome: the unit was force-stopped at the deadline, and
+      // its retained systemd state happens to report a clean exit.
+      waitForUnitTermination: async () => ({ termination: 'confirmed', exitCode: 0, timedOut: true }),
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'false-recovery-timeout', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).not.toBe('completed');
+    expect(body.status, JSON.stringify(body)).toBe('failed');
+  });
+
+  // #2915 round 8 review 8 (C4): `timedOut` is a LATCH, set synchronously
+  // the instant the deadline timer fires, BEFORE starting the (async) stop
+  // escalation -- every completion path (including the `close` handler,
+  // which can race the escalation it triggered) must read this latched
+  // value, never recompute `now >= deadlineAt` from the clock. Reproduces
+  // review 7 finding 3 exactly: with the timeout callback already
+  // executing (SIGTERM already sent), a BACKWARD clock movement followed
+  // by a clean child `close` must still settle `failed`, never `completed`.
+  it('a degraded-mode timeout latch is immune to a backward clock step during stop escalation (#2915 round 8 review 8, C4)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    // A short-fused canary deadline (30ms) stands in for the task deadline
+    // so the timer fires almost immediately in real wall-clock time --
+    // `admission.token.deadlineMs` is the SMALLEST deadline candidate
+    // `continueGated` folds in (see its own doc comment), so this governs
+    // `deadlineMs` regardless of the fixture's much larger default task
+    // wallSeconds.
+    const breaker = new ScopedFailureBreaker({ policy: { canaryTimeoutMs: 30, cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = 1_000_000;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: 'opener-c4-latch', scopeKeys: ['installation:codex'] });
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    // The instant SIGTERM is delivered (the stop escalation genuinely
+    // starting), simulate the backward wall-clock movement and then a
+    // clean close racing the escalation -- both happen synchronously
+    // inside this one `kill()` call, so the test needs no extra real-time
+    // wait for a 5s grace window that never actually needs to elapse.
+    const signalsSent: string[] = [];
+    const child: any = new EventEmitter();
+    child.exitCode = null; child.signalCode = null;
+    child.kill = (sig: string) => {
+      signalsSent.push(sig);
+      if (sig === 'SIGTERM') {
+        clockNow -= 500_000;
+        // Matches real Node `ChildProcess` semantics: `exitCode` is set
+        // before `close` fires, so a LATER `terminateChildWithGrace` call
+        // against this same already-exited child (the descendant-stop
+        // evidence resolution below also attempts termination,
+        // best-effort) short-circuits immediately via its own `exited()`
+        // check instead of sending a real second SIGTERM/SIGKILL round.
+        queueMicrotask(() => { child.exitCode = 0; child.emit('close', 0); });
+      }
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work, scopedBreaker: breaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async (invocation: any) => {
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child };
+      },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'c4-backward-clock-latch', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const runBody = JSON.parse(result.content[0].text);
+    expect(signalsSent).toEqual(['SIGTERM']);
+    expect(runBody.status, JSON.stringify(runBody)).not.toBe('completed');
+    expect(runBody.status, JSON.stringify(runBody)).toBe('failed');
+  });
+});
+
+describe('native MCP pre-spawn requalification never leaks registry capacity (#2915 review 6, finding 2)', () => {
+  it.each(['never-began', undefined])('cleans the private output reservation after a pre-launch refusal (%s)', async dispatchState => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
+    f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio', command: 'never-launched' }) };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers', brief,
+      workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const callMcpWorker = vi.fn(async (_binding: any, _server: any, _options: any) => ({ outcome: 'blocked', diagnostic: 'pre-launch queue refusal', dispatchState }));
+    const tools = await captureTool(undefined, {
+      projectRoot: root, workerWorktreesRoot: work, registry, callMcpWorker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+    });
+    const result = await tools.get('worker-invoke').handler({ operation: 'run', request_id: 'queue-refusal',
+      role: 'coding', task: 'implementation', group: 'workers', brief, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body).toMatchObject({ status: 'blocked', termination: 'confirmed', diagnostics: ['pre-launch queue refusal'] });
+    expect(callMcpWorker).toHaveBeenCalledOnce();
+    expect(callMcpWorker.mock.calls[0][2].admission.gated).toBe(true);
+    expect(registry.canStart()).toBe(true);
+    expect(existsSync(finalOutput)).toBe(false);
+  });
+
+  it('a thrown mcpRegistry.get during requalification fails CLOSED (blocked) and frees capacity, instead of leaking a live uncertain slot', async () => {
+    const root = await tempRoot();
+    const config = path.join(root, 'fixture-config.json');
+    await writeFile(config, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'success' }));
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
+    let calls = 0;
+    let failFromCall = Infinity;
+    f.drivers.codex.mcpRegistry = {
+      get: async () => {
+        calls += 1;
+        if (calls > failFromCall) throw new Error('synthetic: registry lookup exploded during requalification');
+        return { name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+          args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: config } };
+      },
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    // `resolveWorkerInvocation`'s own mcp-profile check, then this bridge's
+    // own explicit admission fetch (`const mcpServer = await mcpRegistry.get(...)`
+    // in `run()`), must both succeed — only the THIRD call, native MCP's own
+    // requalification fetch inside `defaultCallMcpWorker`, throws.
+    failFromCall = calls + 2;
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: 'leak-2-requalify', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    // Capacity was FREED (markTerminal), not leaked as a live 'uncertain' slot.
+    expect(registry.canStart()).toBe(true);
+    expect(existsSync(finalOutput)).toBe(false);
+  }, 20000);
+});
+
+describe('one absolute MCP deadline across queue wait, connect, list and call (#2915 review 6, finding 3)', () => {
+  it('a native MCP call stage recomputes its timeout from the time actually remaining after a serialized queue wait, instead of a stale pre-queue snapshot', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const configPath = path.join(root, 'fixture-config.json');
+    // The worker never answers tools/call -- a stale/overlong timeout would
+    // make this test hang for that full stale duration instead of the
+    // freshly-recomputed, much smaller remaining budget.
+    await writeFile(configPath, JSON.stringify({ recordPath: path.join(root, 'record.jsonl'), scenario: 'stall' }));
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
+    f.profile.mcp.sessionIsolation = 'serialized';
+    let getCalls = 0;
+    f.drivers.codex.mcpRegistry = {
+      get: async () => {
+        getCalls += 1;
+        return { name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+          args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } };
+      },
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    // A canary admission minted at logical ms 0 with a 5000ms absolute
+    // canary window. The outer clip (computed BEFORE queueing, unaffected by
+    // this fix) reads `nowMs()` as 0 and so clips `mcpBinding.timeoutSeconds`
+    // to the full 5s remaining -- the STALE snapshot. While the real request
+    // is queued behind this test's own held task, the logical clock jumps to
+    // 4700: only ~300ms of the SAME absolute deadline remains by actual
+    // dispatch time, far less than the 5s stale snapshot and far less than
+    // the fixture's own 30s task timeout or the SDK's 60s connect/list
+    // default.
+    let nowValue = 0;
+    const fakeBreaker: any = {
+      nowMs: () => nowValue,
+      admit: () => ({ ok: true, token: { id: 'one-deadline-canary', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: ['installation:codex'],
+        mintedAtMs: 0, deadlineMs: 5000 } }),
+      settle: () => ({ ok: true }),
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work, scopedBreaker: fakeBreaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      gateInputs: { live: HEALTHY_GATE_LIVE },
+    });
+    const call = tools.get('worker-invoke').handler;
+    let releaseHold: () => void = () => {};
+    const holdPromise = new Promise<void>(resolve => { releaseHold = resolve; });
+    const held = withServerQueue('fixture-server', () => holdPromise);
+    const baselineCalls = getCalls; // buildStructuredBrief's own probe already ran
+    const startedAt = Date.now();
+    const resultPromise = call({
+      operation: 'run', request_id: 'one-deadline-3', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp',
+    });
+    // Wait for the OUTER admission phase (resolver's own mcp-profile check,
+    // then this bridge's explicit admission fetch) to complete -- the outer
+    // clip has by now already read `nowMs()` at 0 -- before simulating the
+    // queue-wait's elapsed time and releasing the hold.
+    await waitFor(() => getCalls >= baselineCalls + 2);
+    nowValue = 4700;
+    releaseHold();
+    await held;
+    const result = await resultPromise;
+    const elapsedMs = Date.now() - startedAt;
+    const body = JSON.parse(result.content[0].text);
+    expect(elapsedMs, JSON.stringify(body)).toBeLessThan(3000);
+    expect(body.status, JSON.stringify(body)).toBe('uncertain');
+  }, 20000);
+});
+
+describe('stop evidence on every settlement — zero-dispatch and confirmed-termination settlements never leave a permanent blocking marker (#2915 review 6, finding 4)', () => {
+  // #2915 round 8 review 8 (C2): degraded direct-child close is UNRESOLVED
+  // for descendants -- the shared `resolveStopEvidence` never treats a
+  // confirmed exit of this bridge's own direct child (degraded isolation
+  // has no cgroup to prove any descendant process it spawned has also
+  // stopped) as sufficient stop evidence, even though the attempt itself
+  // settles `failed` normally. This replaces the PRE-round-8 assumption
+  // (reflected in this test's own former name) that any confirmed close
+  // implied `confirmedStop: true` -- that was exactly the review 8 defect
+  // ("degraded direct-child close becomes confirmedStop:true").
+  it('a confirmed DEGRADED shell completion with an invalid final claim settles failed with confirmedStop: false (never confirms descendant stop without a cgroup)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const settledOutcomes: any[] = [];
+    const fakeBreaker: any = {
+      nowMs: () => Date.now(),
+      admit: () => ({ ok: true, token: { id: 'confirmed-invalid-claim', breaker: fakeBreaker, invocationId: 'fake-inv',
+        coveringKeys: ['installation:codex'], canaryKeys: [], mintedAtMs: Date.now(), deadlineMs: Infinity } }),
+      settle: (_token: any, outcome: any) => { settledOutcomes.push(outcome); return { ok: true }; },
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work, scopedBreaker: fakeBreaker,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async invocation => {
+        // Malformed final output -- the strict JSONL parser must reject it
+        // even though the process itself exited cleanly and confirmed.
+        await writeFile(invocation.finalPath, 'not-valid-json-or-jsonl\n');
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'confirmed-invalid-claim', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('failed');
+    expect(settledOutcomes).toHaveLength(1);
+    expect(settledOutcomes[0]).toMatchObject({ kind: 'failed', confirmedStop: false });
+  });
+});
+
+describe('disabled-dispatch equivalence with origin/main on the MCP-path recovery mechanisms (#2915 review 6, section C)', () => {
+  it('disabled systemd timeout uses current main stop escalation and abortable observation', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    await writeFile(path.join(root, 'brief.md'), 'hello');
+    const f = buildFixture(root, 'shell');
+    // A CLI whose adapter can never verify a final is never eligible for
+    // recovery-breaker gating (`admitDirectWorker` returns `{ gated: false }`)
+    // WITHOUT disabling the models resolver itself (unlike
+    // `worker_dispatch: false` / `clis[cli].enabled: false`, both of which
+    // the resolver ALSO treats as "disabled", producing no launchable plan
+    // at all) -- so this is the one deterministic way to reach a genuinely
+    // not-gated `run()` while still exercising the real launch/wait path.
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+    let capturedOptions: any;
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async () => ({ launched: true, mode: 'systemd-unit', unit: 'fake-unit-disabled' }),
+      waitForUnitTermination: async (_unit, _deadlineMs, options) => { capturedOptions = options; return { termination: 'uncertain', exitCode: null, timedOut: true }; },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    await call({
+      operation: 'run', request_id: '6a-systemd-disabled', role: 'coding', task: 'implementation', group: 'workers',
+      brief: path.join(root, 'brief.md'), workdir: work, final_output: path.join(work, 'final.json'), transport: 'shell',
+    });
+    // Both continuations use cancellable observations from the audited control.
+    expect(capturedOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(capturedOptions.signal.aborted).toBe(true);
+  });
+
+  it('degraded TERM-then-KILL escalation protects both disabled and gated dispatch', async () => {
+    for (const gated of [false, true]) {
+      const child: any = new EventEmitter();
+      child.pid = 12345; child.exitCode = null;
+      child.kill = vi.fn((signal: string) => {
+        if (signal === 'SIGKILL') queueMicrotask(() => child.emit('close', 0));
+        return true;
+      });
+      const control = buildShellStopControl({ launched: true, mode: 'degraded', child }, { graceMs: 1 });
+      const result = await control.wait(0, gated ? { deadlineAtMs: 0, nowMs: () => 0 } : undefined);
+      expect(child.kill.mock.calls.map((args: any[]) => args[0])).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(result).toMatchObject({ termination: 'confirmed', exitCode: 0, timedOut: true });
+      control.dispose();
+    }
+  });
+
+  it('the audited 10 MiB frame bound also stops disabled-dispatch connections', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport, __testOnlyMcpTransportMaxBufferBytes: maxBytes } =
+      await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
+    const fakeChild: any = {
+      stdout: new EventEmitter(), stderr: fakeStderr, stdin: new EventEmitter(),
+      once(_event: string, _handler: any) { return this; },
+    };
+    const transport = new (ChildProcessTransport as any)(fakeChild, { terminate: () => ({ termination: 'uncertain' }) });
+    fakeChild.stdout.destroy = vi.fn(); fakeChild.stdin.destroy = vi.fn();
+    const errors: Error[] = [];
+    await transport.start();
+    transport.onerror = (error: Error) => errors.push(error);
+    // Recovery eligibility cannot disable the audited stdout byte budget.
+    fakeChild.stdout.emit('data', Buffer.alloc(maxBytes + 1, 0x41));
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as any).code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
+    expect(transport._buffer).toBeUndefined();
+    fakeChild.stdout.emit('data', Buffer.from('another frame\n'));
+    expect(errors).toHaveLength(1);
+  });
+
+  it('disabled-dispatch pre-launch failure releases capacity and output like current main', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    f.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
+    // Not gated (see the systemd test above for why `canVerifyAttempt: false`
+    // is the deterministic route), but `admission` IS still reached and set
+    // to `{ gated: false }` before this throw -- unlike the pre-existing
+    // "pre-spawn exception before any launch attempt" test (#2915 review 5,
+    // finding 2b), which throws before `admission` is ever assigned at all
+    // and correctly keeps its own blocked/uncertain split.
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+    // `resolveWorkerInvocation` itself calls `mcpRegistry.get` once (its own
+    // mcp-profile check, `src/serve/worker-invocation.ts`), BEFORE `run()`
+    // ever reaches admission — that call, and `buildStructuredBrief`'s own
+    // probe-resolve, must both succeed. Only the SECOND call within the
+    // real request — `run()`'s own explicit
+    // `mcpServer = await mcpRegistry.get(...)` fetch, strictly BEFORE
+    // `spawnAttempted` is set — must throw, so this reaches the generic
+    // catch-all with `admission` already resolved to `{ gated: false }`.
+    let calls = 0;
+    let failFromCall = Infinity;
+    f.drivers.codex.mcpRegistry = {
+      get: async () => {
+        calls += 1;
+        if (calls > failFromCall) throw new Error('synthetic: registry.get exploded before any launch');
+        return { name: 'fixture-server', type: 'stdio' as const, command: 'fixture-only' };
+      },
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    failFromCall = calls + 1;
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: '6c-disabled', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.termination).toBe('confirmed');
+    expect(registry.canStart()).toBe(true);
+    expect(existsSync(finalOutput)).toBe(false);
+  });
+
+  it('injected launch/call callbacks receive no admission property when not gated, matching origin/main (#2915 review 6, finding 6d)', async () => {
+    const rootShell = await tempRoot();
+    const workShell = path.join(rootShell, 'work'); await mkdir(workShell, { recursive: true });
+    await writeFile(path.join(rootShell, 'brief.md'), 'hello');
+    const fShell = buildFixture(rootShell, 'shell');
+    registerWorkerRecoveryCapabilities(fShell.drivers.codex, { canVerifyAttempt: false });
+    let capturedShellOptions: any;
+    const shellTools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { shellTools.set(name, { config, handler }); } }, {
+      projectRoot: rootShell, workerWorktreesRoot: workShell,
+      loadWorkerInputs: async () => ({ snapshot: fShell.snapshot, drivers: fShell.drivers }),
+      launchShellWorker: async (_invocation, options) => { capturedShellOptions = options; return { launched: true, mode: 'degraded', child: closingChild(0) }; },
+      now: () => new Date(fShell.now),
+    });
+    await shellTools.get('worker-invoke').handler({
+      operation: 'run', request_id: '6d-shell', role: 'coding', task: 'implementation', group: 'workers',
+      brief: path.join(rootShell, 'brief.md'), workdir: workShell, final_output: path.join(workShell, 'final.json'), transport: 'shell',
+    });
+    expect(capturedShellOptions).toBeDefined();
+    expect('admission' in capturedShellOptions).toBe(false);
+
+    const rootMcp = await tempRoot();
+    const workMcp = path.join(rootMcp, 'work'); await mkdir(workMcp, { recursive: true });
+    const briefMcp = path.join(rootMcp, 'brief.md');
+    const finalMcp = path.join(workMcp, 'final.json');
+    const fMcp = buildFixture(rootMcp, 'mcp');
+    fMcp.snapshot.models.defaults.workerSelection!.dataClasses = { 'local-only': {} };
+    registerWorkerRecoveryCapabilities(fMcp.drivers.codex, { canVerifyAttempt: false });
+    fMcp.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'fixture-only' }) };
+    await buildStructuredBrief(fMcp, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefMcp, workdir: workMcp, final_output: finalMcp, transport: 'mcp' });
+    let capturedMcpOptions: any;
+    const mcpTools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { mcpTools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: rootMcp, allowDegraded: true, workerWorktreesRoot: workMcp,
+      loadWorkerInputs: async () => ({ snapshot: fMcp.snapshot, drivers: fMcp.drivers }),
+      callMcpWorker: async (_binding, _server, options) => { capturedMcpOptions = options; return { outcome: 'blocked', diagnostic: 'test-capture-only' }; },
+      now: () => new Date(fMcp.now),
+    });
+    await mcpTools.get('worker-invoke').handler({
+      operation: 'run', request_id: '6d-mcp', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefMcp, workdir: workMcp, final_output: finalMcp, transport: 'mcp',
+    });
+    expect(capturedMcpOptions).toBeDefined();
+    expect('admission' in capturedMcpOptions).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): disabled dispatch equals main through the REAL launch
+// pipeline -- never through an injected `launchShellWorker`/`callMcpWorker`
+// test double, which would hide exactly the defect being regression-tested
+// (review 7 finding 13's second bullet names `defaultLaunchMcpWorkerProcess`
+// and `planDirectWorkerLaunch` directly: "omitting the disabled admission
+// loses CLI identity before the flat planner. It performs a new admission").
+// ---------------------------------------------------------------------------
+describe('disabled dispatch equals main through the real launch pipeline (#2915 round 8, D6)', () => {
+  it('canVerifyAttempt:false completes through the REAL defaultLaunchMcpWorkerProcess/planDirectWorkerLaunch pipeline, never consulting the recovery breaker (review 7 finding 13, second bullet)', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const recordPath = path.join(root, 'record.jsonl');
+    const configPath = path.join(root, 'fixture-config.json');
+    await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
+    const f = buildFixture(root, 'mcp');
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
+    };
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    // Before the fix, `planDirectWorkerLaunch`'s STANDALONE admission branch
+    // independently re-derived eligibility with no knowledge of
+    // `canVerifyAttempt`, and called `admit()` on whatever breaker is in
+    // scope -- at reservation capacity, that returned `blocked` where
+    // baseline always launched. This breaker THROWS if `admit` is ever
+    // called at all, so reaching it (even successfully) would still fail
+    // this run with a different diagnostic ("recovery admission failed
+    // closed"), proving the standalone admission path is never entered.
+    const throwingBreaker = { admit: () => { throw new Error('must never be reached: canVerifyAttempt:false is not-gated'); } };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      scopedBreaker: throwingBreaker,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({ operation: 'run', request_id: `d6-mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('completed');
+    expect(body.termination).toBe('confirmed');
+  }, 20000);
+
+  // #2915 round 8 critique (D6) / review 7 finding 13 third bullet, M:1079:
+  // "the new unconditional catch changes the same status/capacity behavior
+  // and diagnostic, even globally disabled." A thrown `mcpRegistry.get()`
+  // from `defaultCallMcpWorker`'s OWN pre-launch requalification recheck
+  // must propagate exactly like origin/main when this attempt is not
+  // gated -- settling `uncertain`/`uncertain` through this bridge's own
+  // outer catch-all, never converted to a fail-closed `blocked` result.
+  it('a thrown mcpRegistry.get() during the pre-launch requalification recheck propagates as a rejection when not gated, never converted to a blocked outcome', async () => {
+    const { __testOnlyDefaultCallMcpWorker: defaultCallMcpWorker } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const mcpRegistry = { get: async () => { throw new Error('synthetic: registry requalification exploded'); } };
+    // `admission` omitted entirely (matching how `run()` calls this when
+    // `!admission?.gated`) -- `defaultCallMcpWorker` must take the literal
+    // baseline branch (no try/catch around the requalification check) and
+    // let the rejection propagate, exactly like origin/main's own
+    // unconditional `if (mcpRegistry) { ... }` with no surrounding catch.
+    await expect(defaultCallMcpWorker({ serverRef: 'fixture-server', tool: 'fixture-worker', timeoutSeconds: 1, sessionIsolation: 'per-call' },
+      { type: 'stdio', command: 'unused-never-spawned' }, { mcpRegistry, sessionIsolation: 'per-call' }))
+      .rejects.toThrow(/registry requalification exploded/);
+  });
+
+  it('the SAME thrown mcpRegistry.get() is fail-closed (converted to a blocked outcome) when this call is gated', async () => {
+    const { __testOnlyDefaultCallMcpWorker: defaultCallMcpWorker } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const mcpRegistry = { get: async () => { throw new Error('synthetic: registry requalification exploded'); } };
+    const breaker: any = { nowMs: () => Date.now() };
+    const admission = { gated: true, breaker, token: { deadlineMs: Infinity } };
+    const result = await defaultCallMcpWorker({ serverRef: 'fixture-server', tool: 'fixture-worker', timeoutSeconds: 1, sessionIsolation: 'per-call' },
+      { type: 'stdio', command: 'unused-never-spawned' }, { mcpRegistry, admission, sessionIsolation: 'per-call' });
+    expect(result).toMatchObject({ outcome: 'blocked', diagnostic: expect.stringMatching(/pre-spawn requalification failed/) });
+  });
+
+  // #2915 round 8 (D5) / review 7 finding 9: "a rejected stop helper
+  // escapes as an unhandled timer rejection and leaves the run unresolved."
+  it('degraded stop signal errors resolve uncertain without an unhandled timer rejection', async () => {
+    const child: any = new EventEmitter(); child.pid = 12345; child.exitCode = null;
+    child.kill = vi.fn(() => { throw new Error('synthetic: stop escalation exploded'); });
+    const control = buildShellStopControl({ launched: true, mode: 'degraded', child }, { graceMs: 1 });
+    const result = await control.wait(0);
+    expect(result).toMatchObject({ termination: 'uncertain', exitCode: null, timedOut: true });
+    expect(child.kill.mock.calls.map((args: any[]) => args[0])).toEqual(['SIGTERM', 'SIGKILL']);
+    control.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D5): the absolute deadline is enforced at the transport
+// write boundary too -- AFTER the dynamic `serializeMessage` import -- with
+// stop/cancel cleanup traffic exempt.
+// ---------------------------------------------------------------------------
+describe('absolute MCP deadline enforced at the transport write boundary (#2915 round 8, D5)', () => {
+  function fakeTransportChild(writes: string[]) {
+    const fakeStdin: any = new EventEmitter();
+    fakeStdin.write = (data: string) => { writes.push(data); return true; };
+    const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
+    return { stdin: fakeStdin, stdout: new EventEmitter(), stderr: fakeStderr, once() { return this; } };
+  }
+
+  it('send() refuses once the deadline has passed', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    let now = 1000;
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 1000, now: () => now });
+    await transport.start();
+    now = 1001; // one ms past the deadline
+    await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} })).rejects.toThrow(/deadline/);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('send() exempts notifications/cancelled stop/cleanup traffic from the deadline check', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 1000, now: () => 5000 });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1, reason: 'operator-cancel' } });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('send() allows a write before the deadline', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { deadlineAtMs: 5000, now: () => 1000 });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('a disabled-dispatch (not gated) transport never enforces a deadline at all -- deadlineAtMs defaults to null', async () => {
+    const { __testOnlyChildProcessTransport: ChildProcessTransport } = await import('../../../src/mcp/tools/worker-invoke.mjs');
+    const writes: string[] = [];
+    const fakeChild: any = fakeTransportChild(writes);
+    const transport = new (ChildProcessTransport as any)(fakeChild, { enforceTransportBound: false });
+    await transport.start();
+    await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    expect(writes).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D4): the `reconcile_stopped` operation on this SAME
+// `worker-invoke` status/cancel handler. Accepted only for an invocation
+// whose stored reservation is `dispatched` with `stop: 'unresolved'`,
+// applied to that invocation's actual breaker, idempotent.
+// ---------------------------------------------------------------------------
+describe('reconcile_stopped operator reconciliation (#2915 round 8, D4)', () => {
+  function toolHandler(tools: Map<string, any>) {
+    return tools.get('worker-invoke').handler;
+  }
+
+  /**
+   * Build a REAL breaker with a `dispatched` reservation whose canary
+   * deadline has already passed unresolved (`stop: 'unresolved'`) — the
+   * exact precondition `reconcile_stopped`/`hasUnresolvedStop` must check.
+   * A brand-new scope's FIRST admission is never a canary (`canaryKeys: []`,
+   * `deadlineMs: Infinity`, never swept) — the scope must first be opened
+   * by a trusted (`resolver`/`launcher`) failure so the NEXT admission is
+   * admitted as the half-open canary with a real, finite deadline.
+   */
+  function openedCanaryReservation(invocationId: string, { startAtMs = 1_000_000 } = {}) {
+    const breaker = new ScopedFailureBreaker({ policy: { canaryTimeoutMs: 100, cooldownMs: 1, distinctThreshold: 1, maxJitterMs: 0 } });
+    let clockNow = startAtMs;
+    (breaker as any).nowMs = () => clockNow;
+    const opening = breaker.admit({ invocationId: `${invocationId}-opener`, scopeKeys: ['installation:codex'] });
+    breaker.settle((opening as any).token, { kind: 'failed', reasonCode: 'AUTH', evidenceSource: 'resolver', cli: 'codex' });
+    clockNow += 1000; // past the (jitter-free) 1ms cooldown; the scope is now due
+    const admitted = breaker.admit({ invocationId, scopeKeys: ['installation:codex'] });
+    expect(admitted.ok).toBe(true);
+    const token = (admitted as any).token;
+    expect(token.canaryKeys.length).toBeGreaterThan(0); // genuinely the canary, not an ordinary admission
+    expect(breaker.beginDispatch(token, { invocationId, selectionDigest: null }).ok).toBe(true);
+    expect(breaker.commitDispatch(token).ok).toBe(true);
+    clockNow = token.deadlineMs + 1; // past the canary's own bounded window
+    breaker.expireStaleReservations();
+    expect(breaker.hasUnresolvedStop(invocationId)).toBe(true);
+    return breaker;
+  }
+
+  it('reconciles an invocation whose dispatched reservation has an unresolved stop marker, then is idempotent on a second call', async () => {
+    const root = await tempRoot();
+    const breaker = openedCanaryReservation('inv-reconcile-1');
+
+    // Exercises the reconciliation surface against an explicit registry
+    // seeded directly, in isolation from a full run() admission (which
+    // would require a real worker dispatch) -- the registry/breaker
+    // plumbing being tested is the same either way (see `registry.update(
+    // entry.invocationId, { recoveryBreaker: admission.breaker })` in
+    // `run()` itself).
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    const entry = registry.create({ requestId: 'req-reconcile-1', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-reconcile-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: breaker });
+
+    const handler = toolHandler(tools);
+    // #2915 round 8 review 8 (C7): before reconciliation, this invocation
+    // still occupies a LIVE registry capacity slot (never marked
+    // terminal) -- applying the confirmed stop must finalize that
+    // capacity too, not just the breaker's own reservation table.
+    expect(registry.get('inv-reconcile-1')?.terminalAt).toBeNull();
+    const first = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
+    const firstBody = JSON.parse(first.content[0].text);
+    expect(firstBody.reconciled).toBe(true);
+    expect(breaker.hasUnresolvedStop('inv-reconcile-1')).toBe(false);
+    // Capacity is finalized with a TRUTHFUL terminal state: `terminalAt`
+    // is now set, but `status` is never flipped to an invented success --
+    // it stays exactly the 'uncertain' this bridge actually observed.
+    const finalized = registry.get('inv-reconcile-1');
+    expect(finalized?.terminalAt).not.toBeNull();
+    expect(finalized?.status).toBe('uncertain');
+    expect(firstBody.status).toBe('uncertain');
+
+    const second = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-reconcile-1' });
+    const secondBody = JSON.parse(second.content[0].text);
+    expect(secondBody.reconciled).toBe(false);
+    expect(secondBody.reconcileReason).toMatch(/no dispatched reservation/);
+  });
+
+  it('refuses to reconcile an invocation with no tracked gated reservation', async () => {
+    const root = await tempRoot();
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    registry.create({ requestId: 'req-no-breaker', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-no-breaker' });
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'reconcile_stopped', invocation_id: 'inv-no-breaker' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.reconciled).toBe(false);
+    expect(body.reconcileReason).toMatch(/no tracked gated reservation/);
+  });
+
+  it('requires invocation_id and refuses an unknown invocation_id', async () => {
+    const root = await tempRoot();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root,
+    });
+    const handler = toolHandler(tools);
+    const missingId = await handler({ operation: 'reconcile_stopped' });
+    expect(missingId.isError).toBe(true);
+    const unknownId = await handler({ operation: 'reconcile_stopped', invocation_id: '00000000-0000-4000-8000-000000000000' });
+    expect(unknownId.isError).toBe(true);
+  });
+
+  it("ordinary status with no invocation_id lists invocations with unresolved stop evidence, and never mutates them", async () => {
+    const root = await tempRoot();
+    const breaker = openedCanaryReservation('inv-list-1', { startAtMs: 2_000_000 });
+
+    const registry = createInvocationRegistry();
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, registry,
+    });
+    const entry = registry.create({ requestId: 'req-list-1', transport: 'mcp', status: 'uncertain', termination: 'uncertain', invocationId: 'inv-list-1' });
+    registry.update(entry.invocationId, { recoveryBreaker: breaker });
+
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'status' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.unresolvedReservations).toHaveLength(1);
+    expect(body.unresolvedReservations[0].invocationId).toBe('inv-list-1');
+    expect(body.unresolvedReservations[0].scopes).toContain('installation:codex');
+    expect(typeof body.unresolvedReservations[0].ageMs).toBe('number');
+    // Read-only: the marker is still there after a plain status call.
+    expect(breaker.hasUnresolvedStop('inv-list-1')).toBe(true);
+  });
+
+  it("the reservation-capacity refusal names the reconcile_stopped operation when blocked by unresolved markers", async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const refusingBreaker: any = {
+      admit: () => ({ ok: false, blockedBy: ['reservation-capacity', 'blocking-markers:3'], nextEligibleAt: Date.now() }),
+    };
+    const tools = new Map<string, any>();
+    await registerWorkerInvokeToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+      scopedBreaker: refusingBreaker,
+    });
+    const handler = toolHandler(tools);
+    const result = await handler({ operation: 'run', request_id: `d4-capacity-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status, JSON.stringify(body)).toBe('blocked');
+    expect(body.diagnostics.join(' ')).toMatch(/blocking-markers:3/);
+    expect(body.diagnostics.join(' ')).toMatch(/reconcile_stopped/);
+  }, 20000);
+});
+
+describe('review 9 bounded recovery regressions', () => {
+  const claims = { version: 1, status: 'completed', summary: 'synthetic review probe', claims: [], artifacts: [], checks: [], limitations: [] };
+
+  async function probe(transport: 'shell' | 'mcp', extra: Record<string, any> = {}) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const f = buildFixture(root, transport);
+    const input = { operation: 'run', request_id: 'review-9-probe', role: 'coding', task: 'implementation', group: 'workers',
+      brief: path.join(root, 'brief.json'), workdir: work, final_output: path.join(work, 'final.json'), transport };
+    if (transport === 'mcp') await buildStructuredBrief(f, input as any);
+    else await writeFile(input.brief, 'synthetic review probe');
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const breaker = extra.scopedBreaker ?? new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+    const tools = await captureTool(undefined, { projectRoot: root, registry, scopedBreaker: breaker, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now), ...extra });
+    return { call: tools.get('worker-invoke').handler, input, registry, breaker, f };
+  }
+
+  function commit(options: any) {
+    const { admission } = options;
+    const began = admission.breaker.beginDispatch(admission.token, { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest });
+    expect(began).toEqual({ ok: true });
+    return sessionLauncherModule.debitDirectWorkerAllowance(admission.ledger).then(() => {
+      expect(admission.breaker.commitDispatch(admission.token)).toEqual({ ok: true });
+    });
+  }
+
+  // This speaks real JSON-RPC to the real SDK client and strict transport.
+  // The substituted process can ignore both signals while dropping its tool.
+  function stdioChild(advertise: boolean, closeOnEnd: boolean) {
+    const child: any = new EventEmitter();
+    child.pid = 987654; child.exitCode = null; child.signalCode = null;
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.kill = vi.fn(() => true);
+    child.stdin.on('data', (bytes: Buffer) => {
+      const message = JSON.parse(bytes.toString());
+      if (message.id === undefined) return;
+      let result: any;
+      if (message.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'probe', version: '1' } };
+      else if (message.method === 'tools/list') result = { tools: advertise ? [{ name: 'fixture-worker', inputSchema: workerInputSchema, outputSchema: workerOutputSchema }] : [] };
+      else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: JSON.stringify(claims) }], structuredContent: claims, isError: false };
+      else return;
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`));
+    });
+    if (closeOnEnd) child.stdin.on('finish', () => { child.exitCode = 0; child.emit('close', 0); });
+    return child;
+  }
+
+  it('B2: native success reconciles terminal evidence after the first follow-up, with a fixed observation bound', async () => {
+    let terminal = false;
+    const timers: Array<() => Promise<void>> = [];
+    const recovery = await import('../../../tools/ralph-external/session-launcher.mjs');
+    const observeLate = recovery.observeLateStopEvidence;
+    const observer = vi.spyOn(recovery, 'observeLateStopEvidence').mockImplementation((observe: any) => observeLate(observe, {
+      setTimer: (fn: any) => { timers.push(fn); return { unref() {} }; },
+    }));
+    const status = vi.fn(() => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }));
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'systemd-unit', unit: 'r10-native-late', child: stdioChild(true, true) };
+    });
+    let p: any;
+    try {
+      p = await probe('mcp', { isolationStatus: status });
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(timers).toHaveLength(1);
+      await timers.shift()!(); // sole old follow-up: still nonterminal
+      expect(p.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      expect(timers).toHaveLength(1);
+      terminal = true;
+      await timers.shift()!();
+      expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(p.registry.liveCount()).toBe(0);
+      expect(p.registry.get(body.invocationId).status).toBe('completed');
+      expect(timers).toHaveLength(0);
+      p.breaker.destroy();
+      resetInProcessAllowanceLedger();
+      terminal = false;
+      p = await probe('mcp', { isolationStatus: status });
+      const retained = JSON.parse((await p.call(p.input)).content[0].text);
+      const atSettlement = status.mock.calls.length;
+      for (let i = 0; i < 3; i += 1) { expect(timers).toHaveLength(1); await timers.shift()!(); }
+      expect(status.mock.calls.length - atSettlement).toBe(3);
+      expect(timers).toHaveLength(0);
+      expect(p.breaker.hasUnresolvedStop(retained.invocationId)).toBe(true);
+      const reconciled = JSON.parse((await p.call({ operation: 'reconcile_stopped', invocation_id: retained.invocationId })).content[0].text);
+      expect(reconciled.reconciled).toBe(true);
+    } finally { observer.mockRestore(); launch.mockRestore(); p?.breaker.destroy(); }
+  });
+
+  // 24 owners (6x maxRetained) prove the bound; 200 timed out under full CI load (run 83861).
+  it('B3: 24 independent breakers cannot grow one maxRetained:4 registry or replace its reconciliation owner', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'owner-bound probe');
+    const f = buildFixture(root, 'shell');
+    const registry = createInvocationRegistry({ maxRetained: 4, maxActive: 8, now: () => 0 });
+    const breakers: any[] = [];
+    const launch = vi.fn(async (inv: any, options: any) => {
+      await commit(options);
+      await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+      return { launched: true, mode: 'degraded', child: closingChild(0) };
+    });
+    let firstId: string = '';
+    let lastHandler: any;
+    try {
+      for (let i = 0; i < 24; i += 1) {
+        const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
+        breakers.push(breaker);
+        const tools = await captureTool(undefined, { projectRoot: root, workerWorktreesRoot: work, registry, scopedBreaker: breaker,
+          loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now), launchShellWorker: launch });
+        lastHandler = tools.get('worker-invoke').handler;
+        const body = JSON.parse((await lastHandler({ operation: 'run', request_id: `owner-${i}`, role: 'coding', task: 'implementation', group: 'workers',
+          brief, workdir: work, final_output: path.join(work, `final-${i}.json`), transport: 'shell' })).content[0].text);
+        if (i === 0) {
+          expect(body.status).toBe('completed'); firstId = body.invocationId;
+          expect(breaker.hasUnresolvedStop(firstId)).toBe(true);
+        } else {
+          expect(body).toMatchObject({ status: 'blocked', termination: 'confirmed' });
+          expect(body.diagnostics.join(' ')).toMatch(/already has a recovery breaker owner/);
+          expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+        }
+        expect(registry.size).toBeLessThanOrEqual(4);
+        expect(registry.seenCount).toBeLessThanOrEqual(4);
+      }
+      expect(launch).toHaveBeenCalledOnce();
+      expect(registry.get(firstId).recoveryBreaker).toBe(breakers[0]);
+      expect(registry.claimRequestId('owner-0')).toBe(firstId);
+      const reconciled = JSON.parse((await lastHandler({ operation: 'reconcile_stopped', invocation_id: firstId })).content[0].text);
+      expect(reconciled.reconciled).toBe(true);
+      expect(breakers[0].snapshot().reservationsOutstanding).toBe(0);
+    } finally { for (const breaker of breakers) breaker.destroy(); }
+  }, 60_000);
+
+  it('review 9 item 1: real native post-spawn refusal and shell submission uncertainty retain live registry capacity', async () => {
+    const child = stdioChild(false, false);
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'degraded', child };
+    });
+    let native: any;
+    let shell: any;
+    try {
+      native = await probe('mcp', { allowDegraded: true, terminateChildWithGrace: async () => ({ terminated: false }) });
+      const body = JSON.parse((await native.call(native.input)).content[0].text);
+      expect(body).toMatchObject({ status: 'blocked', termination: 'uncertain' });
+      expect(body.diagnostics.join(' ')).toMatch(/no longer advertised/);
+      expect(child.kill.mock.calls.map((args: any[]) => args[0])).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(native.registry.canStart()).toBe(false);
+      expect(native.registry.get(body.invocationId).terminalAt).toBeNull();
+      expect(native.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      shell = await probe('shell', {
+        isolationStatus: () => ({ active: true, execMainCode: 0 }),
+        waitForUnitTermination: async () => ({ termination: 'uncertain', exitCode: null, timedOut: true }),
+        stopWorkerUnit: async () => ({ ok: true }), killWorkerUnit: async () => ({ ok: true }),
+        launchShellWorker: async (_inv: any, options: any) => {
+        await commit(options);
+          return { launched: false, mode: 'systemd-unit', unit: 'submission-unit', dispatchState: 'submission-uncertain' };
+        } });
+      const shellBody = JSON.parse((await shell.call(shell.input)).content[0].text);
+      expect(shellBody).toMatchObject({ status: 'blocked', termination: 'uncertain' });
+      expect(shell.registry.canStart()).toBe(false);
+      expect(shell.registry.get(shellBody.invocationId).terminalAt).toBeNull();
+      expect(shell.breaker.hasUnresolvedStop(shellBody.invocationId)).toBe(true);
+    } finally { launch.mockRestore(); native?.breaker.destroy(); shell?.breaker.destroy(); }
+  });
+
+  it('review 9 item 2b: clean degraded close exactly at the monotonic deadline beats its timer but still fails', async () => {
+    let monotonic = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    const child: any = new EventEmitter(); child.exitCode = null;
+    const p = await probe('shell', { scopedBreaker: breaker, launchShellWorker: async (inv: any, options: any) => {
+      await commit(options);
+      await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+      // Listener registration signals that preparation is finished; no timer
+      // has had an opportunity to fire before this queued completion.
+      const once = child.once.bind(child);
+      child.once = (event: string, listener: any) => {
+        once(event, listener);
+        if (event === 'close') queueMicrotask(() => { monotonic = options.dispatchGuard.deadlineAtMs; child.exitCode = 0; child.emit('close', 0); });
+        return child;
+      };
+      return { launched: true, mode: 'degraded', child };
+    } });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('failed');
+      expect(breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+    } finally { breaker.destroy(); }
+  });
+
+  it('review 9 item 2c: real run passes an absolute monotonic systemd deadline despite a backward wall-clock step', async () => {
+    const client = systemdClientFixture();
+    roots.push(client.root);
+    vi.stubEnv('PATH', client.root);
+    let monotonic = 0;
+    let wall = 100_000;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    const breaker = new ScopedFailureBreaker({ nowMs: () => monotonic, jitterMs: () => 0 });
+    let active = true;
+    const stop = vi.fn(async () => { active = false; return { ok: true }; });
+    const kill = vi.fn(async () => ({ ok: true }));
+    const polls: { duration: number; deadlineAtMs?: number; clock: () => number }[] = [];
+    const exec = vi.fn(async (binary: string, _args: string[], options: any) => {
+      return { stdout: `LoadState=loaded\nActiveState=${active ? 'active' : 'inactive'}\nResult=success\nExecMainStatus=0\nExecMainCode=${active ? 0 : 1}\nMainPID=${active ? 42 : 0}\n` };
+    });
+    const p = await probe('shell', { scopedBreaker: breaker,
+      launchShellWorker: async (_inv: any, options: any) => {
+        await commit(options);
+        return { launched: true, mode: 'systemd-unit', unit: 'clock-unit' };
+      },
+      isolationStatus: () => ({ active, execMainCode: active ? 0 : 1, result: 'success', execMainStatus: 0 }),
+      stopWorkerUnit: stop, killWorkerUnit: kill,
+      waitForUnitTermination: async (unit: string, duration: number, options: any) => {
+        polls.push({ duration, ...options });
+        return waitForUnitTermination(unit, duration, { ...options, exec,
+          pollIntervalMs: 300_000, sleep: async (ms: number) => { monotonic += ms; wall -= ms * 2; } });
+      },
+    });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('failed');
+      expect(stop).toHaveBeenCalledOnce();
+      expect(stop).toHaveBeenCalledWith('clock-unit', expect.objectContaining({ signal: expect.any(AbortSignal), timeout: expect.any(Number) }));
+      expect(kill).not.toHaveBeenCalled();
+      expect(polls).toHaveLength(2);
+      expect(polls[0].deadlineAtMs).toBeGreaterThan(0);
+      expect(monotonic).toBe(polls[0].deadlineAtMs);
+      expect(polls[1].duration).toBeGreaterThan(0); // fresh stop grace after the task deadline
+      expect(polls[1]).not.toHaveProperty('deadlineAtMs');
+      expect(polls.every(poll => poll.clock() === monotonic)).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(Math.ceil(polls[0].deadlineAtMs! / 300_000) + 1);
+      for (const [binary, _args, options] of exec.mock.calls) {
+        expect(binary).toBe(client.systemctl);
+        expect(path.isAbsolute(binary)).toBe(true);
+        expect(options.signal).toBeInstanceOf(AbortSignal);
+        expect(options.env.PATH).toBe(client.root);
+        expect(options.timeout).toBeGreaterThanOrEqual(1000);
+      }
+      expect(wall).toBeLessThan(100_000);
+      expect(breaker.snapshot().reservationsOutstanding).toBe(0);
+    } finally { wallClock.mockRestore(); breaker.destroy(); }
+  });
+
+  it('review 9 item 4: native systemd success, non-response and error query terminal owned-unit evidence before settlement', async () => {
+    const child = stdioChild(true, true);
+    const launch = vi.spyOn(workerIsolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+      await options.onDispatchCommit();
+      return { launched: true, mode: 'systemd-unit', unit: 'native-success-unit', child };
+    });
+    const status = vi.fn(() => ({ active: false, execMainCode: 1 }));
+    const stop = vi.fn();
+    const success = await probe('mcp', { isolationStatus: status, stopUnit: stop });
+    try {
+      const body = JSON.parse((await success.call(success.input)).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(status).toHaveBeenCalledWith('native-success-unit');
+      expect(stop).not.toHaveBeenCalled();
+      expect(success.breaker.snapshot().reservationsOutstanding).toBe(0);
+      for (const outcome of ['timeout', 'isError', 'error']) {
+        resetInProcessAllowanceLedger();
+        const p = await probe('mcp', { isolationStatus: status, stopUnit: stop,
+          callMcpWorker: async (_binding: any, _server: any, options: any) => {
+            await commit(options);
+            const evidence = { dispatchState: 'dispatched', isolationMode: 'systemd-unit', unitName: `native-${outcome}-unit` };
+            return outcome !== 'isError' ? { outcome, ...evidence }
+              : { outcome: 'responded', response: { isError: true }, ...evidence };
+          },
+        });
+        try {
+          const result = JSON.parse((await p.call(p.input)).content[0].text);
+          expect(result.status).toBe(outcome === 'isError' ? 'failed' : 'uncertain');
+          expect(status).toHaveBeenCalledWith(`native-${outcome}-unit`);
+          expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+          expect(p.registry.canStart()).toBe(true);
+        } finally { p.breaker.destroy(); }
+      }
+    } finally { launch.mockRestore(); success.breaker.destroy(); }
+  });
+
+  it('review 9 item 5: a retained stop promise reconciles ownership and registry capacity after the outward result', async () => {
+    let terminal = false;
+    let resolveStop: () => void = () => {};
+    const stopping = new Promise<void>(resolve => { resolveStop = resolve; });
+    const p = await probe('mcp', { isolationStatus: () => ({ active: !terminal, execMainCode: terminal ? 1 : 0 }),
+      callMcpWorker: async (_binding: any, _server: any, options: any) => {
+        await commit(options);
+        const evidence = { isolationMode: 'systemd-unit', unitName: 'late-stop-unit', dispatchState: 'dispatched' };
+        options.observeStop(stopping, evidence);
+        return { outcome: 'timeout', ...evidence };
+      },
+    });
+    try {
+      const body = JSON.parse((await p.call(p.input)).content[0].text);
+      expect(body).toMatchObject({ status: 'uncertain', termination: 'uncertain' });
+      expect(p.registry.canStart()).toBe(false);
+      expect(p.breaker.hasUnresolvedStop(body.invocationId)).toBe(true);
+      terminal = true;
+      resolveStop();
+      await waitFor(() => p.registry.canStart());
+      expect(p.breaker.snapshot().reservationsOutstanding).toBe(0);
+      expect(p.registry.get(body.invocationId).terminalAt).not.toBeNull();
+      expect(p.registry.get(body.invocationId).status).toBe('uncertain');
+      const repeated = JSON.parse((await p.call({ operation: 'reconcile_stopped', invocation_id: body.invocationId })).content[0].text);
+      expect(repeated.reconciled).toBe(false);
+    } finally { resolveStop(); p.breaker.destroy(); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): equivalence tests. The frozen `8c812250d6` fixture
+// (`test/fixtures/ralph-recovery-baseline/worker-invoke.mjs`) has NO
+// admission/breaker/ledger concept at all; the current branch's `run()`,
+// with dispatch disabled (`canVerifyAttempt: false`), must behave the same
+// from an equivalent starting state: same result shape, same diagnostics,
+// same callMcpWorker call count and call shape (modulo the `admission` key,
+// which the current branch OMITS entirely when not gated -- proven
+// separately by the "injected launch/call callbacks receive no admission
+// property when not gated" test above).
+//
+// This covers a representative subset of the full scenario matrix the
+// design calls for (success/non-zero/timeout/cancellation/early-error/
+// resolver-error/native-throw/launch-refusal/oversized-transport/queue-
+// contention, plus gated<->disabled interleavings) -- blocked (server not
+// registered), isError, and an early resolver/validation error. The
+// remaining scenarios (timeout, cancellation, native requalification throw,
+// oversized-whitespace transport, queue contention, and gated->disabled
+// interleavings on one server instance) are NOT covered here; see the
+// final report.
+// ---------------------------------------------------------------------------
+describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current branch with dispatch disabled', () => {
+  async function runOnce(registerFn: any, callMcpWorker: any, { throwOnLoad = false }: { throwOnLoad?: boolean } = {}) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+    const briefPath = path.join(root, 'brief.md');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false }); // meaningless/ignored by the baseline fixture; disables gating on the branch
+    if (!throwOnLoad) {
+      // `buildFixture`'s own default `mcpRegistry.get()` (a valid stdio
+      // entry) is what the resolver PROBE below needs to succeed; swap in
+      // the "not registered" double only AFTER the brief is built.
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      f.drivers.codex.mcpRegistry = { get: async () => null };
+    } else {
+      await writeFile(briefPath, 'placeholder');
+    }
+    const calls: any[] = [];
+    const tools = new Map<string, any>();
+    await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+      projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+      loadWorkerInputs: throwOnLoad
+        ? async () => { throw new Error('synthetic: resolver/input failure'); }
+        : async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now),
+      callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
+    });
+    const handler = tools.get('worker-invoke').handler;
+    const result = await handler({ operation: 'run', request_id: `equiv-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+    const body = JSON.parse(result.content[0].text);
+    return { body, calls };
+  }
+
+  it('scenario: mcp server not registered -- blocked/confirmed, identical diagnostic text', async () => {
+    const neverCalled = async () => { throw new Error('must never be called: no server registered'); };
+    const baseline = await runOnce(workerInvokeBaseline.registerWorkerInvokeToolset, neverCalled);
+    const branch = await runOnce(registerProductionToolset, neverCalled);
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+    expect(baseline.body.status).toBe('blocked');
+    expect(baseline.calls).toHaveLength(0);
+    expect(branch.calls).toHaveLength(0);
+  }, 20000);
+
+  it('scenario: isError response -- failed/confirmed, identical diagnostic text, one call each, no admission key either side', async () => {
+    async function registerWithServer(registerFn: any) {
+      const callMcpWorker = async () => ({ outcome: 'responded', response: { isError: true, content: [{ type: 'text', text: 'Synthetic worker failure' }] } });
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'mcp');
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'unused-never-spawned' }) };
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      const calls: any[] = [];
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
+        callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-isError-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      return { body: JSON.parse(result.content[0].text), calls };
+    }
+    const baseline = await registerWithServer(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await registerWithServer(registerProductionToolset);
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+    expect(baseline.body.status).toBe('failed');
+    expect(baseline.calls).toHaveLength(1);
+    expect(branch.calls).toHaveLength(1);
+    // The call's own 3rd argument is the options object `callMcpWorker` receives.
+    expect('admission' in baseline.calls[0][2]).toBe(false);
+    expect('admission' in branch.calls[0][2]).toBe(false);
+  }, 20000);
+
+  // Proven pre-dispatch failures release capacity and private output on both sides.
+  it('scenario: a thrown loadWorkerInputs (early resolver/input error) -- byte-equivalent to baseline (round 8, D6)', async () => {
+    const neverCalled = async () => { throw new Error('must never be called: never reaches a launch'); };
+    const baseline = await runOnce(workerInvokeBaseline.registerWorkerInvokeToolset, neverCalled, { throwOnLoad: true });
+    const branch = await runOnce(registerProductionToolset, neverCalled, { throwOnLoad: true });
+    expect(baseline.body.status).toBe('blocked');
+    expect(baseline.body.termination).toBe('confirmed');
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+  }, 20000);
+});
+
+// ---------------------------------------------------------------------------
+// #2915 round 8 (D6): the FULL equivalence scenario matrix the design calls
+// for (design-round8-2915.md D6; crit-round8-2915.md D6's fixture-pinning
+// requirement), driven through the frozen 8c812250d6 fixture's own run() AND
+// the branch's run(), from an equivalent starting state, with recovery not
+// gated. Two independent ways to reach "not gated" are exercised:
+// `global-off` (`parallelism.worker_dispatch: false` -- `admission` is set
+// to `{ gated: false }` directly; `admitDirectWorker` is never even called,
+// see `runInner`'s decision point in worker-invoke.mjs) and
+// `cli-cannot-verify` (`drivers.codex.canVerifyAttempt: false` --
+// `admitDirectWorker` IS called and returns `{ gated: false }` before ever
+// touching the breaker or ledger, per its own documented eligibility order;
+// this is also the ONLY one of the two that still reaches a genuinely
+// launchable plan through the REAL resolver, so it is the one used for
+// every scenario below that needs to exercise `continueBaseline`'s
+// transport-specific branches end-to-end -- see the "mcp transport against
+// the real fake stdio worker" describe block's own comment for why).
+//
+// A third knob, `clis.codex.enabled: false` (the literal "per-CLI switch"),
+// is covered once, explicitly, in its own test below: it disables the
+// models RESOLVER itself for that CLI (not merely this bridge's own
+// admission), so every scenario collapses to the SAME PREFIX-level
+// "blocked at the resolver" outcome on both sides regardless of which
+// scenario's doubles are wired up -- a real equivalence proof, but a
+// degenerate one (it cannot reach `continueBaseline` at all, so repeating
+// it across all ten scenarios would just re-prove the same fact ten times).
+// That same fact is already covered, non-degenerately, by the shared-PREFIX
+// equivalence tests above ("a pre-prefix-decision exception matches
+// origin/main", "a thrown loadWorkerInputs... byte-equivalent to baseline").
+// ---------------------------------------------------------------------------
+describe('disabled dispatch equals main through the full #2915 round 8 (D6) scenario matrix', () => {
+  type Gating = 'global-off' | 'cli-cannot-verify';
+
+  function applyGating(f: any, gating: Gating) {
+    if (gating === 'global-off') {
+      f.snapshot.config.parallelism!.worker_dispatch = false;
+    } else {
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+    }
+  }
+
+  /** Spies proving the recovery module's LEDGER primitives are never
+   * consulted on the not-gated path. `admitDirectWorker` itself may still
+   * be called (see the describe-block comment above), but nothing it could
+   * reach past deciding `{ gated: false }` may run. */
+  function spyOnLedger() {
+    const reserve = vi.spyOn(sessionLauncherModule, 'reserveDirectWorkerAllowance');
+    const debit = vi.spyOn(sessionLauncherModule, 'debitDirectWorkerAllowance');
+    const refund = vi.spyOn(sessionLauncherModule, 'refundDirectWorkerAllowance');
+    const settle = vi.spyOn(sessionLauncherModule, 'settleDirectWorker');
+    return {
+      assertNeverCalled() {
+        expect(reserve, 'reserveDirectWorkerAllowance must never be called when not gated').not.toHaveBeenCalled();
+        expect(debit, 'debitDirectWorkerAllowance must never be called when not gated').not.toHaveBeenCalled();
+        expect(refund, 'refundDirectWorkerAllowance must never be called when not gated').not.toHaveBeenCalled();
+        expect(settle, 'settleDirectWorker must never be called when not gated').not.toHaveBeenCalled();
+      },
+      restore() { reserve.mockRestore(); debit.mockRestore(); refund.mockRestore(); settle.mockRestore(); },
+    };
+  }
+  /** A breaker that throws the instant ANY method is touched -- threaded
+   * through as `scopedBreaker` so that if `admitDirectWorker`'s own
+   * eligibility order ever regresses to consulting the breaker before
+   * deciding `gated: false`, these tests fail loudly instead of silently
+   * passing. */
+  function throwingBreaker() {
+    return new Proxy({}, { get(_t, prop) { return () => { throw new Error(`must never be reached: breaker.${String(prop)}() on a not-gated attempt`); }; } });
+  }
+
+  async function runShellPair(gating: Gating, buildOptions: (calls: any[]) => Record<string, unknown>, input: Record<string, unknown> = {}) {
+    async function runOne(registerFn: any) {
+      const calls: any[] = [];
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'shell');
+      applyGating(f, gating);
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      const ledgerSpies = spyOnLedger();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+        ...buildOptions(calls),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-shell-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell', ...input });
+      const body = JSON.parse(result.content[0].text);
+      ledgerSpies.assertNeverCalled();
+      ledgerSpies.restore();
+      return { body, registry, calls };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    return { baseline, branch };
+  }
+
+  async function runMcpPair(gating: Gating, buildOptions: (calls: any[]) => Record<string, unknown>, input: Record<string, unknown> = {}) {
+    async function runOne(registerFn: any) {
+      const calls: any[] = [];
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'mcp');
+      applyGating(f, gating);
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      const ledgerSpies = spyOnLedger();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+        ...buildOptions(calls),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-mcp-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp', ...input });
+      const body = JSON.parse(result.content[0].text);
+      ledgerSpies.assertNeverCalled();
+      ledgerSpies.restore();
+      return { body, registry, calls };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    return { baseline, branch };
+  }
+
+  // #2915 round 8 (D6): `global-off` (`parallelism.worker_dispatch: false`)
+  // is EXCLUDED from this per-scenario loop -- empirically (confirmed via
+  // the resolver-level probes elsewhere in this file, and reproduced while
+  // writing this suite), the models RESOLVER itself treats
+  // `worker_dispatch: false` as "disabled" and refuses to produce a
+  // launchable plan AT ALL, exactly like `clis.codex.enabled: false` does.
+  // Every one of the scenarios below needs a genuinely launchable plan to
+  // reach `continueBaseline`'s transport-specific branches; looping
+  // `global-off` through them would not re-exercise those branches, it
+  // would just rediscover the SAME "blocked at the resolver" outcome ten
+  // times over (the one already covered, non-degenerately, by "a
+  // pre-prefix-decision exception matches origin/main" and the dedicated
+  // "literal per-CLI switch off" test below). `global-off`'s own
+  // equivalence is covered by its OWN dedicated test immediately after
+  // this loop, parallel to the per-CLI one.
+  const GATINGS: Gating[] = ['cli-cannot-verify'];
+
+  for (const gating of GATINGS) {
+    describe(`gating: ${gating}`, () => {
+      it('scenario: success (confirmed exit 0, valid claims)', async () => {
+        const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+        const buildOptions = (calls: any[]) => ({
+          launchShellWorker: async (invocation: any, options: any) => {
+            calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+            await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+            return { launched: true, mode: 'degraded', child: closingChild(0) };
+          },
+        });
+        const { baseline, branch } = await runShellPair(gating, buildOptions);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('completed');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+        expect(branch.calls).toHaveLength(1);
+        expect(baseline.calls).toHaveLength(1);
+        expect(branch.calls[0].hasAdmission).toBe(false);
+        expect(baseline.calls[0].hasAdmission).toBe(false);
+        expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+      }, 20000);
+
+      it('scenario: non-zero exit (confirmed, failed)', async () => {
+        const buildOptions = (calls: any[]) => ({
+          launchShellWorker: async (invocation: any, options: any) => {
+            calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+            return { launched: true, mode: 'degraded', child: closingChild(1) };
+          },
+        });
+        const { baseline, branch } = await runShellPair(gating, buildOptions);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('failed');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+        expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+      }, 20000);
+
+      it('scenario: systemd timeout escalates and retains capacity until termination is proven', async () => {
+        const buildOptions = (calls: any[]) => ({
+          launchShellWorker: async (invocation: any, options: any) => {
+            calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+            return { launched: true, mode: 'systemd-unit', unit: 'fake-unit-equiv' };
+          },
+          waitForUnitTermination: async (_unit: any, _deadlineMs: any, options: any) => {
+            calls.push({ fn: 'waitForUnitTermination', argCount: options === undefined ? 2 : 3 });
+            return { termination: 'uncertain', exitCode: null, timedOut: true };
+          },
+        });
+        const { baseline, branch } = await runShellPair(gating, buildOptions);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('uncertain');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+        expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+        // Abortable status observation remains active when recovery is disabled.
+        const waitCall = (calls: any[]) => calls.find(c => c.fn === 'waitForUnitTermination');
+        expect(waitCall(branch.calls)?.argCount).toBe(3);
+        expect(waitCall(baseline.calls)?.argCount).toBe(3);
+      }, 20000);
+
+      it('scenario: timeout under degraded isolation, including a clean close arriving during timeout handling (literal base Promise race on both sides)', async () => {
+        const buildOptions = (calls: any[]) => ({
+          launchShellWorker: async (invocation: any, options: any) => {
+            calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+            const child: any = new EventEmitter();
+            child.kill = () => true;
+            // A clean exit-0 close arrives WHILE this bridge's own deadline
+            // timer is also pending -- base's literal (synchronous-resolve)
+            // Promise construction means whichever fires first wins; firing
+            // the close event on the very next tick (before the fixed
+            // 10ms-equivalent timeout below) deterministically exercises
+            // the close-wins race identically on both sides.
+            setImmediate(() => child.emit('close', 0));
+            return { launched: true, mode: 'degraded', child };
+          },
+        });
+        const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+        // The deadline (derived from `invocation.limits.wallSeconds`) is far
+        // longer than the `setImmediate` delay above, so close always wins
+        // deterministically on both sides -- this proves the LITERAL base
+        // Promise race (no `finishOnce`/async indirection) is what the
+        // not-gated continuation actually runs, not merely that the race
+        // exists in principle.
+        async function runWithFinalWrite(gatingArg: Gating) {
+          async function runOne(registerFn: any) {
+            const calls: any[] = [];
+            const root = await tempRoot();
+            const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+            const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+            const finalOutput = path.join(work, 'final.json');
+            const f = buildFixture(root, 'shell');
+            applyGating(f, gatingArg);
+            const registry = createInvocationRegistry({ maxActive: 4 });
+            const tools = new Map<string, any>();
+            await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+              projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+              loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+              now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+              launchShellWorker: async (invocation: any, options: any) => {
+                calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+                await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+                const child: any = new EventEmitter();
+                child.kill = () => true;
+                setImmediate(() => child.emit('close', 0));
+                return { launched: true, mode: 'degraded', child };
+              },
+            });
+            const handler = tools.get('worker-invoke').handler;
+            const result = await handler({ operation: 'run', request_id: `equiv-degraded-race-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+              brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+            return { body: JSON.parse(result.content[0].text), registry, calls };
+          }
+          const baselineRun = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+          const branchRun = await runOne(registerProductionToolset);
+          return { baseline: baselineRun, branch: branchRun };
+        }
+        const { baseline, branch } = await runWithFinalWrite(gating);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('completed');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+      }, 20000);
+
+      it('scenario: cancellation (cancelled, confirmed, even though the worker later claims completed)', async () => {
+        async function runWithCancel(registerFn: any) {
+          const calls: any[] = [];
+          const root = await tempRoot();
+          const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+          const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+          const finalOutput = path.join(work, 'final.json');
+          const f = buildFixture(root, 'shell');
+          applyGating(f, gating);
+          const registry = createInvocationRegistry({ maxActive: 4 });
+          const tools = new Map<string, any>();
+          const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+          const child: any = new EventEmitter();
+          child.kill = () => true;
+          let releaseLaunch: () => void = () => {};
+          let launchCalled = false;
+          await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+            projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+            now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+            // The launch itself does not resolve until `releaseLaunch` is
+            // called -- `launchCalled` is the correct readiness signal (not
+            // the registry entry's 'running' status, which is already true
+            // from `registry.create()` well BEFORE this function is ever
+            // invoked -- waiting on that instead raced `releaseLaunch`
+            // against a `launchShellWorkerImpl` call that had not happened
+            // yet, permanently hanging on the stale no-op default).
+            launchShellWorker: (invocation: any, options: any) => {
+              calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+              launchCalled = true;
+              return new Promise(resolve => { releaseLaunch = () => resolve({ launched: true, mode: 'degraded', child }); });
+            },
+          });
+          const handler = tools.get('worker-invoke').handler;
+          const runPromise = handler({ operation: 'run', request_id: `equiv-cancel-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+          await waitFor(() => launchCalled);
+          const [pendingEntry] = registry.values().filter((e: any) => e.status === 'running');
+          await handler({ operation: 'cancel', invocation_id: pendingEntry.invocationId });
+          // Only write the final-output content once the launch has
+          // actually been reached (proving `reserveFinalOutput`'s own
+          // exclusive create already succeeded) -- writing any earlier
+          // races the bridge's own reservation.
+          await writeFile(finalOutput, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+          releaseLaunch();
+          await waitFor(() => child.listenerCount('close') > 0);
+          child.emit('close', 0);
+          const result = await runPromise;
+          return { body: JSON.parse(result.content[0].text), registry, calls };
+        }
+        const baseline = await runWithCancel(workerInvokeBaseline.registerWorkerInvokeToolset);
+        const branch = await runWithCancel(registerProductionToolset);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('cancelled');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+      }, 20000);
+
+      it('scenario: launch refusal (dispatch gate blocked before any spawn)', async () => {
+        const buildOptions = (calls: any[]) => ({
+          launchShellWorker: async (invocation: any, options: any) => {
+            calls.push({ fn: 'launchShellWorker', hasAdmission: 'admission' in options });
+            return { launched: false, blocked: true, diagnostic: 'synthetic: dispatch gate refused' };
+          },
+        });
+        const { baseline, branch } = await runShellPair(gating, buildOptions);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('blocked');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+        expect(branch.body.diagnostics).toEqual(baseline.body.diagnostics);
+        expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+        expect(branch.registry.canStart()).toBe(true); // proven pre-spawn refusal frees capacity on both sides
+      }, 20000);
+
+      it('scenario: native MCP pre-spawn registry failure is blocked with confirmed zero dispatch', async () => {
+        async function runWithThrowingRequalification(registerFn: any) {
+          const root = await tempRoot();
+          const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+          const briefPath = path.join(root, 'brief.md');
+          const finalOutput = path.join(work, 'final.json');
+          const f = buildFixture(root, 'mcp');
+          applyGating(f, gating);
+          // `resolveWorkerInvocation` itself calls `mcpRegistry.get` once
+          // (its own mcp-profile check) BEFORE `run()` ever reaches the
+          // requalification recheck inside `defaultCallMcpWorker*`; that
+          // call, and `buildStructuredBrief`'s own probe-resolve, must both
+          // succeed. Only the call strictly inside the real run (after this
+          // test's own two probe-resolves) throws.
+          let calls = 0;
+          let failFromCall = Infinity;
+          f.drivers.codex.mcpRegistry = {
+            get: async () => {
+              calls += 1;
+              if (calls > failFromCall) throw new Error('synthetic: registry.get exploded before any launch');
+              return { name: 'fixture-server', type: 'stdio' as const, command: 'fixture-only' };
+            },
+          };
+          await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+          failFromCall = calls + 1;
+          const registry = createInvocationRegistry({ maxActive: 4 });
+          const tools = new Map<string, any>();
+          await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+            projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+            now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+          });
+          const handler = tools.get('worker-invoke').handler;
+          const result = await handler({ operation: 'run', request_id: `equiv-native-throw-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+          return { body: JSON.parse(result.content[0].text), registry };
+        }
+        const baseline = await runWithThrowingRequalification(workerInvokeBaseline.registerWorkerInvokeToolset);
+        const branch = await runWithThrowingRequalification(registerProductionToolset);
+        expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('blocked');
+        expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+        expect(branch.body.termination).toBe(baseline.body.termination);
+        expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+      }, 20000);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // The literal "per-CLI switch" (`clis.codex.enabled: false`) degenerate
+  // case (see describe-block comment): proven ONCE, not per-scenario.
+  // -------------------------------------------------------------------------
+  it('scenario: audited brief-json preparation supplies a private params file on both sides', async () => {
+    async function runOne(registerFn: any, isolation: any) {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work);
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'private brief content');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'shell');
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      const originalBuildInvocation = f.drivers.codex.buildInvocation;
+      f.drivers.codex.buildInvocation = async (input: any) => ({ ...(await originalBuildInvocation(input)), stdin: 'brief-json' });
+      let framed: any;
+      let framedPath = '';
+      const launch = vi.spyOn(isolation, 'launchIsolatedWorker').mockImplementation(async (options: any) => {
+        framedPath = options.stdinPath;
+        framed = JSON.parse(await readFile(framedPath, 'utf8'));
+        expect(options.command).not.toContain('private brief content');
+        expect(JSON.stringify(options.args)).not.toContain('private brief content');
+        expect((await stat(framedPath)).mode & 0o777).toBe(0o600);
+        await writeFile(finalOutput, JSON.stringify({ type: 'result', result: {
+          version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [],
+        } }) + '\n');
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      });
+      const tools = new Map<string, any>();
+      try {
+        await registerFn({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+          projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+          loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+          now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+        });
+        const result = await tools.get('worker-invoke').handler({ operation: 'run', request_id: 'brief-json-preparation',
+          role: 'coding', task: 'implementation', group: 'workers', brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+        const body = JSON.parse(result.content[0].text);
+        expect(body.status, JSON.stringify(body)).toBe('completed');
+        expect(launch).toHaveBeenCalledOnce();
+        expect(framed).toEqual({ message: 'private brief content', model_override: 'synthetic/a%b', cwd: work });
+        expect(existsSync(framedPath)).toBe(false);
+        return body;
+      } finally { launch.mockRestore(); }
+    }
+    const baselineIsolation = await import('../../fixtures/ralph-recovery-baseline/worker-isolation.mjs');
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset, baselineIsolation);
+    const branch = await runOne(registerProductionToolset, workerIsolation);
+    expect(branch.status).toBe(baseline.status);
+    expect(branch.termination).toBe(baseline.termination);
+  }, 20000);
+
+  it('scenario: literal per-CLI switch off (clis.codex.enabled: false) collapses to the same prefix-level resolver refusal on both sides', async () => {
+    async function runOne(registerFn: any) {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'shell');
+      f.snapshot.config.parallelism!.clis = { codex: { enabled: false, adapter: 'providers:codex', accountScope: 'fixture-account', quotaScope: 'fixture-quota' } };
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-percli-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+      return { body: JSON.parse(result.content[0].text), registry };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('blocked');
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+  }, 20000);
+
+  // -------------------------------------------------------------------------
+  // The `global-off` (`parallelism.worker_dispatch: false`) degenerate case
+  // -- parallel to the per-CLI one above, and excluded from the per-scenario
+  // loop for the same reason (see that loop's own `GATINGS` comment): the
+  // models RESOLVER treats this flag as "disabled" too, so EVERY scenario's
+  // doubles would go uncalled and this collapses to the same prefix-level
+  // "blocked at the resolver" outcome regardless of which scenario it is
+  // wired up for.
+  // -------------------------------------------------------------------------
+  it('scenario: literal global switch off (parallelism.worker_dispatch: false) ALSO collapses to the same prefix-level resolver refusal on both sides', async () => {
+    async function runOne(registerFn: any) {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'shell');
+      f.snapshot.config.parallelism!.worker_dispatch = false;
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-globaloff-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+      return { body: JSON.parse(result.content[0].text), registry };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('blocked');
+    expect(branch.body.status).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+  }, 20000);
+
+  // -------------------------------------------------------------------------
+  // Oversized whitespace -- needs the REAL `ChildProcessTransport` (never an
+  // injected `callMcpWorker` double, which would bypass it entirely), so it
+  // runs through a real spawned stdio worker on both sides, using the
+  // frozen fixture's own dependencies -- never current-branch session-
+  // launcher/worker-isolation helpers pointed at by the baseline fixture's
+  // own `loadRalphExternal` (that call resolves to the UNCHANGED
+  // `lib/worker-isolation.mjs` `checkWorkerDispatch`/`launchIsolatedWorker`
+  // exports on both sides; #2915 never modified those two functions).
+  // -------------------------------------------------------------------------
+  it('scenario: oversized whitespace is refused identically on both sides when recovery is disabled', async () => {
+    async function runOne(registerFn: any) {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md');
+      const finalOutput = path.join(work, 'final.json');
+      const f = buildFixture(root, 'mcp');
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
+        args: [path.resolve('test/fixtures/ralph-recovery-baseline/oversized-whitespace-worker.mjs')] }) };
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const result = await handler({ operation: 'run', request_id: `equiv-oversized-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+      return { body: JSON.parse(result.content[0].text), registry };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    expect(['failed', 'uncertain'], JSON.stringify(baseline.body)).toContain(baseline.body.status);
+    expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
+    expect(branch.body.termination).toBe(baseline.body.termination);
+    expect(branch.body.diagnostics.join(' ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
+    expect(baseline.body.diagnostics.join(' ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
+  }, 20000);
+
+  // -------------------------------------------------------------------------
+  // Queue contention with two requests -- `withServerQueue`'s bounded
+  // per-serverRef serialization (#2892 D2) lives INSIDE `defaultCallMcpWorker*`,
+  // invisible to an injected `callMcpWorker` double, so this also needs the
+  // REAL launch pipeline (two real spawned workers against the SAME
+  // registered serverRef, `sessionIsolation: 'serialized'`), mirroring the
+  // existing "two tasks on the SAME registered serialized server both
+  // complete independently" test (#2892 D2/D3) exactly, on both sides.
+  // -------------------------------------------------------------------------
+  it('scenario: queue contention with two requests against the same serialized serverRef -- both complete independently, with no crossover, on both sides', async () => {
+    async function runOne(registerFn: any) {
+      const root = await tempRoot();
+      const workA = path.join(root, 'work-a'); await mkdir(workA, { recursive: true });
+      const workB = path.join(root, 'work-b'); await mkdir(workB, { recursive: true });
+      const briefA = path.join(root, 'brief-a.md');
+      const briefB = path.join(root, 'brief-b.md');
+      const recordPath = path.join(root, 'record.jsonl');
+      const configPath = path.join(root, 'fixture-config.json');
+      await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'success' }));
+      const f = buildFixture(root, 'mcp');
+      registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      f.profile.mcp.serverRef = 'fixture-server-equiv-queue';
+      f.profile.mcp.sessionIsolation = 'serialized';
+      f.drivers.codex.mcpProfile = { servers: ['fixture-server-equiv-queue'] };
+      f.drivers.codex.mcpRegistry = {
+        get: async () => ({ name: 'fixture-server-equiv-queue', type: 'stdio' as const, command: process.execPath,
+          args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
+      };
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefA, workdir: workA, final_output: path.join(workA, 'final.json'), transport: 'mcp' });
+      await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
+        brief: briefB, workdir: workB, final_output: path.join(workB, 'final.json'), transport: 'mcp' });
+      const registry = createInvocationRegistry({ maxActive: 4 });
+      const tools = new Map<string, any>();
+      await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: root,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
+      });
+      const handler = tools.get('worker-invoke').handler;
+      const buildInput = (brief: string, work: string, requestId: string) => ({
+        operation: 'run', request_id: requestId, role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: work, final_output: path.join(work, 'final.json'), transport: 'mcp',
+      });
+      const [a, b] = await Promise.all([
+        handler(buildInput(briefA, workA, `equiv-queue-a-${Math.random()}`)),
+        handler(buildInput(briefB, workB, `equiv-queue-b-${Math.random()}`)),
+      ]);
+      const bodyA = JSON.parse(a.content[0].text);
+      const bodyB = JSON.parse(b.content[0].text);
+      const lines = (await readFile(recordPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      const calls = lines.filter((l: any) => l.event === 'call');
+      return { bodyA, bodyB, registry, callCount: calls.length, workspaceCount: new Set(calls.map((c: any) => c.worker.workspace)).size };
+    }
+    const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
+    const branch = await runOne(registerProductionToolset);
+    expect(baseline.bodyA.status, JSON.stringify(baseline.bodyA)).toBe('completed');
+    expect(baseline.bodyB.status, JSON.stringify(baseline.bodyB)).toBe('completed');
+    expect(branch.bodyA.status, JSON.stringify(branch.bodyA)).toBe(baseline.bodyA.status);
+    expect(branch.bodyB.status, JSON.stringify(branch.bodyB)).toBe(baseline.bodyB.status);
+    // Both tasks actually ran (serialized, not dropped), and never shared a
+    // workspace -- no crossover -- on EITHER side.
+    expect(branch.callCount).toBe(2);
+    expect(baseline.callCount).toBe(2);
+    expect(branch.workspaceCount).toBe(2);
+    expect(baseline.workspaceCount).toBe(2);
+  }, 30000);
+
+  // -------------------------------------------------------------------------
+  // Resolver error -- `resolveWorkerInvocation` itself throwing, as opposed
+  // to the already-covered `loadWorkerInputs` throw. Both calls live inside
+  // the exact same shared-PREFIX try block with the exact same catch (see
+  // `runInner`'s own doc comment in worker-invoke.mjs), so this is provable
+  // by construction without running anything -- this test exercises it
+  // anyway, end-to-end, via `vi.doMock` + a scoped module-registry reset
+  // (never a file-wide `vi.mock`, which would break every other test in
+  // this file that depends on the REAL resolver). Placed LAST in this
+  // file's test order and carefully unmocked/restored in `finally` to
+  // bound the blast radius of resetting the module registry mid-suite.
+  // -------------------------------------------------------------------------
+  it('scenario: resolver error (resolveWorkerInvocation throws) -- byte-equivalent to baseline, same as a loadWorkerInputs throw by construction', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    vi.doMock('../../../src/serve/worker-invocation.js', async (importOriginal) => {
+      const mod = await importOriginal<any>();
+      return { ...mod, resolveWorkerInvocation: async () => { throw new Error('synthetic: resolver exploded'); } };
+    });
+    vi.doMock('../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts', async (importOriginal) => {
+      const mod = await importOriginal<any>();
+      return { ...mod, resolveWorkerInvocation: async () => { throw new Error('synthetic: resolver exploded'); } };
+    });
+    vi.resetModules();
+    try {
+      const { workerInvoke: freshBranch } = await loadRecoveryModuleGraph();
+      const freshBaseline = await import('../../fixtures/ralph-recovery-baseline/worker-invoke.mjs') as any;
+      async function runOne(registerFn: any) {
+        const root = await tempRoot();
+        const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+        const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+        const finalOutput = path.join(work, 'final.json');
+        const f = buildFixture(root, 'shell');
+        const registry = freshBranch.createInvocationRegistry({ maxActive: 4 });
+        const tools = new Map<string, any>();
+        await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+          projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+          loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+          now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
+        });
+        const handler = tools.get('worker-invoke').handler;
+        const result = await handler({ operation: 'run', request_id: `equiv-resolver-throw-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+          brief: briefPath, workdir: work, final_output: finalOutput, transport: 'shell' });
+        return { body: JSON.parse(result.content[0].text), registry };
+      }
+      const baseline = await runOne(freshBaseline.registerWorkerInvokeToolset);
+      const branch = await runOne(freshBranch.registerWorkerInvokeToolset);
+      expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('blocked');
+      expect(baseline.body.termination).toBe('confirmed');
+      expect(baseline.body.diagnostics).toEqual(['synthetic: resolver exploded']);
+      expect(branch.body.status).toBe(baseline.body.status);
+      expect(branch.body.termination).toBe(baseline.body.termination);
+      expect(branch.registry.canStart()).toBe(baseline.registry.canStart());
+    } finally {
+      vi.doUnmock('../../../src/serve/worker-invocation.js');
+      vi.doUnmock('../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts');
+      vi.resetModules();
+    }
+  }, 20000);
+
+  // -------------------------------------------------------------------------
+  // gated<->not-gated interleaving on ONE server instance. Baseline has no
+  // gating concept at all, so this is a branch-only test (there is nothing
+  // for the frozen fixture to "interleave" against) -- it instead proves
+  // the property the equivalence tests above cannot: that a REAL gated
+  // admission/settlement on one request leaves NO observable trace that
+  // changes a LATER not-gated request's outcome on the same registration,
+  // including when the breaker is saturated with blocking markers.
+  // -------------------------------------------------------------------------
+  describe('gated<->not-gated interleavings on one server instance (branch-only; baseline has no gating concept to interleave against)', () => {
+    const breakers: any[] = [];
+    afterEach(() => { for (const breaker of breakers.splice(0)) breaker.destroy(); vi.restoreAllMocks(); });
+    function statefulBreaker() {
+      const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0,
+        policy: { maxOutstandingReservations: 1 } });
+      breakers.push(breaker);
+      const admit = vi.spyOn(breaker, 'admit');
+      const settle = vi.spyOn(breaker, 'settle');
+      return { breaker, admit, settle };
+    }
+
+    async function registerInterleaved(options: Record<string, unknown>, registry: any, f: any, root: string, work: string, briefPath: string) {
+      const tools = new Map<string, any>();
+      await registerProductionToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
+        projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+        now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
+        ...options,
+      });
+      const handler = tools.get('worker-invoke').handler;
+      return async () => {
+        const result = await handler({ operation: 'run', request_id: `interleave-${Math.random()}`, role: 'coding', task: 'implementation', group: 'workers',
+          brief: briefPath, workdir: work, final_output: path.join(work, `final-${Math.random()}.json`), transport: 'shell' });
+        return JSON.parse(result.content[0].text);
+      };
+    }
+
+    async function commitInterleaved(options: any) {
+      if (!options.admission) {
+        expect(options).not.toHaveProperty('dispatchGuard');
+        return;
+      }
+      const a = options.admission;
+      expect(a.breaker.beginDispatch(a.token, { invocationId: a.invocationId, selectionDigest: a.selectionDigest })).toEqual({ ok: true });
+      await (await import('../../../tools/ralph-external/session-launcher.mjs')).debitDirectWorkerAllowance(a.ledger);
+      expect(a.breaker.commitDispatch(a.token)).toEqual({ ok: true });
+    }
+
+    it('a gated run does not change what a FOLLOWING not-gated run does, including with the breaker saturated', async () => {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const f = buildFixture(root, 'shell');
+      const registry = createInvocationRegistry({ maxActive: 8 });
+      const { breaker, admit, settle } = statefulBreaker();
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      };
+
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      // 1. A GATED run (canVerifyAttempt stays true; global switch stays
+      // on): the breaker's `admit`/`settle` are genuinely consulted.
+      const gatedBody = await runOneRequest();
+      expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
+      expect(admit.mock.calls.length).toBeGreaterThan(0);
+      expect(settle.mock.calls.length).toBeGreaterThan(0);
+
+      // 2. The real breaker is saturated by the unresolved degraded run.
+      expect(breaker.hasUnresolvedStop(gatedBody.invocationId)).toBe(true);
+      expect(breaker.admit({ invocationId: 'capacity-probe', scopeKeys: [] }).ok).toBe(false);
+      const saturatedAdmitCalls = admit.mock.calls.length;
+
+      // 3. A NOT-GATED run on the SAME registration/registry/breaker.
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      const notGatedBody = await runOneRequest();
+      expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
+      // The saturated breaker was NEVER consulted by the not-gated run --
+      // admit()/settle() call counts are unchanged since step 1.
+      expect(admit.mock.calls.length).toBe(saturatedAdmitCalls);
+    }, 20000);
+
+    it('a not-gated run does not change what a FOLLOWING gated run does', async () => {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const f = buildFixture(root, 'shell');
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false }); // not-gated FIRST
+      const registry = createInvocationRegistry({ maxActive: 8 });
+      const { breaker, admit, settle } = statefulBreaker();
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      };
+
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker, launchShellWorker: launchSuccess }, registry, f, root, work, briefPath);
+      // 1. A NOT-GATED run first -- the breaker must never be consulted.
+      const notGatedBody = await runOneRequest();
+      expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
+      expect(admit.mock.calls).toHaveLength(0);
+      expect(settle.mock.calls).toHaveLength(0);
+
+      // 2. Flip to gated and run again on the SAME registration/registry/
+      // breaker -- it must admit/settle normally, exactly as if the prior
+      // not-gated run had never happened.
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: undefined });
+      const gatedBody = await runOneRequest();
+      expect(gatedBody.status, JSON.stringify(gatedBody)).toBe('completed');
+      expect(admit.mock.calls.length).toBeGreaterThan(0);
+      expect(settle.mock.calls.length).toBeGreaterThan(0);
+    }, 20000);
+
+    // #2915 round 8 review 8 (D3): a GATED run that times out (its own
+    // deadline-stop escalation genuinely fires) must leave no dangling
+    // timer or stop-control handle behind that a FOLLOWING not-gated run
+    // on the SAME registration could observe or be slowed by, and the
+    // registry's own capacity bookkeeping must reflect only genuinely
+    // live work afterward.
+    it('a gated timeout retains its stop control while a following disabled run completes independently', async () => {
+      const root = await tempRoot();
+      const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
+      const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello');
+      const f = buildFixture(root, 'shell');
+      const registry = createInvocationRegistry({ maxActive: 2 });
+      const { breaker } = statefulBreaker();
+      let monotonic = 0;
+      breaker.nowMs = () => monotonic;
+      // A child that never responds to any signal -- the deadline-stop
+      // escalation (SIGTERM, then SIGKILL after its own bounded grace
+      // window) never confirms it, so this settles genuinely `uncertain`
+      // (never terminal; M2 keeps an unconfirmed-termination run LIVE).
+      const neverRespondingChild = () => { const c: any = new EventEmitter(); c.exitCode = null; c.signalCode = null; c.kill = () => {}; return c; };
+      let launch: any = async (_invocation: any, options: any) => {
+        await commitInterleaved(options);
+        monotonic = options.dispatchGuard.deadlineAtMs - 1;
+        return { launched: true, mode: 'degraded', child: neverRespondingChild() };
+      };
+      const runOneRequest = await registerInterleaved({ scopedBreaker: breaker,
+        launchShellWorker: (...args: any[]) => launch(...args), terminateChildWithGrace: async () => ({ terminated: false }),
+      }, registry, f, root, work, briefPath);
+
+      const timedOutBody = await runOneRequest();
+      expect(timedOutBody.status, JSON.stringify(timedOutBody)).toBe('uncertain');
+      const gatedEntry = registry.get(timedOutBody.invocationId);
+      expect(gatedEntry, 'the timed-out run stays LIVE (M2); never silently dropped from the registry').toBeDefined();
+      // Keep explicit stop authority while this worker still occupies capacity.
+      expect(gatedEntry?.control.stop).toBeTypeOf('function');
+      expect(gatedEntry?.control.pollingStopped).toBe(false);
+      // Capacity reflects exactly one genuinely live run.
+      expect(registry.liveCount()).toBe(1);
+      expect(registry.canStart()).toBe(true); // maxActive: 2, one slot still free
+
+      // A FOLLOWING not-gated run on the SAME registration/registry must
+      // complete normally, unaffected by the first run's own leftover
+      // timeout machinery (no crossed timers, no stolen control handle).
+      await registerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      const launchSuccess = async (invocation: any, options: any) => {
+        await commitInterleaved(options);
+        await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+        return { launched: true, mode: 'degraded', child: closingChild(0) };
+      };
+      launch = launchSuccess;
+      const notGatedBody = await runOneRequest();
+      expect(notGatedBody.status, JSON.stringify(notGatedBody)).toBe('completed');
+      // Capacity now reflects the first (still-live/uncertain) run plus the
+      // second, now-terminal one -- exactly as if these two runs had never
+      // interleaved with each other's gating state at all.
+      expect(registry.liveCount()).toBe(1);
+      expect(registry.get(notGatedBody.invocationId)?.terminalAt).not.toBeNull();
+    }, 20000);
+  });
+});
+
+describe('review 10 frozen fixture ownership', () => {
+  it('C1: importing the frozen adapter and running its default input loader never loads the current installation owner', async () => {
+    // The unchanged authorization helper imports current config in source mode.
+    // Supply the real helper separately to isolate the frozen loader graph.
+    const repoAccess = await import('../../../src/policy/repo-access.js');
+    vi.resetModules();
+    const currentOwnerLoaded = vi.fn(() => { throw new Error('current installation owner entered the frozen graph'); });
+    vi.doMock('../../../src/models/worker-installation.mjs', currentOwnerLoaded);
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'frozen default-loading probe');
+    const f = buildFixture(root, 'shell');
+    const spies: any[] = [];
+    try {
+      const adapter = await import('../../fixtures/ralph-recovery-baseline/provider-adapter.mjs');
+      const owner = await import('../../fixtures/ralph-recovery-baseline/worker-installation.mjs');
+      expect(adapter.createProvider).toBe(owner.createProvider);
+      await adapter.ensureProvidersRegistered();
+      expect(owner.hasProvider('codex')).toBe(true);
+      expect(owner.createProvider('codex')).not.toHaveProperty('parseWorkerAttemptFinal');
+      expect(await adapter.workerNegativeFixtureDigest()).toMatch(/^sha256:[a-f0-9]{64}$/);
+      const config = await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js');
+      const { ConfigLoader } = await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js');
+      const inventory = await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js');
+      const discovery = await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js');
+      // Substitute filesystem-derived inputs only. The frozen default loader,
+      // resolver, adapter parser, and registered run() all execute normally.
+      spies.push(vi.spyOn(config, 'readAiwgConfig').mockResolvedValue(f.snapshot.config));
+      spies.push(vi.spyOn(ConfigLoader.prototype, 'load').mockResolvedValue(f.snapshot.models));
+      spies.push(vi.spyOn(ConfigLoader.prototype, 'getInputDigests').mockReturnValue(f.snapshot.modelDigests));
+      spies.push(vi.spyOn(inventory, 'collectProviderInventory').mockResolvedValue({} as any));
+      spies.push(vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockResolvedValue(f.snapshot.catalog));
+      const installed = vi.spyOn(owner, 'loadRecordedWorkerInstallations').mockResolvedValue({
+        registry: f.snapshot.registry, installations: f.snapshot.installations, drivers: f.drivers,
+      });
+      spies.push(installed);
+      const baseline = await import('../../fixtures/ralph-recovery-baseline/worker-invoke.mjs');
+      const tools = new Map<string, any>();
+      await baseline.registerWorkerInvokeToolset({ registerTool(name: string, _config: any, handler: any) { tools.set(name, handler); } }, {
+        projectRoot: root, workerWorktreesRoot: work, now: () => new Date(f.now), repoAccess,
+        launchShellWorker: async (inv: any) => {
+          await writeFile(inv.finalPath, `${JSON.stringify({ type: 'result', result: { version: 1, status: 'completed', summary: 'ok',
+            claims: [], artifacts: [], checks: [], limitations: [] } })}\n`);
+          return { launched: true, mode: 'degraded', child: closingChild(0) };
+        },
+      });
+      const body = JSON.parse((await tools.get('worker-invoke')({ operation: 'run', request_id: 'frozen-default', role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: work, final_output: path.join(work, 'final.json'), transport: 'shell' })).content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+      expect(installed).toHaveBeenCalledOnce();
+      expect(currentOwnerLoaded).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+      vi.doUnmock('../../../src/models/worker-installation.mjs');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('review 11 populated default driver equivalence', () => {
+  it.each(['src', 'dist'])('P2 (%s): real Codex default-loaded drivers have exactly the frozen Reflect.ownKeys and retain gated capabilities', async (side) => {
+    vi.resetModules();
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', side);
+    const root = await tempRoot();
+    const cwd = path.join(root, 'project');
+    await mkdir(cwd);
+    const loaded: any[] = [];
+    const disabled: any[] = [];
+    const owners: any[] = [];
+    try {
+      const current = await loadRecoveryModuleGraph();
+      for (const baseline of [true, false]) {
+        const owner = baseline
+          ? await import('../../fixtures/ralph-recovery-baseline/worker-installation.mjs')
+          : current.installation;
+        owners.push(owner);
+        const f = workerResolutionFixture();
+        f.snapshot.config.parallelism!.worker_dispatch = true;
+        const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
+        adapter.id = 'codex';
+        const binding = f.snapshot.installations.codex;
+        const profile = adapter.invocationProfiles![binding.profile];
+        const policy = f.snapshot.models.defaults.workerSelection;
+        const { qualificationDigest } = await import('../../../src/models/qualification-digest.mjs');
+        const { requiredWorkerControls } = await import('../../../src/models/provider-policy.js');
+        const controls = requiredWorkerControls({ policy });
+        // Synthetic host evidence and module binding only. The installed factory
+        // constructs the actual current/frozen Codex adapter, with no driver stub.
+        for (const control of Object.values(profile.controls)) Object.assign(control, { support: 'external', mapping: 'synthetic host boundary' });
+        binding.boundary = { kind: 'os', identity: 'fixture:host', digest: qualificationDigest('fixture:host'), controls };
+        const configDir = path.join(root, baseline ? 'baseline' : 'current');
+        await mkdir(configDir, { mode: 0o700 });
+        vi.stubEnv('AIWG_CONFIG', configDir);
+        const adapterPath = path.resolve(baseline ? 'test/fixtures/ralph-recovery-baseline/codex-adapter.mjs' : 'tools/ralph-external/lib/codex-adapter.mjs');
+        // Preserve the adapter body; only route its relative imports from the
+        // private installed copy back to the current/frozen dependency graph.
+        const source = (await readFile(adapterPath, 'utf8')).replace(
+          /from '(\.[^']+)'/g, (_match, relative) => `from '${pathToFileURL(path.resolve(path.dirname(adapterPath), relative)).href}'`);
+        await writeFile(path.join(configDir, 'driver.mjs'), source, { mode: 0o600 });
+        await writeFile(path.join(configDir, 'package.json'), JSON.stringify({ name: 'fixture-codex', version: adapter.adapterVersion, type: 'module' }), { mode: 0o600 });
+        const installation: any = {
+          adapter, profile: binding.profile, cliVersion: binding.cliVersion, policy,
+          cwd, workerWritableRoots: [cwd], boundary: binding.boundary,
+          effectiveConfigDigest: qualificationDigest(policy), accountScope: binding.accountScope,
+          executable: process.execPath, runtimeFiles: [path.join(configDir, 'driver.mjs')], environment: {},
+          modules: [{ reference: adapter.runtimeDriver, packageRoot: configDir, packageName: 'fixture-codex',
+            packageVersion: adapter.adapterVersion, modulePath: 'driver.mjs', interfaceVersion: 1,
+            sha256: `sha256:${createHash('sha256').update(source).digest('hex')}`, adapterIds: ['codex'], platforms: ['linux'] }],
+        };
+        // Inspection needs only the identity for this external-control fixture;
+        // defer importing the real adapter until the installation loader does so.
+        const scope = await owner.inspectWorkerInstallation({ getName: () => 'codex' }, installation);
+        profile.installationQualification = { scopeDigest: scope.scopeDigest, fixtureDigest: await owner.workerNegativeFixtureDigest(),
+          verifiedAt: new Date().toISOString(), evidenceRef: 'fixture:synthetic-host-only' };
+        installation.evidence = { ...profile.installationQualification,
+          cases: Object.fromEntries(Object.keys(owner.workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
+        await writeFile(path.join(configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
+          registrations: [{ cli: 'codex', binding, adapter, installation }] }), { mode: 0o600 });
+        const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : current.config;
+        const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : current.configLoader;
+        const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : current.inventory;
+        const discovery = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/model-discovery.js') : current.discovery;
+        const spies = [
+          vi.spyOn(config, 'readAiwgConfig').mockResolvedValue(f.snapshot.config),
+          vi.spyOn(ConfigLoader.prototype, 'load').mockResolvedValue(f.snapshot.models),
+          vi.spyOn(ConfigLoader.prototype, 'getInputDigests').mockReturnValue(f.snapshot.modelDigests),
+          vi.spyOn(inventory, 'collectProviderInventory').mockResolvedValue({} as any),
+          vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockResolvedValue(f.snapshot.catalog),
+        ];
+        try {
+          const { loadWorkerInputs } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/cli/handlers/models.js') : current.models;
+          loaded.push(await loadWorkerInputs({ cwd, frameworkRoot: process.cwd(), args: [], rawArgs: [] } as any));
+          f.snapshot.config.parallelism!.worker_dispatch = false;
+          disabled.push(await loadWorkerInputs({ cwd, frameworkRoot: process.cwd(), args: [], rawArgs: [] } as any));
+          f.snapshot.config.parallelism!.worker_dispatch = true;
+        } finally { for (const spy of spies) spy.mockRestore(); }
+      }
+      expect(Object.keys(loaded[0].drivers)).toEqual(['codex']);
+      expect(Object.keys(loaded[1].drivers)).toEqual(['codex']);
+      const driver = loaded[1].drivers.codex;
+      expect(Reflect.ownKeys(driver)).toEqual(Reflect.ownKeys(loaded[0].drivers.codex));
+      expect(Reflect.ownKeys(driver)).not.toContain('parseWorkerAttemptFinal');
+      expect(Reflect.ownKeys(driver)).not.toContain('canVerifyAttempt');
+      const capabilities = owners[1].getWorkerRecoveryCapabilities(driver);
+      expect(capabilities.canVerifyAttempt).toBe(true);
+      expect(owners[1].getWorkerRecoveryCapabilities({ ...driver })).toBeNull();
+      const launcher = current.launcher;
+      const eligibility = { invocation: { selected: { cli: 'codex' } }, drivers: loaded[1].drivers, config: loaded[1].snapshot.config };
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: false }).gated).toBe(false);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: true }).gated).toBe(true);
+      const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+      await expect(capabilities.parseWorkerAttemptFinal(JSON.stringify(claims), { format: 'json',
+        observation: { transport: 'shell', status: 'completed', attemptOutcome: 'succeeded', exitCode: 0 } })).resolves.toEqual(claims);
+      // Disabled loading has its own equivalence assertion. Populated-driver
+      // coverage above does not depend on disabled loading returning drivers.
+      expect(Reflect.ownKeys(disabled[1].drivers)).toEqual(Reflect.ownKeys(disabled[0].drivers));
+      for (const cli of Reflect.ownKeys(disabled[0].drivers)) {
+        expect(Reflect.ownKeys(disabled[1].drivers[cli])).toEqual(Reflect.ownKeys(disabled[0].drivers[cli]));
+      }
+      // The registration is private to the exact driver, not its own properties
+      // or a spread copy. Re-register that copy explicitly in this graph.
+      const keys = Reflect.ownKeys(driver);
+      owners[1].registerWorkerRecoveryCapabilities(driver, { ...capabilities, canVerifyAttempt: false });
+      expect(Reflect.ownKeys(driver)).toEqual(keys);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, gateEnabled: true }))
+        .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+      const copy = { ...driver };
+      expect(owners[1].getWorkerRecoveryCapabilities(copy)).toBeNull();
+      expect(launcher.directRecoveryEligibility({ ...eligibility, drivers: { codex: copy }, gateEnabled: true }).gated).toBe(true);
+      owners[1].registerWorkerRecoveryCapabilities(copy, owners[1].getWorkerRecoveryCapabilities(driver));
+      expect(Reflect.ownKeys(copy)).toEqual(keys);
+      expect(launcher.directRecoveryEligibility({ ...eligibility, drivers: { codex: copy }, gateEnabled: true }))
+        .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+    } finally { vi.resetModules(); }
   });
 });

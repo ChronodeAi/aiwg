@@ -271,7 +271,7 @@ describe('T-OG-15 OpenHuman direct command contract', () => {
       const result: any = await new SessionLauncher().launchWorker({ invocationPath, runDir, inputs: { snapshot, drivers }, now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
         isolation: { mode: 'degraded', reason: 'synthetic: no systemd user manager' }, allowDegraded: true,
-        launchIsolated: (options: any) => { launches.push(structuredClone({ ...options, gate: undefined, config: undefined }));
+        launchIsolated: (options: any) => { launches.push(structuredClone({ ...options, gate: undefined, config: undefined, onDispatchCommit: undefined }));
           return launchIsolatedWorker(options); } });
       expect(result.exitCode ?? result.exit?.exitCode ?? 0, JSON.stringify(result)).toBe(0);
     } finally { vi.unstubAllEnvs(); }
@@ -291,6 +291,11 @@ describe('T-OG-15 OpenHuman direct command contract', () => {
   it('OD03a a direct systemd launch plan refuses brief-json without a framed params file', async () => {
     const { planDirectWorkerLaunch } = await import('../../../tools/ralph-external/session-launcher.mjs');
     const { plan } = await openHumanPlan();
+    // #2915 final (step 6, compatibility): this validation throw is
+    // synchronous again — `planDirectWorkerLaunch` is no longer
+    // unconditionally `async`, restoring the pre-#2915 literal sync
+    // behaviour for every path that never reaches the gated admission
+    // branch (see session-launcher.mjs's doc comment on this function).
     expect(() => planDirectWorkerLaunch({ invocation: plan.invocation, memoryMaxGb: 1 }))
       .toThrow('brief-json stdin requires an explicit conductor-framed params file');
   });

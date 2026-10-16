@@ -260,6 +260,13 @@ export class WarpAdapter extends ProviderAdapter {
     error.code = 'OG_CONTRACT_UNSUPPORTED';
     throw error;
   }
+
+  /** #2915 follow-up: `parseWorkerFinal` above always throws, for every
+   * input -- there is no observed final envelope to extract from yet, ever.
+   * A canary admitted for this CLI could structurally never report a
+   * verified success, so this CLI is never eligible for recovery-breaker
+   * gating at all (see `ProviderAdapter.supportsAttemptVerification`). */
+  supportsAttemptVerification() { return false; }
 }
 
 /** Installed-module registration: exactly the one approved adapter ID. */

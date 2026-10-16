@@ -132,8 +132,8 @@ describe('T-OG-16 self-counted caps obey project/group/profile limits (no host-e
 });
 
 describe('T-OG-16 the #2954 dispatch gate and launchIsolatedWorker are the documented gate-then-launch step', () => {
-  it('refuses to launch a resolved worker command when the live host-resource gate blocks', () => {
-    const outcome = planDirectWorkerLaunch({
+  it('refuses to launch a resolved worker command when the live host-resource gate blocks', async () => {
+    const outcome = await planDirectWorkerLaunch({
       name: 'lifecycle-demo', memoryMaxGb: 2, command: '/usr/bin/fixture-worker',
       config: { parallelism: { worker_dispatch: true } },
       live: { supported: true, availMemGb: 1, loadRatio: 3, memPsiAvg10: 90, memPsiAvg60: 90, workers: 50, freeDiskGb: 0.5 },

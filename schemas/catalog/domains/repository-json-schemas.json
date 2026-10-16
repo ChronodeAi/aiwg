@@ -1721,7 +1721,15 @@
       "compatibility": {
         "mode": "unknown"
       },
-      "consumers": []
+      "consumers": [],
+      "projections": [
+        {
+          "kind": "mirror",
+          "path": "test/fixtures/ralph-recovery-baseline/schemas/models/model-catalog.v1.schema.json",
+          "digest": "sha256:94045d5142dcbe29217c10ea414734bdfc8e4ebfb7889dc70eb2bdad9a2fc624",
+          "generated": false
+        }
+      ]
     },
     {
       "logicalName": "schemas.models.model.config.compatibility.v1",
@@ -1781,7 +1789,15 @@
       "compatibility": {
         "mode": "unknown"
       },
-      "consumers": []
+      "consumers": [],
+      "projections": [
+        {
+          "kind": "mirror",
+          "path": "test/fixtures/ralph-recovery-baseline/schemas/models/provider-model-capabilities.v1.schema.json",
+          "digest": "sha256:0a3d734baa4ca9d2a6b70ee8bf94725c8626191479601956ebfa6ffdb5125f52",
+          "generated": false
+        }
+      ]
     },
     {
       "logicalName": "schemas.ops.artifact.governance",

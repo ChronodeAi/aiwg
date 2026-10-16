@@ -8,6 +8,21 @@ import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
 import { satisfies, valid, validRange } from 'semver';
 
+// Recovery metadata belongs to the installed driver identity, never its shape.
+const workerRecoveryCapabilities = new WeakMap();
+
+/** Register capabilities for an installed or caller-supplied driver. Keep the
+ * original driver when passing it to readers; copies must be registered anew. */
+export function registerWorkerRecoveryCapabilities(driver, capabilities) {
+  workerRecoveryCapabilities.set(driver, Object.freeze({ ...capabilities }));
+  return driver;
+}
+
+/** Gated readers use this single lookup; ordinary driver properties are ignored. */
+export function getWorkerRecoveryCapabilities(driver) {
+  return workerRecoveryCapabilities.get(driver) ?? null;
+}
+
 // Shipped negative-suite definition. Evidence producers hash this definition,
 // including case semantics and permission rows; arbitrary fixture labels cannot
 // qualify an installation. Passed observations still come from the trusted host.
@@ -870,6 +885,15 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };
+      registerWorkerRecoveryCapabilities(drivers[cli], {
+        ...(typeof instance.parseWorkerAttemptFinal === 'function'
+          ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
+        // Adapters with neither an explicit signal nor an attempt parser cannot
+        // verify success (e.g. OpenHuman); never admit an unreachable canary.
+        canVerifyAttempt: typeof instance.supportsAttemptVerification === 'function'
+          ? !!instance.supportsAttemptVerification()
+          : typeof instance.parseWorkerAttemptFinal === 'function',
+      });
       installations[cli] = structuredClone(binding);
       Object.assign(resolvedRegistry, candidateRegistry);
     } catch { /* One missing/changed installation cannot grant authority or hide qualified peers. */ }

@@ -40,7 +40,7 @@ export async function prepareWorkerStdin(bytes, root = tmpdir()) {
 }
 
 export async function launchPreparedShellWorker(invocation, { allowDegraded, config, name, live, readers, thresholdOverlay,
-  memoryMaxGb, driver, servedRoot, isolation, spawn, spawnAsync, stdinRuntimeRoot },
+  memoryMaxGb, driver, servedRoot, isolation, spawn, spawnAsync, stdinRuntimeRoot, admission, invocationId, dispatchGuard },
   { loadRalphExternal, readBoundedFile, importImpl, describeGateFailures }) {
   let attempt;
   let cleanup = () => Promise.resolve();
@@ -58,7 +58,7 @@ export async function launchPreparedShellWorker(invocation, { allowDegraded, con
       ({ stdinPath, cleanup } = await prepareWorkerStdin(bytes, stdinRuntimeRoot));
     }
     const launch = await planDirectWorkerLaunch({ invocation, config, allowDegraded, name, live, readers,
-      thresholdOverlay, memoryMaxGb, stdinPath, ownedGroup: true, isolation,
+      thresholdOverlay, memoryMaxGb, stdinPath, ownedGroup: true, isolation, admission, invocationId, dispatchGuard,
       spawn, spawnAsync, onSpawnAttempt: value => {
         attempt = value;
         value.child?.once('close', (exitCode, signalCode) => { Object.assign(value, { closed: true, exitCode, signalCode }); });

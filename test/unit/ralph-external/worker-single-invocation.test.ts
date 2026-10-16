@@ -101,6 +101,43 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).health.state).toBe('completed');
   });
 
+  // #2915 review 5 (finding 6, disabled-dispatch equivalence): a REGRESSION
+  // introduced by the review-4 round -- `healthFinalValid` started reading
+  // the strict final's own `status` field unconditionally, so a
+  // schema-valid but `status: 'failed'` claim now changed baseline health
+  // from `completed` to `failed-to-start`/`FINAL_INVALID` even with
+  // recovery completely disabled (`scopedBreaker: null`). origin/main's
+  // own behavior (a successful strict PARSE alone, regardless of the
+  // claim's own `.status`, is sufficient for `finalValid`) must be
+  // preserved byte-for-byte whenever recovery is not gated.
+  it('with recovery disabled, a schema-valid but status:failed claim still reports baseline completed health, never failed-to-start/FINAL_INVALID (#2915 review 5 finding 6)', async () => {
+    const f = await fixture();
+    // A strict parser that DOES validate (no throw -- a schema-valid
+    // claim) but whose own claimed `status` is 'failed'. Under review 4's
+    // gated logic this would read `healthFinalValid = false`; disabled
+    // dispatch must never apply that stricter check.
+    (f.drivers.codex as any).parseWorkerFinal = async () => ({ status: 'failed', summary: 'worker claims failure despite a clean exit' });
+    const claims = { version: 1, status: 'failed', summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] };
+    (f.drivers.codex as any).extractFinal = () => claims;
+    const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.unref = () => {};
+    child.pid = 2147483645;
+    const result = await f.launch({
+      // Explicit, unambiguous disabled-dispatch: no recovery breaker at all.
+      scopedBreaker: null,
+      launchIsolated: () => {
+        queueMicrotask(() => {
+          writeFileSync(f.final, JSON.stringify(claims));
+          child.stdout.end('{}\n'); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null);
+        });
+        return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-disabled-health' };
+      }, isolationStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0, result: 'success' }),
+    });
+    expect(result.attemptOutcome).toBeUndefined(); // disabled dispatch: no new field at all
+    expect(result.health.state).toBe('completed');
+    expect(result.health.state).not.toBe('failed-to-start');
+    expect(JSON.parse(await readFile(path.join(f.runDir, 'exit.json'), 'utf8')).health.state).toBe('completed');
+  });
+
   it('legacy extraction cannot erase duplicate final keys and authorize completed health', async () => {
     const f = await fixture({ stdoutOnly: true });
     const adapter = new CodexAdapter();
@@ -312,6 +349,12 @@ describe('T-OG-15/20 one attached invocation without managed state', () => {
     expect(JSON.parse(await readFile(path.join(f.runDir, 'final-evidence.json'), 'utf8'))).toMatchObject({ invocationId: result.invocationId, candidate: true, verified: false });
     expect(await readdir(f.root)).not.toContain('.aiwg');
     await expect(lstat(path.join(f.root, 'injected'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // #2915 step 4: path-pair retry inference is deleted (retry is now
+    // `options.retryOf`-declared only), so a same-launcher, same-runDir
+    // call with no `retryOf` is unrelated work — never gated by
+    // stop-before-retry. It reaches `launchOneWorker`'s own independent
+    // fresh/empty runDir precondition directly, restoring this assertion to
+    // its pre-#2915 (origin/main) form.
     await expect(f.launch()).rejects.toThrow(/fresh|empty/);
   });
 
@@ -991,7 +1034,7 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     expect(f.launchSpy).not.toHaveBeenCalled();
   });
 
-  it.each(['pid-reuse', 'pgid-reuse', 'conductor', 'unowned', 'unknown'])('never signals %s', kind => {
+  it.each(['pid-reuse', 'pgid-reuse', 'conductor', 'unowned', 'unknown', 'zero', 'init', 'negative', 'fractional', 'missing-supervisor'])('never signals %s', kind => {
     const own = sampleWorkerIdentity(process.pid)!;
     const identity: any = { ...own, pid: 54321, pgid: 54321 };
     const actual = { ...identity };
@@ -999,9 +1042,11 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     if (kind === 'pgid-reuse') actual.pgid = 123;
     if (kind === 'conductor') { identity.pgid = own.pgid; identity.pid = own.pgid; Object.assign(actual, identity); }
     if (kind === 'unowned') identity.uid += 1;
+    const unsafePid = new Map<string, number>([['zero', 0], ['init', 1], ['negative', -1], ['fractional', 1.5]]).get(kind);
+    if (unsafePid !== undefined) { identity.pid = unsafePid; identity.pgid = unsafePid; Object.assign(actual, identity); }
     const kill = vi.fn();
     expect(signalOwnedWorker(kind === 'unknown' ? null : identity, 'SIGKILL', {
-      sample: () => actual, group: () => [actual], kill, supervisor: own,
+      sample: () => actual, group: () => [actual], kill, supervisor: kind === 'missing-supervisor' ? null : own,
     })).toBe(false);
     expect(kill).not.toHaveBeenCalled();
   });
@@ -1027,6 +1072,15 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     for (const flag of ['--resume', '--provider', '--budget', '--dangerously-skip-permissions', '--launch-worker']) {
       expect(() => parseWorkerLaunchArgs([...args, flag])).toThrow();
     }
+  });
+
+  it('#2915 step 4: --retry-of/--retry-of-run-dir parse together or not at all', () => {
+    const args = ['--launch-worker', '--invocation', '/plan.json', '--run-dir', '/run'];
+    expect(parseWorkerLaunchArgs(args)).not.toHaveProperty('retryOf');
+    expect(parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1', '--retry-of-run-dir', '/prev-run']))
+      .toMatchObject({ retryOf: { invocationId: 'prev-1', runDir: '/prev-run' } });
+    expect(() => parseWorkerLaunchArgs([...args, '--retry-of', 'prev-1'])).toThrow(/together/);
+    expect(() => parseWorkerLaunchArgs([...args, '--retry-of-run-dir', '/prev-run'])).toThrow(/together/);
   });
 
   it('T-OG-14 rejects unsupported platforms before helper spawn', async () => {

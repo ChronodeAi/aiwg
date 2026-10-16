@@ -57,6 +57,66 @@ export function parseWorkerStatusArgs(args) {
 }
 
 /**
+ * #2915 round 8 (D1.9/C1): strict grammar for the one explicit operator
+ * recovery command for the per-task-chain allowance ledger --
+ * `--ledger-release <taskChainDigest> <n>|correction <n>|policy --capture-root DIR`.
+ * There is no age/pid/liveness inference anywhere in the ledger itself;
+ * this is the only way an uncharged, stranded reservation (or, for
+ * `policy`, a chain whose policy publish itself crashed and is now
+ * otherwise empty) is ever freed, and it is documented (see `printHelp`)
+ * as being only for a task chain with no running conductor.
+ *
+ * `correction <n>` (#2915 round 8 review 8, C9): the SAME refusal rules as
+ * `<n>` (an attempt), for a stranded, uncharged `correction-<n>` slot --
+ * refuses if `correction-<n>.charged` exists, otherwise unlinks it and
+ * reports its recorded invocation id, exactly like releasing an attempt.
+ */
+export function parseLedgerReleaseArgs(args) {
+  const idx = args.indexOf('--ledger-release');
+  const usage = 'Usage: ralph-external --ledger-release <taskChainDigest> <n>|correction <n>|policy --capture-root DIR';
+  if (idx === -1) throw new Error(usage);
+  const taskChainDigest = args[idx + 1];
+  const targetRaw = args[idx + 2];
+  if (!taskChainDigest || taskChainDigest.startsWith('--') || !targetRaw || targetRaw.startsWith('--')) {
+    throw new Error(usage);
+  }
+  let target;
+  let consumed = 3;
+  if (targetRaw === 'policy') {
+    target = { kind: 'policy' };
+  } else if (targetRaw === 'correction') {
+    const correctionRaw = args[idx + 3];
+    if (!correctionRaw || !/^[1-9][0-9]*$/.test(correctionRaw)) throw new Error(usage);
+    const attempt = Number(correctionRaw);
+    if (!Number.isSafeInteger(attempt)) throw new Error(usage);
+    target = { kind: 'correction', attempt };
+    consumed = 4;
+  } else {
+    if (!/^[1-9][0-9]*$/.test(targetRaw)) throw new Error(usage);
+    const attempt = Number(targetRaw);
+    if (!Number.isSafeInteger(attempt)) throw new Error(usage);
+    target = { kind: 'attempt', attempt };
+  }
+  const result = { taskChainDigest, target, captureRoot: null };
+  const rest = [...args.slice(0, idx), ...args.slice(idx + consumed)];
+  const seen = new Set();
+  for (let i = 0; i < rest.length; i++) {
+    const flag = rest[i];
+    if (seen.has(flag)) throw new Error(`Duplicate ledger-release option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--capture-root') {
+      const value = rest[++i];
+      if (!value || value.startsWith('--')) throw new Error('--capture-root requires a value');
+      result.captureRoot = value;
+      continue;
+    }
+    throw new Error(`Unsupported ledger-release option: ${flag}`);
+  }
+  if (!result.captureRoot) throw new Error('--ledger-release requires --capture-root DIR (the persistent ledger root for this task chain)');
+  return result;
+}
+
+/**
  * Parse command line arguments
  * @param {string[]} args
  * @returns {Object}
@@ -311,6 +371,28 @@ USAGE:
                           termination — degraded (--allow-degraded-worker)
                           runs cannot confirm descendant stop and never
                           report exit 0, even when the run looked clean.
+  ralph-external --ledger-release <taskChainDigest> <n> --capture-root DIR
+                          Operator recovery for the per-task-chain allowance
+                          ledger. Refuses if attempt-<n> is already charged;
+                          otherwise frees it and prints its recorded
+                          invocation id BEFORE releasing it. There is no
+                          automatic (age/pid/liveness) reclaim anywhere in
+                          the ledger — this is the only way a stranded,
+                          uncharged reservation is ever released. Only for
+                          a task chain with no running conductor.
+  ralph-external --ledger-release <taskChainDigest> correction <n> --capture-root DIR
+                          The same operator recovery, for a stranded,
+                          uncharged correction-<n> slot. Refuses if
+                          correction-<n> is already charged; otherwise
+                          frees it and prints its recorded invocation id
+                          BEFORE releasing it, exactly like an attempt.
+  ralph-external --ledger-release <taskChainDigest> policy --capture-root DIR
+                          Removes a chain's policy file. Refuses if the
+                          chain still has ANY attempt or correction entry
+                          (charged or not) — only for a chain that is
+                          otherwise already empty, to recover one whose
+                          policy publish itself crashed. Only for a task
+                          chain with no running conductor.
 
 ARGUMENTS:
   <objective>             Task objective (required for new loop)
@@ -615,6 +697,34 @@ async function main() {
     process.exitCode = workerExitCode(result);
     return;
   }
+  // #2915 round 8 (D1.9): operator recovery for the allowance ledger --
+  // read-only with respect to everything except the one uncharged slot (or
+  // the otherwise-empty chain's `policy`) named, and performs no provider
+  // probing, loop state or Mission work.
+  if (args.includes('--ledger-release')) {
+    let parsed;
+    try { parsed = parseLedgerReleaseArgs(args); }
+    catch (error) { console.error(error.message); process.exitCode = 1; return; }
+    try {
+      const { releaseLedgerSlot, releaseLedgerPolicy } = await import('./session-launcher.mjs');
+      // #2915 round 8 review 8 (C11): print the recorded invocation id the
+      // MOMENT it is known -- BEFORE the unlink -- never only afterward via
+      // the final result line below. If the unlink itself throws (or the
+      // process is killed between the two), the operator has still seen
+      // what was about to be released.
+      const result = parsed.target.kind === 'policy'
+        ? await releaseLedgerPolicy({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest })
+        : await releaseLedgerSlot({ captureRoot: parsed.captureRoot, taskChainDigest: parsed.taskChainDigest,
+          attempt: parsed.target.attempt, kind: parsed.target.kind,
+          report: ({ invocationId }) => console.log(JSON.stringify({ phase: 'identified', kind: parsed.target.kind, invocationId })) });
+      console.log(JSON.stringify(result));
+      process.exitCode = 0;
+    } catch (error) {
+      console.error(`Ledger release failed: ${error.message}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   const options = parseArgs(args);
   const projectRoot = process.cwd();
 
@@ -777,21 +887,35 @@ async function main() {
 export function parseWorkerLaunchArgs(args) {
   const result = {};
   const seen = new Set();
+  let retryOfInvocationId;
+  let retryOfRunDir;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (seen.has(flag)) throw new Error(`Duplicate worker launch option: ${flag}`);
     seen.add(flag);
     if (flag === '--launch-worker') continue;
     if (flag === '--allow-degraded-worker') { result.allowDegraded = true; continue; }
-    const key = { '--invocation': 'invocationPath', '--run-dir': 'runDir' }[flag];
+    // #2915 step 4: `--retry-of <invocationId>` conductor-declares a retry;
+    // `--retry-of-run-dir <dir>` names where the predecessor's OWN
+    // launcher-written evidence lives. Both are required together and
+    // verified fresh against disk by `SessionLauncher.launchWorker` —
+    // never trusted as supplied. Omitting both means unrelated work.
+    const key = { '--invocation': 'invocationPath', '--run-dir': 'runDir',
+      '--retry-of': '__retryOfInvocationId', '--retry-of-run-dir': '__retryOfRunDir' }[flag];
     if (!key) throw new Error(`Unsupported worker launch option: ${flag}`);
     const value = args[++i];
-    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a path`);
-    result[key] = value;
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    if (key === '__retryOfInvocationId') retryOfInvocationId = value;
+    else if (key === '__retryOfRunDir') retryOfRunDir = value;
+    else result[key] = value;
   }
   if (!seen.has('--launch-worker') || !result.invocationPath || !result.runDir) {
-    throw new Error('Usage: ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker]');
+    throw new Error('Usage: ralph-external --launch-worker --invocation FILE --run-dir DIR [--allow-degraded-worker] [--retry-of ID --retry-of-run-dir DIR]');
   }
+  if ((retryOfInvocationId === undefined) !== (retryOfRunDir === undefined)) {
+    throw new Error('--retry-of and --retry-of-run-dir must be supplied together');
+  }
+  if (retryOfInvocationId !== undefined) result.retryOf = { invocationId: retryOfInvocationId, runDir: retryOfRunDir };
   return result;
 }
 

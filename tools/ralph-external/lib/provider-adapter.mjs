@@ -448,18 +448,76 @@ export class ProviderAdapter {
     return this.parseWorkerOutput(output, options);
   }
 
+  /**
+   * #2915 (evidence contract): the attempt-terminal sibling of
+   * `parseWorkerFinal`/`parseWorkerOutput` below. Shares the exact same
+   * strict decoding AND the exact same per-CLI extraction every subclass's
+   * own `parseWorkerFinal` override performs — the only difference is the
+   * terminal assertion: `assertWorkerAttemptTerminal` requires the
+   * launcher/adapter-owned `attemptOutcome` (never confirmed descendant
+   * termination) instead of `assertWorkerTerminal`'s
+   * `termination: 'confirmed'`. This lets a degraded-isolation shell
+   * attempt or an MCP response — neither of which can ever produce a
+   * confirmed descendant-stop — still validate a genuinely successful
+   * attempt's final claims (session-launcher.mjs `captureOneWorker`). It
+   * never manufactures confirmed termination: the caller's own
+   * `termination`/`descendants` fields are untouched.
+   *
+   * Fixed once here, for every adapter, with NO per-adapter edit required
+   * (2915 follow-up: the previous version called `parseWorkerOutput`
+   * directly, skipping every subclass's own extraction override entirely).
+   * The trick is calling `this.parseWorkerFinal` — polymorphic dispatch
+   * picks up the ACTUAL (possibly overridden) method — with
+   * `assertTerminal` folded into `options`. Every subclass override in this
+   * directory follows the same shape: extract a CLI-specific final, then
+   * `return super.parseWorkerFinal(extracted, { ...options, format: '...' })`
+   * — the `...options` spread carries `assertTerminal` straight through to
+   * the base `parseWorkerOutput` below, so the base class never needs
+   * subclass-specific knowledge of each extraction. An adapter whose
+   * override always throws regardless of input (Warp, Copilot:
+   * `supportsAttemptVerification() === false`) throws here too, by the same
+   * unconditional path — exactly the intended "never verifiable" behavior
+   * for those two; `admitDirectWorker` treats such a CLI as `not-gated`
+   * (recovery never consulted) rather than permanently blocking it.
+   */
+  parseWorkerAttemptFinal(output, options = {}) {
+    return this.parseWorkerAttemptOutput(output, options);
+  }
+
+  async parseWorkerAttemptOutput(output, options = {}) {
+    const { assertWorkerAttemptTerminal } = await importImpl(import.meta.url, 'mission-protocol/index.js');
+    return this.parseWorkerFinal(output, { ...options, assertTerminal: assertWorkerAttemptTerminal });
+  }
+
+  /**
+   * Capability signal (#2915 follow-up), default `true`: can this adapter's
+   * `parseWorkerFinal`/`parseWorkerAttemptFinal` ever validate a genuine
+   * final for ANY input, given a real completed attempt? Override `false`
+   * only for an adapter whose `parseWorkerFinal` always throws regardless
+   * of input (no observed output envelope exists to extract from yet —
+   * Warp, Copilot). `admitDirectWorker` uses this to treat such a CLI as
+   * never eligible for recovery-breaker gating, rather than admitting a
+   * canary that can structurally never report success.
+   */
+  supportsAttemptVerification() { return true; }
+
   /** Strict group-mode path, shared by CLI and MCP. Never falls back to regex.
    * Drivers normalize qualified vendor event framing to result/message/terminal
    * JSONL, or supply one claims JSON document. Observation comes from the trusted
    * process/request owner, not from the final. This returns claims, not acceptance.
    * Called directly or through the `parseWorkerFinal()` alias; never through
    * `parseOutput()`, which keeps its own synchronous, non-group contract.
+   * `options.assertTerminal`, when supplied (by `parseWorkerAttemptOutput`
+   * above), replaces the default `assertWorkerTerminal` confirmed-termination
+   * gate with the attempt-terminal one — every other step of decoding is
+   * identical and unmodified.
    */
   async parseWorkerOutput(output, options = {}) {
     const {
       WORKER_MAX_JSON_BYTES, WORKER_MAX_NESTING_DEPTH, WorkerContractError,
       decodeWorkerProducedPayload, assertWorkerTerminal,
     } = await importImpl(import.meta.url, 'mission-protocol/index.js');
+    const assertTerminal = options.assertTerminal ?? assertWorkerTerminal;
     const fail = message => { throw new WorkerContractError('OG_CONTRACT_INVALID', message); };
     const format = options.format ?? 'jsonl';
     const streamLimit = 10 * 1024 * 1024;
@@ -561,7 +619,7 @@ export class ProviderAdapter {
     boundedJson(final, WORKER_MAX_JSON_BYTES);
     const claims = decodeWorkerProducedPayload('workerClaims', 'worker', final);
     if (options.observation?.transport !== (format === 'mcp' ? 'mcp' : 'shell')) fail('Worker transport observation mismatch.');
-    assertWorkerTerminal(options.observation);
+    assertTerminal(options.observation);
     return claims;
   }
 

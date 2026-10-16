@@ -276,6 +276,54 @@ export function resolveManagerEnvNames({ spawn = spawnSync } = {}) {
  *   the live `systemd-run --pipe --wait` process itself — its stdio IS the
  *   unit's stdio, and its own `close` event fires with the unit's exit code.
  */
+/**
+ * Run the real process-start call, optionally gated by the D2 dispatch-
+ * commit hook (#2915 round 8). `spawnFn` performs the actual, otherwise
+ * irreversible side effect (the `spawn`/`spawnAsync` call) and returns the
+ * same result shape `launchIsolatedWorker` always returned.
+ *
+ * Dual-mode, deliberately: when `onDispatchCommit` is omitted (every
+ * existing caller — direct production callers, every test in this repo
+ * that constructs `launchIsolatedWorker` options itself), this returns
+ * `spawnFn()`'s result DIRECTLY and synchronously — `launchIsolatedWorker`
+ * is NOT declared `async`, and its sync return contract for every pre-D2
+ * caller is completely unaffected; nothing here ever makes an existing
+ * caller receive a Promise where it previously received a plain object.
+ * Only when a caller supplies the hook (today: `session-launcher.mjs`'s own
+ * gated launch paths) does this return a Promise, which that caller already
+ * awaits.
+ *
+ * When the hook IS given, it runs immediately before `spawnFn()` — after
+ * every preparation check `launchIsolatedWorker` performs for whichever
+ * branch (degraded/systemd-unit, attached/non-attached) is actually taken.
+ * If it throws, `spawnFn` is NEVER called — nothing starts — and the thrown
+ * error is converted into the same `{ launched: false, blocked: true,
+ * failures: [...] }` refusal shape every other pre-spawn refusal in this
+ * module already uses, rather than propagating as a rejected promise: a
+ * proven pre-spawn refusal is a RESULT here, consistent with the dispatch
+ * gate and degraded-without-allowDegraded refusals above it.
+ *
+ * `onAbort` (#2915 round 8 review 8, C3 follow-up), when given, runs ONLY
+ * on that same hook-throws path -- it exists so a caller that had to open
+ * resources (e.g. the non-attached degraded path's stdio file descriptors)
+ * BEFORE this call, so that opening them is itself part of "every
+ * preparation check" the hook boundary assumes already ran, can release
+ * them when the hook aborts the dispatch instead of leaking them.
+ */
+function _runDispatchCommit(onDispatchCommit, spawnFn, onAbort) {
+  if (!onDispatchCommit) return spawnFn();
+  return (async () => {
+    try {
+      await onDispatchCommit();
+    } catch (error) {
+      if (onAbort) { try { onAbort(); } catch { /* best-effort cleanup only */ } }
+      return { launched: false, blocked: true,
+        failures: [{ signal: 'dispatch-commit', reason: error?.message ?? String(error) }] };
+    }
+    return spawnFn();
+  })();
+}
+
 export function launchIsolatedWorker({
   name = 'worker',
   memoryMaxGb,
@@ -301,6 +349,14 @@ export function launchIsolatedWorker({
   ownedGroup = false,
   onSpawnAttempt,
   runDir,
+  // #2915 round 8 (D2): INTERNAL dispatch-commit hook — never documented as
+  // a public launch option; only `session-launcher.mjs`'s own gated launch
+  // paths (and, through `planDirectWorkerLaunch`'s borrowed-admission
+  // branch, `src/mcp/tools/worker-invoke.mjs`'s two dispatch boundaries)
+  // ever pass it. See `_runDispatchCommit`'s doc comment for the exact
+  // contract and why every existing caller that omits it is byte-for-byte
+  // unaffected.
+  onDispatchCommit,
 } = {}) {
   const resolvedGate = gate === 'disabled' && !config?.parallelism?.worker_dispatch
     ? checkWorkerDispatch({ config })
@@ -355,46 +411,59 @@ export function launchIsolatedWorker({
     if (attached && envNames.some(isClientControlVariable)) {
       throw new Error('Worker environment cannot alter trusted transport bootstrap');
     }
-    let child;
-    if (attached) {
-      const launchArgs = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
-        ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args];
-      child = spawnAsync(process.execPath, launchArgs, { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-        env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) });
-      onSpawnAttempt?.({ mode: 'degraded', child, pid: child.pid });
-    } else {
-      // Opening the brief/output files ourselves (rather than letting the
-      // worker inherit a stream) is what lets a degraded launch still honor a
-      // resolved #2887 invocation's stdin source and separate stdout/stderr
-      // destinations; `openSync` throws rather than silently falling back.
-      // 'w' truncates a pre-existing file at open time (matching the #2887
-      // shell renderer's `>`/`2>` contract); the previous 'a' silently kept
-      // appending onto a stale file across repeated degraded launches.
-      const fds = [];
-      try {
+    // Finish descriptor, argv and environment preparation before consuming
+    // dispatch authority. Keep the no-hook path synchronous.
+    const fds = [];
+    const closePreparedFds = () => {
+      for (const fd of fds) if (typeof fd === 'number') closeSync(fd);
+    };
+    let deferredClose = false;
+    try {
+      let launchCommand, launchArgs, launchOptions;
+      if (attached) {
+        launchCommand = process.execPath;
+        launchArgs = [fileURLToPath(import.meta.url), '--worker-environment', JSON.stringify(envNames),
+          ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args];
+        launchOptions = { cwd, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+          env: allowedEnv, ...(ownedGroup ? { detached: true } : {}) };
+      } else {
+        // Open every input/output before commit; a preparation failure never
+        // consumes dispatch authority. Output truncation matches the renderer.
         const stdinFd = stdinPath !== undefined ? openSync(stdinPath, 'r') : 'ignore';
         fds.push(stdinFd);
         const stdoutFd = stdoutPath !== undefined ? openSync(stdoutPath, 'w') : 'pipe';
         fds.push(stdoutFd);
         const stderrFd = stderrPath !== undefined ? openSync(stderrPath, 'w') : 'pipe';
         fds.push(stderrFd);
-        child = spawnAsync(command, args, { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd], detached: ownedGroup });
-        onSpawnAttempt?.({ mode: 'degraded', child, pid: child.pid });
-      } finally {
-        // Node duplicates numeric stdio fds; close our copies on every path.
-        for (const fd of fds) if (typeof fd === 'number') closeSync(fd);
+        launchCommand = command;
+        launchArgs = args;
+        launchOptions = { cwd, env: allowedEnv, stdio: [stdinFd, stdoutFd, stderrFd], detached: ownedGroup };
       }
+      const result = _runDispatchCommit(onDispatchCommit, () => {
+        const child = spawnAsync(launchCommand, launchArgs, launchOptions);
+        onSpawnAttempt?.({ mode: 'degraded', child, pid: child.pid });
+        const outcome = {
+          launched: Number.isInteger(child.pid) && child.pid > 0,
+          mode: 'degraded', child, pid: child.pid,
+          ...(attached ? { transportSupervisor: true } : {}),
+          diagnostic: `launched without resource confinement: ${detected.reason}`,
+          gate: resolvedGate,
+        };
+        // Preserve launch errors even when callers attach listeners later.
+        child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
+        return outcome;
+      });
+      if (onDispatchCommit) {
+        const pending = result.finally(closePreparedFds);
+        deferredClose = true;
+        return pending;
+      }
+      return result;
+    } finally {
+      // Numeric stdio descriptors are duplicated into the child. Close our
+      // copies on every preparation, hook-refusal and spawn-error path.
+      if (!deferredClose) closePreparedFds();
     }
-    const outcome = {
-      launched: Number.isInteger(child.pid) && child.pid > 0,
-      mode: 'degraded', child, pid: child.pid,
-      ...(attached ? { transportSupervisor: true } : {}),
-      diagnostic: `launched without resource confinement: ${detected.reason}`,
-      gate: resolvedGate,
-    };
-    // Keep launch failures observable even if the caller attaches listeners later.
-    child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
-    return outcome;
   }
   // The unit path's security contract (see buildWorkerIsolationArgs' doc
   // comment) depends on knowing exactly which names the user manager would
@@ -424,36 +493,53 @@ export function launchIsolatedWorker({
     ...(runDir ? ['--run-dir', runDir, '--invocation-id', name] : []), '--', command, ...args] : args;
   const argv = buildWorkerIsolationArgs({ unit, memoryMaxGb, command: isolatedCommand, args: isolatedArgs,
     cwd, logFile, stdinPath, stdoutPath, stderrPath, env, envNames, managerEnvNames, kind, attached });
+  // #2915 round 8 (D2): same dispatch-commit boundary as the degraded path
+  // above — every systemd-unit preparation check (gate, manager-environment
+  // query, argv construction) has already run by this point.
   if (attached) {
+    const launchArgs = argv.slice(1);
+    const launchOptions = { cwd, env: buildSystemdClientEnv({ env, envNames }),
+      stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: ownedGroup };
+    return _runDispatchCommit(onDispatchCommit, () => {
+      onSpawnAttempt?.({ mode: 'systemd-unit', unit });
+      const child = spawnAsync(systemdRun, launchArgs, launchOptions);
+      const outcome = { launched: Number.isInteger(child.pid) && child.pid > 0, mode: 'systemd-unit', unit, child, gate: resolvedGate };
+      child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
+      return outcome;
+    });
+  }
+  const launchArgs = argv.slice(1);
+  const launchOptions = { encoding: 'utf8', timeout: 30000, env: buildSystemdClientEnv({ env, envNames }) };
+  return _runDispatchCommit(onDispatchCommit, () => {
     onSpawnAttempt?.({ mode: 'systemd-unit', unit });
-    const child = spawnAsync(systemdRun, argv.slice(1), { cwd,
-      env: buildSystemdClientEnv({ env, envNames }),
-      stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: ownedGroup });
-    const outcome = { launched: Number.isInteger(child.pid) && child.pid > 0, mode: 'systemd-unit', unit, child, gate: resolvedGate };
-    child.once('error', error => { outcome.launched = false; outcome.error = error.message; });
-    return outcome;
-  }
-  onSpawnAttempt?.({ mode: 'systemd-unit', unit });
-  const child = spawn(systemdRun, argv.slice(1), { encoding: 'utf8', timeout: 30000, env: buildSystemdClientEnv({ env, envNames }) });
-  if (child.error || child.status !== 0) {
-    const stderr = String(child.stderr ?? '').trim();
-    return {
-      launched: false,
-      mode: 'systemd-unit',
-      unit,
-      diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
-      gate: resolvedGate,
-    };
-  }
-  let pid;
-  try {
-    const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', '-p', 'MainPID', '--value', unit], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
-    const parsed = Number(String(shown.stdout ?? '').trim());
-    if (Number.isInteger(parsed) && parsed > 0) pid = parsed;
-  } catch {
-    pid = undefined;
-  }
-  return { launched: true, mode: 'systemd-unit', unit, pid, gate: resolvedGate };
+    const child = spawn(systemdRun, launchArgs, launchOptions);
+    if (child.error || child.status !== 0) {
+      const stderr = String(child.stderr ?? '').trim();
+      return {
+        launched: false,
+        mode: 'systemd-unit',
+        unit,
+        // #2915 round 8 review 8 (C2): a failed or timed-out `systemd-run`
+        // submission does not PROVE the transient unit was never created
+        // (e.g. a 30s wait timeout after the unit itself started) -- carry
+        // this forward as dispatch-UNCERTAIN, never as "never began", so any
+        // caller deriving stop evidence from this result (`resolveStopEvidence`'s
+        // `dispatchState`) resolves to `unresolved`, never a confirmed stop.
+        ...(onDispatchCommit ? { dispatchState: 'submission-uncertain' } : {}),
+        diagnostic: `systemd-run launch failed: ${child.error?.message ?? stderr ?? `exit ${child.status}`}`,
+        gate: resolvedGate,
+      };
+    }
+    let pid;
+    try {
+      const shown = spawn(resolveSystemdClient('systemctl'), ['--user', 'show', '-p', 'MainPID', '--value', unit], { encoding: 'utf8', timeout: 10000, env: buildSystemdClientEnv({ envNames: [] }) });
+      const parsed = Number(String(shown.stdout ?? '').trim());
+      if (Number.isInteger(parsed) && parsed > 0) pid = parsed;
+    } catch {
+      pid = undefined;
+    }
+    return { launched: true, mode: 'systemd-unit', unit, pid, gate: resolvedGate };
+  });
 }
 
 /**
