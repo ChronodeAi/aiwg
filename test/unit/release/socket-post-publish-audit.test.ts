@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts } from '../../../tools/release/socket-post-publish-audit.mjs'
+import { componentsFromCargoLock, componentsFromLock, evaluateSocketArtifacts, fetchArtifacts } from '../../../tools/release/socket-post-publish-audit.mjs'
 
 const baseline = {
   policy: { materialScoreDrop: 0.1, blockingSeverities: ['high', 'critical'] },
@@ -148,5 +148,44 @@ describe('Socket post-publish audit', () => {
       baseline, components: roots
     })
     expect(result.findings.validationErrors[0].errors).toContain('patched-version-major-mismatch')
+  })
+})
+
+describe('Socket quota pacing', () => {
+  const components = [{ purl: 'pkg:npm/aiwg@1.0.0' }]
+  const ndjson = (body: string) => ({ ok: true, status: 200, text: async () => body })
+  const limited = { ok: false, status: 429, text: async () => '' }
+  const quota = (refresh: string) => ({ ok: true, status: 200, json: async () => ({ quota: 0, maxQuota: 500, nextWindowRefresh: refresh }) })
+  const clock = (start: number) => {
+    let current = start
+    return { now: () => current, sleep: async (ms: number) => { current += ms } }
+  }
+
+  it('waits for the next quota window on 429 and retries the same batch when pacing is enabled', async () => {
+    const start = Date.parse('2026-10-16T18:00:00Z')
+    const { now, sleep } = clock(start)
+    const calls: string[] = []
+    const responses = [limited, quota('2026-10-16T18:27:00Z'), ndjson('{"purl":"pkg:npm/aiwg@1.0.0"}\n')]
+    const fetchImpl = async (url: URL | string) => { calls.push(String(url)); return responses.shift() as never }
+    const artifacts = await fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, paceQuotaMs: 60 * 60_000, now, sleep, log: () => {} })
+    expect(artifacts).toEqual([{ purl: 'pkg:npm/aiwg@1.0.0' }])
+    expect(calls.filter(url => url.endsWith('/v0/quota'))).toHaveLength(1)
+    expect(now()).toBe(Date.parse('2026-10-16T18:27:05Z'))
+  })
+
+  it('reports the 429 instead of waiting past the pacing deadline', async () => {
+    const { now, sleep } = clock(Date.parse('2026-10-16T18:00:00Z'))
+    const fetchImpl = async (url: URL | string) => (String(url).endsWith('/v0/quota') ? quota('2026-10-16T19:00:00Z') : limited) as never
+    await expect(fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, paceQuotaMs: 10 * 60_000, now, sleep, log: () => {} }))
+      .rejects.toThrow('HTTP 429')
+  })
+
+  it('never queries the quota endpoint when pacing is off', async () => {
+    const { now, sleep } = clock(0)
+    const calls: string[] = []
+    const fetchImpl = async (url: URL | string) => { calls.push(String(url)); return limited as never }
+    await expect(fetchArtifacts({ components, token: 't', orgSlug: 'org', fetchImpl, now, sleep, log: () => {} })).rejects.toThrow('HTTP 429')
+    expect(calls.some(url => url.endsWith('/v0/quota'))).toBe(false)
+    expect(calls).toHaveLength(3)
   })
 })

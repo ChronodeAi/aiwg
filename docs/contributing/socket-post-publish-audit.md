@@ -74,4 +74,6 @@ node tools/release/socket-post-publish-audit.mjs \
   --organization "Integro Labs"
 ```
 
+On a plan whose hourly API quota is smaller than one full run (the free plan allows 500 units an hour), add `--pace-quota-minutes <N>` (or `SOCKET_PACE_QUOTA_MINUTES`). When the API answers HTTP 429, the audit then waits for the next quota window and retries the same batch. It reports the 429 if the window opens more than N minutes after the run started. Without the flag, the bounded retries are unchanged. Supply the token from your secret store at run time, never from a file in the repository.
+
 Use `--input path/to/results.ndjson` instead of credentials for deterministic fixture evaluation. A passing result exits 0, a policy failure exits 1, and unavailable evidence exits 2.

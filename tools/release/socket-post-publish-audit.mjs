@@ -337,8 +337,43 @@ function reportMarkdown(report, version, organization = 'AIWG') {
   return `${rows.join('\n')}\n`
 }
 
-async function fetchArtifacts({ components, token, orgSlug, fetchImpl = fetch }) {
+const socketAuthorization = token => `Basic ${Buffer.from(`${token}:`).toString('base64')}`
+
+/**
+ * Wait for the next Socket quota window when a request was rate limited.
+ * Returns false when the window opens after the pacing deadline, so the caller
+ * reports the 429 instead of waiting without bound.
+ */
+async function waitForQuotaWindow({ token, fetchImpl, deadline, now, sleep, log }) {
+  let refreshAt = Number.NaN
+  try {
+    const response = await fetchImpl('https://api.socket.dev/v0/quota', {
+      headers: { authorization: socketAuthorization(token), accept: 'application/json' }
+    })
+    if (response.ok) refreshAt = Date.parse((await response.json()).nextWindowRefresh)
+  } catch { /* fall back to a one-minute wait below */ }
+  const resumeAt = Number.isFinite(refreshAt) ? refreshAt + 5000 : now() + 60000
+  if (resumeAt > deadline) return false
+  log(`Socket quota exhausted; waiting until ${new Date(resumeAt).toISOString()} for the next window`)
+  await sleep(Math.max(0, resumeAt - now()))
+  return true
+}
+
+export async function fetchArtifacts({
+  components,
+  token,
+  orgSlug,
+  fetchImpl = fetch,
+  paceQuotaMs = 0,
+  now = Date.now,
+  sleep = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)),
+  log = message => console.error(message)
+}) {
   const all = []
+  // Opt-in pacing for plans whose hourly quota is smaller than one full run:
+  // a 429 waits for the next quota window (bounded by paceQuotaMs overall)
+  // instead of consuming a retry. Without it, behaviour is unchanged.
+  const paceDeadline = paceQuotaMs > 0 ? now() + paceQuotaMs : null
   for (let offset = 0; offset < components.length; offset += 100) {
     const batch = components.slice(offset, offset + 100)
     const url = new URL(`https://api.socket.dev/v0/orgs/${encodeURIComponent(orgSlug)}/purl`)
@@ -347,11 +382,16 @@ async function fetchArtifacts({ components, token, orgSlug, fetchImpl = fetch })
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       response = await fetchImpl(url, {
         method: 'POST',
-        headers: { authorization: `Basic ${Buffer.from(`${token}:`).toString('base64')}`, 'content-type': 'application/json', accept: 'application/x-ndjson' },
+        headers: { authorization: socketAuthorization(token), 'content-type': 'application/json', accept: 'application/x-ndjson' },
         body: JSON.stringify({ components: batch.map(({ purl }) => ({ purl })) })
       })
       if (response.ok || (response.status !== 429 && response.status < 500)) break
-      await new Promise(resolveDelay => setTimeout(resolveDelay, attempt * 1000))
+      if (response.status === 429 && paceDeadline !== null
+        && await waitForQuotaWindow({ token, fetchImpl, deadline: paceDeadline, now, sleep, log })) {
+        attempt -= 1
+        continue
+      }
+      await sleep(attempt * 1000)
     }
     if (!response?.ok) throw new Error(`Socket API request failed with HTTP ${response?.status ?? 'unknown'}`)
     const text = await response.text()
@@ -405,7 +445,9 @@ async function main() {
       const token = process.env.SOCKET_API_TOKEN
       const orgSlug = process.env.SOCKET_ORG_SLUG
       if (!token || !orgSlug) throw new Error('Socket audit credentials are unavailable')
-      artifacts = await fetchArtifacts({ components, token, orgSlug })
+      const paceMinutes = Number(args['pace-quota-minutes'] ?? process.env.SOCKET_PACE_QUOTA_MINUTES ?? 0)
+      if (!Number.isFinite(paceMinutes) || paceMinutes < 0) throw new Error('--pace-quota-minutes must be a non-negative number')
+      artifacts = await fetchArtifacts({ components, token, orgSlug, paceQuotaMs: paceMinutes * 60_000 })
     }
   } catch (error) {
     fetchError = error instanceof Error ? error.message : String(error)
