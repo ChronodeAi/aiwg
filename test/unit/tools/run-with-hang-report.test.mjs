@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 import {
   parseDuration,
@@ -109,6 +110,46 @@ describe('renderProcessReport', () => {
 });
 
 describe('end to end', () => {
+  it.each([132, 134, 139, 'SIGTERM', 0, 7])('handles a reporter snapshot when the child exits with %s', (exit) => {
+    const reporterUrl = new URL('../../../tools/ci/hang-watchdog-reporter.mjs', import.meta.url).href;
+    const childSource = `
+      import Reporter from ${JSON.stringify(reporterUrl)};
+      import path from 'node:path';
+      const reporter = new Reporter();
+      reporter.onTestRunStart();
+      reporter.onTestModuleStart({ moduleId: path.resolve('test/crashing.test.ts') });
+      reporter.onTestModuleQueued({ moduleId: path.resolve('test/loading.test.ts') });
+      reporter.onTestModuleStart({ moduleId: path.resolve('test/finished.test.ts') });
+      reporter.onTestModuleEnd({ moduleId: path.resolve('test/finished.test.ts') });
+      console.log(process.env.AIWG_HANG_REPORT_STATE_FILE);
+      ${typeof exit === 'string' ? `process.kill(process.pid, '${exit}')` : `process.exit(${exit})`};
+    `;
+    const result = spawnSync(process.execPath, [
+      SCRIPT, '--timeout', '30s', '--', process.execPath, '--input-type=module', '-e', childSource,
+    ], { encoding: 'utf8', timeout: 60_000 });
+
+    expect(result.status, result.stderr).toBe(typeof exit === 'string' ? 128 : exit);
+    if (typeof exit === 'string' || exit >= 128) {
+      expect(result.stderr).toContain(`command exited abnormally (${typeof exit === 'string' ? exit : `exit ${exit}`})`);
+      expect(result.stderr).toContain('test/crashing.test.ts — running');
+      expect(result.stderr).toContain('test/loading.test.ts — loading');
+      expect(result.stderr).not.toContain('test/finished.test.ts');
+    } else {
+      expect(result.stderr).not.toContain('command exited abnormally');
+    }
+    const stateFile = result.stdout.trim();
+    expect(path.basename(stateFile)).toBe('in-flight.txt');
+    expect(existsSync(path.dirname(stateFile))).toBe(false);
+  });
+
+  it('preserves a crash exit code when no reporter snapshot is available', () => {
+    const result = spawnSync(process.execPath, [
+      SCRIPT, '--timeout', '30s', '--', process.execPath, '-e', 'process.exit(132)',
+    ], { encoding: 'utf8', timeout: 60_000 });
+    expect(result.status).toBe(132);
+    expect(result.stderr).toContain('unavailable — no readable reporter snapshot');
+  });
+
   it('passes a healthy command through with its own exit code', () => {
     const ok = spawnSync(process.execPath, [SCRIPT, '--timeout', '30s', '--', process.execPath, '-e', 'process.exit(0)'], { encoding: 'utf8', timeout: 60_000 });
     expect(ok.status).toBe(0);
