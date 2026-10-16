@@ -43,7 +43,7 @@ import { homedir, constants as osConstants } from 'os';
 import { parseDocument } from 'yaml';
 import { importImpl } from '../_resolve-impl.mjs';
 import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, sampleWorkerGroup, sampleWorkerChildren, sampleProcessCgroup, sampleProcessAncestry,
-  qualifyWorkerCpuTickRate, sampleWorkerCpuTime } from './process-monitor.mjs';
+  qualifyWorkerCpuTickRate, sampleWorkerCpuTime, isSafeWorkerGroupTarget } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
@@ -181,7 +181,9 @@ export async function publishWorkerRecord(runDir, name, value, inspect) {
 /** Never trust a PID/PGID from disk. The attached owner supplies this identity. */
 export function signalOwnedWorker(identity, signal, { sample = sampleWorkerIdentity, group = sampleWorkerGroup,
   kill = process.kill, supervisor = sampleWorkerIdentity(process.pid) } = {}) {
-  if (!identity || identity.pgid !== identity.pid || identity.uid !== process.getuid?.()
+  if (!identity || !isSafeWorkerGroupTarget(identity.pid, supervisor)
+    || !supervisor || identity.pid === supervisor.pid
+    || identity.pgid !== identity.pid || identity.uid !== process.getuid?.()
     || identity.pgid === supervisor?.pgid || !sameWorkerIdentity(identity, sample(identity.pid))) return false;
   const members = group(identity.pgid);
   if (!members || !members.length || members.some(member => member.uid !== identity.uid
@@ -3801,7 +3803,7 @@ export class SessionLauncher extends EventEmitter {
       });
 
       const child = this.currentProcess;
-      const terminate = (signal) => { try { if (isOmp && process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { /* process already exited */ } };
+      const terminate = (signal) => { try { if (isOmp && process.platform !== 'win32') { if (isSafeWorkerGroupTarget(child.pid)) process.kill(-child.pid, signal); } else child.kill(signal); } catch { /* process already exited */ } };
 
       // Capture stdout
       child.stdout.on('data', (chunk) => {
@@ -4193,8 +4195,9 @@ export class SessionLauncher extends EventEmitter {
     if (this.currentProcess && !this.currentProcess.killed) {
       if (this.providerAdapter?.getName() === 'omp' && process.platform !== 'win32') {
         const child = this.currentProcess;
+        if (!isSafeWorkerGroupTarget(child.pid)) return;
         try { process.kill(-child.pid, signal); } catch { /* already exited */ }
-        const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } } }, 500);
+        const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null && isSafeWorkerGroupTarget(child.pid)) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } } }, 500);
         timer.unref();
       } else this.currentProcess.kill(signal);
     }

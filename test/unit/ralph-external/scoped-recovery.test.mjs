@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs';
 // `node:fs/promises` so ONE test below can record the exact sequence of
 // `.sync()` (fsync) calls `open()` returns, by target path, in call order
 // -- an injected-filesystem seam this module has no other way to observe.
-// Every method except `open` is forwarded unchanged; `open` itself
+// Methods forward unchanged unless a test spies on them; `open` itself
 // forwards to the real implementation and returns the REAL handle, merely
 // wrapping that handle's own `.sync` to additionally push its target path
 // into `__aiwgSyncTrace.current` when one is installed (`null` by default,
@@ -45,6 +45,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
 import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
@@ -1457,8 +1458,13 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
   // handle").
   it('admitDirectWorker rolls back its own partial acquisition on a root-resolution exception', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-rollback-'));
-    const lockedDir = path.join(root, 'locked');
-    await mkdir(lockedDir, { mode: 0o000 });
+    const captureRoot = path.join(root, 'capture');
+    const error = Object.assign(new Error('injected realpath EACCES'), { code: 'EACCES' });
+    const realpath = fsPromises.realpath;
+    const realpathSpy = vi.spyOn(fsPromises, 'realpath').mockImplementation(async target => {
+      if (target === captureRoot) throw error;
+      return realpath(target);
+    });
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
       await expect(admitDirectWorker({
@@ -1466,11 +1472,10 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
         invocation: { selected: { cli: 'codex' }, cwd: root },
         invocationId: 'rollback-1', scopedBreaker: breaker, drivers: {},
         taskChainDigest: `sha256:${'a'.repeat(64)}`, maxAttempts: 1,
-        // Forces a root-resolution exception (EACCES, not ENOENT) by
-        // routing `realBeneath`'s own `realpath` traversal through a
-        // directory with no search permission.
-        captureRoot: path.join(lockedDir, 'capture'),
-      })).rejects.toThrow();
+        // Inject at realBeneath's realpath call so root also exercises EACCES.
+        captureRoot,
+      })).rejects.toBe(error);
+      expect(realpathSpy).toHaveBeenCalledWith(captureRoot);
       // Not leaked: the breaker reservation `admit()` minted was released
       // before the exception propagated.
       expect(breaker.snapshot().reservationsOutstanding).toBe(0);
@@ -1480,7 +1485,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
       const afterwards = breaker.admit({ invocationId: 'rollback-2', scopeKeys: [] });
       expect(afterwards.ok).toBe(true);
     } finally {
-      await chmod(lockedDir, 0o700).catch(() => {});
+      realpathSpy.mockRestore();
       breaker.destroy();
       await rm(root, { recursive: true, force: true });
     }
@@ -2429,6 +2434,8 @@ describe('planDirectWorkerLaunch recovery gate', () => {
   // unit-status poll so the observer settles once the unit itself reports
   // inactive.
   it('settles a standalone non-attached systemd-unit launch via the native unit-status poll, even with no child handle to observe', async () => {
+    const client = systemdClientFixture();
+    vi.stubEnv('PATH', client.root);
     const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
     try {
       const invocation = { selected: { cli: 'codex' }, stdin: 'closed' };
@@ -2438,14 +2445,14 @@ describe('planDirectWorkerLaunch recovery gate', () => {
         return statusCalls < 3 ? { active: true } : { active: false, execMainCode: 1 };
       };
       const fakeSpawn = (cmd, args) => {
-        if (path.basename(cmd) === 'systemctl' && args[0] === '--user' && args[1] === 'show-environment') {
+        if (cmd === client.systemctl && args[0] === '--user' && args[1] === 'show-environment') {
           return { error: null, status: 0, stdout: 'PATH=/usr/bin\n', stderr: '' };
         }
-        if (path.basename(cmd) === 'systemd-run') {
+        if (cmd === client.binary) {
           expect(path.isAbsolute(cmd)).toBe(true);
           return { error: null, status: 0, stdout: '', stderr: '' };
         }
-        if (path.basename(cmd) === 'systemctl' && args[0] === '--user' && args[1] === 'show') {
+        if (cmd === client.systemctl && args[0] === '--user' && args[1] === 'show') {
           return { error: null, status: 0, stdout: '4242\n', stderr: '' };
         }
         return { error: new Error(`unexpected spawn: ${cmd}`), status: 1, stdout: '', stderr: '' };
@@ -2475,6 +2482,8 @@ describe('planDirectWorkerLaunch recovery gate', () => {
       expect(statusCalls).toBeGreaterThanOrEqual(3);
     } finally {
       breaker.destroy();
+      vi.unstubAllEnvs();
+      await rm(client.root, { recursive: true, force: true });
     }
   });
 });
@@ -4377,26 +4386,29 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('settleDirectWorker surfaces a refund failure as a diagnostic instead of silently swallowing it', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-refund-diag-'));
-    let chainDir;
+    let unlinkSpy;
     try {
       const taskChainDigest = 'refund-diag-chain';
       const ledger = await reserveDirectWorkerAllowance({ captureRoot: root, taskChainDigest, invocationId: 'inv-1', maxAttempts: 1 });
-      const ledgerDir = path.join(root, 'ledger');
-      chainDir = path.join(ledgerDir, (await readdir(ledgerDir))[0]);
-      // Forces the refund's own `unlink` to fail with EACCES (not ENOENT)
-      // by removing search permission on the chain directory itself --
-      // the same failure-injection style the "root-resolution exception"
-      // test above this describe block already uses.
-      await chmod(chainDir, 0o000);
+      const slotPath = path.join(ledger.dir, `attempt-${ledger.n}`);
+      const unlink = fsPromises.unlink;
+      unlinkSpy = vi.spyOn(fsPromises, 'unlink').mockImplementation(async target => {
+        // Inject at the refund's unlink call, independently of caller privileges.
+        if (await fsPromises.realpath(target) === slotPath) throw Object.assign(new Error('injected unlink EACCES'), { code: 'EACCES' });
+        return unlink(target);
+      });
       // `settleDirectWorker` never throws (recovery accounting must never
       // fail a launch), but it must not resolve to a bare `undefined`
       // indistinguishable from "nothing was owed" -- a failed refund now
       // resolves to a bounded diagnostic STRING naming it.
       const admission = { gated: false, ledger };
       const result = await settleDirectWorker(admission, { kind: 'uncertain' });
-      expect(result).toMatch(/allowance refund failed/);
+      expect(result).toBe('allowance refund failed: injected unlink EACCES');
+      expect(unlinkSpy).toHaveBeenCalledOnce();
+      expect(ledger.state).toBe('refund-failed');
+      await expect(lstat(slotPath)).resolves.toBeDefined();
     } finally {
-      if (chainDir) await chmod(chainDir, 0o700).catch(() => {});
+      unlinkSpy?.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -5892,6 +5904,8 @@ describe('review 9 bounded recovery regressions', () => {
   });
 
   it('review 9 item 4: the standalone attached observer queries terminal owned-unit status on exit without stopping it', async () => {
+    const client = systemdClientFixture();
+    vi.stubEnv('PATH', client.root);
     const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     const child = new EventEmitter();
     child.pid = 987654;
@@ -5909,7 +5923,11 @@ describe('review 9 bounded recovery regressions', () => {
       await new Promise(resolve => setImmediate(resolve));
       expect(getStatus).toHaveBeenCalledExactlyOnceWith(result.unit);
       expect(breaker.snapshot().reservationsOutstanding).toBe(0);
-    } finally { breaker.destroy(); }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(client.root, { recursive: true, force: true });
+      breaker.destroy();
+    }
   });
 
   it('review 9 item 5: the standalone bound retains one unrefed follow-up and reconciles a later terminal unit', async () => {
@@ -5948,6 +5966,8 @@ describe('review 10 bounded recovery regressions', () => {
     { attached: true, mode: 'systemd-unit' },
     { attached: true, mode: 'degraded' },
   ])('B1: $mode attached=$attached stops at the absolute monotonic deadline despite a backward wall-clock step', async ({ attached, mode }) => {
+    const client = systemdClientFixture();
+    vi.stubEnv('PATH', client.root);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let monotonic = 100;
     let wall = 100_000;
@@ -5978,10 +5998,19 @@ describe('review 10 bounded recovery regressions', () => {
       expect(breaker.snapshot().reservationsOutstanding).toBe(1);
       await vi.advanceTimersByTimeAsync(30);
       expect(mode === 'systemd-unit' ? stop : terminate).toHaveBeenCalledOnce();
-    } finally { breaker.destroy(); wallClock.mockRestore(); vi.clearAllTimers(); vi.useRealTimers(); }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(client.root, { recursive: true, force: true });
+      breaker.destroy();
+      wallClock.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it.each([false, true])('B2: standalone attached=%s observes terminal evidence after the first follow-up and bounds unresolved observation', async attached => {
+    const client = systemdClientFixture();
+    vi.stubEnv('PATH', client.root);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let monotonic = 0;
     let terminal = false;
@@ -5999,6 +6028,7 @@ describe('review 10 bounded recovery regressions', () => {
     };
     try {
       const result = await launch();
+      expect(result.launched).toBe(true);
       if (attached) {
         result.child.emit('exit', 0); // completion status can precede terminal unit evidence
         await vi.advanceTimersByTimeAsync(0);
@@ -6024,13 +6054,21 @@ describe('review 10 bounded recovery regressions', () => {
       expect(vi.getTimerCount()).toBe(0);
       expect(breaker.hasUnresolvedStop(unresolved.admission.invocationId)).toBe(true);
       expect(breaker.reconcileStopEvidence({ invocationId: unresolved.admission.invocationId, confirmedStop: true })).toEqual({ released: 1 });
-    } finally { breaker.destroy(); vi.clearAllTimers(); vi.useRealTimers(); }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(client.root, { recursive: true, force: true });
+      breaker.destroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 
 
 describe('rebased standalone submission ownership', () => {
   it.each(['nonzero', 'throws'])('stops an uncertain %s submission at its absolute deadline and releases only after terminal unit evidence', async failure => {
+    const client = systemdClientFixture();
+    vi.stubEnv('PATH', client.root);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let monotonic = 0;
     let terminal = false;
@@ -6043,7 +6081,7 @@ describe('rebased standalone submission ownership', () => {
         invocation: { selected: { cli: 'codex' } }, memoryMaxGb: 1, isolation: { mode: 'systemd-unit' },
         isolationStatus: status, stopUnit: stop, unitSettlementBoundMs: 10, unitSettlementPollMs: 2,
         spawn: command => {
-          if (path.basename(command) !== 'systemd-run') return { status: 0, stdout: '' };
+          if (command !== client.binary) return { status: 0, stdout: '' };
           if (failure === 'throws') throw new Error('submission uncertain');
           return { status: 1, stderr: 'submission uncertain' };
         },
@@ -6060,6 +6098,12 @@ describe('rebased standalone submission ownership', () => {
       await vi.advanceTimersByTimeAsync(2);
       expect(breaker.snapshot().reservationsOutstanding).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
-    } finally { breaker.destroy(); vi.clearAllTimers(); vi.useRealTimers(); }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(client.root, { recursive: true, force: true });
+      breaker.destroy();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

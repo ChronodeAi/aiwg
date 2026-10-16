@@ -1034,7 +1034,7 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     expect(f.launchSpy).not.toHaveBeenCalled();
   });
 
-  it.each(['pid-reuse', 'pgid-reuse', 'conductor', 'unowned', 'unknown'])('never signals %s', kind => {
+  it.each(['pid-reuse', 'pgid-reuse', 'conductor', 'unowned', 'unknown', 'zero', 'init', 'negative', 'fractional', 'missing-supervisor'])('never signals %s', kind => {
     const own = sampleWorkerIdentity(process.pid)!;
     const identity: any = { ...own, pid: 54321, pgid: 54321 };
     const actual = { ...identity };
@@ -1042,9 +1042,11 @@ describe('T-OG-23 pre-spawn boundaries and ownership', () => {
     if (kind === 'pgid-reuse') actual.pgid = 123;
     if (kind === 'conductor') { identity.pgid = own.pgid; identity.pid = own.pgid; Object.assign(actual, identity); }
     if (kind === 'unowned') identity.uid += 1;
+    const unsafePid = new Map<string, number>([['zero', 0], ['init', 1], ['negative', -1], ['fractional', 1.5]]).get(kind);
+    if (unsafePid !== undefined) { identity.pid = unsafePid; identity.pgid = unsafePid; Object.assign(actual, identity); }
     const kill = vi.fn();
     expect(signalOwnedWorker(kind === 'unknown' ? null : identity, 'SIGKILL', {
-      sample: () => actual, group: () => [actual], kill, supervisor: own,
+      sample: () => actual, group: () => [actual], kill, supervisor: kind === 'missing-supervisor' ? null : own,
     })).toBe(false);
     expect(kill).not.toHaveBeenCalled();
   });

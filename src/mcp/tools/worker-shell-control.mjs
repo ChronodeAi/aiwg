@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
@@ -103,11 +104,21 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
   let resolveClose;
   const probes = new Set();
   const child = launch.child;
-  const ownedGroup = platform !== 'win32' && launch.ownedGroup && child?.pid;
+  const ownedGroup = platform !== 'win32' && launch.ownedGroup;
   const closeProof = new Promise(resolve => { resolveClose = resolve; });
 
+  function safeGroupTarget() {
+    if (!Number.isSafeInteger(child?.pid) || child.pid <= 1 || child.pid === process.pid) return false;
+    if (platform !== 'linux') return true;
+    try {
+      const stat = readFileSync('/proc/self/stat', 'utf8');
+      const pgid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[2]);
+      return Number.isSafeInteger(pgid) && child.pid !== pgid;
+    } catch { return false; }
+  }
   function groupGone() {
     if (!ownedGroup) return true;
+    if (!safeGroupTarget()) return false;
     try { process.kill(-child.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
   }
   function confirm(outcome) {
@@ -186,6 +197,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
         return !!result.ok;
       }
       if (ownedGroup) {
+        if (!safeGroupTarget()) return false;
         if ((closed || child.exitCode != null || child.signalCode != null) && groupSwept) return false;
         if (signalName === 'SIGKILL') groupSwept = true;
         process.kill(-child.pid, signalName);

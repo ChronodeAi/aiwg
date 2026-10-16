@@ -4809,7 +4809,7 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
     }
     const baseline = await runOne(workerInvokeBaseline.registerWorkerInvokeToolset);
     const branch = await runOne(registerProductionToolset);
-    expect(baseline.body.status, JSON.stringify(baseline.body)).toBe('failed');
+    expect(['failed', 'uncertain'], JSON.stringify(baseline.body)).toContain(baseline.body.status);
     expect(branch.body.status, JSON.stringify(branch.body)).toBe(baseline.body.status);
     expect(branch.body.termination).toBe(baseline.body.termination);
     expect(branch.body.diagnostics.join(' ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');

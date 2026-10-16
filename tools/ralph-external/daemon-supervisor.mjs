@@ -14,6 +14,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { isSafeWorkerGroupTarget } from './process-monitor.mjs';
 import { ConsecutiveFailureCircuitBreaker } from './lib/consecutive-failure-circuit-breaker.mjs';
 
 export class DaemonSupervisor extends EventEmitter {
@@ -358,7 +359,7 @@ export class DaemonSupervisor extends EventEmitter {
    */
   killProcessGroup(loopId, signal = 'SIGTERM') {
     const entry = this._running.get(loopId);
-    if (!entry || !entry.pid) {
+    if (!entry || !isSafeWorkerGroupTarget(entry.pid)) {
       return false;
     }
 

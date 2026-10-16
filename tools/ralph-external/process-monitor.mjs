@@ -70,6 +70,13 @@ export function sameWorkerIdentity(expected, actual) {
     .every(key => expected[key] === actual[key]);
 }
 
+/** A negative PID must name a worker group, never broadcast or select our own. */
+export function isSafeWorkerGroupTarget(pgid, supervisor = sampleWorkerIdentity(process.pid)) {
+  return Number.isSafeInteger(pgid) && pgid > 1 && pgid !== process.pid
+    && (supervisor ? Number.isSafeInteger(supervisor.pgid) && supervisor.pgid >= 0
+      && pgid !== supervisor.pgid : process.platform !== 'linux');
+}
+
 /** Two matching kernel observations, bounded from the first visible candidate.
  * Pin each candidate's first observed birth; PID reuse can never gain ownership.
  */

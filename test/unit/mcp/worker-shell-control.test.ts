@@ -319,6 +319,29 @@ describe('shell control lifetimes', () => {
       expect(child.kill).not.toHaveBeenCalled();
     }
   });
+  it.each([0, 1, -1, 1.5, NaN, undefined, process.pid])('refuses unsafe owned group %s without manufacturing close proof', async pid => {
+    const child = childFixture();
+    child.pid = pid;
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const control = buildShellStopControl({ launched: true, mode: 'degraded', child, ownedGroup: true },
+      { graceMs: 1, platform: 'linux', recheckMaxAttempts: 0 });
+    child.emit('close', 0);
+    expect(await control.stopAndConfirm()).toMatchObject({ termination: 'uncertain' });
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    control.dispose();
+  });
+  it.skipIf(process.platform !== 'linux')('refuses the caller process group', async () => {
+    const stat = await readFile('/proc/self/stat', 'utf8');
+    const child = childFixture();
+    child.pid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[2]);
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const control = buildShellStopControl({ launched: true, mode: 'degraded', child, ownedGroup: true },
+      { graceMs: 1, recheckMaxAttempts: 0 });
+    expect(await control.stopAndConfirm()).toMatchObject({ termination: 'uncertain' });
+    expect(kill).not.toHaveBeenCalled();
+    control.dispose();
+  });
   it.skipIf(process.platform === 'win32').each(['exit', 'close'])('does not signal a possibly reused PGID after its post-reap sweep on %s', async event => {
     const child = childFixture();
     const groupKill = vi.spyOn(process, 'kill').mockReturnValue(true);
