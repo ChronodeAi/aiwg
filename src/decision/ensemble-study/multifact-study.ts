@@ -233,8 +233,10 @@ function dispatchOrder(rows: HeldoutRow[], seed: string): HeldoutRow[] {
 }
 
 export function prepareD17MultifactStudy(seed: string, moduleDigest: Digest, sourceDigests: Record<string, Digest>) {
-  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed) || !/^sha256:[a-f0-9]{64}$/.test(moduleDigest)
-    || !Object.keys(sourceDigests).length || Object.values(sourceDigests).some(v => !/^sha256:[a-f0-9]{64}$/.test(v))) throw new Error('D17-MF source or seed pins');
+  if (typeof seed === 'string' && seed.length > 32) refuse('seed-too-long');
+  if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed-invalid');
+  if (!/^sha256:[a-f0-9]{64}$/.test(moduleDigest)
+    || !Object.keys(sourceDigests).length || Object.values(sourceDigests).some(v => !/^sha256:[a-f0-9]{64}$/.test(v))) refuse('source-pin-mismatch');
   const generated: HeldoutRow[] = [];
   const gold: Gold = { schemaVersion: 'decision-d17mf-gold/v1', labels: {}, worlds: {} };
   for (let index = 0; index < D17MF_ROWS; index++) {
@@ -288,7 +290,7 @@ export async function d17MultifactPlan(prepared: Pick<Prepared, 'corpus' | 'prer
   }
   return { rows, firstAttempts: first, maximumAttempts: first * attempts, maximumRequestEstimateTokens: max, reservedTokens: tokens, reservedUsdMicros: usd };
 }
-export function d17MultifactFit(plan: Awaited<ReturnType<typeof d17MultifactPlan>>, allowance: { calls: number; tokens: number; usdMicros: number }) {
+export function d17MultifactFit(plan: Pick<Awaited<ReturnType<typeof d17MultifactPlan>>, 'maximumAttempts' | 'reservedTokens' | 'reservedUsdMicros'>, allowance: { calls: number; tokens: number; usdMicros: number }) {
   const headroom = { calls: allowance.calls - plan.maximumAttempts, tokens: allowance.tokens - plan.reservedTokens, usdMicros: allowance.usdMicros - plan.reservedUsdMicros };
   return { allowance: { ...allowance }, headroom, fits: headroom.calls >= 0 && headroom.tokens >= 0 && headroom.usdMicros >= 0 };
 }
