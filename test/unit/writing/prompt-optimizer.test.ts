@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PromptOptimizer } from '../../../src/writing/prompt-optimizer.ts';
+import { medianMs } from '../../helpers/median-ms.ts';
 
 describe('PromptOptimizer', () => {
   let optimizer: PromptOptimizer;
@@ -460,12 +461,13 @@ Use comprehensive approach`,
     it('should process large batches efficiently', async () => {
       const prompts = Array.from({ length: 25 }, (_, i) => `Write about topic ${i}`);
 
-      const startTime = Date.now();
       const results = await optimizer.optimizeBatch(prompts);
-      const duration = Date.now() - startTime;
 
       expect(results.size).toBe(25);
-      expect(duration).toBeLessThan(10000); // Should complete in under 10 seconds
+      expect(Array.from(results.keys())).toEqual(prompts);
+      // Loaded Node 24 calibration: <2 ms median. Keep the original 10s batch
+      // budget with CI headroom, measuring seven complete batches after warm-up.
+      expect(await medianMs(() => optimizer.optimizeBatch(prompts), 7)).toBeLessThan(10000);
     });
 
     it('should maintain individual prompt context', async () => {
