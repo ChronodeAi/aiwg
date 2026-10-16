@@ -640,6 +640,7 @@ export class ScopedFailureBreaker extends EventEmitter {
         // otherwise satisfy. Only a settlement carrying confirmed-
         // termination evidence for that exact reservation clears it (see
         // `settle()`).
+        if (rec.status === 'operator-intervention') { blockedBy.push(scopeKey); continue; }
         if (rec.blockingMarker) { blockedBy.push(scopeKey); continue; }
         if (rec.activeCanary) { blockedBy.push(scopeKey); continue; }
         const dueFloor = Math.max(rec.nextProbeAtMs ?? 0, rec.resetAtMs ?? 0);
@@ -1001,6 +1002,15 @@ export class ScopedFailureBreaker extends EventEmitter {
     rec.cohortFrozenAt = null;
     this._transition(rec, 'closed', 'canary succeeded; resume covered launches');
     rec.breaker.reset();
+  }
+
+  requireOperatorIntervention(scopeKeys, reason) {
+    for (const key of scopeKeys) {
+      const rec = this._scopes.get(key);
+      if (!rec || rec.status === 'closed') continue;
+      rec.operatorReason = `${reason}; restore a qualified scope-relevant probe, then reset this scope`;
+      this._transition(rec, 'operator-intervention', rec.operatorReason);
+    }
   }
 
   _transition(rec, to, action) {
@@ -1414,6 +1424,7 @@ export class ScopedFailureBreaker extends EventEmitter {
       scope: rec.scope,
       tracked: true,
       state: rec.status,
+      ...(rec.operatorReason ? { operatorReason: rec.operatorReason } : {}),
       consecutiveFailures: inner.consecutiveFailures,
       distinctFailures: new Set(rec.failures.map((f) => f.invocationId)).size,
       outstanding: this._outstanding.get(scopeKey)?.size ?? 0,

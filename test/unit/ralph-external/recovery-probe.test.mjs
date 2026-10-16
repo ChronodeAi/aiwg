@@ -146,6 +146,34 @@ describe('T-OG-22 production probe and canary cumulative allowance', () => {
     } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
   });
 
+  it('T-OG-22 reports unavailable profiles once as operator intervention instead of infinite backoff', async () => {
+    const { breaker, admissionOptions, options, advance } = pausedFixture();
+    delete options.driver.qualification.installation.endpoints;
+    const summaries = vi.fn();
+    try {
+      const admission = await admitDirectWorker({ ...admissionOptions, invocationId: 'no-profile', maxAttempts: 2,
+        onTransition: summaries });
+      expect(admission.refused).toMatchObject({ code: 'RECOVERY_OPERATOR_INTERVENTION',
+        reason: expect.stringContaining('restore a qualified scope-relevant probe'),
+        probeDiagnostic: { reason: 'probe-profile-unavailable', operatorIntervention: true } });
+      const state = breaker.getState('quota:shared');
+      expect(state.state).toBe('operator-intervention');
+      const reports = summaries.mock.calls.length;
+      for (let n = 0; n < 3; n++) {
+        advance(1_000_000);
+        const again = await admitDirectWorker({ ...admissionOptions, invocationId: `no-profile-${n}`, maxAttempts: 2,
+          onTransition: summaries });
+        expect(again.refused.code).toBe('RECOVERY_OPERATOR_INTERVENTION');
+        expect(breaker.getState('quota:shared').episodeCooldownMs).toBe(state.episodeCooldownMs);
+      }
+      expect(summaries).toHaveBeenCalledTimes(reports);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      const unused = await reserveDirectWorkerAllowance({ taskChainDigest: admissionOptions.taskChainDigest,
+        invocationId: 'unused', maxAttempts: 2 });
+      await debitDirectWorkerAllowance(unused);
+    } finally { breaker.destroy(); }
+  });
+
   it('a failed upstream probe backs off and consumes exactly one remaining slot', async () => {
     const { breaker, admissionOptions } = pausedFixture(503);
     try {

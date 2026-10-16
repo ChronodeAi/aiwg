@@ -46,7 +46,8 @@ import { sampleWorkerIdentity, sameWorkerIdentity, createWorkerIdentityCapture, 
   qualifyWorkerCpuTickRate, sampleWorkerCpuTime, isSafeWorkerGroupTarget } from './process-monitor.mjs';
 import { createWorkerHealthObserver, sampleOwnedWorktreeContent, classifyWorkerHealthFailure } from './lib/worker-health.mjs';
 import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-failure-circuit-breaker.mjs';
-import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
+import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
+export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
@@ -504,7 +505,8 @@ async function launchOneWorker(owner, options) {
   try {
     admission = await admitDirectWorker({ gateEnabled: gate.enabled, config: inputs.snapshot.config,
       invocation, invocationId, drivers: inputs.drivers, scopedBreaker: options?.scopedBreaker,
-      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot, dispatchGuard });
+      taskChainDigest: taskDigest, maxAttempts: invocation.limits?.maxAttempts, captureRoot: options?.captureRoot, dispatchGuard,
+      onTransition: null });
   } catch (error) {
     // Fail closed, never fail open or leak a slot: an admission-time
     // exception (bad breaker state, a thrown import) is a refusal, not a
@@ -521,7 +523,8 @@ async function launchOneWorker(owner, options) {
     const message = admission.refused.blockedBy.length
       ? `Worker launch refused: recovery scope open (${admission.refused.blockedBy.join(', ')})`
       : `Worker launch refused: ${admission.refused.reason ?? admission.refused.code}`;
-    const error = new Error(message);
+    const error = new Error(`${message}${admission.refused.reason ? `; ${admission.refused.reason}` : ''}`);
+    error.probeDiagnostic = admission.refused.probeDiagnostic;
     error.code = admission.refused.code;
     error.blockedBy = admission.refused.blockedBy;
     if (admission.refused.ledgerDiagnostic) error.ledgerDiagnostics = [admission.refused.ledgerDiagnostic];
@@ -764,24 +767,7 @@ async function launchOneWorker(owner, options) {
       installation: inputs.drivers[invocation.selected.cli]?.qualification?.installation,
       timeoutMs: () => Math.min(10_000, dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? performance.now())),
       beforeRequest: async () => {
-        // Diagnostics use the same cumulative allowance as worker attempts.
-        // No allowance identity means no independent upstream probe.
-        if (!admission.ledger) return false;
-        let probeLedger;
-        try {
-          checkDispatchGuard(dispatchGuard);
-          probeLedger = await reserveDirectWorkerAllowance({ captureRoot: admission.ledger.captureRoot,
-            taskChainDigest: admission.ledger.taskChainDigest, maxAttempts: admission.ledger.maxAttempts,
-            invocationId: randomUUID() });
-          checkDispatchGuard(dispatchGuard);
-          await debitDirectWorkerAllowance(probeLedger);
-          checkDispatchGuard(dispatchGuard);
-          return true;
-        } catch (error) {
-          if (probeLedger) await refundDirectWorkerAllowance(probeLedger).catch(() => {});
-          ledgerDiagnostics.push(`Recovery diagnostic skipped: ${error?.code ?? 'ALLOWANCE_UNAVAILABLE'}`);
-          return false;
-        }
+        try { checkDispatchGuard(dispatchGuard); return true; } catch { return false; }
       } });
     await settleLedger(classifyAttemptForSettlement(invocation, result,
       { quotaAccount: admission.quotaAccount, installationQualifier: admission.installationQualifier }));
@@ -1003,8 +989,11 @@ async function captureOneWorker(owner, ctx) {
     owner.emit('stdout', chunk);
   });
   let stderrBytes = 0;
+  let recoveryReason = null;
   child.stderr.on('data', chunk => {
     observer.feed(chunk, { kind: 'stderr', id: 'stderr', generation: 0, offset: stderrOffset }); stderrOffset += chunk.length;
+    const hint = classifyWorkerHealthFailure(chunk.toString('utf8'), { source: { kind: 'stderr' } })?.reasonCode;
+    if (['RATE_LIMIT', 'NETWORK'].includes(hint)) recoveryReason = hint;
     const remaining = Math.max(0, 10485760 - stderrBytes);
     streams[1].write(chunk.subarray(0, remaining)); streams[3].write(chunk.subarray(0, remaining)); stderrBytes += chunk.length;
     if (stderrBytes > 10485760) { errorCode = 'OUTPUT_LIMIT'; stop(); }
@@ -1081,6 +1070,7 @@ async function captureOneWorker(owner, ctx) {
       nativeExitCode: native?.execMainCode === 1 ? native.execMainStatus : null,
       captureCoverage: sawClose ? 'complete' : 'gap', isolation: outcome.mode, nativeResult: native?.result ?? null,
       publishFailures: ctx.publishFailures?.length ? ctx.publishFailures.slice() : null };
+    recordLauncherRecoveryHint(result, recoveryReason);
     // #2915 (evidence contract): `attemptOutcome` is a SEPARATE launcher-owned
     // fact from `termination`/`descendants` above — whether THIS attempt
     // succeeded, never whether the descendant tree is confirmed stopped.
@@ -3360,7 +3350,28 @@ export function directRecoveryEligibility({ gateEnabled, config, invocation, dri
  *     — admitted (ordinarily or as the canary for `token.canaryKeys`).
  *     `token` MUST be passed to exactly one later `settleDirectWorker` call.
  */
-export async function admitDirectWorker({ gateEnabled, config, invocation, invocationId, drivers = {},
+const recoveryTransitionSubscriptions = new WeakMap();
+
+export async function admitDirectWorker(options = {}) {
+  const eligibility = directRecoveryEligibility(options);
+  if (!eligibility.gated) return eligibility;
+  const breaker = options.scopedBreaker ?? getDirectRecoveryBreaker();
+  const report = options.onTransition ?? (event => console.error(event.summary));
+  const listener = event => {
+    if (_reportedRecoveryTransitions.has(event)) return;
+    if (report(event) !== false) _reportedRecoveryTransitions.add(event);
+  };
+  if (options.onTransition !== null) breaker.on?.('transition', listener);
+  const unsubscribe = () => breaker.removeListener?.('transition', listener);
+  let admission;
+  try {
+    admission = await admitDirectWorkerInner({ ...options, scopedBreaker: breaker });
+    if (admission.token) recoveryTransitionSubscriptions.set(admission, unsubscribe);
+    return admission;
+  } finally { if (!admission?.token) unsubscribe(); }
+}
+
+async function admitDirectWorkerInner({ gateEnabled, config, invocation, invocationId, drivers = {},
   scopedBreaker, quotaAccount = null, installationQualifier = null,
   // #2915 review 4 (finding 8): the allowance ledger is consulted ONLY when
   // gated — disabled dispatch (or an ineligible CLI, or a covering scope
@@ -3415,7 +3426,7 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
         const began = breaker.beginDispatch(reserved.token, { invocationId: probeId, selectionDigest });
         if (!began.ok) throw new Error(began.reason);
         const { runRecoveryProbe } = await import('./lib/recovery-probe.mjs');
-        const result = await runRecoveryProbe({ driver: drivers[cli], invocation,
+        const result = await runRecoveryProbe({ driver: drivers[cli], invocation, scopeKeys: reserved.token.canaryKeys,
           timeoutMs: Math.min(breaker.policy.probeTimeoutMs, reserved.token.deadlineMs - breaker.nowMs(),
             dispatchGuard?.deadlineAtMs == null ? Infinity : dispatchGuard.deadlineAtMs - (dispatchGuard.nowMs?.() ?? Date.now())), maxOutputBytes: breaker.policy.probeMaxOutputBytes,
           onDispatch: async () => {
@@ -3425,7 +3436,7 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
             const committed = breaker.commitDispatch(reserved.token);
             if (!committed.ok) throw new Error(committed.reason);
           } });
-        probeDiagnostic = { reason: result.reason, ...(result.retainedPath ? { retainedPath: result.retainedPath, invocationId: probeId } : {}) };
+        probeDiagnostic = { reason: result.reason, operatorIntervention: result.operatorIntervention === true, ...(result.retainedPath ? { retainedPath: result.retainedPath, invocationId: probeId } : {}) };
         probeOutcome = { kind: result.success ? 'succeeded' : 'failed',
           relevant: result.relevant === true, evidenceSource: 'launcher', retryAfterSeconds: result.retryAfterSeconds ?? null,
           confirmedStop: result.termination === 'confirmed' };
@@ -3438,11 +3449,18 @@ export async function admitDirectWorker({ gateEnabled, config, invocation, invoc
         breaker.settle(reserved.token, probeOutcome);
         if (probeLedger) await refundDirectWorkerAllowance(probeLedger);
       }
+      if (probeDiagnostic?.operatorIntervention) {
+        breaker.requireOperatorIntervention(reserved.token.canaryKeys, probeDiagnostic.reason);
+      }
       admission = breaker.admit({ invocationId, scopeKeys, selectionDigest });
     } else admission = reserved;
   }
   if (!admission.ok) {
-    return { gated: true, refused: { code: RECOVERY_SCOPE_OPEN_CODE, blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt, ...(probeDiagnostic ? { probeDiagnostic } : {}) } };
+    const operatorReasons = (admission.blockedBy ?? []).map(key => breaker.getState?.(key)?.operatorReason).filter(Boolean);
+    return { gated: true, refused: { code: operatorReasons.length ? 'RECOVERY_OPERATOR_INTERVENTION' : RECOVERY_SCOPE_OPEN_CODE,
+      blockedBy: admission.blockedBy, nextEligibleAt: admission.nextEligibleAt,
+      ...(probeDiagnostic ? { probeDiagnostic } : {}),
+      ...(operatorReasons.length ? { reason: operatorReasons.join('; ') } : {}) } };
   }
   let ledger = null;
   let ledgerDiagnostic = null;
@@ -3567,6 +3585,8 @@ export function settleDirectWorker(admission, outcome = { kind: 'uncertain' }) {
   // reports `{ kind: 'uncertain', confirmedStop: true }`, which `settle()`
   // handles identically to `abortDispatch` (itself defined in terms of it).
   try { admission.breaker.settle(admission.token, outcome); } catch { /* recovery accounting must never fail a launch */ }
+  recoveryTransitionSubscriptions.get(admission)?.();
+  recoveryTransitionSubscriptions.delete(admission);
   return refund;
 }
 
@@ -4685,6 +4705,7 @@ export function planDirectWorkerLaunch({
   // enforcement too — a borrowed admission already carries these from its
   // own caller's `admitDirectWorker` call and never re-resolves them here.
   taskChainDigest,
+  onRecoveryTransition,
   maxAttempts,
   captureRoot,
   // Test-only isolation observation/stop seams for standalone launches.
@@ -4871,14 +4892,15 @@ export function planDirectWorkerLaunch({
       // a shared scope).
       admission = await admitDirectWorker({ gateEnabled: gate.enabled, config, invocation,
         invocationId: mintedInvocationId, scopedBreaker, drivers: drivers ?? {},
-        taskChainDigest, maxAttempts, captureRoot, dispatchGuard });
+        taskChainDigest, maxAttempts, captureRoot, dispatchGuard, onTransition: onRecoveryTransition });
     } catch (error) {
       return { launched: false, blocked: true,
         diagnostic: `recovery admission failed closed: ${error?.message ?? String(error)}` };
     }
     if (admission.refused) {
       return { launched: false, blocked: true, recoveryBlocked: admission.refused.blockedBy,
-        diagnostic: `recovery scope open: ${admission.refused.blockedBy.join(', ')}` };
+        diagnostic: `recovery scope open: ${admission.refused.blockedBy.join(', ')}${admission.refused.reason ? `; ${admission.refused.reason}` : ''}`,
+        probeDiagnostic: admission.refused.probeDiagnostic };
     }
     // #2915 round 8 (D2/D3, replaces the former "debit immediately before
     // this call" comment): the hook below is passed to

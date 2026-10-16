@@ -5,8 +5,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // @ts-ignore - ESM import
-import { planDirectWorkerLaunch } from '../../../tools/ralph-external/session-launcher.mjs';
+import { planDirectWorkerLaunch, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import path from 'node:path';
 import { rmSync } from 'node:fs';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
@@ -115,5 +116,39 @@ describe('planDirectWorkerLaunch gate-then-launch (T-OG-16, FR-OG-107/108)', () 
     expect(outcome).toMatchObject({ launched: false, blocked: true });
     expect((outcome as any).failures).toContainEqual(expect.objectContaining({ signal: 'free-disk' }));
     expect(seen).toEqual(['/tmp/work']);
+  });
+});
+
+// T-OG-22: standalone planner admissions must have an operator consumer too.
+describe('standalone recovery transition summaries', () => {
+  it('reports a real planner probe/canary transition once and preserves unavailable-profile reasons', async () => {
+    let time = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0 });
+    const summaries = vi.fn();
+    try {
+      for (let n = 0; n < 3; n++) {
+        const { token } = breaker.admit({ invocationId: `failed-${n}`, scopeKeys: ['quota:shared'] });
+        breaker.settle(token, { kind: 'failed', reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher',
+          quotaAccount: 'shared', confirmedStop: true });
+      }
+      time = 120_000;
+      const options = { name: 'planner-summary', command: process.execPath, args: ['--version'],
+        invocation: { transport: 'shell', selected: { cli: 'fixture' }, limits: { wallSeconds: 30 } },
+        config: dispatchOnConfig, live: okLive, scopedBreaker: breaker, onRecoveryTransition: summaries,
+        taskChainDigest: 'planner-summary', maxAttempts: 2,
+        drivers: { fixture: { qualification: { installation: { accountScope: 'shared' } } } },
+      };
+      const result = await planDirectWorkerLaunch(options);
+      expect(result).toMatchObject({ launched: false, blocked: true,
+        diagnostic: expect.stringContaining('restore a qualified scope-relevant probe'),
+        probeDiagnostic: { reason: 'probe-profile-unavailable' } });
+      expect(summaries.mock.calls.map(([event]) => event.to)).toEqual(['half-open', 'open', 'operator-intervention']);
+      for (let n = 0; n < 3; n++) {
+        time += 1_000_000;
+        await planDirectWorkerLaunch(options);
+      }
+      expect(summaries).toHaveBeenCalledTimes(3);
+      expect(breaker.listenerCount('transition')).toBe(0);
+    } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
   });
 });

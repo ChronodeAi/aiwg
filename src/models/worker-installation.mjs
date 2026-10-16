@@ -157,6 +157,34 @@ export async function qualifyWorkerInstallation(instance, options) {
   }
 }
 
+/** A harmless version check for installation/host recovery, never upstream health. */
+export async function probeWorkerInstallation(instance, installation, { timeoutMs, maxOutputBytes, onDispatch } = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 10_000
+    || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 65_536) {
+    throw new RangeError('Recovery probe exceeds the 10s/64KiB bounds');
+  }
+  const started = performance.now();
+  let scope;
+  try { ({ scope } = await recheckWorkerInstallation(instance, { ...installation, now: Date.now() })); }
+  catch { return { success: false, relevant: false, termination: 'confirmed',
+    reason: 'probe-installation-unqualified', operatorIntervention: true }; }
+  const remaining = Math.floor(timeoutMs - (performance.now() - started));
+  if (remaining <= 0) return { success: false, relevant: false, termination: 'confirmed', reason: 'probe-timeout' };
+  await onDispatch?.();
+  try {
+    const { version } = await boundedVersionProbe(scope.binary.realpath, installation.adapter.invocation.versionArgv,
+      installation.environment ?? {}, scope.cwd, Math.max(1, Math.floor(timeoutMs - (performance.now() - started))), maxOutputBytes,
+      installation.adapter.invocation.versionPattern);
+    const unchanged = (await inspectWorkerInstallation(instance, installation)).scopeDigest === scope.scopeDigest;
+    return { success: unchanged && version === installation.cliVersion, relevant: true,
+      termination: 'confirmed', reason: unchanged && version === installation.cliVersion ? 'probe-succeeded' : 'probe-installation-changed' };
+  } catch {
+    // The bounded process probe sends KILL on failure, but cannot attest an
+    // escaped descendant's stop. Retain the reservation until reconciled.
+    return { success: false, relevant: false, termination: 'uncertain', reason: 'probe-local-stop-unconfirmed' };
+  }
+}
+
 export async function prepareInstalledWorkerInvocation(instance, invocation, qualification) {
   const { prepareWorkerInvocation } = await import('../serve/worker-invocation.js');
   const { requiredWorkerControls, WorkerPolicyError } = await import('./provider-policy.js');
@@ -886,6 +914,7 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, s
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };
       registerWorkerRecoveryCapabilities(drivers[cli], {
+        probeInstallation: options => probeWorkerInstallation(instance, installation, options),
         ...(typeof instance.parseWorkerAttemptFinal === 'function'
           ? { parseWorkerAttemptFinal: (output, options) => instance.parseWorkerAttemptFinal(output, options) } : {}),
         // Adapters with neither an explicit signal nor an attempt parser cannot

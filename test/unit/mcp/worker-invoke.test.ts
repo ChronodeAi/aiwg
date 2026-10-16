@@ -5343,3 +5343,109 @@ describe('review 11 populated default driver equivalence', () => {
     } finally { vi.resetModules(); }
   });
 });
+
+// T-OG-16/22: exercise registered operator tools, not just the helper exports.
+describe('registered worker recovery evidence and summaries (#2915)', () => {
+  it.each(['shell', 'mcp'] as const)('%s failures confirm quota evidence and report transitions once', async transport => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'synthetic upstream failure');
+    const f = buildFixture(root, transport);
+    f.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
+    const installation = { accountScope: 'shared-quota', endpoints: ['https://provider.invalid/health'] };
+    (f.drivers.codex.qualification as any).installation = installation;
+    let time = 1_000_000;
+    let recovering = false;
+    const claims = { version: 1, status: 'completed', summary: 'ok', claims: [], artifacts: [], checks: [], limitations: [] };
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0 });
+    const summaries = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null,
+      { status: 429, headers: { 'retry-after': '180', 'ratelimit-reset': '240' } }));
+    const dispatch = async (options: any) => {
+      const admission = options.admission;
+      expect(admission.breaker.beginDispatch(admission.token,
+        { invocationId: admission.invocationId, selectionDigest: admission.selectionDigest }).ok).toBe(true);
+      await sessionLauncherModule.debitDirectWorkerAllowance(admission.ledger);
+      expect(admission.breaker.commitDispatch(admission.token).ok).toBe(true);
+    };
+    if (transport === 'mcp') f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio',
+      command: process.execPath, args: [], env: {} }) } as any;
+    const tools = await captureTool(null, { projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      now: () => new Date(f.now), scopedBreaker: breaker, onRecoveryTransition: summaries,
+      launchShellWorker: async (invocation: any, options: any) => {
+        await dispatch(options);
+        if (recovering) {
+          await writeFile(invocation.finalPath, `${JSON.stringify({ type: 'result', result: claims })}\n`);
+          return { launched: true, mode: 'degraded', child: closingChild(0) };
+        }
+        const child: any = new EventEmitter(); child.stderr = new PassThrough(); child.kill = () => true;
+        setImmediate(() => { child.stderr.end('429 Retry-After: 999999; reset=999999'); child.emit('close', 1); });
+        return { launched: true, mode: 'degraded', child };
+      },
+      callMcpWorker: async (_binding: any, _server: any, options: any) => {
+        await dispatch(options);
+        if (recovering) return { outcome: 'responded', response: { isError: false, structuredContent: claims,
+          content: [{ type: 'text', text: JSON.stringify(claims) }] } };
+        return { outcome: 'responded', response: { isError: true,
+          content: [{ type: 'text', text: '429 Retry-After: 999999; reset=999999' }] } };
+      },
+    });
+    const call = tools.get('worker-invoke').handler;
+    try {
+      const bodies: any[] = [];
+      for (let n = 0; n < 3; n++) {
+        const input = { operation: 'run', request_id: `quota-${transport}-${n}`, role: 'coding', task: 'implementation',
+          group: 'workers', brief, workdir: work, final_output: path.join(work, `final-${n}.json`), transport };
+        if (transport === 'mcp') await buildStructuredBrief(f, input);
+        else await writeFile(brief, `independent synthetic upstream task ${n}`);
+        const response = await call(input);
+        bodies.push(JSON.parse(response.content[0].text));
+        expect(bodies[n].status, JSON.stringify(bodies[n])).toBe('failed');
+      }
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(breaker.getState('quota:shared-quota')).toMatchObject({ state: 'open', nextProbeAtMs: 1_240_000 });
+      expect(summaries).toHaveBeenCalledOnce();
+      expect(summaries.mock.calls[0][0]).toMatchObject({ scopeKey: 'quota:shared-quota', from: 'closed', to: 'open' });
+      expect(bodies[2].diagnostics).toContain(summaries.mock.calls[0][0].summary);
+      expect(summaries.mock.calls[0][0].summary).toContain('pause covered launches');
+      for (let n = 0; n < 3; n++) {
+        await call({ operation: 'status' }); breaker.snapshot();
+      }
+      expect(summaries).toHaveBeenCalledOnce();
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      recovering = true;
+      time = 1_240_000;
+      fetchSpy.mockResolvedValue(new Response(null));
+      const input = { operation: 'run', request_id: `canary-${transport}`, role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: work, final_output: path.join(work, 'canary.json'), transport };
+      if (transport === 'mcp') await buildStructuredBrief(f, input);
+      else await writeFile(brief, 'independent synthetic canary');
+      const response = JSON.parse((await call(input)).content[0].text);
+      expect(response.status, JSON.stringify(response)).toBe('completed');
+      expect(breaker.getState('quota:shared-quota').state).toBe('closed');
+      expect(summaries.mock.calls.map(([event]) => event.to)).toEqual(['open', 'half-open', 'canary-ready', 'canary', 'closed']);
+      expect(response.diagnostics).toEqual(expect.arrayContaining(summaries.mock.calls.slice(1).map(([event]) => event.summary)));
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+      // If a later outage has no relevant probe, the registered operator
+      // surface must preserve the reason and the required repair action.
+      breaker.reconcileStopEvidence({ invocationId: response.invocationId, confirmedStop: true });
+      installation.endpoints = [];
+      for (let n = 0; n < 3; n++) {
+        const { token } = breaker.admit({ invocationId: `no-profile-${n}`, scopeKeys: ['quota:shared-quota'] });
+        breaker.settle(token, { kind: 'failed', reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher',
+          quotaAccount: 'shared-quota', confirmedStop: true });
+      }
+      time = breaker.getState('quota:shared-quota').nextProbeAtMs;
+      input.request_id = `operator-${transport}`;
+      input.final_output = path.join(work, 'operator.json');
+      if (transport === 'mcp') await buildStructuredBrief(f, input);
+      else await writeFile(brief, 'independent synthetic operator intervention task');
+      const blocked = JSON.parse((await call(input)).content[0].text);
+      expect(blocked.status).toBe('blocked');
+      expect(blocked.diagnostics.join(' ')).toContain('probe-profile-unavailable; restore a qualified scope-relevant probe');
+      expect(breaker.getState('quota:shared-quota').state).toBe('operator-intervention');
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+    } finally { breaker.destroy(); fetchSpy.mockRestore(); }
+  });
+});

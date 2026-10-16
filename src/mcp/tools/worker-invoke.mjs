@@ -1631,21 +1631,28 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
    */
   async function run(input) {
     let settlementPromise = null;
-    const result = await runInner(input, promise => { settlementPromise = promise; });
+    const transitions = [];
+    let result = await runInner(input, promise => { settlementPromise = promise; }, event => {
+      transitions.push(event.summary);
+      (options.onRecoveryTransition ?? (event => console.error(event.summary)))(event);
+    });
     if (settlementPromise) {
       let diagnostic = null;
       try { diagnostic = await settlementPromise; } catch { /* never fail a run on diagnostic retrieval */ }
       if (diagnostic && result?.invocationId) {
         const current = registry.get(result.invocationId);
         if (current) {
-          return registry.update(result.invocationId, { diagnostics: [...(current.diagnostics ?? []), diagnostic] });
+          result = registry.update(result.invocationId, { diagnostics: [...(current.diagnostics ?? []), diagnostic] });
         }
       }
+    }
+    if (transitions.length && result?.invocationId) {
+      result = registry.update(result.invocationId, { diagnostics: [...(result.diagnostics ?? []), ...transitions] });
     }
     return result;
   }
 
-  async function runInner(input, captureSettlementPromise) {
+  async function runInner(input, captureSettlementPromise, onTransition) {
     // M1: request_id is required, and admission (capacity + replay check +
     // reservation) is entirely synchronous — no `await` between the checks
     // and `registry.create()` — so no concurrent `run()` call can observe a
@@ -1776,7 +1783,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           admission = await recoveryModule.admitDirectWorker({
             gateEnabled: dispatchGateEnabled, config: snapshot.config,
             invocation, invocationId: entry.invocationId, drivers, scopedBreaker: options.scopedBreaker,
-            taskChainDigest, maxAttempts: invocation.limits?.maxAttempts,
+            taskChainDigest, maxAttempts: invocation.limits?.maxAttempts, onTransition,
           });
         }
       } catch (error) {
@@ -1807,7 +1814,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         ? "; unresolved reservations can be reconciled via this tool's 'reconcile_stopped' operation (see 'status' with no invocation_id for the pending list)"
         : '';
       return markTerminal({ status: 'blocked', termination: 'confirmed',
-        diagnostics: [`recovery scope open: ${blockedBy}${markerNote}`] });
+        diagnostics: [`recovery scope open: ${blockedBy}${markerNote}${admission.refused.reason ? `; ${admission.refused.reason}` : ''}`] });
     }
     // #2915 round 8 (D4): track which breaker instance actually owns this
     // invocation's reservation (when gated) — the `reconcile_stopped`
@@ -2098,6 +2105,15 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       settlementStarted();
       if (!outcome.confirmedStop) observeLater(isolationEvidence);
     };
+    let recoveryDeadlineAtMs = 0;
+    const settleObservedFailure = async (result, failureHint = '') => {
+      await recoveryModule.observeLauncherRecoveryOutcome({ invocation, result, failureHint,
+        installation: drivers[invocation.selected.cli]?.qualification?.installation, breaker: admission.breaker,
+        timeoutMs: () => Math.min(10_000, recoveryDeadlineAtMs - admission.breaker.nowMs()),
+        beforeRequest: async () => !registry.get(entry.invocationId)?.cancelRequested });
+      settleRecovery({ ...recoveryModule.classifyAttemptForSettlement(invocation, result, admission),
+        confirmedStop: result.confirmedStop });
+    };
     try {
       // #2915 round 8 review 8 (C3): ONE absolute wall-clock deadline for
       // this attempt, computed HERE — at the very top of this function,
@@ -2121,6 +2137,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       if (invocation.transport === 'mcp') deadlineCandidatesMs.push((admission.startedAtMs ?? deadlineClockNow()) + invocation.mcp.timeoutSeconds * 1000);
       if (admission.token?.canaryKeys?.length > 0) deadlineCandidatesMs.push(admission.token.deadlineMs);
       const deadlineAtMs = Math.min(...deadlineCandidatesMs);
+      recoveryDeadlineAtMs = deadlineAtMs;
       // #2915 round 8 review 8 (C3): cancellation predicate, read from the
       // registry's own live `cancelRequested` flag — set by `cancel()`
       // (M2) at any point during this run's lifetime, including before any
@@ -2234,6 +2251,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         const launch = await launchShellWorkerImpl(invocation, { allowDegraded, config: snapshot.config,
           name: `mcp-${entry.invocationId.slice(0, 8)}`, memoryMaxGb: options.shellWorkerMemoryMaxGb,
           driver: drivers[invocation.selected.cli], servedRoot: root, stdinRuntimeRoot: options.stdinRuntimeRoot, admission, invocationId: entry.invocationId, dispatchGuard, ...gateInputs });
+        let failureHint = Buffer.alloc(0);
+        const observeHint = chunk => {
+          if (failureHint.length < 8192) failureHint = Buffer.concat([failureHint, Buffer.from(chunk).subarray(0, 8192 - failureHint.length)]);
+        };
+        launch.child?.stderr?.on('data', observeHint);
         isolationEvidence = { isolationMode: launch.mode ?? null, unitName: launch.unit ?? null, child: launch.child ?? null,
           dispatchState: launch.dispatchState === 'submission-uncertain' ? 'submission-uncertain' : (launch.launched || launch.launchAttempted) ? 'dispatched' : 'never-began' };
         registry.update(entry.invocationId, { isolationMode: launch.mode ?? null });
@@ -2315,6 +2337,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // a valid, matching, uncancelled completed claim can never close a
         // scope through this path. Uncertain termination never implicates
         // anything either way.
+        launch.child?.stderr?.removeListener('data', observeHint);
         if (outcome.termination !== 'confirmed') {
           settleRecovery({ kind: 'uncertain', confirmedStop });
           // M2: stays LIVE — capacity is held until a stop is proven or the
@@ -2326,7 +2349,11 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           });
         }
         if (outcome.exitCode !== 0) {
-          settleRecovery({ kind: 'failed', evidenceSource: 'launcher', confirmedStop });
+          if (!failureHint.length && invocation.stderrPath) {
+            try { failureHint = await readBoundedFile(invocation.stderrPath, 8192, root); } catch { /* no usable hint */ }
+          }
+          await settleObservedFailure({ ...outcome, invocationId: entry.invocationId, attemptOutcome: 'failed',
+            cancelled: !!registry.get(entry.invocationId)?.cancelRequested, confirmedStop }, failureHint.toString('utf8'));
         }
         await Promise.resolve().then(() => launch.cleanup?.()).catch(() => {
           console.error('[worker-invoke] stdin cleanup failed after confirmed termination');
@@ -2503,7 +2530,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // the cancellation check, so a transport-correlated response alone
         // can never close a scope.
         if (result.response.isError) {
-          settleRecovery({ kind: 'failed', evidenceSource: 'launcher', confirmedStop });
+          await settleObservedFailure({ invocationId: entry.invocationId, attemptOutcome: 'failed',
+            termination: 'confirmed', exitCode: 1, confirmedStop,
+            cancelled: !!registry.get(entry.invocationId)?.cancelRequested }, JSON.stringify(result.response).slice(0, 8192));
           return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: ['worker reported isError'] });
         }
       }

@@ -43,16 +43,19 @@ async function fixture() {
     signalParser: 'fixture:jsonl', sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only',
     fixtureRef: 'fixture:one-shot', qualifiedAt: f.request.now, statusOperation: null, cancelOperation: null };
   f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+  let upstream = false;
   const driver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0', installation,
     boundary: { kind: 'os', identity: 'fixture:boundary', digest: qualificationDigest('boundary'), controls: ['sandbox'] } },
-    buildInvocation: async () => ({ argv: [process.execPath, '-e', 'process.exit(1)'], stdin: 'closed', envNames: [] }),
+    buildInvocation: async () => ({ argv: [process.execPath, '-e', upstream ? 'process.stderr.write("429 Retry-After: 9999"); process.exit(1)' : 'process.exit(1)'], stdin: 'closed', envNames: [] }),
     extractFinal: () => null };
   f.snapshot.installations.codex.boundary = driver.qualification.boundary;
   const drivers = { codex: driver };
-  return { root, f, drivers, async run(breaker, n, { backend = 'vendor', nativeError = null } = {}) {
+  return { root, f, drivers, async run(breaker, n, { backend = 'vendor', nativeError = null, upstreamFailure = false, task = `independent synthetic task ${n}`, maxAttempts = 3 } = {}) {
+    upstream = upstreamFailure;
+    f.snapshot.config.parallelism.retry = { maxAttempts };
     for (const model of f.snapshot.catalog.discovery.instances.codex.models) model.llmProvider = backend;
     const brief = join(root, `brief-${n}`);
-    await writeFile(brief, `independent synthetic task ${n}`);
+    await writeFile(brief, task);
     const plan = await resolveWorkerInvocation(f.snapshot, { role: 'coding', task: 'implementation', group: 'workers',
       brief, workdir: cwd, final_output: join(root, `final-${n}`) }, drivers, f.request.now);
     expect(plan.invocation, JSON.stringify(plan.diagnostics)).toBeDefined();
@@ -109,8 +112,8 @@ describe('T-OG-16/22 launcher-owned provider evidence', () => {
         'x-ratelimit-reset': String(Math.ceil(Date.now() / 1000) + 240) } }, request);
     });
     for (let n = 1; n <= 3; n += 1) {
-      const result = await fx.run(breaker, n);
-      expect(classifyLaunchOutcomeForRecovery(result)).toMatchObject({ reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher' });
+      const result = await fx.run(breaker, n, { upstreamFailure: true });
+      expect(classifyLaunchOutcomeForRecovery(result), JSON.stringify(result)).toMatchObject({ reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher' });
     }
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     const state = breaker.getState('quota:shared-account');
@@ -181,14 +184,51 @@ describe('T-OG-16/22 launcher-owned provider evidence', () => {
     const fx = await fixture();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, request) => fakeProviderResponse({ status: 200 }, request));
     for (let n = 1; n <= 3; n += 1) await fx.run(breaker, n);
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(breaker.getState('provider:vendor').state).toBe('closed');
     expect(breaker.getState('quota:shared-account').state).toBe('closed');
     expect(breaker.getState('host:local').state).toBe('closed');
   });
 
+  it('T-OG-16 preserves maxAttempts=2 for a failed task and its permitted retry with no open scopes', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    const breaker = breakerAt();
+    const fx = await fixture();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    for (const n of [1, 2]) await fx.run(breaker, n, { task: 'same task retry', maxAttempts: 2 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(breaker.snapshot().scopes.every(scope => scope.state === 'closed')).toBe(true);
+    expect(breaker.snapshot().attemptsObserved).toBe(2);
+    await expect(fx.run(breaker, 3, { task: 'same task retry', maxAttempts: 2 }))
+      .rejects.toMatchObject({ code: 'ALLOWANCE_EXHAUSTED' });
+  });
+
+  it('surfaces the unavailable-profile reason on the launcher refusal', async () => {
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
+    let time = 0;
+    const breaker = breakerAt(() => time);
+    const fx = await fixture();
+    fx.drivers.codex.qualification.installation = { accountScope: 'shared-account' };
+    for (let n = 0; n < 3; n++) {
+      const { token } = breaker.admit({ invocationId: `quota-${n}`, scopeKeys: ['quota:shared-account'] });
+      breaker.settle(token, { kind: 'failed', reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher',
+        quotaAccount: 'shared-account', confirmedStop: true });
+    }
+    time = 120_000;
+    await expect(fx.run(breaker, 1)).rejects.toMatchObject({ code: 'RECOVERY_OPERATOR_INTERVENTION',
+      message: expect.stringContaining('probe-profile-unavailable; restore a qualified scope-relevant probe'),
+      probeDiagnostic: { reason: 'probe-profile-unavailable' } });
+  });
+
+  it('does not probe for a generic task/provider error hint', async () => {
+    const fetchImpl = vi.fn();
+    await observeLauncherRecoveryOutcome({ result: { attemptOutcome: 'failed', health: { reasonCode: 'PROVIDER_ERROR' } },
+      installation, beforeRequest: async () => true, fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('sends no diagnostic without an authorized endpoint and charged allowance; normalizes HTTP-date Retry-After', async () => {
-    const result = { attemptOutcome: 'failed', termination: 'confirmed', exitCode: 1 };
+    const result = { attemptOutcome: 'failed', termination: 'confirmed', exitCode: 1, health: { reasonCode: 'RATE_LIMIT' } };
     const fetchImpl = vi.fn(async () => new Response(null, { status: 429, headers: { 'retry-after': 'Thu, 01 Jan 1970 00:05:00 GMT' } }));
     await observeLauncherRecoveryOutcome({ result, installation, beforeRequest: async () => false, fetchImpl });
     await observeLauncherRecoveryOutcome({ result, installation: {}, beforeRequest: async () => true, fetchImpl });

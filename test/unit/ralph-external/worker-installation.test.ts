@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -15,6 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
+
+import { probeWorkerInstallation, registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+import { SessionLauncher, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 
 vi.mock('node:child_process', { spy: true });
 
@@ -122,6 +128,73 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     expect(executable.mode & 0o777).toBe(0o755);
     expect(executable.nlink).toBe(1);
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('ENABLED');
+  });
+
+  it('T-OG-22 recovers an endpoint-free installation via its bounded local CLI probe then exactly one real canary', async () => {
+    const f = await setup();
+    const inputs = workerResolutionFixture();
+    const adapter = inputs.snapshot.registry.providers.codex.workerAdapter!;
+    adapter.invocationProfiles['fixture-shell'].envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    adapter.invocation.envAllowlist = ['AIWG_FAKE_WORKER_CONFIG'];
+    adapter.invocationProfiles['fixture-shell'].health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl',
+      signalParser: 'fixture:jsonl', sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only',
+      fixtureRef: 'fixture:one-shot', qualifiedAt: inputs.request.now, statusOperation: null, cancelOperation: null };
+    inputs.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+    inputs.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
+    inputs.snapshot.installations.codex.boundary = f.request.boundary;
+    let time = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => time, jitterMs: () => 0 });
+    const scopeKey = `installation:codex:${f.request.boundary.digest}`;
+    const localDriver = { qualification: { adapter, adapterId: adapter.id, cliVersion: '1.0.0',
+      installation: f.request, boundary: f.request.boundary },
+      buildInvocation: async (input: any) => ({ argv: [f.request.executable, driver.fixtureCli, '--model', input.selected.model,
+        '--final-output', input.finalPath], stdin: 'closed', envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
+      extractFinal: (text: string) => { try { return JSON.parse(text).result ?? null; } catch { return null; } } };
+    const probe = vi.fn(options => probeWorkerInstallation(driver, f.request, options));
+    registerWorkerRecoveryCapabilities(localDriver, { probeInstallation: probe,
+      parseWorkerAttemptFinal: (output: any, options: any) => driver.parseWorkerAttemptFinal(output, { ...options, format: 'jsonl' }) });
+    const launcher = new SessionLauncher();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No upstream request allowed'));
+    vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', f.config);
+    const launch = async (n: number, onDispatch = async () => {}) => {
+      const brief = path.join(f.root, `brief-${n}.md`);
+      await writeFile(brief, `synthetic endpoint-free task ${n}`);
+      const plan = await resolveWorkerInvocation(inputs.snapshot, { role: 'coding', task: 'implementation', group: 'workers',
+        brief, workdir: f.cwd, final_output: path.join(f.cwd, `final-${n}.json`) }, { codex: localDriver }, inputs.request.now);
+      expect(plan.invocation, JSON.stringify(plan.diagnostics)).toBeDefined();
+      const invocationPath = path.join(f.root, `plan-${n}.json`);
+      await writeFile(invocationPath, JSON.stringify(plan));
+      return launcher.launchWorker({ invocationPath, runDir: path.join(f.root, `run-${n}`), scopedBreaker: breaker,
+        inputs: { snapshot: inputs.snapshot, drivers: { codex: localDriver } }, now: inputs.request.now,
+        isolation: { mode: 'degraded', reason: 'synthetic manager' }, allowDegraded: true,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        launchIsolated: async ({ command, args, cwd, onDispatchCommit }: any) => {
+          await onDispatchCommit();
+          await onDispatch();
+          return { mode: 'degraded', child: spawn(command, args, { cwd, detached: true,
+            env: f.request.environment, stdio: ['ignore', 'pipe', 'pipe'] }) };
+        } });
+    };
+    try {
+      // Actual ENOENT launches open the qualified installation scope.
+      // Restore identical binary bytes so the original qualification still binds.
+      await unlink(f.request.executable);
+      for (let n = 0; n < 3; n++) await expect(launch(n)).resolves.toMatchObject({ errorCode: 'ENOENT', attemptOutcome: 'failed' });
+      expect(breaker.getState(scopeKey).state).toBe('open');
+      expect(probe).not.toHaveBeenCalled();
+      await copyNode(f.packageRoot);
+      time = 120_000;
+      const result = await launch(3, async () => {
+        expect(breaker.getState(scopeKey).state).toBe('canary');
+        expect(breaker.admit({ invocationId: 'second-canary', scopeKeys: [scopeKey] }).ok).toBe(false);
+      });
+      expect(result.attemptOutcome).toBe('succeeded');
+      expect(probe).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ timeoutMs: 5000, maxOutputBytes: 65_536 }));
+      expect(breaker.getState(scopeKey).state).toBe('closed');
+      expect(breaker.snapshot().attemptsObserved).toBe(5); // three failures, one probe, one canary
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await readdir(f.root)).not.toContain('.aiwg');
+    } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
   });
 
   it('rejects a writable executable with multiple hard links', async () => {

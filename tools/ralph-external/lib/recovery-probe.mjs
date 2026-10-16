@@ -1,6 +1,9 @@
+import { importImpl } from '../../_resolve-impl.mjs';
+const { getWorkerRecoveryCapabilities } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+
 /** A recovery probe is a conductor-owned request, never an uncontained worker. */
 export async function runRecoveryProbe({ driver, invocation, timeoutMs = 10_000, maxOutputBytes = 65_536,
-  onDispatch, fetchImpl = globalThis.fetch, wallNowMs = Date.now }) {
+  scopeKeys = [], onDispatch, fetchImpl = globalThis.fetch, wallNowMs = Date.now }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 10_000
     || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 65_536) {
     throw new RangeError('Recovery probe exceeds the 10s/64KiB bounds');
@@ -11,12 +14,20 @@ export async function runRecoveryProbe({ driver, invocation, timeoutMs = 10_000,
   // output, task argv, a prompt, or ambient provider configuration.
   const endpoint = driver?.qualification?.installation?.endpoints?.[0];
   if (!['shell', 'mcp'].includes(invocation?.transport) || typeof endpoint !== 'string' || typeof fetchImpl !== 'function') {
-    return failed('probe-profile-unavailable');
+    // A version check proves only the qualified local installation/host.
+    // It cannot attest provider, model or quota recovery, even if it exits 0.
+    const localProbe = getWorkerRecoveryCapabilities(driver)?.probeInstallation;
+    if (scopeKeys.length && scopeKeys.every(key => key === 'host:local'
+      || key === `installation:${invocation?.selected?.cli}` || key.startsWith(`installation:${invocation?.selected?.cli}:`))
+      && typeof localProbe === 'function') {
+      return localProbe({ timeoutMs, maxOutputBytes, onDispatch });
+    }
+    return failed('probe-profile-unavailable', { operatorIntervention: true });
   }
   let url;
-  try { url = new URL(endpoint); } catch { return failed('probe-endpoint-unavailable'); }
+  try { url = new URL(endpoint); } catch { return failed('probe-endpoint-unavailable', { operatorIntervention: true }); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) {
-    return failed('probe-endpoint-unavailable');
+    return failed('probe-endpoint-unavailable', { operatorIntervention: true });
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, Math.floor(timeoutMs)));
@@ -55,7 +66,7 @@ export async function runRecoveryProbe({ driver, invocation, timeoutMs = 10_000,
             .filter(value => Number.isFinite(value) && value >= 0);
           return failed('probe-rate-limited', { retryAfterSeconds: delays.length ? Math.max(...delays) : null });
         }
-        return failed('probe-failed');
+        return failed('probe-failed', { status: response.status });
       } finally {
         // HEAD exposes no response body on the native transport. Cancel an
         // unexpected body without reading it, under the same absolute bound.
