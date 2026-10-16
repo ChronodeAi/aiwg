@@ -4508,9 +4508,12 @@ aiwg index build [options]
 - `--verbose` - Show detailed progress during indexing
 - `--all` - Build all known graphs (built-in + user-defined)
 - `--scope <dir>` - Limit scan to a specific subdirectory (relative to project root)
+- `--include-ignored` - Include gitignored artifact sources (default: respect Git ignore rules)
 - `--graph <name>` - Build a single graph only — built-in (`project`, `codebase`, `framework`) or user-defined
 
 **Default behavior** (no `--graph`): Builds all graphs with `defaultBuild: true`. Built-in defaults: `project` (always) and `codebase` (JavaScript/TypeScript roots plus detected conventional Python layouts; skipped with a warning only when no supported roots exist). The `framework` graph covers AIWG framework source (`agentic/code/`, `docs/`) and must be built explicitly with `--graph framework`.
+
+**Source discovery**: Artifact scans skip symlinked files and directories. `.aiwg/working/`, `.aiwg/sessions/`, and `.aiwg/.index/` are always excluded, including under a configured artifact root and with `--scope` or `--include-ignored`. Git ignore rules (including nested `.gitignore` files and negations) apply by default in Git worktrees; `--include-ignored` opts in to other ignored sources. Outside a Git worktree or without Git, ignore filtering is unavailable. Rebuild an existing index to remove previously indexed scratch.
 
 **Incremental mode** (default): Only re-indexes files whose checksum has changed. Use `--force` for a full rebuild.
 

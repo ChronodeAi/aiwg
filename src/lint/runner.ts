@@ -8,7 +8,7 @@
  */
 
 import fs from 'fs';
-import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
+import { dropGitignored } from '../config/gitignore.js';
 import fsp from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
@@ -634,36 +634,6 @@ async function collectFiles(
     return respectGitignore ? dropGitignored(targetDir, linted) : linted;
   } catch {
     return [];
-  }
-}
-
-/**
- * Drop files git ignores (#2555).
- *
- * Generated trees are regenerated, not authored: linting `indices/` reported an
- * error in text that documents a deliberate gap. `git check-ignore` is asked
- * once for the whole set so the semantics are git's own (negations, nested
- * `.gitignore`, `core.excludesFile`) rather than a re-implementation. Outside a
- * repository, or without git, every file is kept.
- */
-function dropGitignored(targetDir: string, files: string[]): string[] {
-  if (files.length === 0) return files;
-  try {
-    const result = boundedSpawnSync('git', ['check-ignore', '--stdin'], 'quick', {
-      cwd: targetDir,
-      input: `${files.join('\n')}\n`,
-      encoding: 'utf8',
-    });
-    // 0 = some paths ignored, 1 = none ignored, anything else = not a repo or
-    // git unavailable, in which case nothing is filtered.
-    if (result.error || (result.status !== 0 && result.status !== 1)) return files;
-    const ignored = new Set(
-      (result.stdout ?? '').split('\n').map((line) => line.trim()).filter(Boolean),
-    );
-    if (ignored.size === 0) return files;
-    return files.filter((file) => !ignored.has(file));
-  } catch {
-    return files;
   }
 }
 

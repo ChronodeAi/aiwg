@@ -1004,14 +1004,14 @@ Depends on @.aiwg/requirements/UC-001.md
     });
 
     it('builds scoped markdown-link edges and reports their count (#147)', async () => {
-      const workingDir = path.join(tmpDir, '.aiwg', 'working');
+      const docsDir = path.join(tmpDir, '.aiwg', 'docs');
       const outsideDir = path.join(tmpDir, 'outside');
-      fs.mkdirSync(workingDir, { recursive: true });
+      fs.mkdirSync(docsDir, { recursive: true });
       fs.mkdirSync(outsideDir, { recursive: true });
 
-      fs.writeFileSync(path.join(workingDir, 'target.md'), '# Target\n');
+      fs.writeFileSync(path.join(docsDir, 'target.md'), '# Target\n');
       fs.writeFileSync(path.join(outsideDir, 'outside.md'), '# Outside\n');
-      fs.writeFileSync(path.join(workingDir, 'source.md'), `---
+      fs.writeFileSync(path.join(docsDir, 'source.md'), `---
 title: Source
 ---
 # Source
@@ -1037,8 +1037,8 @@ title: Source
       );
       const stats = JSON.parse(fs.readFileSync(path.join(indexDir, 'stats.json'), 'utf-8'));
 
-      const sourcePath = '.aiwg/working/source.md';
-      const targetPath = '.aiwg/working/target.md';
+      const sourcePath = '.aiwg/docs/source.md';
+      const targetPath = '.aiwg/docs/target.md';
       expect(metadata.entries[sourcePath].dependencies).toEqual([]);
       expect(metadata.entries[sourcePath].markdownLinks).toEqual(['./target.md', '../../outside/outside.md']);
       expect(deps[sourcePath].upstream).toEqual([{ path: targetPath, type: 'markdown-link' }]);

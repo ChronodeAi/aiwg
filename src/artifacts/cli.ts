@@ -539,6 +539,8 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  --verbose        Show detailed progress during indexing');
     console.log('  --all            Build all known graphs (including user-defined)');
     console.log('  --scope <dir>    Limit scan to a specific subdirectory');
+    console.log('  --include-ignored Include gitignored sources (runtime directories stay excluded)');
+    console.log('  Source discovery skips symlinks and .aiwg/{working,sessions,.index}/.');
     console.log('  --graph <name>   Build a specific graph only (built-in or user-defined)');
     console.log('');
     console.log('Built-in graph names: project, codebase, source, user, framework');
@@ -571,6 +573,7 @@ async function handleBuild(args: string[]): Promise<void> {
   const force = args.includes('--force');
   const verbose = args.includes('--verbose');
   const all = args.includes('--all');
+  const includeIgnored = args.includes('--include-ignored');
   const graph = parseGraphFlag(args);
 
   let scope: string | undefined;
@@ -589,14 +592,14 @@ async function handleBuild(args: string[]): Promise<void> {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
-      await buildIndex(cwd, { force, verbose, scope, graph, explicit: true });
+      await buildIndex(cwd, { force, verbose, scope, includeIgnored, graph, explicit: true });
       jsonBuilt = true;
       builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
     for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
-      await buildIndex(cwd, { force, verbose, graph: name, explicit: false });
+      await buildIndex(cwd, { force, verbose, includeIgnored, graph: name, explicit: false });
       builtGraphs.add(name);
     }
     jsonBuilt = true;
@@ -604,7 +607,7 @@ async function handleBuild(args: string[]): Promise<void> {
     // Default: build graphs with defaultBuild=true; skip gracefully if their dirs don't exist
     for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
-        await buildIndex(cwd, { force, verbose, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
+        await buildIndex(cwd, { force, verbose, includeIgnored, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
         builtGraphs.add(name);
       }
     }
