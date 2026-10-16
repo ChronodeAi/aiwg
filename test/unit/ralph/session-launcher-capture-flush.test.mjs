@@ -131,3 +131,43 @@ test('launcher rejects instead of crashing when a capture stream fails mid-run',
     if (savedPiBin === undefined) delete process.env.AIWG_PI_BIN; else process.env.AIWG_PI_BIN = savedPiBin;
   }
 });
+
+test('launcher still rejects when the failed capture stream closes its fd slowly', async () => {
+  // WriteStream emits 'error' only after its async fd close; under CI load that
+  // close can land after the child exits. launch() must still reject.
+  const originalWrite = WriteStream.prototype._write;
+  const originalWritev = WriteStream.prototype._writev;
+  const originalDestroy = WriteStream.prototype._destroy;
+  const failure = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  WriteStream.prototype._write = function (_chunk, _encoding, callback) { callback(failure); };
+  WriteStream.prototype._writev = function (_chunks, callback) { callback(failure); };
+  WriteStream.prototype._destroy = function (error, callback) {
+    setTimeout(() => originalDestroy.call(this, error, callback), 300);
+  };
+  const { dir, cleanup } = scratch('session-launcher-capture-slow-close-');
+  const savedPiBin = process.env.AIWG_PI_BIN;
+  process.env.AIWG_PI_BIN = stub;
+  try {
+    const launcher = new SessionLauncher();
+    launcher.setProviderAdapter(new PiAdapter());
+    const errors = [];
+    launcher.on('error', (error) => errors.push(error));
+    await assert.rejects(
+      launcher.launch({
+        prompt: 'bounded fixture task',
+        sessionId: 'aiwg-fixture-session',
+        workingDir: dir,
+        stdoutPath: join(dir, 'stdout.log'),
+        stderrPath: join(dir, 'stderr.log'),
+      }),
+      { code: 'ENOSPC' },
+    );
+    assert.equal(errors.length, 1);
+  } finally {
+    WriteStream.prototype._write = originalWrite;
+    WriteStream.prototype._writev = originalWritev;
+    WriteStream.prototype._destroy = originalDestroy;
+    cleanup();
+    if (savedPiBin === undefined) delete process.env.AIWG_PI_BIN; else process.env.AIWG_PI_BIN = savedPiBin;
+  }
+});
