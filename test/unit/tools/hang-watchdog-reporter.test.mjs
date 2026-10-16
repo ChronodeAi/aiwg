@@ -9,10 +9,12 @@
  * @issue #2521
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import HangWatchdogReporter, {
   parseStallMs,
@@ -26,8 +28,14 @@ function moduleState(entries) {
   return new Map(entries.map((entry) => [entry.moduleId, entry]));
 }
 
+beforeEach(() => {
+  // Unit reporter instances must not overwrite the enclosing CI run's state.
+  vi.stubEnv('AIWG_HANG_REPORT_STATE_FILE', undefined);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('parseStallMs', () => {
@@ -102,6 +110,44 @@ describe('formatStallReport', () => {
 });
 
 describe('reporter lifecycle', () => {
+  it('persists phases, removes finished modules, and resets the snapshot for a new run', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'hang-watchdog-test-'));
+    const stateFile = path.join(dir, 'state.txt');
+    vi.stubEnv('AIWG_HANG_REPORT_STATE_FILE', stateFile);
+    const reporter = new HangWatchdogReporter();
+    reporter.root = dir;
+    const module = { moduleId: path.join(dir, 'test/example.test.ts') };
+    try {
+      reporter.onTestRunStart();
+      expect(readFileSync(stateFile, 'utf8')).toBe('');
+      reporter.onTestModuleQueued(module);
+      expect(readFileSync(stateFile, 'utf8')).toContain('test/example.test.ts — loading');
+      reporter.onTestModuleCollected(module);
+      expect(readFileSync(stateFile, 'utf8')).toContain('test/example.test.ts — running');
+      reporter.onTestModuleEnd(module);
+      expect(readFileSync(stateFile, 'utf8')).toBe('');
+      reporter.onTestModuleQueued(module);
+      reporter.onTestRunStart();
+      expect(readFileSync(stateFile, 'utf8')).toBe('');
+    } finally {
+      reporter.onTestRunEnd();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps reporting stalls when snapshot persistence fails', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'hang-watchdog-test-'));
+    vi.stubEnv('AIWG_HANG_REPORT_STATE_FILE', path.join(dir, 'missing', 'state.txt'));
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      const reporter = reporterWith('/repo/test/a.test.ts');
+      reporter.tick(reporter.lastProgressAt + 10_000);
+      expect(write.mock.calls[0][0]).toContain('test/a.test.ts — loading');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   /** Drive the lifecycle hooks vitest calls, with no vitest involved. */
   function reporterWith(moduleId) {
     const reporter = new HangWatchdogReporter();

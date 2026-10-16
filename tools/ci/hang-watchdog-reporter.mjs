@@ -34,6 +34,7 @@
  */
 
 import path from 'node:path';
+import { renameSync, writeFileSync } from 'node:fs';
 
 const DEFAULT_STALL_MS = 120_000;
 /** Cap the poll interval so a long stall threshold still reports promptly. */
@@ -92,6 +93,7 @@ export default class HangWatchdogReporter {
 
   onTestRunStart() {
     this.modules.clear();
+    this.persistInFlight();
     this.lastProgressAt = Date.now();
     this.arm();
   }
@@ -145,6 +147,24 @@ export default class HangWatchdogReporter {
       phase,
       since: Date.now(),
     });
+    this.persistInFlight();
+  }
+
+  /** Leave a crash-readable snapshot for the wrapper, even through npm. */
+  persistInFlight() {
+    const stateFile = process.env['AIWG_HANG_REPORT_STATE_FILE'];
+    if (!stateFile) return;
+    try {
+      const snapshot = [...this.modules.values()]
+        .filter((module) => module.phase !== 'ended')
+        .map((module) => `  ${path.relative(this.root, module.moduleId)} — ${module.phase}`)
+        .join('\n');
+      // Rename prevents a crash during a write from destroying the last state.
+      writeFileSync(`${stateFile}.next`, snapshot);
+      renameSync(`${stateFile}.next`, stateFile);
+    } catch {
+      // Diagnostics must never fail a test run.
+    }
   }
 
   /** Attach the last-seen case/hook to a module without changing its phase. */
