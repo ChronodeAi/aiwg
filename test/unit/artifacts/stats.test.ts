@@ -211,7 +211,7 @@ describe('Artifact Index Statistics', () => {
     expect(parsed.myglobal.coverage).toEqual({ indexed: 1, totalFiles: 1, percentage: 100 });
   });
 
-  it('counts symlinked directory artifacts consistently in build and coverage (#149)', async () => {
+  it('excludes symlinked directory artifacts consistently in build and coverage (#149)', async () => {
     const linkedTarget = path.join(tmpDir, 'elsewhere', 'shared');
     const linkPath = path.join(tmpDir, '.aiwg', 'linked');
     fs.mkdirSync(linkedTarget, { recursive: true });
@@ -230,11 +230,11 @@ describe('Artifact Index Statistics', () => {
     consoleSpy.mockClear();
     await showStats(tmpDir, { json: true, graph: 'project' });
     const parsed = JSON.parse(consoleSpy.mock.calls.at(-1)?.[0] as string);
-    expect(parsed.totalArtifacts).toBe(1);
-    expect(parsed.coverage).toEqual({ indexed: 1, totalFiles: 1, percentage: 100 });
+    expect(parsed.totalArtifacts).toBe(0);
+    expect(parsed.coverage).toEqual({ indexed: 0, totalFiles: 0, percentage: 100 });
   });
 
-  it('terminates directory symlink cycles while following linked artifacts (#149)', () => {
+  it('terminates directory symlink cycles without following linked artifacts (#149)', () => {
     const root = path.join(tmpDir, 'scan');
     fs.mkdirSync(root, { recursive: true });
     fs.writeFileSync(path.join(root, 'one.md'), '# One\n');

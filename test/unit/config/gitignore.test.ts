@@ -17,6 +17,7 @@ import {
   PROVIDER_CONVENTIONAL_PATTERNS,
   ALL_RECOMMENDED_PATTERNS,
   checkGitignore,
+  dropGitignored,
   appendGitignore,
 } from '../../../src/config/gitignore.js';
 
@@ -251,5 +252,39 @@ describe('appendGitignore', () => {
     expect(result.added).toHaveLength(0);
     expect(result.alreadyPresent).toEqual(AIWG_RUNTIME_PATTERNS);
     expect(await readFile(join(tempDir, '.gitignore'), 'utf-8')).toBe(original);
+  });
+});
+
+/** @implements #3146 */
+describe('dropGitignored', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'aiwg-ignore-filter-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('honors nested rules, negations, and unusual filenames, and keeps tracked files', async () => {
+    await execFileAsync('git', ['init', '-q'], { cwd: root });
+    await mkdir(join(root, 'docs'));
+    const ignored = 'docs/draft "quoted"\nnotes.md';
+    const kept = 'docs/keep.md';
+    const tracked = 'docs/tracked.md';
+    await writeFile(join(root, ignored), '# Scratch');
+    await writeFile(join(root, kept), '# Canonical');
+    await writeFile(join(root, tracked), '# Tracked');
+    await execFileAsync('git', ['add', '--', tracked], { cwd: root });
+    await writeFile(join(root, 'docs', '.gitignore'), '*.md\n!keep.md\n');
+    // Git never treats a tracked file as ignored; neither does this helper.
+    expect(dropGitignored(root, [ignored, kept, tracked])).toEqual([kept, tracked]);
+    expect(dropGitignored(root, [join(root, ignored), join(root, kept)])).toEqual([join(root, kept)]);
+  });
+
+  it('keeps files outside Git worktrees and handles an empty set', () => {
+    expect(dropGitignored(root, ['canonical.md'])).toEqual(['canonical.md']);
+    expect(dropGitignored(root, [])).toEqual([]);
   });
 });

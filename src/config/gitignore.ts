@@ -12,6 +12,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { boundedSpawnSync } from '../process/bounded-child-process.mjs';
 
 const execFileAsync = promisify(execFile);
 const GITIGNORE_PROBE_BASENAME = '.aiwg-ignore-probe';
@@ -256,4 +257,34 @@ export async function appendGitignore(
     alreadyPresent,
     created: !fileExists && toAdd.length > 0,
   };
+}
+
+/**
+ * Drop files git ignores (#2555).
+ *
+ * Shared by lint and artifact discovery. `git check-ignore` is asked once for
+ * the whole set so the semantics are git's own (negations, nested
+ * `.gitignore`, `core.excludesFile`) rather than a re-implementation. Outside a
+ * repository, or without git, every file is kept. NUL delimiters preserve
+ * whitespace and quoting in filenames.
+ */
+export function dropGitignored(targetDir: string, files: string[]): string[] {
+  if (files.length === 0) return files;
+  try {
+    const result = boundedSpawnSync('git', ['check-ignore', '-z', '--stdin'], 'quick', {
+      cwd: targetDir,
+      input: `${files.join('\0')}\0`,
+      encoding: 'utf8',
+    });
+    // 0 = some paths ignored, 1 = none ignored, anything else = not a repo or
+    // git unavailable, in which case nothing is filtered.
+    if (result.error || (result.status !== 0 && result.status !== 1)) return files;
+    const ignored = new Set(
+      (result.stdout ?? '').split('\0').filter(Boolean),
+    );
+    if (ignored.size === 0) return files;
+    return files.filter((file) => !ignored.has(file));
+  } catch {
+    return files;
+  }
 }
