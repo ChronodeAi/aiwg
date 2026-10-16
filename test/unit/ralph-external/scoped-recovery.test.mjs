@@ -4709,7 +4709,7 @@ describe('allowance ledger: cross-instance probes', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------

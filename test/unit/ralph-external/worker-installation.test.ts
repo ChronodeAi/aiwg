@@ -139,7 +139,8 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     adapter.invocationProfiles['fixture-shell'].health = { version: 1, handshake: 'process-only', outputFraming: 'jsonl',
       signalParser: 'fixture:jsonl', sessionLogLocator: null, progressEvidence: [], stopEvidence: 'fixture:wait-only',
       fixtureRef: 'fixture:one-shot', qualifiedAt: inputs.request.now, statusOperation: null, cancelOperation: null };
-    inputs.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 5, terminateGraceSeconds: 1 };
+    // The fixture CLI is a real node process; under full CI load startup alone can exceed 5s (run 83892).
+    inputs.snapshot.config.parallelism!.health = { hardTimeoutSeconds: 60, terminateGraceSeconds: 1 };
     inputs.snapshot.config.parallelism!.retry = { maxAttempts: 2 };
     inputs.snapshot.installations.codex.boundary = f.request.boundary;
     let time = 0;
@@ -201,7 +202,7 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(await readdir(f.root)).not.toContain('.aiwg');
     } finally { breaker.destroy(); resetInProcessAllowanceLedger(); }
-  });
+  }, 180_000);
 
   it('rejects a writable executable with multiple hard links', async () => {
     const f = await setup();
