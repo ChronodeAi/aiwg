@@ -4,6 +4,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { decisionRefusalCode } from './refusal-code.mjs';
 const args = process.argv.slice(2), mode = args[0] ?? '--help';
 const root = resolve(import.meta.dirname, '../..');
 const usage = 'No provider calls by default. --prepare MODULE.mjs SEED OUTPUT_DIR; '
@@ -44,15 +45,16 @@ try {
         const prior = await journal.scanHeldoutSpend(artifactRoot, bundle.approval.study, bundle.approval);
         const { validateHeldoutPhaseAccess } = await import('../../src/decision/heldout/calibration.ts');
         await validateHeldoutPhaseAccess(bundle, journal.heldoutRunsRoot(artifactRoot), prior.runs, new Date().toISOString());
-        const estimate = await contract.planHeldoutCollection(bundle, args[2]);
+        const estimate = await contract.planHeldoutCollection(bundle, args[2], prior.attempts);
         const studyPrior = prior.studyUsdMicros;
         const portfolioPrior = prior.portfolioUsdMicros;
         const allowance = journal.heldoutCollectionAllowance(bundle.approval, prior);
-        const ready = estimate.fitsBeforeStop && estimate.reservedUsdMicros <= allowance.usdMicros
-          && estimate.maximumAttempts <= allowance.calls && estimate.reservedTokens <= allowance.tokens
-          && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
-        process.stdout.write(JSON.stringify({ ...estimate, priorStudyUsdMicros: studyPrior, priorPortfolioUsdMicros: portfolioPrior, allowance, ready }) + '\n');
-        if (!ready) process.exitCode = 1;
+        const reason = prior.counterBlocked || prior.attempts.some(a => !a.result || a.result.disposition === 'stop') ? 'prior-stop'
+          : !estimate.fitsBeforeStop || estimate.reservedUsdMicros > allowance.usdMicros
+            || estimate.maximumAttempts > allowance.calls || estimate.reservedTokens > allowance.tokens ? 'budget-exceeded' : null;
+        const ready = reason === null;
+        process.stdout.write(JSON.stringify({ ...estimate, priorStudyUsdMicros: studyPrior, priorPortfolioUsdMicros: portfolioPrior, allowance, ready, reason }) + '\n');
+        if (!ready) { process.stderr.write(`Held-out collector refused (${reason}).\n`); process.exitCode = 1; }
       } else {
         const { collectHeldoutStudy } = await import('../../src/decision/heldout/collector.ts');
         const result = await collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: args[2], sourceRoot: root, artifactRoot });
@@ -69,6 +71,6 @@ try {
     process.stderr.write('D29 paid collection requires the current paid-eligible generator (d29-synthetic/v8); older generators are public-replay-only. Prepare a fresh private seed.\n');
   }
   if (error?.category === 'spend-counter-operator-repair-required') process.stderr.write('Spend counter requires operator repair; preserve the counter, head, baselines and run evidence.\n');
-  process.stderr.write('Held-out collector refused: mode, approval, provenance, source, artifact root or collection check failed. No automatic retry.\n');
+  process.stderr.write(`Held-out collector refused (${decisionRefusalCode(error)}). No automatic retry.\n`);
   process.exitCode = 1;
 }

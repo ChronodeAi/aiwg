@@ -11,7 +11,7 @@ import { executeQualificationPlan, verifyQualificationArtifacts, writeQualificat
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../qualification/release.js';
 import { redactText } from '../../governance/redaction.js';
 import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_ENV_GATE,
-  heldoutRowsInScope, planHeldoutCollection, validateHeldoutBundle } from './contract.js';
+  heldoutRowsInScope, heldoutResumeAttempts, heldoutPendingRequests, planHeldoutCollection, validateHeldoutBundle } from './contract.js';
 import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile, validateHeldoutJournal, heldoutCollectionAllowance } from './journal.js';
 import { readHeldoutFrozen, sealHeldoutCalibrationPhase, validateHeldoutPhaseAccess } from './calibration.js';
@@ -73,10 +73,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     // An unacknowledged execution is never silently retried, even in a different study.
     if (prior.counterBlocked || prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
     if (!offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
-    const old = prior.attempts.filter(attempt => attempt.study === a.study && attempt.corpusDigest === a.corpusDigest);
-    if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
-    const latest = new Map<string, HeldoutAttempt>();
-    for (const attempt of old) if (attempt.ordinal >= (latest.get(key(attempt))?.ordinal ?? 0)) latest.set(key(attempt), attempt);
+    const { old, latest } = heldoutResumeAttempts(bundle, prior.attempts);
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
     // D17-MF (#2850) is scored only through the registered D17 member calibrator: a session whose whole dispatch window
     // (start plus the preregistered session limit) does not end before the calibrator expires never starts. A seed
@@ -119,15 +116,13 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
       if (reason || checkpoint) break;
       if (options.signal?.aborted) { reason = 'cancelled'; break; }
       if (failed.has(row.id) || overSlice(row.slice, row.split)) continue;
-      const remaining = row.requests.filter(request => latest.get(`${row.id}/${request.id}`)?.result?.disposition !== 'success');
+      const remaining = heldoutPendingRequests(row, plan, latest);
       if (!remaining.length) continue;
       // Checkpoint before a subject/paired arms: enough time for every bounded attempt and interval.
-      const pairBound = remaining.length * (1 + plan.providerFailurePolicy.maxRetries) * (plan.requestTimeoutMs + plan.minDispatchIntervalMs);
+      const pairBound = remaining.reduce((n, request) => n + request.attempts, 0) * (plan.requestTimeoutMs + plan.minDispatchIntervalMs);
       if (now() - started + pairBound > plan.sessionLimitMs * 0.8) { checkpoint = true; break; }
-      for (const request of remaining) {
+      for (const { request, first } of remaining) {
         if (reason || failed.has(row.id)) break;
-        const previous = latest.get(`${row.id}/${request.id}`);
-        const first = previous ? previous.ordinal + 1 : 1;
         for (let ordinal = first; ordinal <= 1 + plan.providerFailurePolicy.maxRetries; ordinal++) {
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); }
