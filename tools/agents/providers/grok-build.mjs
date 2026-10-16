@@ -216,7 +216,9 @@ function regularFiles(dir, prefix = '') {
 function matchesSkillSource(source, target) {
   try {
     const expected = regularFiles(source);
-    const actual = regularFiles(target).filter(name => name !== '.aiwg-managed');
+    // The marker and the per-skill ownership receipt are AIWG bookkeeping,
+    // not skill content, so neither makes a deployed skill look modified.
+    const actual = regularFiles(target).filter(name => name !== '.aiwg-managed' && name !== '.aiwg-manifest.json');
     if (JSON.stringify(expected) !== JSON.stringify(actual)) return false;
     return expected.every(relative => {
       if (relative.endsWith(path.sep)) return true;
