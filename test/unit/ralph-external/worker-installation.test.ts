@@ -16,13 +16,26 @@ import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuit
 import { requiredWorkerControls } from '../../../src/models/provider-policy.js';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
-import { registerWorkerRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { getWorkerRecoveryCapabilities as sourceRecoveryCapabilities } from '../../../src/models/worker-installation.mjs';
+import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
 import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
-import { SessionLauncher, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
+import { SessionLauncher, directRecoveryEligibility, resetInProcessAllowanceLedger } from '../../../tools/ralph-external/session-launcher.mjs';
 
 vi.mock('node:child_process', { spy: true });
+
+// Force separate direct-source and resolver-selected registries even without
+// dist/. CI selects dist before beforeEach forces src; both owners use WeakMaps.
+vi.mock('../../../tools/_resolve-impl.mjs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../tools/_resolve-impl.mjs')>();
+  return { ...actual, importImpl: (caller: string, name: string) => name === 'models/worker-installation.mjs'
+    ? import('../../../src/models/worker-installation.mjs?resolved-owner')
+    : actual.importImpl(caller, name) };
+});
+
+// Register with the owner captured by the launcher, before per-test env stubs.
+const { installation: { registerWorkerRecoveryCapabilities } } = await loadRecoveryModuleGraph();
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -121,6 +134,14 @@ function nodePermissionFlag(flags: ReadonlySet<string> = process.allowedNodeEnvi
 }
 
 describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
+  it('registers recovery capabilities with the launcher owner when direct source imports use a separate registry', () => {
+    const localDriver = registerWorkerRecoveryCapabilities({}, { canVerifyAttempt: false });
+    expect(sourceRecoveryCapabilities(localDriver)).toBeNull();
+    expect(directRecoveryEligibility({ gateEnabled: true, config: {},
+      invocation: { selected: { cli: 'codex' } }, drivers: { codex: localDriver } }))
+      .toEqual({ gated: false, reason: 'cli-cannot-verify-final' });
+  });
+
   it('qualifies a private executable with explicit permissions independent of the runner Node', async () => {
     const f = await setup();
     const executable = await lstat(f.request.executable);
@@ -195,7 +216,7 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
       expect(dispatches).toBe(3);
       expect(breaker.reset(scopeKey)).toEqual({ ok: true });
       const result = await launch(4);
-      expect(result.attemptOutcome).toBe('succeeded');
+      expect(result.attemptOutcome, JSON.stringify(result, null, 2)).toBe('succeeded');
       expect(breaker.getState(scopeKey).state).toBe('closed');
       expect(dispatches).toBe(4);
       expect(breaker.snapshot().attemptsObserved).toBe(4);
