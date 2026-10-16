@@ -845,6 +845,10 @@ export const contextFirewallHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-context-firewall', '--context-firewall'],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: CONTEXT_FIREWALL_HELP, rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
       return { exitCode: 0, message: CONTEXT_FIREWALL_HELP };

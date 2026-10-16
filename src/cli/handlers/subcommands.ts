@@ -36,6 +36,10 @@ export const quickrefHandler: CommandHandler = {
   category: 'project',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: 'Usage: aiwg quickref generate|deploy --project [--provider <id>] [--dry-run]', rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const action = ctx.args.find(arg => !arg.startsWith('-')) ?? 'generate';
     if (!ctx.args.includes('--project')) {
@@ -178,6 +182,12 @@ export const mcpHandler: CommandHandler = {
   description: "AIWG MCP server commands (serve, install, add, remove, update, list, inject, info)",
   category: "mcp",
   aliases: ["mcp", "aiwg-mcp"],
+
+  async help(): Promise<HandlerResult> {
+    const { main } = await import("../../mcp/cli.mjs");
+    await main(["--help"]);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
@@ -1435,6 +1445,12 @@ export const indexHandler: CommandHandler = {
   category: "index",
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    const { printIndexUsage } = await import("../../artifacts/cli.js");
+    printIndexUsage();
+    return { exitCode: 0 };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
       const { main } = await import("../../artifacts/cli.js");
@@ -1460,6 +1476,12 @@ export const corpusHandler: CommandHandler = {
   description: "Research-corpus tools (radar-init, radar-status, radar-report)",
   category: "index",
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    const { corpusMain } = await import("../../artifacts/corpus-tools/cli.js");
+    await corpusMain(["--help"]);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {

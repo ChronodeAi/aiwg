@@ -335,7 +335,7 @@ export async function main(args: string[]): Promise<void> {
   }
 }
 
-function printIndexUsage(): void {
+export function printIndexUsage(): void {
   console.log('Usage: aiwg index <subcommand> [options]');
   console.log('');
   console.log('Available subcommands:');
@@ -358,6 +358,9 @@ function printIndexUsage(): void {
   console.log('  watch      Start a filesystem watcher for automatic incremental index updates');
   console.log('');
   console.log('Options:');
+  console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
+  console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
+  console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');
   console.log('  --all           Build all known graphs (including user-defined)');
   console.log('');

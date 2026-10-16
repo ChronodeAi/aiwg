@@ -70,6 +70,11 @@ export const runHandler: CommandHandler = {
   category: 'utility',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    printRunUsage();
+    return { exitCode: 0 };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     let parsed: { args: string[]; modes: string[] };
     try { parsed = extractOutputModes(ctx.args); } catch (error) { return { exitCode: 1, message: (error as Error).message }; }

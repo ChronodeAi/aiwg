@@ -29,6 +29,10 @@ function usage(): string {
 
 export const evidenceHandler: CommandHandler = {
   id: 'evidence', name: 'Evidence', description: 'Export and verify portable evaluation evidence bundles', category: 'utility', aliases: [],
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const [subcommand] = ctx.args;
     if (!subcommand || subcommand === '--help' || subcommand === '-h') return { exitCode: 0, message: usage() };
