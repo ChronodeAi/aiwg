@@ -82,7 +82,7 @@ describe('install-aware update service', () => {
 
   it('routes a Windows npm.cmd path with spaces through the command interpreter', async () => {
     const root = packageRoot('aiwg');
-    const managerExecutable = path.join(root, 'Program Files', 'nodejs', 'npm.cmd');
+    const managerExecutable = path.join(root, 'Program Files %PATH% & 100%', 'nodejs', 'npm.cmd');
     fs.mkdirSync(path.dirname(managerExecutable), { recursive: true });
     fs.writeFileSync(managerExecutable, '');
     fs.chmodSync(managerExecutable, 0o755);
@@ -99,7 +99,7 @@ describe('install-aware update service', () => {
 
     expect(execute).toHaveBeenCalledWith(
       'C:\\Windows\\System32\\cmd.exe',
-      ['/d', '/v:off', '/s', '/c', `""${managerExecutable}" "install" "--global" "aiwg@latest""`],
+      ['/d', '/v:off', '/s', '/c', `"${root.replace(/ /g, '^ ')}${path.sep}Program^ Files^ ^%PATH^%^ ^&^ 100^%${path.sep}nodejs${path.sep}npm.cmd ^^^"install^^^" ^^^"--global^^^" ^^^"aiwg@latest^^^""`],
       { stdio: 'inherit', windowsVerbatimArguments: true },
     );
   });
