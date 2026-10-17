@@ -96,6 +96,42 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
       installedVersion: '0.999.0', readiness: 'not-ready', nextAction: 'upgrade-or-pin-cli' }));
   });
 
+  it.each([
+    ['codex', 'codex-cli 0.161.1', '0.161.1'],
+    ['codex', 'codex-cli 0.163.0', '0.163.0'],
+    ['codex', 'codex-cli 0.199.9+build.1', '0.199.9+build.1'],
+    ['muse', 'Muse Code 1.4.4 (1.4.4-R5419.1)', '1.4.4'],
+    ['muse', 'Muse Code 1.4.5 (1.4.5-R5500.1)', '1.4.5'],
+    ['muse', 'Muse Code 1.4.10 (1.4.10-R6427.1)', '1.4.10'],
+    ['muse', 'Muse Code 1.5.0 (1.5.0-R7000.1)', '1.5.0'],
+  ])('#3171 keeps %s installation ready after compatible updates: %s', async (cli, banner, version) => {
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ [cli]: { ...codexCli(await fakeCli(banner)), adapter: `providers:${cli}` } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
+    });
+    expect(report.ready).toBe(true);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli, kind: 'install',
+      code: 'WORKER_DIRECT_READY', status: 'ok', installedVersion: version, readiness: 'ready' }));
+  });
+
+  it.each([
+    ['codex', 'codex-cli 0.160.9'],
+    ['codex', 'codex-cli 0.200.0'],
+    ['codex', 'codex-cli 0.201.0'],
+    ['codex', 'codex-cli 0.163.0-rc.1'],
+    ['muse', 'Muse Code 1.4.3 (1.4.3-R5018.1)'],
+    ['muse', 'Muse Code 2.0.0 (2.0.0-R8000.1)'],
+    ['muse', 'Muse Code 2.1.0 (2.1.0-R9000.1)'],
+  ])('#3171 preserves blocking range failures for %s: %s', async (cli, banner) => {
+    const report = await diagnoseDirectWorkerReadiness({
+      parallelism: parallelismWith({ [cli]: { ...codexCli(await fakeCli(banner)), adapter: `providers:${cli}` } }),
+      registry: registry(), probe: probeDirectWorkerVersion, probeCwd: await scratchDir('aiwg-direct-cwd-'),
+    });
+    expect(report.ready).toBe(false);
+    expect(report.findings).toContainEqual(expect.objectContaining({ cli, kind: 'install',
+      code: 'WORKER_DIRECT_VERSION_OUT_OF_RANGE', readiness: 'not-ready', nextAction: 'upgrade-or-pin-cli' }));
+  });
+
   it('T-OG-12-direct-03 reports a banner that misses the version pattern, advisory while unreferenced', async () => {
     const report = await diagnoseDirectWorkerReadiness({
       parallelism: parallelismWith({ codex: codexCli(await fakeCli('hello world')) }),

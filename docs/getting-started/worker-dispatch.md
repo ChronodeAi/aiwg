@@ -104,6 +104,24 @@ When dispatch is disabled, JSON still includes every configured CLI with reason
 `WORKER_DIRECT_DISABLED` and a message explaining that no probes ran.
 Unknown `aiwg doctor` flags exit non-zero naming the flag.
 
+## Supported CLI versions
+
+Both the adapter and its invocation profile declare `supportedVersions`; the installed
+version must satisfy both. These are semver ranges: space-separated comparators
+are ANDed, so Codex's `>=0.161.0 <0.200.0` includes patch and minor updates from
+0.161.0 up to, but excluding, 0.200.0. Muse uses `>=1.4.4-R5419.1 <2.0.0`, retaining
+the originally evidenced build and accepting subsequent stable 1.x releases.
+
+The shared matcher uses standard semver prerelease ordering: `1.4.4-R5419.1`
+precedes `1.4.4`; prereleases are admitted only when a comparator explicitly
+names a prerelease with the same major/minor/patch. Build metadata (`+build.1`)
+does not affect precedence. Registered banner patterns extract the version before
+matching; for example, `Muse Code 1.4.10 (1.4.10-R6427.1)` yields `1.4.10`.
+
+Versions below the minimum or at/above an exclusive upper bound remain not-ready
+with `WORKER_DIRECT_VERSION_OUT_OF_RANGE`. A matching version establishes
+installation readiness; dispatch still requires the existing qualification checks.
+
 ## How to turn it off
 
 ```bash

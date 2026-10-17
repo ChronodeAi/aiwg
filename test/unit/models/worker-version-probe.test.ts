@@ -148,4 +148,29 @@ describe('shared bounded version probe (#2894)', () => {
     expect(workerVersionRangeMismatch('0.999.0', ['0.161.0'])).toBe('0.161.0');
     expect(workerVersionRangeMismatch('0.161.0', ['not-a-range'])).toBe('Unsupported version range \'not-a-range\'');
   });
+
+  it.each([
+    ['0.161.1', '>=0.161.0 <0.200.0', true],
+    ['0.163.0', '>=0.161.0 <0.200.0', true],
+    ['0.200.0', '>=0.161.0 <0.200.0', false],
+    ['0.201.0', '>=0.161.0 <0.200.0', false],
+    ['0.160.9', '>=0.161.0 <0.200.0', false],
+    ['1.4.4-R5419.1', '>=1.4.4-R5419.1 <2.0.0', true],
+    ['1.4.4-R5419.0', '>=1.4.4-R5419.1 <2.0.0', false],
+    ['1.4.4', '>=1.4.4-R5419.1 <2.0.0', true],
+    ['1.4.10', '>=1.4.4-R5419.1 <2.0.0', true],
+    ['1.5.0', '>=1.4.4-R5419.1 <2.0.0', true],
+    ['1.4.10-R6427.1', '>=1.4.4-R5419.1 <2.0.0', false],
+    ['1.4.10+build.1', '>=1.4.4-R5419.1 <2.0.0', true],
+    ['2.0.0', '>=1.4.4-R5419.1 <2.0.0', false],
+  ])('checks comparator bounds and semver suffix ordering: %s in %s is %s', (version, range, supported) => {
+    expect(workerVersionRangeMismatch(version, [range])).toBe(supported ? null : range);
+  });
+
+  it('requires both adapter and profile ranges to match, in either order', () => {
+    const broad = '>=0.161.0 <0.200.0';
+    const narrow = '>=0.161.0 <0.163.0';
+    expect(workerVersionRangeMismatch('0.163.0', [broad, narrow])).toBe(narrow);
+    expect(workerVersionRangeMismatch('0.163.0', [narrow, broad])).toBe(narrow);
+  });
 });
