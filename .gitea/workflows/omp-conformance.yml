@@ -11,6 +11,8 @@ on:
       - 'tools/agents/providers/omp.*'
       - 'src/sessions/**'
       - 'tools/providers/omp-*.mjs'
+      - 'tools/providers/omp-download.sh'
+      - 'test/unit/ci/omp-download.test.ts'
       - 'tools/ralph-external/**'
       - 'src/models/**'
       - 'test/unit/providers/omp-runtime.test.ts'
@@ -26,19 +28,32 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 15
+    env:
+      OMP_VERSION: v18.1.10
+      OMP_SHA256: e91d5598ee47e1d4099fd8686dc9f61c9b755f2ea077d5f1774aba1072321f9e
+      OMP_BINARY: /tmp/aiwg-omp-conformance
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1 (ci/digests.txt)
       - run: npm ci
-      - name: Acquire reviewed binary and verify immutable digest
+      # v3 uses the cache protocol supported by Gitea's runner.
+      # Exact keys only: never restore a different version or digest.
+      - name: Restore pinned OMP binary
+        id: omp-cache
+        uses: actions/cache@704facf57e6136b1bc63b828d79edcd491f0ee84  # v3.3.2 (ci/digests.txt)
+        with:
+          path: /tmp/aiwg-omp-conformance
+          key: omp-linux-x64-${{ env.OMP_VERSION }}-${{ env.OMP_SHA256 }}
+      - name: Fetch pinned OMP binary
+        if: steps.omp-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash tools/providers/omp-download.sh "https://github.com/can1357/oh-my-pi/releases/download/${OMP_VERSION}/omp-linux-x64" "$OMP_BINARY"
+      - name: Verify immutable digest of downloaded or cached binary
         shell: bash
         run: |
           set -euo pipefail
           test "$(uname -m)" = x86_64
-          curl --fail --location --silent --show-error \
-            https://github.com/can1357/oh-my-pi/releases/download/v18.1.10/omp-linux-x64 \
-            --output /tmp/aiwg-omp-conformance
-          echo 'e91d5598ee47e1d4099fd8686dc9f61c9b755f2ea077d5f1774aba1072321f9e  /tmp/aiwg-omp-conformance' | sha256sum --check --strict
-          chmod 700 /tmp/aiwg-omp-conformance
+          echo "${OMP_SHA256}  ${OMP_BINARY}" | sha256sum --check --strict
+          chmod 700 "$OMP_BINARY"
       - name: Native parser, resource, context and RPC gate without credentials
         run: node tools/providers/omp-conformance.mjs --binary /tmp/aiwg-omp-conformance --require --output artifacts/omp-native-conformance.json
       - name: Native MCP lifecycle and loopback-model contracts
