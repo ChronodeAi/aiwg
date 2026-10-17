@@ -90,8 +90,18 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
   await cp(path.join(repoRoot, 'schemas', 'mission-v1.schema.json'), path.join(outputDir, 'schemas', 'mission-v1.schema.json'));
   await cp(path.join(repoRoot, 'schemas', 'models'), path.join(outputDir, 'schemas', 'models'), { recursive: true });
-  // Include the installed loader's imports, not the Ralph runners and fixtures.
+  // Installed adapters and the worker-invoke runtime closure. The packaged
+  // import-graph regression test guards this list without shipping Ralph fixtures.
   const workerAdapterFiles = [
+    'tools/ralph-external/session-launcher.mjs',
+    'tools/ralph-external/process-monitor.mjs',
+    'tools/ralph-external/lib/worker-isolation.mjs',
+    'tools/ralph-external/lib/systemd-client.mjs',
+    'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
+    'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
+    'tools/ralph-external/lib/recovery-probe.mjs',
+    'tools/ralph-external/lib/worker-overflow.mjs',
+    'tools/scripts/resource-preflight.mjs',
     'tools/ralph-external/lib/provider-adapter.mjs',
     'tools/ralph-external/lib/worker-health.mjs',
     'tools/ralph-external/lib/claude-adapter.mjs',

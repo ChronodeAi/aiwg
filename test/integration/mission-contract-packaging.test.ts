@@ -35,10 +35,10 @@ function copyValidatorDependencies(scratch: string): void {
 }
 
 describe('installed Mission worker contract packaging', () => {
-  it.each(['aiwg', '@aiwg/cli'])('loads validation and digest APIs from unpacked %s outside the checkout', async (name) => {
+  it.each(['aiwg', '@aiwg/cli'])('loads validation and digest APIs from unpacked %s in an isolated consumer', async (name) => {
     const scratch = mkdtempSync(path.join(tmpdir(), 'aiwg-mission-installed-'));
     try {
-      expect(path.relative(ROOT, scratch).startsWith('..')).toBe(true);
+      writeFileSync(path.join(scratch, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
       const stage = name === 'aiwg' ? ROOT : path.join(scratch, 'stage');
       if (name === '@aiwg/cli') await buildCliPackage({ outputDir: stage });
       const pack = spawnSync('npm', ['pack', stage, '--offline', '--ignore-scripts', '--json',
@@ -57,6 +57,11 @@ describe('installed Mission worker contract packaging', () => {
       expect(unpack.status, unpack.stderr).toBe(0);
       expect(readFileSync(path.join(installed, SCHEMA))).toEqual(readFileSync(path.join(ROOT, SCHEMA)));
       copyValidatorDependencies(scratch);
+      const installedRequire = createRequire(path.join(installed, 'package.json'));
+      for (const dependency of ['ajv', 'ajv-formats']) {
+        expect(installedRequire.resolve(`${dependency}/package.json`))
+          .toBe(path.join(scratch, 'node_modules', dependency, 'package.json'));
+      }
       const intent = vectors.find(vector => vector.id === 'intent-unresolved')!;
       writeFileSync(path.join(scratch, 'intent.json'), JSON.stringify(intent.value));
       const schemaId = JSON.parse(readFileSync(path.join(installed, SCHEMA), 'utf8')).$id;

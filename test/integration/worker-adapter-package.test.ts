@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { findRelativeImportSpecifiers } from '../helpers/packed-relative-imports.mjs';
 import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
 import { fixtureJson, fixtureRoot } from '../conformance/mission-v1/worker-contract-fixtures.js';
 import { workerInputSchema } from '../fixtures/ralph-worker-protocol.mjs';
@@ -19,6 +21,53 @@ afterEach(async () => {
 });
 
 describe('T-OG-14 published package installed adapter paths', () => {
+  it('@aiwg/cli packs the complete worker-invoke runtime import graph', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-closure-'));
+    roots.push(root);
+    const stage = path.join(root, 'stage');
+    await buildCliPackage({ outputDir: stage });
+    const { stdout } = await exec('npm', ['pack', stage, '--dry-run', '--ignore-scripts', '--json'], {
+      cwd: root, timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
+      env: { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, 'config'),
+        npm_config_cache: path.join(root, 'cache'), npm_config_update_notifier: 'false' },
+    });
+    const files = new Set(JSON.parse(stdout)[0].files.map((file: any) => file.path));
+    // These URL-based imports construct their paths rather than using literal
+    // specifiers. Literal importImpl/loadRalphExternal calls are followed below.
+    const constructedImports: Record<string, string[]> = {
+      'dist/src/mcp/tools/worker-invoke.mjs': ['tools/_resolve-impl.mjs'],
+      'dist/src/mcp/tools/worker-shell-control.mjs': ['tools/ralph-external/lib/systemd-client.mjs'],
+      'tools/scripts/resource-preflight.mjs': [
+        'dist/src/config/dispatch-thresholds-runtime.mjs', 'dist/src/config/project-artifacts-runtime.mjs',
+      ],
+    };
+    const pending = ['dist/src/mcp/tools/worker-invoke.mjs'];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const filename = pending.pop()!;
+      if (visited.has(filename)) continue;
+      visited.add(filename);
+      const source = await readFile(path.resolve(filename), 'utf8');
+      const imports = findRelativeImportSpecifiers(filename, source)
+        .map(({ spec }: { spec: string }) => path.posix.join(path.posix.dirname(filename), spec));
+      imports.push(...(constructedImports[filename] ?? []));
+      const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+          const arg = node.arguments[node.arguments.length - 1];
+          if (arg && ts.isStringLiteralLike(arg)) {
+            if (node.expression.text === 'importImpl') imports.push(`dist/src/${arg.text}`);
+            if (node.expression.text === 'loadRalphExternal') imports.push(`tools/ralph-external/${arg.text}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(ast);
+      pending.push(...imports);
+    }
+    expect([...visited].filter(filename => !files.has(filename))).toEqual([]);
+  }, 60_000);
+
   it.each(['aiwg', '@aiwg/cli'])('%s loads a third module and catalog outside the checkout', async target => {
     // Build prerequisite: npx tsc && npm run build:copy-mjs. Registry installs
     // use only public package dependencies; no model service or account store.
@@ -31,7 +80,7 @@ describe('T-OG-14 published package installed adapter paths', () => {
     await writeFile(path.join(root, 'empty-global.npmrc'), '');
     const { stdout } = await exec('npm', ['pack', source, '--ignore-scripts', '--json', '--pack-destination', root], {
       cwd: root, timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-      env: { PATH: process.env.PATH, npm_config_userconfig: path.join(root, 'empty.npmrc'), npm_config_globalconfig: path.join(root, 'empty-global.npmrc'), npm_config_cache: path.join(root, 'cache'), npm_config_update_notifier: 'false' },
+      env: { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, 'config'), npm_config_userconfig: path.join(root, 'empty.npmrc'), npm_config_globalconfig: path.join(root, 'empty-global.npmrc'), npm_config_cache: path.join(root, 'cache'), npm_config_update_notifier: 'false' },
     });
     const packed = JSON.parse(stdout)[0];
     expect(packed.name).toBe(target);
@@ -39,7 +88,8 @@ describe('T-OG-14 published package installed adapter paths', () => {
     for (const required of ['tools/ralph-external/lib/provider-adapter.mjs', 'tools/ralph-external/lib/worker-health.mjs', 'tools/_resolve-impl.mjs',
       'dist/src/models/provider-policy.js', 'dist/src/serve/worker-invocation.js', 'schemas/models/provider-model-capabilities.v1.schema.json']) expect(files.has(required), required).toBe(true);
     if (target === 'aiwg') expect(files.has('tools/ralph-external/index.mjs')).toBe(true);
-    const npmEnv = { PATH: process.env.PATH, npm_config_cache: process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(root, 'cache'),
+    await writeFile(path.join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
+    const npmEnv = { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, 'config'), npm_config_cache: process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(root, 'cache'),
       npm_config_userconfig: path.join(root, 'empty.npmrc'), npm_config_globalconfig: path.join(root, 'empty-global.npmrc'),
       npm_config_update_notifier: 'false' };
     await exec('npm', ['install', path.join(root, packed.filename), '--ignore-scripts', '--no-audit', '--no-fund',
@@ -101,6 +151,9 @@ describe('T-OG-14 published package installed adapter paths', () => {
     await writeFile(path.join(installed, 'probe.mjs'), `
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { SessionLauncher } from './tools/ralph-external/session-launcher.mjs';
+import { registerWorkerInvokeToolset } from './dist/src/mcp/tools/worker-invoke.mjs';
+if (typeof SessionLauncher !== 'function' || typeof registerWorkerInvokeToolset !== 'function') throw new Error('Installed worker runtime unavailable');
 import { loadProviderModelCapabilities, resolveWorkerInstallation, requiredWorkerControls } from './dist/src/models/provider-policy.js';
 import { qualificationDigest } from './dist/src/models/qualification-digest.mjs';
 import { ProviderAdapter, createProvider, ensureProvidersRegistered, listProviders, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from './tools/ralph-external/lib/provider-adapter.mjs';

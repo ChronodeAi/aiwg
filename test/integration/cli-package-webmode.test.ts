@@ -275,6 +275,15 @@ describe('@aiwg/cli packaged web distribution', () => {
     )).toBe(true);
     const allowedToolPrefixes = [
       'tools/_resolve-impl.mjs',
+      'tools/ralph-external/session-launcher.mjs',
+      'tools/ralph-external/process-monitor.mjs',
+      'tools/ralph-external/lib/worker-isolation.mjs',
+      'tools/ralph-external/lib/systemd-client.mjs',
+      'tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs',
+      'tools/ralph-external/lib/launcher-recovery-evidence.mjs',
+      'tools/ralph-external/lib/recovery-probe.mjs',
+      'tools/ralph-external/lib/worker-overflow.mjs',
+      'tools/scripts/resource-preflight.mjs',
       'tools/ralph-external/lib/provider-adapter.mjs',
       'tools/ralph-external/lib/worker-health.mjs',
       'tools/ralph-external/lib/claude-adapter.mjs',

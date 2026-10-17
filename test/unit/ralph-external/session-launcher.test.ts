@@ -5,12 +5,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Import the module under test
 // @ts-ignore - ESM import
-import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { SessionLauncher, isClaudeAvailable, getClaudeVersion } from '../../../tools/ralph-external/session-launcher.mjs';
 
 describe('SessionLauncher', () => {
   let launcher: InstanceType<typeof SessionLauncher>;
@@ -18,14 +19,30 @@ describe('SessionLauncher', () => {
 
   beforeEach(() => {
     launcher = new SessionLauncher();
-    testDir = join('/tmp', `ralph-test-${Date.now()}`);
+    testDir = mkdtempSync(join(tmpdir(), 'ralph-test-'));
     mkdirSync(testDir, { recursive: true });
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  describe('legacy version probes', () => {
+    it.each([
+      { name: 'availability', probe: isClaudeAvailable, expected: true },
+      { name: 'version', probe: getClaudeVersion, expected: 'fixture-version' },
+    ])('clears unrelated variables and credentials for $name', async ({ probe, expected }) => {
+      vi.stubEnv('AIWG_AUDIT_SENTINEL', 'synthetic-unlisted');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-auth');
+      vi.stubEnv('PATH', `${testDir}:${process.env.PATH}`);
+      writeFileSync(join(testDir, 'claude'), `#!${process.execPath}
+        if (!process.env.PATH || process.env.AIWG_AUDIT_SENTINEL || process.env.ANTHROPIC_API_KEY) process.exitCode = 17;
+        else console.log('fixture-version');`, { mode: 0o755 });
+      expect(await probe()).toBe(expected);
+    });
   });
 
   describe('constructor', () => {
