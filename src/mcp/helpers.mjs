@@ -5,6 +5,7 @@
  * @issues #1311 (scope split), #1312 (command-run), #1313 (discover + pairs)
  */
 
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import fs from 'node:fs/promises';
@@ -287,11 +288,11 @@ export function runAiwgCli(args, { cwd, env, timeoutMs = 120_000, input } = {}) 
       // owned child one second to exit gracefully, then escalate cleanup.
       reject(err);
       killTimer = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch { /* child may already have exited */ }
+        try { signalChild(proc, 'SIGKILL'); } catch { /* child may already have exited */ }
       }, 1000);
       killTimer.unref?.();
       // Install cleanup first: kill() can synchronously trigger close in an adapter.
-      try { proc.kill('SIGTERM'); } catch { /* retain the original failure */ }
+      try { signalChild(proc, 'SIGTERM'); } catch { /* retain the original failure */ }
     };
     const timer = setTimeout(() => {
       rejectAndTerminate(new Error(`aiwg ${args[0] || ''} timed out after ${timeoutMs}ms`));

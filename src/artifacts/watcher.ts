@@ -54,7 +54,7 @@ export function getRunningPid(cwd: string): number | null {
 
   try {
     const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
-    if (!Number.isFinite(pid)) return null;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
 
     // Check if the process is still alive
     try {

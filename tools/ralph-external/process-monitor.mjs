@@ -304,7 +304,7 @@ export class ProcessMonitor extends EventEmitter {
    * @returns {boolean}
    */
   isProcessAlive(pid) {
-    if (!pid || pid <= 0) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
       return false;
     }
 

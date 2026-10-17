@@ -122,6 +122,7 @@ async function transportFixture({ start = true, terminate }: { start?: boolean; 
   child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   child.stdin = Object.assign(new EventEmitter(), { destroy: vi.fn(), write: vi.fn(() => true) });
   child.stderr = { resume: vi.fn() };
+  child.pid = 54321;
   child.kill = vi.fn(() => true);
   const transport = new ChildProcessTransport(child, terminate ? { terminate } : {});
   transport.onerror = vi.fn();
@@ -792,6 +793,7 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     expect(maxBytes).toBe(10 * 1024 * 1024);
     const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
     const fakeChild: any = {
+      pid: 54321,
       stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }), stderr: fakeStderr,
       stdin: Object.assign(new EventEmitter(), { destroy: vi.fn() }), kill: vi.fn(() => true),
       once(event: string, _handler: any) { return this; },
@@ -3000,10 +3002,12 @@ describe('bounded stop escalation on canary-deadline timeout (#2915 review 5)', 
     const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
     const signals: string[] = [];
     const child: any = new EventEmitter();
+    child.pid = 54321;
     child.exitCode = null; child.signalCode = null;
     child.kill = (sig: string) => {
       signals.push(sig);
       if (sig === 'SIGTERM') { child.exitCode = 0; child.signalCode = null; queueMicrotask(() => child.emit('exit')); }
+      return true;
     };
     const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 20 });
     expect(result).toEqual({ terminated: true });
@@ -3014,10 +3018,12 @@ describe('bounded stop escalation on canary-deadline timeout (#2915 review 5)', 
     const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
     const signals: string[] = [];
     const child: any = new EventEmitter();
+    child.pid = 54321;
     child.exitCode = null; child.signalCode = null;
     child.kill = (sig: string) => {
       signals.push(sig);
       if (sig === 'SIGKILL') { child.exitCode = null; child.signalCode = 'SIGKILL'; }
+      return true;
     };
     const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
     expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
@@ -3027,8 +3033,9 @@ describe('bounded stop escalation on canary-deadline timeout (#2915 review 5)', 
   it('terminateChildWithGrace reports not terminated when neither signal produced an observable exit', async () => {
     const sessionLauncher = await import('../../../tools/ralph-external/session-launcher.mjs');
     const child: any = new EventEmitter();
+    child.pid = 54321;
     child.exitCode = null; child.signalCode = null;
-    child.kill = () => {};
+    child.kill = () => true;
     const result = await sessionLauncher.terminateChildWithGrace(child, { graceMs: 10 });
     expect(result).toEqual({ terminated: false });
   });
@@ -3150,6 +3157,7 @@ describe('timeout is never treated as success, independent of exit status (#2915
     // wait for a 5s grace window that never actually needs to elapse.
     const signalsSent: string[] = [];
     const child: any = new EventEmitter();
+    child.pid = 54321;
     child.exitCode = null; child.signalCode = null;
     child.kill = (sig: string) => {
       signalsSent.push(sig);
@@ -3163,6 +3171,7 @@ describe('timeout is never treated as success, independent of exit status (#2915
         // check instead of sending a real second SIGTERM/SIGKILL round.
         queueMicrotask(() => { child.exitCode = 0; child.emit('close', 0); });
       }
+      return true;
     };
     const tools = new Map<string, any>();
     await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
@@ -3431,6 +3440,7 @@ describe('disabled-dispatch equivalence with origin/main on the MCP-path recover
       await import('../../../src/mcp/tools/worker-invoke.mjs');
     const fakeStderr: any = new EventEmitter(); fakeStderr.resume = () => {};
     const fakeChild: any = {
+      pid: 54321,
       stdout: new EventEmitter(), stderr: fakeStderr, stdin: new EventEmitter(),
       once(_event: string, _handler: any) { return this; },
     };

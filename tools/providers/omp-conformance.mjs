@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -7,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transformAgent } from '../../src/providers/omp-agent.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const manifest = JSON.parse(await readFile(join(root, 'test/fixtures/providers/omp-conformance/manifest.json'), 'utf8'));
 const args = process.argv.slice(2);
@@ -71,8 +73,8 @@ function runRpc(binary,args,options){
   return new Promise((resolve,reject)=>{
     const child=spawn(binary,args,{...options,stdio:['pipe','pipe','pipe']});
     let buffer='',count=0,finished=false;const checks={ready:false,negotiate:false,state:false,abort:false};
-    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('OMP_RPC_TIMEOUT'));},45000);
-    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);if(error){child.kill('SIGKILL');reject(error);}else resolve(checks);};
+    const timer=setTimeout(()=>{signalChild(child, 'SIGKILL');reject(Error('OMP_RPC_TIMEOUT'));},45000);
+    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);if(error){signalChild(child, 'SIGKILL');reject(error);}else resolve(checks);};
     child.stderr.on('data',()=>{});
     child.stdout.on('data',chunk=>{
       buffer+=chunk.toString();if(buffer.length>1024*1024||++count>10000)return finish(Error('OMP_RPC_OUTPUT_LIMIT'));

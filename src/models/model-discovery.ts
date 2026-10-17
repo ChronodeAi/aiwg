@@ -1,3 +1,4 @@
+import { signalChild } from '../process/signal-child.mjs';
 import { hasSelectionRelevantConflicts, validateWorkerCatalogDiscovery } from './provider-policy.js';
 import type { WorkerModelObservation } from './types.js';
 import { spawn } from 'node:child_process';
@@ -285,7 +286,7 @@ export const runModelDiscoveryCommand: ModelDiscoveryCommandRunner = (
     clearTimeout(timer);
     resolveCommand({ stdout, stderr, exitCode });
   };
-  child.stdout.on('data', chunk => { stdout += String(chunk); if (Buffer.byteLength(stdout) > 8 * 1024 * 1024) { stdout = ''; stderr = 'Model catalog exceeded 8 MiB limit'; child.kill('SIGKILL'); finish(1); } });
+  child.stdout.on('data', chunk => { stdout += String(chunk); if (Buffer.byteLength(stdout) > 8 * 1024 * 1024) { stdout = ''; stderr = 'Model catalog exceeded 8 MiB limit'; signalChild(child, 'SIGKILL'); finish(1); } });
   child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
   child.on('error', error => {
     stderr = `${stderr}${stderr ? '\n' : ''}${error.message}`;
@@ -294,7 +295,7 @@ export const runModelDiscoveryCommand: ModelDiscoveryCommandRunner = (
   child.on('close', code => finish(code ?? 1));
   const timer = setTimeout(() => {
     stderr = `${stderr}${stderr ? '\n' : ''}${command} timed out`;
-    child.kill();
+    signalChild(child);
     finish(124);
   }, options.timeoutMs ?? 10_000);
 });
@@ -599,7 +600,7 @@ export async function discoverCodexModels(
       settled = true;
       clearTimeout(timer);
       lines.close();
-      child.kill();
+      signalChild(child);
       resolveDiscovery(result);
     };
     child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });

@@ -6,6 +6,7 @@
  * Tests the server by spawning it and sending JSON-RPC messages via stdio.
  */
 
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -254,7 +255,7 @@ async function main() {
   });
 
   // Cleanup
-  server.kill();
+  signalChild(server);
 
   // Summary
   console.log('');

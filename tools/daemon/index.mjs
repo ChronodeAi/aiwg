@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { createClient } from './ipc-client.mjs';
 import { TmuxManager, formatStatusDashboard } from './tmux-manager.mjs';
 import { importImpl } from '../_resolve-impl.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -175,6 +176,7 @@ class DaemonCLI {
     }
 
     const pid = this.readPidFile();
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
     console.log(`Stopping daemon (PID: ${pid})...`);
 
     try {
@@ -313,7 +315,7 @@ class DaemonCLI {
       });
 
       process.on('SIGINT', () => {
-        tail.kill();
+        signalChild(tail);
         process.exit(0);
       });
     } else {
@@ -1054,6 +1056,7 @@ Requirements:
   }
 
   isPidAlive(pid) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
       return true;

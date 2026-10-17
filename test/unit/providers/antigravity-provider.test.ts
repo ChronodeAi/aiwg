@@ -110,6 +110,7 @@ describe('Antigravity provider contract', () => {
 
     let killed = false;
     const hanging = new EventEmitter() as EventEmitter & Record<string, any>;
+    hanging.pid = 54321;
     hanging.stdin = { end() {} };
     hanging.stdout = new PassThrough();
     hanging.stderr = new PassThrough();

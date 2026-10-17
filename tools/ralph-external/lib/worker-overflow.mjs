@@ -1,7 +1,9 @@
 /** Stop authority and bounded termination proof for MCP stdout overflow. */
+import { importImpl } from '../../_resolve-impl.mjs';
 import { getWorkerIsolationStatus, stopWorkerUnit } from './worker-isolation.mjs';
 import { signalOwnedWorker } from '../session-launcher.mjs';
 import { sampleWorkerChildren, sampleWorkerIdentity, sameWorkerIdentity } from '../process-monitor.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export async function stopOverflowWorker(launch, {
   deadlineMs = 2000, pollIntervalMs = 25,
@@ -22,7 +24,7 @@ export async function stopOverflowWorker(launch, {
     const child = launch.child;
     // The direct-child handle cannot prove descendant termination.
     if (platform !== 'linux') {
-      try { if (!(delivered = !!child?.kill('SIGKILL'))) return uncertain('OG_WORKER_MCP_STOP_FAILED'); }
+      try { if (!(delivered = !!signalChild(child, 'SIGKILL'))) return uncertain('OG_WORKER_MCP_STOP_FAILED'); }
       catch { return uncertain('OG_WORKER_MCP_STOP_FAILED'); }
       return uncertain('OG_WORKER_MCP_STOP_UNCONFIRMED');
     }

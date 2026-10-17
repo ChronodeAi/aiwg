@@ -1,4 +1,6 @@
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn } from 'node:child_process';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export const ANTIGRAVITY_CONTRACT_VERSION = '1.0.0';
 export const ANTIGRAVITY_QUALIFIED_CLI_VERSION = '1.1.26';
@@ -92,7 +94,7 @@ export function runAntigravity(prompt, options = {}) {
     let settled = false;
     const timer = setTimeout(() => {
       settled = true;
-      child.kill('SIGTERM');
+      signalChild(child, 'SIGTERM');
       reject(new Error(`Antigravity invocation timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout.on('data', chunk => { stdout += chunk; });

@@ -14,6 +14,7 @@
  * error, a result or a log line.
  */
 
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from 'node:child_process';
 
 export type ForgeProvider = 'gitea' | 'github';
@@ -154,7 +155,7 @@ function spawnCliRunner(binary: string, maxBytes: number): ForgeCliRunner {
     let oversized = false;
     child.stdout.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > maxBytes + 65_536) { oversized = true; child.kill(); } else chunks.push(chunk);
+      if (size > maxBytes + 65_536) { oversized = true; signalChild(child); } else chunks.push(chunk);
     });
     child.once('error', () => reject(new ForgeReadError(aborted(signal) ? 'timeout' : 'network-error')));
     child.once('close', code => {

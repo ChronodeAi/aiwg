@@ -52,7 +52,7 @@ describe('MCP overflow stop authority', () => {
   });
 
   it.each(['darwin', 'win32'])('attempts direct-child kill on %s without claiming tree termination', async platform => {
-    const child = { kill: vi.fn(() => true) };
+    const child = { pid: 54321, kill: vi.fn(() => true) };
     const sample = vi.fn(); const signal = vi.fn();
     expect(await stopOverflowWorker({ mode: 'degraded', child }, { platform, sample, signal }))
       .toEqual({ termination: 'uncertain', delivered: true, diagnostic: 'OG_WORKER_MCP_STOP_UNCONFIRMED' });
@@ -61,7 +61,7 @@ describe('MCP overflow stop authority', () => {
   });
 
   it.each(['false', 'throw'])('reports failed direct-child kill (%s)', async failure => {
-    const child = { kill: () => { if (failure === 'throw') throw new Error('failed'); return false; } };
+    const child = { pid: 54321, kill: () => { if (failure === 'throw') throw new Error('failed'); return false; } };
     expect(await stopOverflowWorker({ mode: 'degraded', child }, { platform: 'win32' }))
       .toEqual({ termination: 'uncertain', delivered: false, diagnostic: 'OG_WORKER_MCP_STOP_FAILED' });
   });

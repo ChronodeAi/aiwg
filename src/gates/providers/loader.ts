@@ -1,3 +1,4 @@
+import { signalChild } from '../../process/signal-child.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
@@ -665,7 +666,7 @@ export function probeIsolationSandbox(options?: { connectPort?: number }): Promi
   return new Promise((resolvePromise) => {
     const child = spawn(plan.command, plan.args, { env: plan.env, stdio: ['pipe', 'pipe', 'ignore'] });
     const chunks: Buffer[] = [];
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* exited */ } }, SANDBOX_SELF_TEST_TIMEOUT_MS);
+    const timer = setTimeout(() => { try { signalChild(child, 'SIGKILL'); } catch { /* exited */ } }, SANDBOX_SELF_TEST_TIMEOUT_MS);
     child.stdout?.on('data', (chunk: Buffer) => { chunks.push(chunk); });
     child.stdin?.on('error', () => { /* reported via exit status */ });
     child.on('error', (error) => {
@@ -832,11 +833,11 @@ function runIsolatedRecord(
       return;
     }
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
       settle(() => rejectPromise(new GateProviderError(`provider ${record.id} timed out`, 'timeout')));
     }, limits.timeoutMs);
     const onAbort = (): void => {
-      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
       settle(() => rejectPromise(new GateProviderError(`provider ${record.id} was cancelled`, 'cancelled')));
     };
     limits.signal?.addEventListener('abort', onAbort, { once: true });
@@ -847,7 +848,7 @@ function runIsolatedRecord(
       bytes += chunk.length;
       if (bytes > limits.maxOutputBytes) {
         capped = true;
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
         settle(() => rejectPromise(new GateProviderError(`provider ${record.id} exceeds its output cap`, 'rejected')));
         return;
       }

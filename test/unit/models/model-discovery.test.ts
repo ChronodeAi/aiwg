@@ -1015,6 +1015,7 @@ describe('#2882 real parser completeness regressions', () => {
 
   it('keeps only the last 4 KiB of Codex app-server stderr and redacts timeout errors', async () => {
     const child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
       kill: vi.fn(),
     });
@@ -1035,6 +1036,7 @@ describe('#2882 real parser completeness regressions', () => {
       : { id: 2, result: { data: [{ model: 'current-code' }, ...(shape === 'mixed' ? [null, {}] : [])],
         ...(shape === 'pagination' ? { nextCursor: 'page-2' } : {}) } };
     const child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
       kill: vi.fn(),
     });

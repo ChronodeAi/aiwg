@@ -1,3 +1,4 @@
+import { signalChild } from '../../process/signal-child.mjs';
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
@@ -219,7 +220,7 @@ export function buildShellStopControl(launch, { waitForUnit = waitForUnitTermina
         process.kill(-child.pid, signalName);
         return true;
       }
-      return !closed && !!child?.kill(signalName);
+      return !closed && !!signalChild(child, signalName);
     } catch { return false; }
   }
   const control = {
