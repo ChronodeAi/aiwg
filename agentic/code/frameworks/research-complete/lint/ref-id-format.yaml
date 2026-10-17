@@ -1,9 +1,10 @@
 id: research/ref-id-format
 name: REF identifier format
-description: REF identifiers follow REF-NNN naming convention (3-digit zero-padded)
+description: REF identifiers have at least three digits and an optional lowercase slug; ref metadata matches the identifier
 severity: warn
 applies-to:
   glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: id-format
-    pattern: "^REF-\\d{3}$"
+    field: ref
+    pattern: "^(REF-\\d{3,})(?:-[a-z0-9][a-z0-9-]*)?$"

@@ -1,4 +1,4 @@
-/** Regression coverage for research lint issues #3143, #3144 and #3145. */
+/** Regression coverage for research lint issues #3143, #3144, #3145 and #3163. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -52,6 +52,47 @@ async function cli(target: string, extra: string[] = []) {
   await main([target, '--ruleset', 'research', '--format', 'json', '--ci', ...extra]);
   return JSON.parse(output.mock.calls.at(-1)![0]);
 }
+
+describe('REF identifier format (#3163)', () => {
+  it.each(['findings', 'documentation/references'])(
+    'warns only for malformed names in %s, from root and direct targets',
+    async (layout) => {
+      const names = [
+        'REF-123', 'REF-1000', 'REF-124-slug',
+        'REF-2832-skyjepa-quadrotor-world-model',
+        'REF-12', 'REF-ABC-bad', 'REF-125-Bad', 'REF-126-',
+      ];
+      for (const name of names) note(layout, valid, `${name}.md`);
+
+      for (const target of [root, join(root, layout)]) {
+        const result = await runLint(target, [research], { respectGitignore: false });
+        const diagnostics = result.diagnostics.filter(d => d.ruleId === 'research/ref-id-format');
+        expect(diagnostics).toHaveLength(4);
+        expect(diagnostics.every(d => d.severity === 'warn')).toBe(true);
+        expect(diagnostics.map(d => d.file.split('/').at(-1)).sort()).toEqual([
+          'REF-12.md', 'REF-125-Bad.md', 'REF-126-.md', 'REF-ABC-bad.md',
+        ].sort());
+      }
+    },
+  );
+
+  it.each([
+    ['REF-123', 'REF-123', false],
+    ['REF-123-slug', 'REF-123', false],
+    ['REF-2832-slug', 'REF-2832', false],
+    ['REF-123', 'REF-124', true],
+    ['REF-123-slug', 'REF-124', true],
+    ['REF-2832-slug', 'REF-283', true],
+    ['REF-2832-slug', 'REF', true],
+    ['REF-123-slug', '', false],
+  ])('compares %s with ref: %s', async (name, ref, mismatch) => {
+    note('documentation/references', valid.replace('---\ntitle:', `---\nref: ${ref}\ntitle:`), `${name}.md`);
+    const result = await runLint(root, [research]);
+    const diagnostics = result.diagnostics.filter(d => d.ruleId === 'research/ref-id-format');
+    expect(diagnostics).toHaveLength(mismatch ? 1 : 0);
+    if (mismatch) expect(diagnostics[0].message).toContain("does not match frontmatter field 'ref'");
+  });
+});
 
 describe('YAML frontmatter (#3143)', () => {
   it('produces identical diagnostics for the reported block and flow lists', async () => {

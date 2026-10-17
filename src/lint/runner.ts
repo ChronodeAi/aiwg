@@ -464,7 +464,8 @@ function runCheck(
     case 'id-format': {
       if (!check.pattern) break;
       const basename = path.basename(filePath, '.md');
-      if (!new RegExp(check.pattern).test(basename)) {
+      const match = basename.match(new RegExp(check.pattern));
+      if (!match) {
         diagnostics.push({
           ruleId: '',
           ruleName: '',
@@ -473,6 +474,19 @@ function runCheck(
           message: `File name '${basename}' does not match expected format: ${check.pattern}`,
           fix: `Rename to match the pattern ${check.pattern}`,
         });
+      } else if (check.field && isPresent(frontmatter[check.field])) {
+        const identifier = match[1] ?? match[0];
+        const value = frontmatter[check.field];
+        if (value !== identifier) {
+          diagnostics.push({
+            ruleId: '',
+            ruleName: '',
+            severity: 'warn',
+            file: filePath,
+            message: `File identifier '${identifier}' does not match frontmatter field '${check.field}': ${String(value)}`,
+            fix: `Make the filename identifier and '${check.field}' field agree`,
+          });
+        }
       }
       break;
     }

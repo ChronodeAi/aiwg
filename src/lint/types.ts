@@ -39,7 +39,10 @@ export interface LintCheck {
   /** Specific field name (for single-field checks) */
   field?: string;
 
-  /** Regex pattern (for format/pattern checks) */
+  /**
+   * Regex pattern (for format/pattern checks). For id-format with a field,
+   * the first capture group (or the full match) must equal the present field.
+   */
   pattern?: string;
 
   /** Reference pattern to extract and resolve (for reference checks) */
