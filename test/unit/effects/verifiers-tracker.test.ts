@@ -252,13 +252,16 @@ describe.each(PROVIDERS)('%s tri-state', (provider) => {
     const run = await runVerifier(trackerCommentVerifier(options), request('tracker.comment', provider));
     expect(run.observation).toMatchObject({ result: 'unknown', reason: 'evidence-conflict' });
     expect(run.evidence).toMatchObject({ foreignMarker: true });
+    expect(run.evidence).not.toHaveProperty('actorUnpinned');
   });
 
   it('EFF-TRK-19 tracker.comment: without a pinned actor a marker is never present', async () => {
     const unpinned = { remotes: { ...config.remotes, tracker_actor: undefined, customer_tracker_actor: undefined } } as AiwgConfig;
     const { options } = setup(provider, { comments: [{ id: 1, author: 'delivery-bot', body: marker() }] }, { config: unpinned });
     const run = await runVerifier(trackerCommentVerifier(options), request('tracker.comment', provider));
-    expect(run.observation.result).toBe('unknown');
+    expect(run.observation).toMatchObject({ result: 'unknown', reason: 'evidence-conflict' });
+    expect(run.evidence).toMatchObject({ foreignMarker: true, actorUnpinned: true });
+    expect(run.evidence?.hint).toContain(provider === 'gitea' ? 'remotes.tracker_actor.login' : 'remotes.customer_tracker_actor.login');
   });
 
   it('EFF-TRK-20 tracker.comment: an author and time-window match is heuristic present, never absent', async () => {
@@ -299,8 +302,8 @@ describe('access gaps map to unknown', () => {
     { name: 'full page with no pagination headers', provider: 'gitea', state: { comments: [{ id: 1, author: 'x', body: 'a' }, { id: 2, author: 'x', body: 'b' }], noPaginationHeaders: true }, reason: 'paging-incomplete' },
     { name: 'page bound exceeded', provider: 'github', state: { comments: [1, 2, 3, 4, 5].map(id => ({ id, author: 'x', body: 'a' })) }, overrides: { maxPages: 2 }, reason: 'paging-incomplete' },
     { name: 'oversized body', provider: 'gitea', state: { oversized: true }, overrides: { maxResponseBytes: 1024 }, reason: 'malformed-response' },
-    { name: 'blocker: no credentials and no CLI', provider: 'gitea', state: {}, overrides: { env: {} }, reason: 'tracker-blocked' },
-    { name: 'blocker: GitHub CLI unauthenticated', provider: 'github', state: {}, overrides: { env: {}, cli: { available: true, authenticated: false } }, reason: 'tracker-blocked' },
+    { name: 'blocker: no credentials and no CLI', provider: 'gitea', state: {}, overrides: { env: {} }, reason: 'tracker-credential-missing' },
+    { name: 'blocker: GitHub CLI unauthenticated', provider: 'github', state: {}, overrides: { env: {}, cli: { available: true, authenticated: false } }, reason: 'tracker-no-access-route' },
   ];
 
   it.each(cases)('EFF-TRK-30 $name gives unknown/$reason for every tracker kind', async ({ provider, state, overrides, reason, timeoutMs }) => {
@@ -311,7 +314,7 @@ describe('access gaps map to unknown', () => {
       expect(run.observation, verifier.kind).toMatchObject({ result: 'unknown', reason, complete: false });
       expect(JSON.stringify(run)).not.toContain(CANARY);
     }
-    if (reason === 'tracker-blocked') expect(traffic.urls).toEqual([]);
+    if (reason.startsWith('tracker-')) expect(traffic.urls).toEqual([]);
   });
 });
 
@@ -327,15 +330,31 @@ describe('tracker authority', () => {
     }
   });
 
-  it('EFF-TRK-41 a target on another repository or an unconfigured forge is tracker-blocked with no traffic', async () => {
+  it('EFF-TRK-41 a target on another repository or an unconfigured forge has a specific reason with no traffic', async () => {
     const { options, traffic } = setup('gitea', {});
     const other = await runVerifier(trackerIssueClosedVerifier(options), { ...request('tracker.issue.closed', 'gitea'), target: 'gitea:someone/else#12' });
-    expect(other.observation).toMatchObject({ result: 'unknown', reason: 'tracker-blocked' });
+    expect(other.observation).toMatchObject({ result: 'unknown', reason: 'tracker-repository-mismatch' });
     const internalOnly = { remotes: { ...config.remotes, customer_issue_tracker: undefined, customer_issue_provider: undefined } } as AiwgConfig;
     const github = await runVerifier(trackerIssueClosedVerifier({ ...options, config: internalOnly }), request('tracker.issue.closed', 'github'));
-    expect(github.observation).toMatchObject({ result: 'unknown', reason: 'tracker-blocked' });
+    expect(github.observation).toMatchObject({ result: 'unknown', reason: 'tracker-provider-unresolved' });
     const malformed = await runVerifier(trackerIssueClosedVerifier(options), { ...request('tracker.issue.closed', 'gitea'), target: 'gitea:example/repo#0' });
     expect(malformed.observation).toMatchObject({ result: 'unknown', reason: 'malformed-response' });
+    expect(traffic.urls).toEqual([]);
+  });
+
+  it.each([
+    { provider: 'gitea', overrides: { config: { remotes: { ...config.remotes, issue_provider: undefined } } as AiwgConfig }, reason: 'tracker-provider-unresolved', hints: ['remotes.issue_provider'] },
+    { provider: 'gitea', overrides: { remoteUrls: { ...remoteUrls, origin: 'https://forge.example.test/other/repo.git' } }, reason: 'tracker-repository-mismatch', hints: ['remotes.issue_tracker'] },
+    { provider: 'gitea', overrides: { env: {} }, reason: 'tracker-credential-missing', hints: ['AIWG_GITEA_TOKEN', 'GITEA_TOKEN'] },
+    { provider: 'github', overrides: { env: {}, cli: false }, reason: 'tracker-no-access-route', hints: ['AIWG_GITHUB_TOKEN', 'GITHUB_TOKEN', 'gh'] },
+  ] as Array<{ provider: Provider; overrides: Partial<TrackerVerifierOptions>; reason: string; hints: string[] }>)('#3164 $reason is stable across all tracker kinds and names the repair', async ({ provider, overrides, reason, hints }) => {
+    const { options, traffic } = setup(provider, {}, overrides);
+    for (const verifier of createTrackerVerifiers(options)) {
+      const run = await runVerifier(verifier, request(verifier.kind, provider));
+      expect(run.observation).toMatchObject({ result: 'unknown', reason, complete: false });
+      for (const hint of hints) expect(run.evidence?.hint).toContain(hint);
+      expect(JSON.stringify(run)).not.toContain(CANARY);
+    }
     expect(traffic.urls).toEqual([]);
   });
 
@@ -357,7 +376,7 @@ describe('tracker authority', () => {
     expect(calls).toEqual([['api', '--include', '--method', 'GET', '--hostname', 'github.com', 'repos/example/repo/issues/12']]);
     // Gitea has no CLI with a raw read API: without credentials it is blocked.
     const gitea = await runVerifier(trackerIssueClosedVerifier({ ...cliOnly }), request('tracker.issue.closed', 'gitea'));
-    expect(gitea.observation).toMatchObject({ result: 'unknown', reason: 'tracker-blocked' });
+    expect(gitea.observation).toMatchObject({ result: 'unknown', reason: 'tracker-credential-missing' });
   });
 
   it('EFF-TRK-43 CLI failures classify from the included status line', async () => {

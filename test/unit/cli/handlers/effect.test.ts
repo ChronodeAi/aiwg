@@ -357,7 +357,7 @@ describe('aiwg effect keys and kinds', () => {
     const other = await env.run(['record', '--kind', 'tracker.issue.closed', '--target', 'gitea:elsewhere/repo#7', '--payload-digest', payloadDigest('close')],
       { env: { AIWG_GITEA_TOKEN: 'test-token-value' }, tracker: { fetchImpl } });
     expect(other.exitCode).toBe(4);
-    expect(other.json.verification).toMatchObject({ result: 'unknown', reason: 'tracker-blocked' });
+    expect(other.json.verification).toMatchObject({ result: 'unknown', reason: 'tracker-repository-mismatch' });
     expect(requests).toHaveLength(1);
     expect(env.outputs.join('\n')).not.toContain('test-token-value');
   });
@@ -560,7 +560,7 @@ describe('aiwg effect probe (#2722)', () => {
     expect(pending.json.verification).toMatchObject({ result: 'absent' });
     const blocked = await env.run(['probe', '--kind', 'tracker.pr.merged', '--target', 'gitea:owner/repo#12'], { env: {}, tracker: { fetchImpl: forge.fetchImpl } });
     expect(blocked.exitCode).toBe(4);
-    expect(blocked.json.verification).toMatchObject({ result: 'unknown', reason: 'tracker-blocked' });
+    expect(blocked.json.verification).toMatchObject({ result: 'unknown', reason: 'tracker-credential-missing' });
     // A marker probe by explicit effect ID, as a skill checks for its own cycle comment.
     const effectId = (await env.run(['id', '--kind', 'tracker.comment', '--target', 'gitea:owner/repo#12', '--issue', '12', '--action', 'cycle', '--cycle', '1'])).json.effectId;
     const marked = fakeGitea({ comments: [{ id: 1, author: 'maintainer', body: `Cycle 1\n<!-- aiwg-effect: ${effectId} -->` }] });
@@ -572,6 +572,50 @@ describe('aiwg effect probe (#2722)', () => {
     expect(files(env.artifacts).map(file => file.slice(env.ledgerDir().length + 1)).sort()).toEqual(['index.key', 'keyring.json']);
     expect(forge.requests.every(path => path.startsWith('/api/v1/repos/owner/repo/'))).toBe(true);
     expect(env.outputs.join('\n')).not.toContain('test-token-value');
+  });
+
+  it.each([
+    { provider: 'gitea', reason: 'tracker-provider-unresolved', hints: ['remotes.issue_provider'] },
+    { provider: 'gitea', reason: 'tracker-repository-mismatch', hints: ['remotes.issue_tracker'] },
+    { provider: 'gitea', reason: 'tracker-credential-missing', hints: ['AIWG_GITEA_TOKEN', 'GITEA_TOKEN'] },
+    { provider: 'github', reason: 'tracker-no-access-route', hints: ['AIWG_GITHUB_TOKEN', 'GITHUB_TOKEN', 'gh'] },
+  ])('#3164 record, reconcile and probe print $reason repairs in JSON and text', async ({ provider, reason, hints }) => {
+    trackerProject(env);
+    const configPath = join(env.project, '.aiwg', 'aiwg.config');
+    const projectConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+    projectConfig.remotes.issue_provider = reason === 'tracker-provider-unresolved' ? undefined : provider;
+    writeFileSync(configPath, JSON.stringify(projectConfig));
+    const repository = reason === 'tracker-repository-mismatch' ? 'other/repo' : 'owner/repo';
+    const identity = ['--kind', 'tracker.issue.closed', '--target', `${provider}:${repository}#12`, '--payload-digest', payloadDigest('close')];
+    const extra = { env: {}, tracker: { cli: false as const } };
+    const recorded = await env.run(['record', ...identity], extra);
+    expect(recorded.exitCode).toBe(4);
+    expect(recorded.json).toMatchObject({ status: 'reconciled', verification: { result: 'unknown', reason } });
+    for (const hint of hints) expect(recorded.json.evidence.hint).toContain(hint);
+    for (const command of [['record', ...identity], ['reconcile', recorded.json.effectId], ['probe', ...identity]]) {
+      const text = await env.run([...command, '--format', 'text'], extra);
+      expect(text.exitCode).toBe(4);
+      expect(text.raw).toContain(reason);
+      for (const hint of hints) expect(text.raw).toContain(hint);
+    }
+  });
+
+  it('#3164 an unpinned marker author has evidence and a visible config repair', async () => {
+    trackerProject(env);
+    const configPath = join(env.project, '.aiwg', 'aiwg.config');
+    const projectConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+    delete projectConfig.remotes.tracker_actor;
+    writeFileSync(configPath, JSON.stringify(projectConfig));
+    const identity = ['--kind', 'tracker.comment', '--target', 'gitea:owner/repo#12'];
+    const effectId = (await env.run(['id', ...identity])).json.effectId;
+    const forge = fakeGitea({ comments: [{ id: 1, author: 'maintainer', body: `<!-- aiwg-effect: ${effectId} -->` }] });
+    const extra = { env: { AIWG_GITEA_TOKEN: 'test-token-value' }, tracker: { fetchImpl: forge.fetchImpl } };
+    const json = await env.run(['probe', ...identity, '--effect-id', effectId], extra);
+    expect(json.exitCode).toBe(4);
+    expect(json.json).toMatchObject({ verification: { reason: 'evidence-conflict' }, evidence: { actorUnpinned: true } });
+    const text = await env.run(['probe', ...identity, '--effect-id', effectId, '--format', 'text'], extra);
+    expect(text.raw).toContain('remotes.tracker_actor.login');
+    expect(text.raw).not.toContain('test-token-value');
   });
 
   it('EFF-CLI-25 re-entry after a crash between posting and recording finds the marker comment and never posts twice', async () => {
