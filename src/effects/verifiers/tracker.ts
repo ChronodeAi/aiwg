@@ -5,12 +5,12 @@
  * - **Authority.** The tracker comes from `resolveTrackerAuthority` over the
  *   project config and git remote URLs. A target whose forge is neither the
  *   internal nor the customer tracker, or whose repository differs from that
- *   tracker remote, is `unknown` / `tracker-blocked`. The API base is derived
- *   from the selected remote URL; no host is assumed.
+ *   tracker remote, is `unknown` with a specific precondition reason. The API
+ *   base is derived from the selected remote URL; no host is assumed.
  * - **Access order.** `chooseTrackerAccess` over the probes a CLI process can
  *   offer: the tracker HTTP API (with credentials from the existing tracker
  *   token path, `resolveToken`), then the forge CLI (`gh`, GitHub only). MCP
- *   is never offered. A blocker is `unknown` / `tracker-blocked`.
+ *   is never offered. Blockers include a safe configuration or credential hint.
  * - **Matching.** A comment matches exactly when it carries the
  *   `<!-- aiwg-effect: <id> -->` marker and was written by the pinned tracker
  *   actor; a merged PR matches its merge commit's `Effect-Id:` trailer.
@@ -20,8 +20,8 @@
  *   older than `minAbsentAgeMs`; a younger intent is `unknown` /
  *   `consistency-lag`.
  *
- * Access material stays inside the transport: evidence carries IDs, SHAs and
- * digests only, and errors carry fixed messages.
+ * Access material stays inside the transport: evidence carries IDs, SHAs,
+ * digests and safe repair hints only, and errors carry fixed messages.
  *
  * @see docs/contracts/effect-ledger.v1.md "Tracker verifiers"
  */
@@ -117,6 +117,7 @@ interface Lane {
   access: 'http-api' | 'cli';
   reader: ForgeReader;
   actor: TrackerActorConfig | undefined;
+  actorConfigKey: string;
 }
 
 const FAILURE_REASON: Record<ForgeReadFailure, UnknownReason> = {
@@ -149,23 +150,23 @@ function onPath(binary: string): boolean {
   }));
 }
 
-/** Resolve the tracker lane for a target: authority, remote, access path and reader. Throws `tracker-blocked`. */
-function resolveLane(options: TrackerVerifierOptions, target: string): Lane {
+/** Resolve the tracker lane, or return a classified precondition failure with a safe repair hint. */
+function resolveLane(options: TrackerVerifierOptions, target: string): Lane | EffectVerifierObservation {
   const parsed = TARGET.exec(target);
   if (!parsed) throw new EffectVerifierError('malformed-response', 'Tracker target must be gitea:owner/repo#N or github:owner/repo#N');
   const provider = parsed[1] as ForgeProvider;
   const number = Number(parsed[3]);
   const authority = resolveTrackerAuthority(options.config, options.remoteUrls);
   const remotes = options.config?.remotes;
-  let lane: { remote: string; url: string | undefined; actor: TrackerActorConfig | undefined } | null = null;
+  let lane: { remote: string; url: string | undefined; actor: TrackerActorConfig | undefined; actorConfigKey: string } | null = null;
   if (authority.provider === provider) {
-    lane = { remote: authority.issueTrackerRemote, url: authority.issueTrackerUrl, actor: remotes?.tracker_actor };
+    lane = { remote: authority.issueTrackerRemote, url: authority.issueTrackerUrl, actor: remotes?.tracker_actor, actorConfigKey: 'remotes.tracker_actor.login' };
   } else if (authority.customerIssueTrackerRemote && authority.customerProvider === provider) {
-    lane = { remote: authority.customerIssueTrackerRemote, url: authority.customerIssueTrackerUrl, actor: remotes?.customer_tracker_actor };
+    lane = { remote: authority.customerIssueTrackerRemote, url: authority.customerIssueTrackerUrl, actor: remotes?.customer_tracker_actor, actorConfigKey: 'remotes.customer_tracker_actor.login' };
   }
-  if (!lane) throw new EffectVerifierError('tracker-blocked');
+  if (!lane) return unknown('tracker-provider-unresolved', { hint: 'Set remotes.issue_provider (or remotes.customer_issue_provider for the customer tracker) to the target forge.' });
   const endpoint = forgeEndpointFromRemote(provider, lane.url);
-  if (!endpoint || endpoint.repository.toLowerCase() !== parsed[2].toLowerCase()) throw new EffectVerifierError('tracker-blocked');
+  if (!endpoint || endpoint.repository.toLowerCase() !== parsed[2].toLowerCase()) return unknown('tracker-repository-mismatch', { hint: 'Match the target repository to the remote selected by remotes.issue_tracker (or remotes.customer_issue_tracker).' });
   const laneAuthority: TrackerAuthority = { ...authority, provider, issueTrackerRemote: lane.remote, issueTrackerUrl: lane.url };
 
   const token = resolveToken(provider, options.env ?? process.env);
@@ -179,13 +180,16 @@ function resolveLane(options: TrackerVerifierOptions, target: string): Lane {
   const readerOptions = options.pageSize ? { pageSize: options.pageSize } : {};
   if (decision.kind === 'http-api' && token) {
     const transport = httpForgeTransport({ provider, apiBaseUrl: endpoint.apiBaseUrl, token, fetchImpl: options.fetchImpl, maxResponseBytes: options.maxResponseBytes });
-    return { provider, repository: endpoint.repository, number, access: 'http-api', reader: createForgeReader(provider, transport, readerOptions), actor: lane.actor };
+    return { provider, repository: endpoint.repository, number, access: 'http-api', reader: createForgeReader(provider, transport, readerOptions), actor: lane.actor, actorConfigKey: lane.actorConfigKey };
   }
   if (decision.kind === 'cli' && cli) {
     const transport = cliForgeTransport({ provider, hostname: endpoint.host, runner: cli.runner, binary: cli.binary, maxResponseBytes: options.maxResponseBytes });
-    return { provider, repository: endpoint.repository, number, access: 'cli', reader: createForgeReader(provider, transport, readerOptions), actor: lane.actor };
+    return { provider, repository: endpoint.repository, number, access: 'cli', reader: createForgeReader(provider, transport, readerOptions), actor: lane.actor, actorConfigKey: lane.actorConfigKey };
   }
-  throw new EffectVerifierError('tracker-blocked');
+  // Gitea has no raw-read CLI fallback. GitHub may use gh when no token is set.
+  return provider === 'gitea'
+    ? unknown('tracker-credential-missing', { hint: 'Set AIWG_GITEA_TOKEN or GITEA_TOKEN for the tracker HTTP API.' })
+    : unknown('tracker-no-access-route', { hint: 'Set AIWG_GITHUB_TOKEN or GITHUB_TOKEN, or install and authenticate gh for the tracker host.' });
 }
 
 const unknown = (reason: UnknownReason, evidence?: EffectVerifierEvidence): EffectVerifierObservation =>
@@ -219,6 +223,7 @@ export function trackerCommentVerifier(options: TrackerVerifierOptions): EffectV
     canReportAbsent: true,
     async verify(request) {
       const lane = resolveLane(options, request.target);
+      if ('result' in lane) return lane;
       const expectedDigest = expectedString(request, 'digest');
       if (expectedDigest !== undefined && !DIGEST.test(expectedDigest)) return unknown('malformed-response');
       const pinned = lane.actor?.login;
@@ -264,7 +269,10 @@ export function trackerCommentVerifier(options: TrackerVerifierOptions): EffectV
       }
       const summary = { ...base, pages, scanned };
       // A marker for this effect under another author is never ours; escalate instead of replaying.
-      if (foreignMarker) return unknown('evidence-conflict', { ...summary, foreignMarker: true });
+      if (foreignMarker) return unknown('evidence-conflict', {
+        ...summary, foreignMarker: true,
+        ...(!pinned ? { actorUnpinned: true, hint: `Set ${lane.actorConfigKey} to the trusted tracker author.` } : {}),
+      });
       if (digestMatch) {
         return { result: 'present', reason: 'digest-match', complete, evidence: { ...summary, commentId: digestMatch.id, bodyDigest: digestMatch.bodyDigest, confidence: 'exact' } };
       }
@@ -285,6 +293,7 @@ export function trackerIssueClosedVerifier(options: TrackerVerifierOptions): Eff
     canReportAbsent: true,
     async verify(request) {
       const lane = resolveLane(options, request.target);
+      if ('result' in lane) return lane;
       const issue = await read(() => lane.reader.getIssue(lane.repository, lane.number, request.signal));
       const evidence = { ...laneEvidence(lane), state: issue.state, closedAt: issue.closedAt };
       if (issue.state === 'closed') return { result: 'present', reason: 'state-match', complete: true, evidence };
@@ -306,6 +315,7 @@ export function trackerPrMergedVerifier(options: TrackerVerifierOptions): Effect
       const expectedSha = expectedString(request, 'object');
       if (expectedSha !== undefined && !OBJECT_ID.test(expectedSha)) return unknown('malformed-response');
       const lane = resolveLane(options, request.target);
+      if ('result' in lane) return lane;
       const pr = await read(() => lane.reader.getPullState(lane.repository, lane.number, request.signal));
       const evidence: EffectVerifierEvidence = {
         ...laneEvidence(lane), state: pr.state, merged: pr.merged, mergedAt: pr.mergedAt,

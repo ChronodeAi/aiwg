@@ -266,10 +266,11 @@ member of records) is:
 |---|---|---|
 | `present` | `marker-match`, `state-match`, `digest-match`, `heuristic-match` | The target positively confirms the effect. Author and time-window heuristics give `heuristic-match` and never `absent`. |
 | `absent` | `complete-query-no-match` | Requires `canReportAbsent: true`, `complete: true`, and an authenticated, successful, fully paged query. Verifiers SHOULD also require a minimum age since the intent, or two probes separated by a delay, where the target is eventually consistent. |
-| `unknown` | `verifier-missing`, `verifier-version-mismatch`, `verifier-cannot-report-absent`, `network-error`, `timeout`, `auth-denied`, `rate-limited`, `server-error`, `container-unreadable`, `paging-incomplete`, `consistency-lag`, `tracker-blocked`, `malformed-response`, `evidence-conflict` | Anything else. `unknown` blocks replay and escalates. |
+| `unknown` | `verifier-missing`, `verifier-version-mismatch`, `verifier-cannot-report-absent`, `network-error`, `timeout`, `auth-denied`, `rate-limited`, `server-error`, `container-unreadable`, `paging-incomplete`, `consistency-lag`, `tracker-blocked` (legacy), `tracker-provider-unresolved`, `tracker-repository-mismatch`, `tracker-credential-missing`, `tracker-no-access-route`, `malformed-response`, `evidence-conflict` | Anything else. `unknown` blocks replay and escalates. |
 
 Verifiers use read-only credentials and the project tracker access order. A
-`chooseTrackerAccess` blocker maps to `unknown` / `tracker-blocked`. Each
+tracker precondition failure maps to `unknown` with a specific reason and a safe
+repair hint in evidence (also printed in CLI text output). Each
 reconcile appends a new `reconciled` record; earlier records are never mutated.
 A `present` result also records `completed` when no outcome is recorded yet
 (the first outcome wins; an existing `failed` is left as it is).
@@ -437,7 +438,9 @@ version `1.0.0` with `canReportAbsent: true`, and each takes a target
   uses the `issue_tracker` remote and `tracker_actor`; a target on the customer
   tracker's forge uses `customer_issue_tracker` and `customer_tracker_actor`.
   Any other forge, or a repository other than the selected remote's, is
-  `unknown` / `tracker-blocked` and sends no request. The API base is derived
+  `unknown` / `tracker-provider-unresolved` or `tracker-repository-mismatch`
+  and sends no request. Evidence names the provider or tracker config key to
+  fix. The API base is derived
   from the selected remote URL (`https://<host>/api/v1` for Gitea,
   `https://api.github.com` or `https://<host>/api/v3` for GitHub); no host is
   assumed and secondary remotes are never contacted.
@@ -446,11 +449,17 @@ version `1.0.0` with `canReportAbsent: true`, and each takes a target
   (`AIWG_GITEA_TOKEN`/`GITEA_TOKEN`, `AIWG_GITHUB_TOKEN`/`GITHUB_TOKEN`), then
   the forge CLI (`gh api --include`, GitHub only; Gitea has no CLI with a raw
   read API). MCP/app tools are never offered. A blocker is `unknown` /
-  `tracker-blocked`. Reads are GET-only; access material is never part of
+  `tracker-credential-missing` for Gitea (no API token) or
+  `tracker-no-access-route` for GitHub (neither a token nor a usable CLI), with evidence
+  naming the token environment variables and, for GitHub, the CLI fallback.
+  Reads are GET-only; access material is never part of
   evidence, records, errors or output.
 - **Exact and heuristic matches.** A marker by any author other than the pinned
   actor, by a `forbid_actors` login, or when no actor is pinned, is `unknown` /
-  `evidence-conflict`, never `present`. A pinned-actor comment without the
+  `evidence-conflict`, never `present`. An unpinned author adds evidence
+  `actorUnpinned: true` and a hint to set `remotes.tracker_actor.login` (or
+  `remotes.customer_tracker_actor.login` for the customer tracker).
+  A pinned-actor comment without the
   marker created within `heuristicWindowMs` of the intent (off by default) is
   `present` / `heuristic-match` with evidence `confidence: heuristic`, never
   `absent`.
@@ -469,7 +478,10 @@ version `1.0.0` with `canReportAbsent: true`, and each takes a target
 | Framework timeout | `timeout` |
 | A full page without pagination headers, totals that disagree, a short chain, or more than `maxPages` (default 100) pages | `paging-incomplete` |
 | A body over 2 MB (`maxResponseBytes`), invalid JSON or an unexpected shape | `malformed-response` |
-| No usable access path, or a target outside the tracker authority | `tracker-blocked` |
+| Target forge has no resolved tracker lane | `tracker-provider-unresolved` |
+| Target repository differs from the tracker remote, or the remote URL is unavailable/invalid | `tracker-repository-mismatch` |
+| Gitea API token missing | `tracker-credential-missing` |
+| GitHub API token missing and no usable CLI route | `tracker-no-access-route` |
 
 ## Retention and tombstones
 
