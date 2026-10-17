@@ -7,18 +7,25 @@ import path from 'node:path';
 // lookup (reached via `createInstallationIdentity()` for a `method:
 // 'source'` identity with no `managerExecutable` override) must pass only
 // an allow-listed environment, never the whole parent one — this spies on
-// the real `boundedExecFileSync` to capture what it was actually called
-// with, without changing its behavior.
+// `boundedExecFileSync` to capture the environment at the lookup boundary.
 const boundedExecFileSyncSpy = vi.fn();
 vi.mock('../../../src/process/bounded-child-process.mjs', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../src/process/bounded-child-process.mjs')>();
   return {
     ...actual,
     boundedExecFileSync: (...callArgs: Parameters<typeof actual.boundedExecFileSync>) => {
-      boundedExecFileSyncSpy(...callArgs);
-      return actual.boundedExecFileSync(...callArgs);
+      return boundedExecFileSyncSpy(...callArgs) ?? actual.boundedExecFileSync(...callArgs);
     },
   };
+});
+
+// Pin the fast-path filesystem probe without changing the real fixture I/O.
+const existsSyncSpy = vi.fn();
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const existsSync = (...args: Parameters<typeof actual.existsSync>) =>
+    existsSyncSpy(...args) ?? actual.existsSync(...args);
+  return { ...actual, existsSync, default: { ...actual.default, existsSync } };
 });
 
 import {
@@ -259,28 +266,31 @@ describe('canonical installation identity', () => {
 
   // Go/no-go review blocker 1B.
   it("resolving a method: 'source' identity's manager executable looks up `git` with only PATH, never the whole parent environment", () => {
-    const previousSecret = process.env.AIWG_TEST_INSTALLATION_SECRET;
-    process.env.AIWG_TEST_INSTALLATION_SECRET = 'sk-test-installation-secret';
-    try {
-      const root = packageRoot('aiwg', true);
-      boundedExecFileSyncSpy.mockClear();
-      createInstallationIdentity({ actualRoot: root, method: 'source' });
+    const root = packageRoot('aiwg', true);
+    const git = path.join(root, 'git');
+    fs.writeFileSync(git, '');
+    const besideNode = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'git.cmd' : 'git');
+    // A system Node may share /usr/bin with git; that fast path skips which.
+    existsSyncSpy.mockImplementation(file => file === besideNode ? false : undefined);
+    boundedExecFileSyncSpy.mockReturnValue(`${git}\n`);
+    const env = {
+      PATH: path.join(root, 'lookup-bin'),
+      PATHEXT: '.EXE;.CMD',
+      SystemRoot: path.join(root, 'windows'),
+      AIWG_TEST_INSTALLATION_SECRET: 'sk-test-installation-secret',
+    };
+    const identity = createInstallationIdentity({ actualRoot: root, method: 'source', env });
 
-      expect(boundedExecFileSyncSpy).toHaveBeenCalledTimes(1);
-      const [finder, args, , options] = boundedExecFileSyncSpy.mock.calls[0] as [
-        string, string[], string, { env?: Record<string, string> },
-      ];
-      expect(finder).toBe(process.platform === 'win32' ? 'where.exe' : 'which');
-      expect(args).toEqual(['git']);
-      expect(options?.env).toBeDefined();
-      expect(options!.env!.AIWG_TEST_INSTALLATION_SECRET).toBeUndefined();
-      const allowed = process.platform === 'win32'
-        ? new Set(['PATH', 'PATHEXT', 'SystemRoot'])
-        : new Set(['PATH']);
-      expect(new Set(Object.keys(options!.env!))).toEqual(allowed);
-    } finally {
-      if (previousSecret === undefined) delete process.env.AIWG_TEST_INSTALLATION_SECRET;
-      else process.env.AIWG_TEST_INSTALLATION_SECRET = previousSecret;
-    }
+    expect(identity.managerExecutable).toBe(fs.realpathSync(git));
+    expect(existsSyncSpy).toHaveBeenCalledWith(besideNode);
+    expect(boundedExecFileSyncSpy).toHaveBeenCalledTimes(1);
+    const [finder, args, profile, options] = boundedExecFileSyncSpy.mock.calls[0];
+    expect(finder).toBe(process.platform === 'win32' ? 'where.exe' : 'which');
+    expect(args).toEqual(['git']);
+    expect(profile).toBe('quick');
+    expect(options.env).toEqual({
+      PATH: env.PATH,
+      ...(process.platform === 'win32' ? { PATHEXT: env.PATHEXT, SystemRoot: env.SystemRoot } : {}),
+    });
   });
 });
