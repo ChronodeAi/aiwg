@@ -64,12 +64,15 @@ function makeFakeAsyncChild() {
     return stdin;
   });
   const child = new EventEmitter() as EventEmitter & {
+    pid: number;
     stdin: typeof stdin;
     kill: ReturnType<typeof vi.fn>;
     exitCode: number | null;
     signalCode: NodeJS.Signals | null;
     setExit(code: number | null, signal: NodeJS.Signals | null): void;
   };
+  // A spawned child has a PID; signalChild() refuses to signal one without.
+  child.pid = 424242;
   child.stdin = stdin;
   child.exitCode = null;
   child.signalCode = null;
