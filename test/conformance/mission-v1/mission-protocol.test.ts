@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
@@ -118,6 +120,76 @@ describe('Mission schema compatibility classification', () => {
   it('classifies optional fields and enum additions as additive', () => {
     const next = { ...base, properties: { ...base.properties, optional: { type: 'string' }, state: { enum: ['running', 'completed', 'unknown'] } } };
     expect(classifyContractChanges(base, next).every(change => change.kind === 'additive')).toBe(true);
+  });
+
+  const invocationPath = '/$defs/workerResolvedInvocation/properties';
+  const mutations = [
+    ...['closed', 'brief-text', 'brief-json', 'adapter-frame'].map(value => ({
+      name: `removing stdin kind ${value}`, verdict: 'breaking',
+      path: `${invocationPath}/stdin/enum`, detail: `enum value removed: "${value}"`,
+      mutate: (schema: any) => {
+        const stdin = schema.$defs.workerResolvedInvocation.properties.stdin;
+        stdin.enum = stdin.enum.filter((kind: string) => kind !== value);
+      },
+    })),
+    ...['name', 'content', 'location'].map(field => ({
+      name: `removing artifact field ${field}`, verdict: 'breaking',
+      path: `${invocationPath}/artifacts/items/properties/${field}`, detail: 'property removed or renamed',
+      mutate: (schema: any) => { delete schema.$defs.workerResolvedInvocation.properties.artifacts.items.properties[field]; },
+    })),
+    {
+      name: 'adding a stdin kind', verdict: 'additive', path: `${invocationPath}/stdin/enum`,
+      detail: 'enum value added: "future-kind"',
+      mutate: (schema: any) => { schema.$defs.workerResolvedInvocation.properties.stdin.enum.push('future-kind'); },
+    },
+    {
+      name: 'adding an optional artifact field', verdict: 'additive',
+      path: `${invocationPath}/artifacts/items/properties/futureField`, detail: 'new optional property',
+      mutate: (schema: any) => { schema.$defs.workerResolvedInvocation.properties.artifacts.items.properties.futureField = { type: 'string' }; },
+    },
+    {
+      name: 'removing an invocation definition', verdict: 'breaking',
+      path: '/$defs/workerResolvedInvocation', detail: 'definition removed or renamed',
+      mutate: (schema: any) => { delete schema.$defs.workerResolvedInvocation; },
+    },
+    {
+      name: 'adding an invocation definition', verdict: 'additive',
+      path: '/$defs/futureInvocation', detail: 'new definition',
+      mutate: (schema: any) => { schema.$defs.futureInvocation = { type: 'object' }; },
+    },
+  ];
+
+  it('records the current worker vocabulary in the baseline', async () => {
+    const baseline = JSON.parse(await readFile('schemas/mission-protocol/schema-baseline-v1.json', 'utf8'));
+    const candidate = JSON.parse(await readFile('schemas/mission-v1.schema.json', 'utf8'));
+    expect(baseline.$defs).toEqual(candidate.$defs);
+    expect(classifyContractChanges(baseline, candidate)).toEqual([]);
+  });
+
+  it.each(mutations)('the contract lint reports $name', async ({ mutate, verdict, path: changePath, detail }) => {
+    // Copy the existing lane so its normal paths and exit status are exercised
+    // without changing the working schema or blessing the mutation as baseline.
+    const root = await mkdtemp(path.join(tmpdir(), 'aiwg-mission-contract-'));
+    try {
+      await mkdir(path.join(root, 'tools/mission-protocol'), { recursive: true });
+      await mkdir(path.join(root, 'schemas/mission-protocol'), { recursive: true });
+      await copyFile('tools/mission-protocol/contract-diff.mjs', path.join(root, 'tools/mission-protocol/contract-diff.mjs'));
+      await copyFile('schemas/mission-protocol/schema-baseline-v1.json', path.join(root, 'schemas/mission-protocol/schema-baseline-v1.json'));
+      const candidate = JSON.parse(await readFile('schemas/mission-v1.schema.json', 'utf8'));
+      mutate(candidate);
+      await writeFile(path.join(root, 'schemas/mission-v1.schema.json'), JSON.stringify(candidate));
+      const result = spawnSync(process.execPath, [path.join(root, 'tools/mission-protocol/contract-diff.mjs')], {
+        cwd: root, encoding: 'utf8', timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(verdict === 'breaking' ? 1 : 0);
+      const report = JSON.parse(result.stdout);
+      expect(report.verdict).toBe(verdict);
+      expect(report.changes).toEqual([{ kind: verdict, path: changePath, detail }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
