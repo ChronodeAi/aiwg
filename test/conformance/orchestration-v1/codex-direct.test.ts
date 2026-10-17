@@ -228,10 +228,10 @@ function messages(plan: any): string {
 }
 
 describe('Codex version-bound profile (B-OG-07)', () => {
-  it('CX01 pins the evidenced release, driver, template and health grammar; unknown controls stay unqualified', () => {
+  it('CX01 bounds compatible releases and pins the evidenced driver, template and health grammar; unknown controls stay unqualified', () => {
     const adapter = loadProviderModelCapabilities().providers.codex.workerHealthAdapter!;
     expect(CODEX_SUPPORTED_VERSIONS).toEqual([VERSION]);
-    expect(adapter).toMatchObject({ supportedVersions: VERSION, adapterVersion: '1',
+    expect(adapter).toMatchObject({ supportedVersions: '>=0.161.0 <0.200.0', adapterVersion: '1',
       runtimeDriver: 'installed:codex',
       catalogAdapter: { kind: 'file', locator: 'agentic/code/providers/model-catalog.v1.json' },
       invocation: { kind: 'process', executable: 'codex', stdin: 'brief-text', versionArgv: ['--version'] },
@@ -243,7 +243,7 @@ describe('Codex version-bound profile (B-OG-07)', () => {
     expect(adapter.invocation.argv.join(' ')).not.toContain("'\"");
     expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);
     const profile = adapter.invocationProfiles!['direct-shell'];
-    expect(profile.supportedVersions).toBe(VERSION);
+    expect(profile.supportedVersions).toBe('>=0.161.0 <0.200.0');
     expect(profile.transport).toBe('shell');
     expect(profile.mcp).toBeUndefined();
     expect(profile.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);

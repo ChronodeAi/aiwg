@@ -452,7 +452,7 @@
         "id": "codex",
         "provider": "codex",
         "adapterVersion": "1",
-        "supportedVersions": "0.161.0",
+        "supportedVersions": ">=0.161.0 <0.200.0",
         "runtimeDriver": "installed:codex",
         "catalogAdapter": {
           "kind": "file",
@@ -513,7 +513,7 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "0.161.0",
+            "supportedVersions": ">=0.161.0 <0.200.0",
             "controls": {
               "model": {
                 "support": "unqualified",
@@ -3027,7 +3027,7 @@
         "id": "muse",
         "provider": "muse",
         "adapterVersion": "1",
-        "supportedVersions": "1.4.4-R5419.1",
+        "supportedVersions": ">=1.4.4-R5419.1 <2.0.0",
         "runtimeDriver": "tools/ralph-external/lib/muse-adapter.mjs",
         "catalogAdapter": {
           "kind": "file",
@@ -3087,7 +3087,7 @@
         "invocationProfiles": {
           "direct-shell": {
             "transport": "shell",
-            "supportedVersions": "1.4.4-R5419.1",
+            "supportedVersions": ">=1.4.4-R5419.1 <2.0.0",
             "controls": {
               "model": {
                 "support": "unqualified",
