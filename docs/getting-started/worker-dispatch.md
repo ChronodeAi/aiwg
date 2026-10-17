@@ -106,6 +106,170 @@ When dispatch is disabled, JSON still includes every configured CLI with reason
 `WORKER_DIRECT_DISABLED` and a message explaining that no probes ran.
 Unknown `aiwg doctor` flags exit non-zero naming the flag.
 
+## Configure a worker group
+
+Two files work together: **`.aiwg/aiwg.config`** declares the CLI installations and
+worker groups; **`models.json` at the project root** supplies role guidance. It is
+not `.aiwg/models.json`. Model settings merge in this order, highest precedence
+first: project-root `models.json`, `$AIWG_CONFIG/models.json` (normally
+`~/.config/aiwg/models.json`), then bundled defaults. `aiwg config set --project`
+only edits `.aiwg/aiwg.config`; edit `models.json` directly, including in headless
+setup scripts. There is currently no role-guidance setter.
+
+Run commands from the project root. For a new project, the following is a complete
+minimal `.aiwg/aiwg.config`. For an existing project, merge its `parallelism` keys
+into your existing configuration, preserving providers, scripts and other settings.
+The account/quota scope names identify your local bindings; replace them if these
+CLIs use different accounts or share a quota.
+
+**`.aiwg/aiwg.config`:**
+
+```json
+{
+  "version": "1",
+  "parallelism": {
+    "worker_dispatch": true,
+    "max_parallel_subagents": 4,
+    "clis": {
+      "codex": {
+        "adapter": "providers:codex",
+        "accountScope": "local-codex-account",
+        "quotaScope": "local-codex-quota"
+      },
+      "muse": {
+        "adapter": "providers:muse",
+        "accountScope": "local-muse-account",
+        "quotaScope": "local-muse-quota"
+      }
+    },
+    "groups": {
+      "harness": {
+        "maxParallel": 2,
+        "requiredRoles": ["efficiency", "coding", "reasoning"],
+        "members": [
+          { "id": "fast", "cli": "codex", "model": "gpt-5.6-luna", "roles": ["efficiency"], "priority": 10, "enabled": true },
+          { "id": "coder", "cli": "codex", "model": "gpt-5.6-terra", "roles": ["coding"], "priority": 10, "enabled": true },
+          { "id": "reviewer", "cli": "codex", "model": "gpt-5.6-sol", "roles": ["reasoning"], "priority": 10, "enabled": true },
+          { "id": "alternate", "cli": "muse", "model": "muse-spark-1.3", "roles": ["efficiency", "coding", "reasoning"], "priority": 20, "enabled": true }
+        ],
+        "fallback": ["alternate"],
+        "execution": {
+          "isolation": "worktree",
+          "sandbox": "workspace-write",
+          "approval": "never",
+          "network": "deny",
+          "transport": "shell",
+          "receipts": "optional"
+        }
+      }
+    }
+  }
+}
+```
+
+**`models.json` (project root):**
+
+```json
+{
+  "defaults": {
+    "workerSelection": {
+      "roleGuidance": {
+        "efficiency": {
+          "groups": ["harness"],
+          "tier": "economy",
+          "initialEffort": "medium",
+          "effortLadder": ["medium", "high"]
+        },
+        "coding": {
+          "groups": ["harness"],
+          "tier": "standard",
+          "initialEffort": "medium",
+          "effortLadder": ["medium", "high"]
+        },
+        "reasoning": {
+          "groups": ["harness"],
+          "tier": "standard",
+          "initialEffort": "high",
+          "effortLadder": ["high", "xhigh"]
+        }
+      }
+    }
+  }
+}
+```
+
+`models.json` is not automatically ignored by Git. If these are machine-local
+choices, add `/models.json` to `.git/info/exclude` (local only) or your project's
+`.gitignore`. Commit it only when you intend to share project policy. Keep
+credentials out of both files.
+
+### What the fields mean
+
+- A member's `id` is unique within its group; `cli` names a configured
+  `parallelism.clis` entry, and `model` is the exact catalog model ID, not an alias.
+  `roles` lists its permitted roles: `efficiency`, `coding`, and/or `reasoning`.
+  `enabled: false` disables a member; disabling its CLI disables all its members.
+- Lower `priority` values are preferred. Ties preserve declaration order.
+  `fallback` lists existing member IDs for alternate routes. The current direct
+  resolver iterates members by priority/declaration order; the fallback list does
+  not override that order, so give alternatives a higher numeric priority.
+- `requiredRoles` requires enabled coverage for each listed role. Qualification
+  must also cover those roles before dispatch. `maxParallel` caps group
+  concurrency alongside the project/provider and admission caps.
+- `execution` declares the required controls, not proof that a CLI enforces them.
+  `isolation` accepts `worktree`, `snapshot`, or `isolated-copy`; `sandbox` accepts
+  `read-only`, `workspace-write`, or `external`; `approval` accepts `never` or
+  `on-request`; `network` accepts `deny` or `allowlisted`; `transport` accepts
+  `shell` or `mcp`; `receipts` accepts `off`, `optional`, or `required`.
+  The example spells out the defaults. Optional `runnerRef` and
+  `verifierRunnerRef` identify runners when required by your setup. Unsupported
+  controls block dispatch; qualification does not make them enforceable.
+- Each requested role needs `defaults.workerSelection.roleGuidance`. Its
+  `groups` is an ordered list of eligible group names. A requested `--group`
+  must belong to that list. Missing guidance produces
+  `OG_CONFIG_REFERENCE /defaults/workerSelection/roleGuidance`.
+- `tier` sets role selection guidance (`economy`, `standard`, `premium`, or
+  `max-quality`); it does not replace a member's exact model pin or authorize
+  premium use. `initialEffort` is tried first; `effortLadder` lists permitted
+  efforts in order. The initial effort must occur in the ladder. Use only
+  efforts discovered for that model; `ultra` is denied by default because it
+  can self-delegate. Models with explicit `none` need `initialEffort: "none"`
+  and an empty ladder. For effort that is not applicable, use
+  `initialEffort: null`, an empty ladder, and `allowNotApplicableEffort: true`.
+
+### Choose models by role, then qualify
+
+Use `efficiency` for inventory and bounded simple tasks, `coding` for
+implementation, and `reasoning` for architecture and review. The example uses
+the bundled catalog's Luna/Terra/Sol role mapping and Muse Spark as an alternate.
+Check the models and supported efforts actually available to your accounts with
+`aiwg models sources --json`; use `aiwg models refresh --json` when you intend
+to refresh discovery. Catalog presence alone is not dispatch approval.
+
+Astra-class (and Fable-class) models are **flagship, user-elected only** under
+#2643's tier policy. Keep them out of
+automatically selected group members and fallback routes. `--authorize-premium`
+authorizes a premium escalation for one resolution after explicit human approval;
+it does not authorize automatic flagship selection.
+
+With both files in place, the built-in task classes are `inventory` → `efficiency`,
+`implementation` → `coding`, and `architecture`/`review` → `reasoning`. Additional
+mappings belong in `defaults.workerSelection.taskClasses`. A minimal check is:
+
+```bash
+printf '%s\n' 'Inspect this project and report a bounded implementation plan.' > brief.txt
+aiwg models resolve --role coding --task implementation --group harness \
+  --brief "$PWD/brief.txt" --workdir "$PWD" --final-output "$PWD/result.json" --format json
+```
+
+Before qualification this exits with a blocked plan naming
+`OG_ADAPTER_UNQUALIFIED`, rather than a missing group or role-guidance error.
+`aiwg models validate` validates artifact policies, so it is not a substitute
+for this worker configuration check. Repeat with `--role efficiency --task inventory`
+and `--role reasoning --task review` to check the other roles. Next follow
+[Qualify the installed CLIs](#qualify-the-installed-clis); actual dispatch still
+requires discovered models/efforts, approved installations and supported controls.
+
 ## Supported CLI versions
 
 Both the adapter and its invocation profile declare `supportedVersions`; the installed
@@ -207,7 +371,7 @@ Agents pass it only after the human explicitly confirmed the premium escalation
 Check a concrete brief with the existing resolver after qualification:
 
 ```bash
-aiwg models resolve --role coding --task implementation --group workers \
+aiwg models resolve --role coding --task implementation --group harness \
   --brief "$PWD/brief.txt" --workdir "$PWD" --final-output "$PWD/result.json" --format json
 ```
 

@@ -323,9 +323,57 @@ function replaceFrontmatter(raw: string, item: Artifact, tier: string): string {
   }
   return `---\n${frontmatter}\n---\n${match[2]}`;
 }
+const MODELS_HELP = `Usage: aiwg models <subcommand> [options]
+
+Subcommands:
+  list                         List discovered agent and skill model policies
+  audit                        Compile selected policies and report diagnostics
+  resolve                      Resolve artifact policies, or a direct worker invocation
+  validate                     Validate selected artifact policies (not worker configuration)
+  sources                      Show the effective model catalog without network refresh
+  refresh                      Refresh model discovery (may access the network)
+  set-default <TIER>           Write defaults.tier to models.json
+  set --tier <TIER>            Update selected agent/skill frontmatter; requires a selector or --all
+  migrate                      Add canonical role/tier hints to legacy skills
+
+Artifact selectors and options:
+  --agent <name>  --skill <name>  --glob <pattern>  --role <role>
+  --tier <tier>  --framework <name>  --all
+  --provider <provider>         Provider for artifact compilation (default: claude)
+  --model <id>                  Explicit Grok Build model for artifact resolve
+  --target <directory>         Artifact/project root (default: current directory)
+  --scope project|user         set-default destination (default: project)
+  --dry-run                    Preview mutations without writing
+  --json                       Emit JSON
+  --drift                      Include catalog drift for sources/refresh
+  --url <url>                  Remote catalog URL for refresh
+  --help, -h                   Show this reference
+  TIER: economy | standard | premium | max-quality
+
+Direct worker resolution (plans an invocation; does not launch it):
+  aiwg models resolve --role <role> --task <class> --group <group>
+    --brief <file> --workdir <tree> --final-output <file>
+    [--transport shell|mcp] [--format json|shell] [--authorize-premium]
+  --role                       efficiency | coding | reasoning
+  --task                       Task class from defaults.workerSelection.taskClasses
+                               Built-ins: inventory, implementation, architecture, review
+  --group                      Group from parallelism.groups and the role's guidance
+  --brief                      Absolute path to the task brief
+  --workdir                    Absolute path to the worker tree
+  --final-output               Absolute path for the final result
+  --transport                  Must match group execution transport (default: shell)
+  --format                     JSON plan or POSIX shell command (default: json)
+  --json                       Alias for --format json
+  --authorize-premium          Authorize premium for this resolution only
+                               Agents require explicit human confirmation of escalation
+
+Worker groups live in .aiwg/aiwg.config; role guidance lives in project-root models.json.
+Configure both, then run aiwg doctor --probe-workers --qualify.
+See docs/getting-started/worker-dispatch.md for a complete example.`;
+
 async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { load: loadWorkerInputs }): Promise<HandlerResult> {
-  if (ctx.args[0] === 'resolve' && ctx.args.includes('--help')) {
-    print('Usage: aiwg models resolve --role <role> --task <class> --group <group> --brief <file> --workdir <tree> --final-output <file> [--transport shell|mcp] [--format json|shell] [--authorize-premium]\nAgents pass --authorize-premium only after the human explicitly confirmed the premium escalation (escalation-discipline rule). Authorization applies to this resolution only.', false);
+  if (ctx.args.length === 0 || ctx.args[0] === 'help' || ctx.args.includes('--help') || ctx.args.includes('-h')) {
+    print(MODELS_HELP, false);
     return { exitCode: 0 };
   }
   // Preserve artifact/native resolve when direct-only flags are absent.
@@ -343,10 +391,6 @@ async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { l
   const target = path.resolve(flagString(parsed, 'target') ?? ctx.cwd);
   const provider = flagString(parsed, 'provider') ?? 'claude';
   if (!PROVIDERS.has(provider)) return { exitCode: 2, message: `Unknown provider: ${provider}` };
-  if (parsed.subcommand === 'help' || parsed.flags.has('help')) {
-    print('Usage: aiwg models <audit|list|resolve|sources|refresh|set-default|set|validate|migrate> [selectors] [--provider P] [--dry-run] [--json]', json);
-    return { exitCode: 0 };
-  }
   if (parsed.subcommand === 'sources' || parsed.subcommand === 'refresh') {
     const { diffModelCatalog } = await import('../../models/model-discovery.js');
     const catalog = await effectiveCatalog(ctx, target, parsed.subcommand === 'refresh', parsed, provider);
@@ -482,6 +526,7 @@ export const modelsHandler: CommandHandler = {
   description: 'Audit, resolve, validate, and safely update model policy',
   category: 'catalog',
   aliases: [],
+  help: async () => ({ exitCode: 0, message: MODELS_HELP, rawOutput: true }),
   execute,
 };
 
