@@ -505,7 +505,7 @@ describe('T-OG-15 Codex direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', {}, /Exact model or child\/fallback control is unqualified/],
+    ['bundled unqualified profile', {}, /Exact model or fallback control is unqualified|Child-agent control is unqualified/],
     ['unsupported CLI version', { cliVersion: '0.160.1' }, /Worker CLI version is outside qualified profile/],
     ['denied ultra effort', { effort: 'ultra' }, /Unsupported, denied or self-delegating effort/],
     ['contributor model', { memberModel: 'team-contributor/x', discoveryModel: 'team-contributor/x' }, /Inference model is denied/],

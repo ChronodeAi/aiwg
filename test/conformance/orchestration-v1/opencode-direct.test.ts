@@ -360,7 +360,7 @@ describe('T-OG-15 OpenCode direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', {}, /Exact model or child\/fallback control is unqualified/],
+    ['bundled unqualified profile', {}, /Exact model or fallback control is unqualified|Child-agent control is unqualified/],
     ['unsupported CLI version', { cliVersion: '1.9.0' }, /Worker CLI version is outside qualified profile/],
     ['denied ultra effort', { effort: 'ultra' }, /Unsupported, denied or self-delegating effort/],
     ['unknown model', { memberModel: 'synthetic/unknown' }, /./],

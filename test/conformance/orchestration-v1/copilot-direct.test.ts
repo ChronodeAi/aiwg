@@ -318,7 +318,7 @@ describe('T-OG-15 Copilot direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', { qualify: false }, /Exact model or child\/fallback control is unqualified/],
+    ['bundled unqualified profile', { qualify: false }, /Exact model or fallback control is unqualified|Child-agent control is unqualified/],
     ['unsupported CLI version', { cliVersion: '1.0.88' }, /Worker CLI version is outside qualified profile/],
     ['required control left unqualified', { adapterOverride: (a: any) => { a.invocationProfiles['direct-shell'].controls.children.support = 'unqualified'; } }, /Required worker control is unqualified: children/],
   ])('CP04 %s produces no launch command', async (_name, options, reason) => {

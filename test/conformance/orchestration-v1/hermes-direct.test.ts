@@ -388,7 +388,7 @@ describe('T-OG-15 Hermes direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', { qualify: false }, /Exact model or child\/fallback control is unqualified|Worker transport\/profile is unqualified/],
+    ['bundled unqualified profile', { qualify: false }, /Exact model or fallback control is unqualified|Child-agent control is unqualified|Worker transport\/profile is unqualified/],
     ['required control left unqualified', { adapterOverride: (a: any) => { a.invocationProfiles['direct-shell'].controls.approval.support = 'unqualified'; } }, /Required worker control is unqualified: approval/],
   ])('HD04 %s produces no launch command', async (_name, options, reason) => {
     const { plan } = await hermesPlan(options as any);
