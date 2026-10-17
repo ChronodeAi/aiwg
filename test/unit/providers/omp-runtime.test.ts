@@ -1,7 +1,7 @@
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
 import { compileModelPolicy } from '../../../src/models/provider-policy.js';
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,9 @@ import { discoverOmpModels, resolveOmpRoleModel } from '../../../src/models/mode
 const jsonl = (...frames: any[]) => frames.map(f => JSON.stringify(f) + '\n').join('');
 const message = { role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' };
 
+// #2669: never rewrite an executable to change scenarios. Even an awaited write
+// can leave a writable descriptor inherited by another Vitest thread's fork.
+// Keep both scripts static and pass each child's configuration through its env.
 const rpcNodeFixture = (config: Record<string, unknown>) => ({
   binary: fileURLToPath(new URL('../../fixtures/providers/omp-rpc-node-launcher.sh', import.meta.url)),
   env: { ...process.env, AIWG_OMP_TEST_NODE: process.execPath,
@@ -237,6 +240,47 @@ describe('OMP native model field contract', () => {
 
 
 describe('OMP External Ralph session integration', () => {
+  it('isolates concurrent scenarios without rewriting the shared fixture executable (#2669)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'omp-launcher-parallel-'));
+    const fixture = rpcNodeFixture({ mode: 'session', messages: [message] });
+    const paths = [fixture.binary, fixture.env.AIWG_OMP_TEST_FIXTURE];
+    const before = await Promise.all(paths.map(path => stat(path)));
+    const parentConfig = process.env.AIWG_OMP_TEST_CONFIG;
+    try {
+      // Exercise the real SessionLauncher spawn and output capture, with separate
+      // output files and adapters but the same immutable launcher and Node script.
+      // Settle every child before cleanup, including when one launch fails.
+      const results = await Promise.allSettled(Array.from({ length: 8 }, async (_, index) => {
+        const expected = { ...message, stopReason: index % 2 ? 'error' : 'stop',
+          content: [{ type: 'text', text: `scenario ${index}: '" \\ newline\n` }] };
+        const scenario = rpcNodeFixture({ mode: 'session', messages: [expected] });
+        expect(scenario.binary).toBe(fixture.binary);
+        expect(scenario.env.AIWG_OMP_TEST_FIXTURE).toBe(fixture.env.AIWG_OMP_TEST_FIXTURE);
+        const adapter = new OmpAdapter();
+        adapter.getBinary = () => scenario.binary;
+        const getEnvOverrides = adapter.getEnvOverrides.bind(adapter);
+        adapter.getEnvOverrides = () => ({ ...getEnvOverrides(), ...scenario.env });
+        const launcher = new SessionLauncher();
+        launcher.setProviderAdapter(adapter);
+        const stdoutPath = join(dir, `stdout-${index}`);
+        const result = await launcher._launchSession({ prompt: 'work', workingDir: dir,
+          stdoutPath, stderrPath: join(dir, `stderr-${index}`), timeoutMs: 5000 });
+        expect(result.exitCode).toBe(index % 2);
+        expect(JSON.parse(await readFile(stdoutPath, 'utf8'))).toEqual({ type: 'agent_end', messages: [expected] });
+      }));
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+      }
+      const after = await Promise.all(paths.map(path => stat(path)));
+      for (let index = 0; index < paths.length; index++) {
+        expect(after[index]!.ino).toBe(before[index]!.ino);
+        expect(after[index]!.mtimeMs).toBe(before[index]!.mtimeMs);
+        expect(after[index]!.ctimeMs).toBe(before[index]!.ctimeMs);
+      }
+      expect(process.env.AIWG_OMP_TEST_CONFIG).toBe(parentConfig);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('does not treat AIWG tracking UUID as native resume and rejects model failure despite exit zero', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'omp-launcher-'));
     let fixture = rpcNodeFixture({ mode: 'session', messages: [message] });
