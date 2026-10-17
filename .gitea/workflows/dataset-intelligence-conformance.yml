@@ -11,16 +11,6 @@ on:
       - 'tools/qualification/dataset-conformance.ts'
       - 'tools/qualification/dataset-local-cells.ts'
       - '.gitea/workflows/dataset-intelligence-conformance.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'src/dataset/**'
-      - 'schemas/dataset/**'
-      - 'test/conformance/dataset/**'
-      - 'test/fixtures/dataset-intelligence/**'
-      - 'tools/qualification/dataset-conformance.ts'
-      - 'tools/qualification/dataset-local-cells.ts'
-      - '.gitea/workflows/dataset-intelligence-conformance.yml'
   workflow_dispatch:
 
 concurrency:

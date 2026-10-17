@@ -88,6 +88,16 @@ Recovery for a partial publish or advisory failure uses the same tag:
 
 Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
 
+### CI policy: verify locally, CI after merge
+
+Pull requests do not run CI; no `.gitea/workflows/` file triggers on
+`pull_request`. Before opening or merging a PR, build and test on the
+workstation (typecheck, `npm run build:cli`, and the touched vitest files plus
+neighbours with `--config config/vitest.config.js`) and list the commands and
+counts in the PR. Merge without waiting for a PR status. `delivery.require_ci_green`
+applies to the post-merge run on `main`: work is done when that run is green;
+a red `main` is fixed forward right away on a new branch.
+
 
 <!-- AIWG:project-extraction:start -->
 
@@ -144,7 +154,6 @@ Reusable project context and specialist workflows for the AI tools you already u
 - [`.gitea/workflows/npm-publish.yml`](./.gitea/workflows/npm-publish.yml)
 - [`.gitea/workflows/omp-conformance.yml`](./.gitea/workflows/omp-conformance.yml)
 - [`.gitea/workflows/scheduled-docs-release.yml`](./.gitea/workflows/scheduled-docs-release.yml)
-- [`.gitea/workflows/skill-lint-pr.yml`](./.gitea/workflows/skill-lint-pr.yml)
 - [`.gitea/workflows/storage-server-conformance.yml`](./.gitea/workflows/storage-server-conformance.yml)
 - [`.gitea/workflows/upload-release-sigs.yml`](./.gitea/workflows/upload-release-sigs.yml)
 - [`.github/workflows/npm-publish.yml`](./.github/workflows/npm-publish.yml)

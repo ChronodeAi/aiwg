@@ -16,13 +16,6 @@ on:
       - '.aiwg/research/parity/hermes/**'
       - 'tools/verify-hermes-citations.mjs'
       - '.gitea/workflows/hermes-citations.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'docs/integrations/hermes-*.md'
-      - 'docs/providers/hermes-*.md'
-      - '.aiwg/research/parity/hermes/**'
-      - 'tools/verify-hermes-citations.mjs'
 
 concurrency:
   group: hermes-cite-${{ gitea.head_ref || gitea.ref }}

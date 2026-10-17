@@ -244,9 +244,11 @@ This project declares `delivery.mode` in `.aiwg/aiwg.config`. Three modes:
 
 Match your workflow to the configured mode. The `delivery-policy` rule in `agentic/code/addons/aiwg-utils/rules/delivery-policy.md` is the canonical reference.
 
-### CI green before done
+### Local verification before a PR, CI after merge
 
-A commit isn't done until CI is green. AIWG CI runs on `origin` (Gitea) on every push to `main`. Wait for the run; if it fails, fix it before declaring work complete. Never leave `main` red.
+Pull requests do not run CI. Before opening or merging a PR, build and test on your own workstation: at least `npm run typecheck`, `npm run build:cli`, and the vitest files you touched plus their neighbours (`npx vitest run --config config/vitest.config.js …`). Record the commands and counts in the PR's Verification section.
+
+CI runs on `origin` (Gitea) after the merge, on every push to `main`. Work isn't done until that run is green. If it fails, fix it forward on a new branch right away; don't leave `main` red.
 
 ### Import flow (cross-tracker reports)
 

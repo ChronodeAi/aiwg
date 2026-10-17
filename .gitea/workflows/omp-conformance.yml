@@ -1,23 +1,5 @@
 name: OMP pinned native conformance
 on:
-  pull_request:
-    paths:
-      - 'src/providers/**'
-      - 'src/mcp/**'
-      - 'src/agents/**'
-      - 'src/cli/handlers/team.ts'
-      - 'src/cli/handlers/use.ts'
-      - 'tools/agents/providers/omp.*'
-      - 'src/sessions/**'
-      - 'tools/providers/omp-*.mjs'
-      - 'tools/ralph-external/**'
-      - 'src/models/**'
-      - 'test/unit/providers/omp-runtime.test.ts'
-      - 'tools/providers/omp-mcp-conformance.mjs'
-      - 'agentic/code/providers/omp/**'
-      - 'test/fixtures/providers/omp-conformance/**'
-      - 'test/fixtures/providers/omp-precedence/**'
-      - '.gitea/workflows/omp-conformance.yml'
   push:
     branches: [main, develop]
     paths:

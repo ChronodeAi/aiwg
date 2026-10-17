@@ -103,13 +103,14 @@ skills that haven't been fleshed out.
 
 ## CI integration
 
-Two workflows in `.gitea/workflows/` cover skill quality:
+One workflow in `.gitea/workflows/` covers skill quality:
 
-- **`metadata-validation.yml`** (#1014) — schema-only gate. Fails the PR
-  if any SKILL.md violates the schema. Runs against the full corpus.
-- **`skill-lint-pr.yml`** (#1015 Phase D) — diagnostic. Runs
-  `aiwg skill-lint --json` on changed SKILL.md files and posts a
-  sticky PR comment with per-dimension scores. Non-blocking by default.
+- **`metadata-validation.yml`** (#1014) — schema-only gate. Fails the
+  post-merge `main` run if any SKILL.md violates the schema. Runs against
+  the full corpus.
+- Pull requests do not run CI, so there is no PR skill-lint comment
+  (the former `skill-lint-pr.yml` was removed). Run
+  `aiwg skill-lint <path...>` locally before opening a PR.
 
 For an ad-hoc CI step in another workflow:
 

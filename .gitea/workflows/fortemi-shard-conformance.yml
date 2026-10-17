@@ -13,18 +13,6 @@ on:
       - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
       - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
       - '.gitea/workflows/fortemi-shard-conformance.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'package.json'
-      - 'package-lock.json'
-      - 'src/artifacts/fortemi-shard-export.ts'
-      - 'test/unit/artifacts/fortemi-shard-export.test.ts'
-      - 'test/fixtures/fortemi-shard/**'
-      - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
-      - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
-      - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
-      - '.gitea/workflows/fortemi-shard-conformance.yml'
   workflow_dispatch:
 
 concurrency:
