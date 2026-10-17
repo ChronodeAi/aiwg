@@ -10,8 +10,8 @@
 #   - workflow_dispatch                                     → manual rerun
 #     from the UI, with `sandbox_ref` and `conformance_ref` inputs for
 #     pinned-ref retries.
-#   - pull_request                                          → optional, opt-in
-#     via the `conformance:full` PR label.
+#   - pull requests do not run CI: developers build and test locally
+#     before opening a PR; CI runs after merge to main.
 #
 # We deliberately do NOT trigger on push-to-main: the upstream sandbox v2
 # reference instance is still pre-release, so a green main branch shouldn't
@@ -38,8 +38,6 @@ on:
   push:
     tags:
       - 'v*'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       sandbox_ref:
@@ -97,11 +95,6 @@ jobs:
       image: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     timeout-minutes: 25
 
-    # PRs only run the gate when explicitly opted in. Default PR run is a
-    # noop status-check so PR latency stays bounded.
-    if: |
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'conformance:full')
 
     steps:
       # ── Phase 1: Upstream prerequisite probe ──────────────────────────

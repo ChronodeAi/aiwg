@@ -29,7 +29,7 @@ What changed and why, in one short paragraph.
 
 - **Delivery mode**: confirm matches `.aiwg/aiwg.config` `delivery.mode` (direct / feature-branch / pr-required). For `direct`, use `Closes #N` in the commit, not a separate PR.
 - **No AI attribution**: no `Co-Authored-By` / "Generated with" lines. The AI is a tool, not an author.
-- **CI green before done**: a commit is not finished until CI passes. Wait for the run on `origin`.
+- **Verify locally; CI after merge**: PRs do not run CI. Build and test locally before merging, and confirm the post-merge run on `main` is green; fix failures forward.
 
 ## Documentation
 

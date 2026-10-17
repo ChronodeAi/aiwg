@@ -9,9 +9,6 @@ on:
   push:
     branches: [main, develop]
     paths: ['docs/**', '.gitea/workflows/docsite-build.yml']
-  pull_request:
-    branches: [main, develop]
-    paths: ['docs/**', '.gitea/workflows/docsite-build.yml']
 
 concurrency:
   group: docsite-build-${{ gitea.head_ref || gitea.ref }}

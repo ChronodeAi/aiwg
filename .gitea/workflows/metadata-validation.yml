@@ -17,15 +17,6 @@ on:
       - 'src/plugin/**'
       - 'tools/workspace/**'
       - '.gitea/workflows/metadata-validation.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - '.claude/**'
-      - '.claude-plugin/**'
-      - 'agentic/**'
-      - 'src/plugin/**'
-      - 'tools/workspace/**'
-      - '.gitea/workflows/metadata-validation.yml'
 
 concurrency:
   group: metadata-validation-${{ gitea.head_ref || gitea.ref }}
