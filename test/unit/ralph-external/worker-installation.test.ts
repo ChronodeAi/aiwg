@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -313,6 +313,19 @@ describe('S1 scoped installation qualification (T-OG-03/10/14/15/19)', () => {
     const start = Date.now();
     expect((await driver.qualifyWorkerInstallation(f.request)).status).toBe('DISABLED');
     expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
+  it('hashes a real-Codex-sized binary but rejects binaries over 1 GiB', async () => {
+    const f = await setup();
+    const executable = path.join(f.packageRoot, 'large-binary');
+    await writeFile(executable, '', { mode: 0o755 });
+    // Sparse files exercise the streaming bound without a large allocation.
+    await truncate(executable, 296865480);
+    f.request.executable = executable;
+    const scope = await driver.inspectWorkerInstallation(f.request);
+    expect(scope.binary.sha256).toMatch(/^sha256:[a-f0-9]{64}$/);
+    await truncate(executable, 1024 * 1024 * 1024 + 1);
+    await expect(driver.inspectWorkerInstallation(f.request)).rejects.toThrow('Binary exceeds qualification byte bound');
   });
 
   it('invalidates changed binary bytes, executable permissions and runtime dependencies', async () => {

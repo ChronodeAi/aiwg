@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   compileModelPolicy,
+  assertOperatorWorkerNativeArgv,
+  WORKER_OPERATOR_APPROVAL,
   loadProviderModelCapabilities,
   loadProviderModelCatalog,
   resetModelPolicyCachesForTests,
@@ -187,5 +189,37 @@ describe('Codex standalone TOML compiler', () => {
     expect(() => renderCodexAgentToml({
       name: '', description: 'Missing name', developerInstructions: 'Do work',
     })).toThrow(/requires name/);
+  });
+});
+
+
+describe('operator-approved native Codex controls', () => {
+  const adapter = () => {
+    const result = structuredClone(loadProviderModelCapabilities().providers.codex.workerHealthAdapter!);
+    result.qualification = { status: 'qualified', evidenceRef: WORKER_OPERATOR_APPROVAL };
+    return result;
+  };
+  const selected = { model: 'synthetic-code', effort: { value: 'medium' } };
+  const permissions = { sandbox: 'workspace-write', approval: 'never' };
+  const argv = ['/trusted/codex', '--no-daemon', 'exec', '--ignore-user-config', '-m', selected.model,
+    '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-c', 'approval_policy="never"', '-'];
+  it('accepts exact model, effort, sandbox and approval flags', () => {
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, permissions)).not.toThrow();
+  });
+  it.each(['-m', '-s', 'model_reasoning_effort="medium"'])('blocks dropped %s', control => {
+    const broken = [...argv];
+    const index = broken.indexOf(control);
+    if (control.startsWith('-')) broken.splice(index, 2);
+    else broken.splice(index - 1, 2);
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), broken, selected, permissions)).toThrow('absent or ambiguous');
+  });
+  it.each(['external', 'danger-full-access', 'unknown'])('blocks an unrenderable sandbox %s', sandbox => {
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, { ...permissions, sandbox })).toThrow('sandbox');
+  });
+  it.each([
+    ['-s', 'read-only'], ['--dangerously-bypass-approvals-and-sandbox'], ['--full-auto'],
+    ['-c', 'model_reasoning_effort="high"'], ['--sandbox=read-only'], ['-sread-only'], ['-cmodel_reasoning_effort="high"'], ['-c', 'sandbox_mode="danger-full-access"'],
+  ])('blocks ambiguous or overriding flags %j', (...extra) => {
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), [...argv, ...extra], selected, permissions)).toThrow();
   });
 });

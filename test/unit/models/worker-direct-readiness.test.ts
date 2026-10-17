@@ -75,10 +75,11 @@ describe('T-OG-12 direct worker onboarding/readiness (#2894)', () => {
     const install = report.findings.filter(finding => finding.kind === 'install');
     expect(install).toContainEqual(expect.objectContaining({ cli: 'codex',
       code: 'WORKER_DIRECT_READY', status: 'ok', installedVersion: '0.161.0',
-      readiness: 'ready', eligibility: null, nextAction: 'run-authenticated-smoke-run' }));
+      readiness: 'ready', eligibility: null, nextAction: 'qualify-installed-cli' }));
     for (const finding of report.findings) {
       expect(finding.message).toMatch(/unqualified/i);
       expect(finding.message).toContain('#3005');
+      expect(finding.message).toContain('aiwg doctor --probe-workers --qualify');
       expect(finding.message).not.toMatch(/is qualified|now qualified|fully qualified/i);
       expect(finding.configFile).toBe('.aiwg/aiwg.config');
       expect(finding.configKey).toContain('/parallelism/clis/codex');

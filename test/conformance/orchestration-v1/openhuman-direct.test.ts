@@ -301,7 +301,7 @@ describe('T-OG-15 OpenHuman direct command contract', () => {
   });
 
   it.each([
-    ['bundled unqualified profile', { qualify: false }, /Exact model or child\/fallback control is unqualified/],
+    ['bundled unqualified profile', { qualify: false }, /Exact model or fallback control is unqualified|Child-agent control is unqualified/],
     ['unsupported CLI version', { cliVersion: '0.64.15' }, /Worker CLI version is outside qualified profile/],
     ['task requiring effort', { effort: true }, /Required worker control is unqualified: effort/],
     ['required control left unqualified', { adapterOverride: (a: any) => { a.invocationProfiles['direct-shell'].controls.children.support = 'unqualified'; } }, /Required worker control is unqualified: children/],

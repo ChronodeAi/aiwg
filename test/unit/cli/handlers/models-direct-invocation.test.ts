@@ -404,6 +404,13 @@ describe('#2956 controls come from resolved permissions, never caller waivers', 
     const result = await f.call();
     expect(result.plan.invocation).toBeUndefined(); expect(f.buildInvocation).not.toHaveBeenCalled();
   });
+  it('parses premium authorization for one request and rejects values or duplicates', () => {
+    const args = fixtureJson('public-vocabulary.json').cli.cases[0].argv.slice(2);
+    expect(parseWorkerCommandArgs([...args, '--authorize-premium']).authority).toEqual({ premiumAuthorized: true, maxAutoTier: 3 });
+    expect(parseWorkerCommandArgs(args).authority).toBeUndefined();
+    expect(() => parseWorkerCommandArgs([...args, '--authorize-premium=false'])).toThrow('Unsupported');
+    expect(() => parseWorkerCommandArgs([...args, '--authorize-premium', '--authorize-premium'])).toThrow('Duplicate');
+  });
   it('requires the strictest set without policy and preserves additions', () => {
     expect(requiredWorkerControls({ requiredControls: ['model'] })).toEqual([
       'model', 'effort', 'sandbox', 'approval', 'workdir', 'finalOutput', 'stdin', 'structuredOutput', 'stepCap', 'trust', 'children', 'fallback',

@@ -13,7 +13,7 @@ import type { WorkerResolvedInvocation, WorkerEffectiveHealth } from '../mission
 import type { WorkerPolicyDiagnostic } from '../models/types.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
 import type { WorkerExecution, ParallelismConfig } from '../config/aiwg-config.js';
-import { qualifyWorkerInvocationProfile, assertWorkerSelectionAllowed,
+import { qualifyWorkerInvocationProfile, isOperatorQualifiedWorkerAdapter, assertOperatorWorkerNativeArgv, assertWorkerSelectionAllowed,
   requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
 
 /** Frozen per-attempt windows; parent/transport ceilings include time already spent. */
@@ -181,6 +181,7 @@ export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocati
     throw new Error('Worker invocation input/output paths must be distinct');
   }
   if (result.transport === 'shell') {
+    assertOperatorWorkerNativeArgv(qualification.adapter, result.argv, result.selected, qualification.permissions);
     if (!absolute(result.argv[0]) || result.argv[0].includes('=') || result.argv.some(value => value.includes('\0'))) {
       throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker invocation requires an absolute binary without equals and NUL-free argv');
     }
@@ -282,6 +283,7 @@ export interface WorkerCommandRequest {
   final_output: string;
   transport?: 'shell' | 'mcp';
   format?: 'shell' | 'json';
+  authority?: { premiumAuthorized: true; maxAutoTier: 3 };
 }
 
 /** Reject unsupported syntax before discovery or any path reads. */
@@ -290,8 +292,13 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
     workdir: 'workdir', 'final-output': 'final_output', transport: 'transport', format: 'format' };
   const result: Record<string, string> = {};
   let json = false;
+  let premiumAuthorized = false;
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
+    if (token === '--authorize-premium') {
+      if (premiumAuthorized) throw new Error('Duplicate --authorize-premium');
+      premiumAuthorized = true; continue;
+    }
     if (token === '--json') { if (json) throw new Error('Duplicate --json'); json = true; continue; }
     const match = /^--([^=]+)(?:=([\s\S]*))?$/.exec(token);
     if (!match || !Object.hasOwn(names, match[1])) throw new Error(`Unsupported models resolve argument: ${token}`);
@@ -312,7 +319,7 @@ export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
   if (!/^[a-z][a-z0-9-]{0,62}$/.test(result.group)) throw new Error('Invalid group');
   if (result.transport && !['shell', 'mcp'].includes(result.transport)) throw new Error('Unsupported transport');
   if (result.format && !['shell', 'json'].includes(result.format)) throw new Error('Unsupported renderer; use POSIX shell or JSON');
-  return result as unknown as WorkerCommandRequest;
+  return { ...result, ...(premiumAuthorized ? { authority: { premiumAuthorized: true, maxAutoTier: 3 } } : {}) } as unknown as WorkerCommandRequest;
 }
 
 const bytesDigest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -393,6 +400,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
   let failureCode: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE';
   let plan: WorkerCommandPlan | undefined;
   try {
+    if (!path.isAbsolute(request.brief)) throw new WorkerPolicyError('OG_CONFIG_REFERENCE', '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.');
     const bytes = await readBrief(request.brief);
     const briefDigest = bytes === null ? null : bytesDigest(bytes);
     if (expected && expected.briefDigest !== briefDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief digest changed; resolve again');
@@ -406,7 +414,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       }
     }
     plan = resolveWorkerPlan(snapshot, { role: request.role, taskClass: request.task, group: request.group,
-      transport: request.transport, now, expectedDigests: expected?.digests,
+      transport: request.transport, authority: request.authority, now, expectedDigests: expected?.digests,
       ...(brief ? { dataClass: brief.intent.dataClass, member: brief.intent.pins.member,
         model: brief.intent.pins.model, effort: brief.intent.pins.effort?.value, ceilings: {
           ...brief.intent.limits, costUsd: brief.intent.limits.costUsd ?? undefined } } : {}),
@@ -480,7 +488,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
         throw new Error('MCP server/tool is not registered and allowed by the current MCP profile');
       }
     }
-    const controls = requiredWorkerControls({ policy: plan.policy, permissions: tuple.permissions, effort: tuple.effort,
+    const controls = isOperatorQualifiedWorkerAdapter(adapter) ? (healthConfig?.requireStepCap ? ['stepCap'] : []) : requiredWorkerControls({ policy: plan.policy, permissions: tuple.permissions, effort: tuple.effort,
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
     pointer = `/parallelism/clis/${tuple.cli}/invocationProfile`;
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
@@ -505,7 +513,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       readiness: bytes !== null && workspaceExists && outputParentsExist ? 'launchable' : 'preparatory', briefDigest,
       limits, maxOutputBytes: adapter.invocation.maxOutputBytes ?? 10485760,
       effectiveCaps: tuple.effectiveMaxParallel === null ? {} : { parallel: tuple.effectiveMaxParallel },
-      controlEvidence: controls.map(name => profile.controls[name].evidence),
+      controlEvidence: isOperatorQualifiedWorkerAdapter(adapter) ? [adapter.qualification.evidenceRef!, ...controls.map(name => profile.controls[name].evidence)] : controls.map(name => profile.controls[name].evidence),
       health: effectiveHealth,
     };
     const invocationQualification: WorkerInvocationQualification = { ...qualification, now: Date.parse(now),
@@ -565,9 +573,10 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
     OG_MODEL_UNAPPROVED: 'The selected model lacks current approved observation evidence.',
     OG_EFFORT_DENIED: 'The selected effort is denied by the resolved worker policy.',
     OG_DATA_POLICY: 'The selected model does not satisfy the resolved data policy.',
-    OG_ADAPTER_UNQUALIFIED: 'The installation or invocation could not be revalidated. Use inspectWorkerInstallation, qualifyWorkerInstallation and recordWorkerInstallation from the trusted installation owner to qualify this workspace.',
+    OG_ADAPTER_UNQUALIFIED: 'The installation or invocation could not be revalidated. Run aiwg doctor --probe-workers --qualify to qualify this workspace.',
     OG_POLICY_RELAXATION: 'The request would relax the resolved worker policy.',
     OG_BUDGET_UNMEASURABLE: 'The requested worker budget cannot be enforced.',
   };
-  return { code, pointer, message: messages[code] };
+  return { code, pointer, message: error instanceof WorkerPolicyError && error.message === '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.'
+    ? error.message : messages[code] };
 }

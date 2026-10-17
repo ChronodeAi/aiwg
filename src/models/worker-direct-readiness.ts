@@ -47,8 +47,8 @@
  * is a binding the public config validator also accepts, and vice versa.
  *
  * The shipped direct profiles are declarations, not live qualification: no
- * finding ever calls a profile "qualified". Profiles stay unqualified until
- * an authenticated smoke run (tracker #3005), and an installed, in-range CLI
+ * finding ever calls a profile "qualified". Explicit operator approval uses `aiwg doctor --probe-workers --qualify`;
+ * a probe alone does not qualify a profile, and an installed, in-range CLI
  * can still be refused by the resolver — the dispatch finding says so
  * plainly with the resolver's own reason.
  *
@@ -147,7 +147,7 @@ export interface DirectWorkerResolverSnapshot {
   now: string;
 }
 
-const SMOKE_NOTE = 'Profiles are unqualified until an authenticated smoke run (see #3005).';
+const SMOKE_NOTE = 'A version probe alone leaves profiles unqualified. To record direct CLI operator approval, run aiwg doctor --probe-workers --qualify; a version probe is not an authenticated smoke run (see #3005).';
 
 function truncateBanner(banner: string, limit = 200): string {
   const singleLine = banner.replace(/[\r\n]+/g, '\\n');
@@ -269,12 +269,12 @@ function describeConfigContext(members: string[]): string {
  * `parallelism.clis` entries plus any cli id referenced only implicitly by a
  * group member (canonical default binding, no explicit installation entry).
  */
-function allConfiguredCliIds(parallelism: ParallelismConfig): string[] {
+function allConfiguredCliIds(parallelism: ParallelismConfig, cli?: string): string[] {
   const ids = new Set(Object.keys(parallelism.clis ?? {}));
   for (const group of Object.values(parallelism.groups ?? {})) {
     for (const member of group?.members ?? []) ids.add(member.cli);
   }
-  return [...ids].sort();
+  return [...ids].filter(id => cli === undefined || id === cli).sort();
 }
 
 /**
@@ -393,7 +393,7 @@ function resolveEligibilityFromBindingOnly(
     const reason = error instanceof Error ? error.message : String(error);
     const readyNote = installReady
       ? ' The CLI is installed with an in-range version, but dispatch stays refused for the reason above; '
-        + 'an authenticated smoke run (see #3005) alone does not satisfy the resolver gates.'
+        + `an authenticated smoke run (see #3005) alone does not satisfy the resolver gates. ${SMOKE_NOTE}`
       : ` ${SMOKE_NOTE}`;
     return { eligibility: 'blocked',
       detail: `Resolver refuses cli '${cli}': ${reason}. Dispatch eligibility: blocked.${readyNote}` };
@@ -429,13 +429,14 @@ export async function diagnoseDirectWorkerReadiness(input: {
   probeCwd?: string;
   configFile?: string;
   projectRoot?: string;
+  cli?: string;
   resolverSnapshot?: DirectWorkerResolverSnapshot;
 }): Promise<DirectWorkerReadinessReport> {
   const { parallelism, registry, probe, announce, timeoutMs = workerVersionProbeDefaults.timeoutMs,
     probeCwd = tmpdir(), configFile = '.aiwg/aiwg.config', projectRoot = process.cwd(), resolverSnapshot } = input;
   const report: DirectWorkerReadinessReport = {
     enabled: parallelism.worker_dispatch === true,
-    workersConfigured: allConfiguredCliIds(parallelism).length > 0,
+    workersConfigured: allConfiguredCliIds(parallelism, input.cli).length > 0,
     ready: true,
     findings: [],
   };
@@ -450,7 +451,7 @@ export async function diagnoseDirectWorkerReadiness(input: {
       members: [] });
     return report;
   }
-  const cliIds = allConfiguredCliIds(parallelism);
+  const cliIds = allConfiguredCliIds(parallelism, input.cli);
   if (!cliIds.length) {
     // No workers configured: no findings at all so doctor stays silent.
     return report;
@@ -595,12 +596,12 @@ export async function diagnoseDirectWorkerReadiness(input: {
     pushInstall({ cli, profile: profileRef, executable, installedVersion,
       status: 'ok', code: 'WORKER_DIRECT_READY',
       message: `CLI '${executable}' version ${installedVersion} matches profile '${profileRef}' for cli '${cli}' (config ${configFile} key ${configKey}). Installation readiness: ready. ${SMOKE_NOTE} See the dispatch finding for whether the resolver would dispatch. (${describeConfigContext(members)})`,
-      nextAction: 'run-authenticated-smoke-run',
+      nextAction: 'qualify-installed-cli',
       configFile, configKey, readiness: 'ready', members });
     const { eligibility, detail } = checkDispatchEligibility(parallelism, registry, cli, true, resolverSnapshot, refs);
     pushDispatch(cli, profileRef, eligibility === 'eligible' ? 'ok' : 'warn',
       eligibility === 'eligible' ? 'WORKER_DIRECT_DISPATCH_ELIGIBLE' : 'WORKER_DIRECT_DISPATCH_BLOCKED',
-      eligibility, detail, configKey, members, 'run-authenticated-smoke-run');
+      eligibility, detail, configKey, members, 'qualify-installed-cli');
   }));
   report.findings.sort((a, b) => a.cli.localeCompare(b.cli) || a.kind.localeCompare(b.kind));
   return report;
@@ -639,10 +640,11 @@ export async function buildDirectWorkerDoctorSection(input: {
   announce?: DirectWorkerAnnounce;
   configFile?: string;
   projectRoot?: string;
+  cli?: string;
   resolverSnapshot?: DirectWorkerResolverSnapshot;
 }): Promise<{ lines: DirectWorkerDoctorLine[]; probed: boolean; workersConfigured: boolean; installFindings: DirectWorkerReadinessFinding[] }> {
   const { parallelism, registry, probeWorkers } = input;
-  const cliIds = allConfiguredCliIds(parallelism ?? {});
+  const cliIds = allConfiguredCliIds(parallelism ?? {}, input.cli);
   if (!cliIds.length) return { lines: [], probed: false, workersConfigured: false, installFindings: [] };
   const lines: DirectWorkerDoctorLine[] = [];
   if (probeWorkers) {
@@ -655,6 +657,7 @@ export async function buildDirectWorkerDoctorSection(input: {
   const report = await diagnoseDirectWorkerReadiness({
     parallelism: parallelism as ParallelismConfig,
     registry,
+    cli: input.cli,
     ...(probeWorkers ? { probe: input.probe ?? probeDirectWorkerVersion, ...(input.announce ? { announce: input.announce } : {}) } : {}),
     ...(input.configFile ? { configFile: input.configFile } : {}),
     ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
@@ -671,7 +674,7 @@ export async function buildDirectWorkerDoctorSection(input: {
   }
   if (probeWorkers && !report.findings.some(finding => finding.code === 'WORKER_DIRECT_READY')) {
     lines.push({ name: 'Direct Worker', status: 'info',
-      message: 'no profile is onboarded; profiles are unqualified until an authenticated smoke run (see #3005)' });
+      message: `no profile is onboarded; ${SMOKE_NOTE}` });
   }
   return {
     lines,

@@ -181,10 +181,10 @@ const PROVIDER_AGENT_DIRS = {
 // through: --deployment/--bundle/--scope/--user/--verbose/-v/--project-local/
 // --quiet/--help/-h never change this script's behavior but remain accepted
 // so existing invocations keep working.
-const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens'];
+const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
 const DOCTOR_KNOWN_FLAGS = new Set([
   ...DOCTOR_VALUE_FLAGS,
-  '--all-providers', '--probe-workers', '--no-budget-check', '--strict-context', '--json',
+  '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
   '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
 ]);
 
@@ -224,6 +224,7 @@ function parseDoctorArgs(argv) {
   try {
     // Preserve the previous parser's last-occurrence-wins behavior.
     const valueOptions = { rejectEmpty: true, precedence: 'last' };
+    out.cli = requireDoctorFlagValue(argv, valueOptions, '--cli');
     out.provider = requireDoctorFlagValue(argv, valueOptions, '--provider') ?? null;
     requireDoctorFlagValue(argv, valueOptions, '--bundle');
     requireDoctorFlagValue(argv, valueOptions, '--scope');
@@ -237,6 +238,9 @@ function parseDoctorArgs(argv) {
   }
   out.allProviders = hasDoctorFlagSwitch(argv, '--all-providers', DOCTOR_VALUE_FLAGS);
   out.probeWorkers = hasDoctorFlagSwitch(argv, '--probe-workers', DOCTOR_VALUE_FLAGS);
+  out.qualify = hasDoctorFlagSwitch(argv, '--qualify', DOCTOR_VALUE_FLAGS);
+  out.yes = hasDoctorFlagSwitch(argv, '--yes', DOCTOR_VALUE_FLAGS);
+  out.dryRun = hasDoctorFlagSwitch(argv, '--dry-run', DOCTOR_VALUE_FLAGS);
   out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
   out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
   out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
@@ -245,6 +249,9 @@ function parseDoctorArgs(argv) {
   // there is nothing machine-readable to emit.
   if (out.json && !out.probeWorkers) {
     throw new Error('Unknown flag combination: --json requires --probe-workers. See \'aiwg doctor --help\'.');
+  }
+  if ((out.qualify || out.cli || out.dryRun || out.yes) && !out.probeWorkers) {
+    throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
   }
   return out;
 }
@@ -708,7 +715,7 @@ function toWorkerProbeRecord(finding) {
 // the binding-level fallback (no resolver snapshot is resolved here) — the
 // records only speak to installation readiness, so the snapshot would add
 // resolution cost without changing them.
-async function runWorkerProbeJson(projectDir) {
+async function runWorkerProbeJson(projectDir, options = {}) {
   let workerConfig;
   try {
     workerConfig = await readAiwgConfig(projectDir);
@@ -717,12 +724,18 @@ async function runWorkerProbeJson(projectDir) {
     process.exit(1);
   }
   const parallelism = workerConfig?.parallelism;
+  if (options.cli) {
+    const ids = new Set([...Object.keys(parallelism?.clis ?? {}), ...Object.values(parallelism?.groups ?? {}).flatMap(group => group.members.map(member => member.cli))]);
+    if (!ids.has(options.cli)) throw new Error(`Unknown configured worker CLI: ${options.cli}`);
+  }
   const workerDispatch = parallelism?.worker_dispatch === true;
   const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
   const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
+  const registry = loadProviderModelCapabilities();
   const section = await buildDirectWorkerDoctorSection({
     parallelism,
-    registry: loadProviderModelCapabilities(),
+    registry,
+    cli: options.cli,
     probeWorkers: true,
     projectRoot: projectDir,
   });
@@ -735,7 +748,17 @@ async function runWorkerProbeJson(projectDir) {
   };
   if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
   else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  if (options.qualify) {
+    const { qualifyProbedWorkers } = await import('./worker-qualification.mjs');
+    payload.qualification = await qualifyProbedWorkers({ projectDir, packageRoot: getPackageRoot(), config: workerConfig,
+      registry, section, ...options });
+    if (['failed', 'partial'].includes(payload.qualification.status)) process.exitCode = 1;
+  }
+  if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else {
+    for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
+    if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
+  }
 }
 
 function hasSigningMaterial(signing) {
@@ -855,6 +878,7 @@ const BRAND_HEX = '#818CF8';
 export async function runDoctor() {
   // Usage errors (unknown flags, valueless value flags, --json without
   // --probe-workers) exit 2 here, before any check, spawn, or write.
+  const options = parseDoctorArgsOrExit(process.argv.slice(2));
   const {
     provider: providerArg,
     allProviders,
@@ -864,12 +888,16 @@ export async function runDoctor() {
     strictContext,
     contextBaseline,
     contextBudgetTokens,
-  } = parseDoctorArgsOrExit(process.argv.slice(2));
+  } = options;
 
   // Machine-readable worker probes: exactly one JSON document on stdout
   // and nothing else — the full diagnostic run (and its footer) is skipped.
-  if (jsonMode) {
-    await runWorkerProbeJson(process.cwd());
+  if (jsonMode || options.qualify || options.cli || options.dryRun) {
+    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }); }
+    catch (error) {
+      process.stderr.write(`aiwg doctor: ${error.message}\n`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -2220,7 +2248,7 @@ export async function runDoctor() {
   // or mutation). Decision 17 dropped qualification runners and evidence
   // files, so this reports installation readiness and resolver dispatch
   // eligibility only, and never claims a profile is "qualified" — profiles
-  // stay unqualified until an authenticated smoke run (#3005). No workers
+  // require explicit doctor --probe-workers --qualify approval. No workers
   // configured (explicitly or implicitly through a group member) means no
   // section at all unless --probe-workers was passed (#3066: an explicit
   // probe ask with nothing configured renders one visible line instead of

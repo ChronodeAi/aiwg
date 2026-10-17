@@ -618,11 +618,66 @@ interface WorkerProfileSelection {
 
 /** The same sandbox requirement governs inspection, resolution and rendering. */
 export function requiresWorkerExternalBoundary(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): boolean {
+  if (hasOperatorWorkerNativeRenderer(adapter) && selection.permissions?.sandbox !== 'external') return false;
   const providers = [adapter.id, adapter.provider].map(normalizeProviderDefinitionId);
   return requiredWorkerControls(selection).includes('sandbox')
     && (providers.some(provider => provider && ['claude', 'muse', 'hermes'].includes(provider))
       || adapter.invocationProfiles?.[selection.profile]?.controls.sandbox?.support === 'external'
       || selection.permissions?.sandbox === 'external');
+}
+
+/** Explicit local operator approval for the direct CLI baseline (decision 17).
+ * This is not backend attestation or a live negative-fixture result. */
+export const WORKER_OPERATOR_APPROVAL = 'aiwg doctor --probe-workers --qualify';
+export function isOperatorQualifiedWorkerAdapter(adapter: WorkerAdapterMetadata): boolean {
+  return adapter.qualification.status === 'qualified'
+    && adapter.qualification.evidenceRef === WORKER_OPERATOR_APPROVAL;
+}
+
+/** Only this bundled renderer has an independently checked native direct baseline. */
+export function hasOperatorWorkerNativeRenderer(adapter: WorkerAdapterMetadata): boolean {
+  return isOperatorQualifiedWorkerAdapter(adapter) && adapter.provider === 'codex'
+    && adapter.invocation.kind === 'process';
+}
+
+/** Check the actual argv before granting the direct renderer exception. */
+export function assertOperatorWorkerNativeArgv(adapter: WorkerAdapterMetadata, argv: string[],
+  selected: { model: string; effort: { value: string | null } }, permissions?: { sandbox?: string; approval?: string }): void {
+  if (!hasOperatorWorkerNativeRenderer(adapter)) return;
+  const args = argv.slice(1);
+  const requirePair = (flag: string, value: string): void => {
+    if (args.filter(token => token === flag).length !== 1 || args[args.indexOf(flag) + 1] !== value) {
+      throw new Error(`Requested native worker control is absent or ambiguous: ${flag}`);
+    }
+  };
+  const sandbox = permissions?.sandbox ?? 'workspace-write';
+  if (!['read-only', 'workspace-write'].includes(sandbox)) throw new Error('Requested sandbox has no verified native renderer');
+  requirePair('-m', selected.model);
+  requirePair('-s', sandbox);
+  for (const [name, value] of [['model_reasoning_effort', selected.effort.value], ['approval_policy', permissions?.approval ?? 'never']]) {
+    const overrides = args.flatMap((token, index) => token === '-c' ? [args[index + 1]] : [])
+      .filter(token => token?.split('=')[0] === name);
+    if (value === null || overrides.length !== 1 || overrides[0] !== `${name}=${JSON.stringify(value)}`) {
+      throw new Error(`Requested native worker control is absent or ambiguous: ${name}`);
+    }
+  }
+  // Permit only the bounded native command grammar. Alternate/combined flags,
+  // profiles and additional config overrides must not undo the checked pairs.
+  if (args[0] !== '--no-daemon' || args[1] !== 'exec' || !args.includes('--ignore-user-config')) {
+    throw new Error('Native worker controls could be overridden');
+  }
+  for (let index = 2; index < args.length; index++) {
+    const flag = args[index];
+    if (['--ignore-user-config', '--skip-git-repo-check', '--json'].includes(flag)) continue;
+    if (flag === '-' && index === args.length - 1) continue;
+    if (!['-m', '-s', '-c', '-C', '-o'].includes(flag) || index + 1 >= args.length) {
+      throw new Error('Native worker controls could be overridden');
+    }
+    const value = args[++index];
+    if (flag === '-c' && !['model_reasoning_effort', 'approval_policy'].includes(value.split('=')[0])) {
+      throw new Error('Native worker controls could be overridden');
+    }
+  }
 }
 
 /** Inspect declared controls before installation evidence can be produced. This
@@ -638,6 +693,23 @@ export function inspectWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
   // re-deriving this inspector's range logic.
   if (workerVersionRangeMismatch(selection.cliVersion, [adapter.supportedVersions, profile.supportedVersions]) !== null) {
     throw new Error('Worker CLI version is outside qualified profile');
+  }
+  // The direct CLI baseline trusts the installed driver's bounded renderer.
+  // Explicit extra controls still require the existing qualified mappings.
+  if (hasOperatorWorkerNativeRenderer(adapter) && profile.transport === 'shell') {
+    if (selection.permissions?.sandbox && !['read-only', 'workspace-write'].includes(selection.permissions.sandbox)) {
+      throw new Error('Requested sandbox has no verified native renderer');
+    }
+    if (selection.permissions?.sandbox === 'external' && (!selection.boundary
+      || !['os', 'executor'].includes(selection.boundary.kind) || !selection.boundary.controls.includes('sandbox'))) {
+      throw new Error('Requested external sandbox requires an enforcing boundary');
+    }
+    for (const name of selection.requiredControls ?? []) {
+      if (!['native', 'external'].includes(profile.controls[name]?.support)) {
+        throw new Error(`Required worker control is unqualified: ${name}`);
+      }
+    }
+    return profile;
   }
   const requiredControls = requiredWorkerControls(selection);
   if (requiresWorkerExternalBoundary(adapter, selection)
@@ -669,6 +741,10 @@ export function inspectWorkerInvocationProfile(adapter: WorkerAdapterMetadata, s
  * installation scope, including this boundary, against the recorded digest. */
 export function qualifyWorkerInvocationProfile(adapter: WorkerAdapterMetadata, selection: WorkerProfileSelection): WorkerInvocationProfile {
   const profile = inspectWorkerInvocationProfile(adapter, selection);
+  if (isOperatorQualifiedWorkerAdapter(adapter) && selection.policy?.guards?.denySelfDelegation !== false
+    && !adapter.capabilities.nestedAgentsControllable) {
+    throw new Error('Required worker control is unqualified: children');
+  }
   if (requiresWorkerExternalBoundary(adapter, selection) && !profile.installationQualification) {
     throw new Error('Required worker control sandbox needs matching installation qualification for its external boundary');
   }
@@ -964,7 +1040,7 @@ export function validateWorkerPolicyRoute(input: {
   });
   const guards = input.policy.guards ?? DEFAULT_WORKER_SELECTION.guards!;
   const guidance = input.policy.roleGuidance?.[input.role];
-  if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence');
+  if (observation.qualification.status !== 'qualified' || !observation.qualification.roles.includes(input.role)) deny('OG_ADAPTER_UNQUALIFIED', '/worker/qualification', 'Role lacks qualified evidence. Run aiwg doctor --probe-workers --qualify.');
   if (!guidance) deny('OG_CONFIG_REFERENCE', `/defaults/workerSelection/roleGuidance/${input.role}`, 'Role guidance is unavailable');
   const substitution = input.substitution?.model === input.selectedModel
     && input.substitution.effort === input.effort && input.substitution.rationale.trim();
@@ -985,11 +1061,21 @@ export function validateWorkerPolicyRoute(input: {
     if (isWorkerNullEffortDenied(input.effort, observation, guidance)) deny('OG_EFFORT_DENIED', '/worker/effortSupport', 'Null effort requires qualified absence of an effort control');
   } else {
     const effort = observation.efforts.find(e => e.id === input.effort);
-    if (observation.effortSupport !== 'explicit' || !effort || !(input.effort === 'none' ? guidance?.initialEffort === 'none' && guidance.effortLadder.length === 0 : guidance?.effortLadder.includes(input.effort)) || isWorkerEffortDenied(input.effort, input.policy) || (guards.denySelfDelegation !== false && effort.selfDelegates !== false)) deny('OG_EFFORT_DENIED', '/worker/efforts', 'Unsupported, denied or self-delegating effort');
+    if (observation.effortSupport !== 'explicit' || !effort || !(input.effort === 'none' ? guidance?.initialEffort === 'none' && guidance.effortLadder.length === 0 : guidance?.effortLadder.includes(input.effort)) || isWorkerEffortDenied(input.effort, input.policy) || (guards.denySelfDelegation !== false && effort.selfDelegates !== false)) deny('OG_EFFORT_DENIED', '/worker/efforts', 'Unsupported, denied or self-delegating effort. Check catalog effort evidence and models.json defaults.workerSelection.roleGuidance, guards.deniedEfforts and guards.denySelfDelegation.');
   }
   const { data, unknownDataClass } = workerRouteDataPolicy(input.policy, input.dataClass);
   if (unknownDataClass) deny('OG_DATA_POLICY', '/defaults/workerSelection/dataClasses', 'Unknown data class');
-  if (isWorkerDataUseDenied(observation.dataUse, data)) deny('OG_DATA_POLICY', '/worker/dataUse', 'Execution path data facts do not satisfy policy');
+  if (isWorkerDataUseDenied(observation.dataUse, data)) {
+    const facts = observation.dataUse;
+    const keys = [
+      ...((facts.processing === 'unknown' || facts.productImprovement === null
+        || data.maxRetentionDays !== undefined && facts.retentionDays === null) && data.allowUnknown !== true ? ['allowUnknown'] : []),
+      ...(facts.processing !== 'unknown' && !data.allowedProcessing?.includes(facts.processing) ? ['allowedProcessing'] : []),
+      ...(facts.productImprovement === true && data.allowProductImprovement !== true ? ['allowProductImprovement'] : []),
+      ...(data.maxRetentionDays !== undefined && facts.retentionDays !== null && facts.retentionDays > data.maxRetentionDays ? ['maxRetentionDays'] : []),
+    ];
+    deny('OG_DATA_POLICY', '/worker/dataUse', `Execution path data facts do not satisfy policy. Review models.json ${keys.map(key => `defaults.workerSelection.dataPolicy.${key}`).join(', ')}${input.dataClass ? ` and defaults.workerSelection.dataClasses.${input.dataClass}` : ''}; unknown facts remain unknown.`);
+  }
   const now = (input.now ?? new Date()).getTime();
   if (observation.retiredAt != null && Date.parse(observation.retiredAt) <= now
     || observation.sunsetAt && Date.parse(observation.sunsetAt) <= now) {
@@ -1000,7 +1086,14 @@ export function validateWorkerPolicyRoute(input: {
     diagnostics.push({ code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/worker/observedAt', blocking: false, message: 'Model observation exceeds the freshness warning threshold' });
   }
   if (input.context && !workerContextHeadroom(input.context, observation).fits) {
-    deny('OG_MODEL_UNAPPROVED', '/worker/contextTokens', 'Bounded context and output do not fit qualified limits');
+    const missing = [observation.contextTokens === null ? 'contextTokens' : ''].filter(Boolean);
+    deny('OG_MODEL_UNAPPROVED', '/worker/contextTokens', missing.length
+      ? `Bounded context and output cannot be checked: catalog does not report a qualified ${missing.join(', ')} limit. Refresh discovery with reported limits; operator approval does not invent limits.`
+      : 'Bounded context and output do not fit qualified limits; reduce the request context or reserved output.');
+  }
+  if (input.context && observation.contextTokens !== null && observation.maxOutputTokens === null) {
+    diagnostics.push({ code: 'OG_MODEL_UNAPPROVED', pointer: '/worker/maxOutputTokens', blocking: false,
+      message: 'Output limit is unreported; only the context window was checked.' });
   }
   return diagnostics;
 }
@@ -1022,8 +1115,8 @@ export function workerContextHeadroom(estimate: WorkerContextEstimate,
   const total = terms.reduce((sum, value) => sum + value, 0);
   const fits = Boolean(estimate.estimator.trim()) && terms.every(value => Number.isSafeInteger(value) && value >= 0)
     && (estimate.safetyMargin === undefined || Number.isSafeInteger(estimate.safetyMargin) && estimate.safetyMargin >= 0)
-    && Number.isSafeInteger(total) && observation.contextTokens !== null && observation.maxOutputTokens !== null
-    && total <= observation.contextTokens && estimate.reservedOutput <= observation.maxOutputTokens;
+    && Number.isSafeInteger(total) && observation.contextTokens !== null
+    && total <= observation.contextTokens && (observation.maxOutputTokens === null || estimate.reservedOutput <= observation.maxOutputTokens);
   return { ...estimate, safetyMargin, total, qualifiedContextTokens: observation.contextTokens,
     qualifiedMaxOutputTokens: observation.maxOutputTokens, fits };
 }

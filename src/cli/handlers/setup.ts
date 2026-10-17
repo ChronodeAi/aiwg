@@ -727,6 +727,7 @@ Options:
       }, null, 2));
     } else {
       printPlan(plan);
+      if (options.workerDispatchChoice === 'enable') ui.info('Next: aiwg doctor --probe-workers --qualify.');
       if (plan.workerDispatchOffer.shouldOffer) {
         ui.info(workerDispatchOfferHintWithArg(plan.workerDispatchOffer.detected));
       }

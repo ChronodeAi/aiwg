@@ -233,7 +233,7 @@ describe('models resolve production installation loading', () => {
     const f = await productionFixture();
     const result = await f.call();
     expect(result.result.exitCode).toBe(2);
-    expect(result.output).toContain('recordWorkerInstallation');
+    expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
     expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
   });
 });

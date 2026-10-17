@@ -610,6 +610,18 @@ describe('#2882 production and evidence regressions', () => {
     expect(validateWorkerModelObservation(worker)).toEqual([]);
   });
 
+  it('preserves exact API/provider identity and blocks conflicting native rows', () => {
+    const row = { slug: 'synthetic-model', provider: 'synthetic-inference', visibility: 'listed', context_window: 32000, output_limit: 4096 };
+    const options = { ...evidenceOptions, cliId: 'codex' };
+    const exact = normalizeCodexDebugModels({ models: [row] }, options).models[0];
+    expect(exact.apiModelId).toBe('synthetic-model');
+    expect(exact.llmProvider).toBe('synthetic-inference');
+    expect(exact.worker!.provenance[0].fields).toEqual(expect.arrayContaining(['/apiModelId', '/llmProvider']));
+    const conflicting = normalizeCodexDebugModels({ models: [row, { ...row, provider: 'other-inference' }] }, options).models[0];
+    expect(conflicting.llmProvider).toBeUndefined();
+    expect(conflicting.worker!.conflicts).toEqual(expect.arrayContaining([expect.objectContaining({ field: '/llmProvider' })]));
+  });
+
   it('hashes evidence values and covers every emitted field with concrete provenance', async () => {
     const one = normalizeMuseCatalogRows({ rows: [evidenceRow] }, evidenceOptions).models[0];
     const two = normalizeMuseCatalogRows({ rows: [{ ...evidenceRow, context_limit: 200 }] }, evidenceOptions).models[0];
@@ -1051,6 +1063,63 @@ describe('#2882 real parser completeness regressions', () => {
       if (shape === 'mixed') expect(next.error).toContain('/result/data/1');
       if (shape === 'truncated') expect(next.error).toContain('line 2');
       if (shape === 'pagination') expect(next.error).toContain('/result/nextCursor');
+    }
+  });
+});
+
+it('normalizes inference identity from real providerless Codex and provider_id Muse rows', () => {
+  const options = { cliId: 'codex', source: 'fixture:real-shape', runtimeVersion: '0.163.0', accountScope: 'local-account' as const };
+  const codex = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', visibility: 'list' }] }, options).models[0];
+  expect(codex.llmProvider).toBe('openai');
+  expect(codex.apiModelId).toBe('synthetic-code');
+  const muse = normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-muse', provider_id: 'meta' }] }, { ...options, cliId: 'muse' }).models[0];
+  expect(muse.llmProvider).toBe('meta');
+  expect(muse.apiModelId).toBe('synthetic-muse');
+  expect(muse.worker!.provenance[0].fields).toContain('/llmProvider');
+  const unknown = normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-muse' }] }, { ...options, cliId: 'muse' }).models[0];
+  expect(unknown.llmProvider).toBeUndefined();
+});
+
+describe('#3083 native catalog context and delegation facts', () => {
+  it.each([
+    [{ context_window: 500000, max_context_window: 872000, effective_context_window_percent: 95 }, 475000],
+    [{ context_window: 272000, max_context_window: 872000, effective_context_window_percent: 95 }, 258400],
+    [{ context_window: 500000, max_context_window: 272000, effective_context_window_percent: 95 }, 258400],
+    [{ context_window: 1001, effective_context_window_percent: 95 }, 950],
+    [{ context_window: 32000 }, 32000],
+    [{ max_context_window: 872000 }, null],
+  ])('bounds context using the active catalog window: %j', (limits, expected) => {
+    const result = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', ...limits }] }, evidenceOptions);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.models[0].worker).toMatchObject({ contextTokens: expected, maxOutputTokens: null });
+    expect(result.models[0].worker!.provenance[0].fields).toContain('/contextTokens:context_window+max_context_window+effective_context_window_percent');
+    expect(validateWorkerModelObservation(result.models[0].worker)).toEqual([]);
+  });
+
+  it.each([
+    { max_context_window: -1 }, { max_context_window: '872000' },
+    { effective_context_window_percent: 0 }, { effective_context_window_percent: 101 },
+    { effective_context_window_percent: '95' }, { context_window: 3.5 },
+  ])('keeps malformed context facts unknown: %j', limits => {
+    const result = normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', context_window: 500000, ...limits }] }, evidenceOptions);
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+    expect(result.models[0].worker!.contextTokens).toBeNull();
+  });
+
+  it.each(['codex', 'muse'] as const)('%s distinguishes ultra delegation from ordinary reasoning and child effort', cli => {
+    const ids = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    const levels = ids.map(id => ({ [cli === 'codex' ? 'effort' : 'tier']: id,
+      description: id === 'ultra' ? 'Maximum reasoning with automatic task delegation' : 'Reasoning depth' }));
+    const normalize = (raw: unknown) => cli === 'codex'
+      ? normalizeCodexDebugModels({ models: [{ slug: 'synthetic-code', supported_reasoning_levels: raw,
+        multi_agent_reasoning_effort: 'xhigh', multi_agent_version: 'v2' }] }, { ...evidenceOptions, cliId: cli })
+      : normalizeMuseCatalogRows({ rows: [{ model_id: 'synthetic-code', reasoning_effort_variants: raw }] }, { ...evidenceOptions, cliId: cli });
+    for (const raw of [levels, ids]) {
+      const worker = normalize(raw).models[0].worker!;
+      expect(worker.effortSupport).toBe('explicit');
+      expect(worker.efforts).toEqual(ids.map(id => ({ id, selfDelegates: id === 'ultra' })));
+      expect(worker.dataUse).toEqual({ processing: 'unknown', productImprovement: null, retentionDays: null });
+      expect(validateWorkerModelObservation(worker)).toEqual([]);
     }
   });
 });

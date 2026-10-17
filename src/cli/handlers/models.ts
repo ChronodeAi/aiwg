@@ -4,6 +4,7 @@
  */
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
 import path from 'node:path';
 import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
@@ -14,13 +15,22 @@ import {
 } from '../../models/provider-policy.js';
 import type { CanonicalModelPolicy, ModelTier } from '../../models/types.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
-import type { DynamicModelCatalog } from '../../models/model-discovery.js';
+import type { DiscoveredModel, DynamicModelCatalog } from '../../models/model-discovery.js';
 import { resolveGrokBuildRoleModel } from '../../models/grok-build-models.js';
 import { readAiwgConfig, emptyConfig } from '../../config/aiwg-config.js';
 import { ConfigLoader } from '../../models/config-loader.js';
-import { loadRecordedWorkerInstallations } from '../../models/worker-installation.mjs';
+import { loadRecordedWorkerInstallations, normalizeWorkerVersionBanner } from '../../models/worker-installation.mjs';
 import type { WorkerPlanSnapshot } from '../../models/resolver.js';
 import { parseWorkerCommandArgs, resolveWorkerInvocation, workerInvocationDiagnostic, type WorkerInvocationDriver } from '../../serve/worker-invocation.js';
+
+/** Compare selection facts without observation times or approval/provenance metadata. */
+function approvalFacts(row: DiscoveredModel) {
+  if (!row.worker) return null;
+  const { observedAt, verifiedAt, firstObservedAt, fetchedAt, retiredAt,
+    evidenceDigest, provenance, qualification, ...facts } = row.worker;
+  return { id: row.id, apiModelId: row.apiModelId, llmProvider: row.llmProvider,
+    hidden: row.hidden, reasoningEfforts: row.reasoningEfforts, facts };
+}
 
 /** #2885's trusted installation owner supplies qualified bindings and installed drivers.
  * This is an in-process dependency, never a CLI flag or project-config module path. */
@@ -46,9 +56,41 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
     return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
       registry, installations: {} }, drivers: {} };
   }
-  const { registry: qualifiedRegistry, installations, drivers } = await loadRecordedWorkerInstallations({
-    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection,
+  const { registry: qualifiedRegistry, installations, drivers, observations } = await loadRecordedWorkerInstallations({
+    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection, parallelism: config.parallelism,
   });
+  catalog.discovery ??= { source: 'static', fetchedAt: new Date().toISOString(), providers: {} };
+  catalog.discovery.instances = { ...catalog.discovery.instances };
+  for (const [cli, approved] of Object.entries(observations)) {
+    const cached = catalog.discovery.instances[cli] ?? catalog.discovery.providers[approved.provider];
+    // Discovery stores the CLI banner; qualification stores its parsed version.
+    const invocation = drivers[cli]?.qualification.adapter.invocation;
+    const versionPattern = invocation?.kind === 'process' ? invocation.versionPattern : undefined;
+    const version = (value: string | undefined) => {
+      if (value === undefined) return value;
+      try { return normalizeWorkerVersionBanner(value, versionPattern); }
+      catch { return value; } // A changed or invalid banner must still fail closed.
+    };
+    const current = cached ? { ...cached, runtimeVersion: version(cached.runtimeVersion),
+      accountBinding: cached.accountBinding ?? cached.accountScope,
+      models: cached.models.map(row => row.worker ? { ...row,
+        worker: { ...row.worker, runtimeVersion: version(row.worker.runtimeVersion)! } } : row) } : undefined;
+    // Stale discovery must not replace a newer approved observation.
+    if (!current || Date.parse(approved.observedAt) > Date.parse(current.observedAt)) {
+      catalog.discovery.instances[cli] = approved;
+      continue;
+    }
+    catalog.discovery.instances[cli] = { ...current, models: current.models.map(row => {
+      const prior = approved.models.find(model => model.id === row.id);
+      if (!row.worker || !prior?.worker) return row;
+      if (Date.parse(prior.worker.observedAt) > Date.parse(row.worker.observedAt)) return prior;
+      // New retirement/conflict/visibility evidence always requires requalification.
+      const safe = !row.hidden && row.worker.visibility !== 'hidden'
+        && row.worker.lifecycle !== 'retired' && !row.worker.conflicts?.length;
+      return safe && isDeepStrictEqual(approvalFacts(row), approvalFacts(prior))
+        ? { ...row, worker: { ...row.worker, qualification: prior.worker.qualification } } : row;
+    }) };
+  }
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
     registry: qualifiedRegistry, installations }, drivers };
 }
@@ -282,9 +324,13 @@ function replaceFrontmatter(raw: string, item: Artifact, tier: string): string {
   return `---\n${frontmatter}\n---\n${match[2]}`;
 }
 async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { load: loadWorkerInputs }): Promise<HandlerResult> {
+  if (ctx.args[0] === 'resolve' && ctx.args.includes('--help')) {
+    print('Usage: aiwg models resolve --role <role> --task <class> --group <group> --brief <file> --workdir <tree> --final-output <file> [--transport shell|mcp] [--format json|shell] [--authorize-premium]\nAgents pass --authorize-premium only after the human explicitly confirmed the premium escalation (escalation-discipline rule). Authorization applies to this resolution only.', false);
+    return { exitCode: 0 };
+  }
   // Preserve artifact/native resolve when direct-only flags are absent.
   if (ctx.args[0] === 'resolve' && ctx.args.slice(1).some(arg =>
-    /^--(?:task|group|brief|workdir|final-output|transport|format)(?:=|$)/.test(arg))) {
+    /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium)(?:=|$)/.test(arg))) {
     return resolveDirect(ctx, services);
   }
   const parsed = parseArgs(ctx.args);

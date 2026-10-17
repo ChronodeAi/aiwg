@@ -18,6 +18,20 @@ const routeInput = (f: ReturnType<typeof workerResolutionFixture>, index = 0) =>
 });
 
 describe('Consolidated review regressions for #2883', () => {
+  it('names the operator data policy key and warns about unreported output', () => {
+    const f = workerResolutionFixture();
+    const input = { ...routeInput(f), context: f.request.context };
+    input.observation.dataUse = { processing: 'unknown', productImprovement: null, retentionDays: null };
+    input.observation.maxOutputTokens = null;
+    const diagnostics = validateWorkerPolicyRoute(input);
+    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'OG_DATA_POLICY',
+      message: expect.stringContaining('models.json defaults.workerSelection.dataPolicy.allowUnknown') }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'OG_MODEL_UNAPPROVED',
+      blocking: false, message: expect.stringContaining('Output limit is unreported; only the context window was checked') }));
+    input.policy.dataPolicy = { ...input.policy.dataPolicy, allowUnknown: true };
+    expect(validateWorkerPolicyRoute(input).map(d => d.code)).toEqual(['OG_MODEL_UNAPPROVED']);
+  });
+
   it('denies a contributor-named selected model even when it differs from apiModelId (requireExactModel false)', () => {
     const f = workerResolutionFixture();
     rows(f)[0].id = 'synthetic-contributor';
@@ -237,6 +251,21 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     f.request.context[term] = -1;
     expect(resolve(f).selected).toBeNull();
   });
+  it('checks only the context window when output is unreported, preserving null', () => {
+    const f = workerResolutionFixture();
+    rows(f).forEach(row => { row.worker!.maxOutputTokens = null; });
+    f.request.context = { estimator: 'exact-v1', briefTokens: 1024, inputTokens: 1024, toolOutputAllowance: 614, reservedOutput: 1024 };
+    const plan = resolve(f);
+    expect(plan.selected?.context).toMatchObject({ total: 4096, fits: true, qualifiedMaxOutputTokens: null });
+    expect(plan.selected?.diagnostics).toContainEqual(expect.objectContaining({ blocking: false,
+      pointer: '/worker/maxOutputTokens', message: expect.stringContaining('only the context window was checked') }));
+    f.request.context.reservedOutput++;
+    expect(resolve(f).selected).toBeNull();
+    f.request.context.reservedOutput = 1;
+    rows(f).forEach(row => { row.worker!.contextTokens = null; });
+    expect(resolve(f).selected).toBeNull();
+  });
+
   it('R06 enforces exact context/output boundaries and blocks unknown limits', () => {
     const f = workerResolutionFixture();
     f.request.context = { estimator: 'exact-v1', briefTokens: 1024, inputTokens: 1024, toolOutputAllowance: 614, reservedOutput: 1024 };
@@ -272,6 +301,8 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     const f = workerResolutionFixture();
     rows(f).forEach(r => { r.worker!.pricing.costClass = 'premium'; });
     expect(resolve(f).selected).toBeNull();
+    expect(resolve(f).exclusions.flatMap(e => e.diagnostics)).toContainEqual(expect.objectContaining({
+      pointer: '/request/authority', message: expect.stringContaining('--authorize-premium') }));
     f.request.authority = { premiumAuthorized: true, maxAutoTier: 3 };
     expect(resolve(f).status).toBe('eligible');
     f.request.authority.maxAutoTier = 2;
