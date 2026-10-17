@@ -1116,7 +1116,7 @@ export function resolveWorkerGroupInstallation(
  * `options.aiwgHome`, when provided, is passed through to `ConfigLoader`
  * unchanged — it never reads or writes `process.env.AIWG_HOME`. Omitting it
  * keeps `ConfigLoader`'s own default precedence (`AIWG_HOME` env, else the
- * user-home install).
+ * running package root).
  */
 export async function validateWorkerConfigCandidate(projectDir: string, config: AiwgConfig, options?: { aiwgHome?: string }): Promise<void> {
   const errors = validateParallelismConfig(config.parallelism);
