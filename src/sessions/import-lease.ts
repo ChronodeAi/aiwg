@@ -139,7 +139,7 @@ async function readOwner(path: string): Promise<ImportLeaseOwner | null> {
     const value = JSON.parse(await readFile(path, 'utf8')) as Partial<ImportLeaseOwner>;
     if (value.contractVersion !== '1.0.0'
       || typeof value.runId !== 'string'
-      || typeof value.pid !== 'number'
+      || !Number.isSafeInteger(value.pid) || (value.pid ?? 0) <= 0
       || typeof value.host !== 'string'
       || typeof value.startedAt !== 'string'
       || typeof value.heartbeatAt !== 'string') return null;

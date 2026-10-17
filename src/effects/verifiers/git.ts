@@ -14,6 +14,7 @@
  * @see docs/contracts/effect-ledger.v1.md "Built-in verifiers"
  */
 
+import { signalChild } from '../../process/signal-child.mjs';
 import { spawn } from 'node:child_process';
 import { EffectVerifierError, type EffectVerifier, type EffectVerifierObservation, type EffectVerifierRequest } from './types.js';
 
@@ -49,7 +50,7 @@ function spawnRunner(repoDir: string, binary: string): VerifierGitRunner {
     let size = 0;
     const collect = (sink: Buffer[]) => (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_OUTPUT) child.kill();
+      if (size > MAX_OUTPUT) signalChild(child);
       else sink.push(chunk);
     };
     child.stdout.on('data', collect(out));

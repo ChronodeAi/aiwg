@@ -357,7 +357,7 @@ describe('SessionLauncher', () => {
 
       const killMock = vi.fn();
       // @ts-ignore - mock
-      launcher.currentProcess = { killed: false, kill: killMock };
+      launcher.currentProcess = { pid: 54321, killed: false, kill: killMock };
 
       launcher.kill();
       expect(killMock).toHaveBeenCalledWith('SIGTERM');

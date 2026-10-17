@@ -449,7 +449,7 @@ export function boundedVersionProbe(executable, argv, environment, cwd, timeoutM
     let size = 0;
     let failed = false;
     const stop = () => {
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ } }
+      if (Number.isSafeInteger(child.pid) && child.pid > 0) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ } }
     };
     // Never rely on close: an escaped descendant may retain the pipe descriptors.
     const abort = () => {

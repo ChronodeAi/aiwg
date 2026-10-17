@@ -24,10 +24,12 @@
  * coreutils `timeout`).
  */
 
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 const TIMEOUT_EXIT_CODE = 124;
 
@@ -153,8 +155,9 @@ export async function run({ timeoutMs, graceMs, command }) {
 
   /** Signal the whole group, falling back to the child if the group is gone. */
   const signalGroup = (signal) => {
+    if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return;
     try { process.kill(-child.pid, signal); }
-    catch { try { child.kill(signal); } catch { /* already gone */ } }
+    catch { try { signalChild(child, signal); } catch { /* already gone */ } }
   };
 
   let timedOut = false;

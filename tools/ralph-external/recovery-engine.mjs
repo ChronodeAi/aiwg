@@ -70,7 +70,7 @@ export class RecoveryEngine {
    * @returns {boolean}
    */
   isProcessAlive(pid) {
-    if (!pid || pid <= 0) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
       return false;
     }
 

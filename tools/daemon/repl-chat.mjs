@@ -8,8 +8,10 @@
  * @tests @test/unit/daemon/repl-chat.test.js
  */
 
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export class REPLChat extends EventEmitter {
   constructor(options = {}) {
@@ -63,7 +65,7 @@ export class REPLChat extends EventEmitter {
 
     if (this.activeProcess) {
       try {
-        this.activeProcess.kill('SIGTERM');
+        signalChild(this.activeProcess, 'SIGTERM');
       } catch {
         // Process may have already exited
       }
@@ -148,7 +150,7 @@ export class REPLChat extends EventEmitter {
       case 'cancel':
         if (this.activeProcess) {
           try {
-            this.activeProcess.kill('SIGTERM');
+            signalChild(this.activeProcess, 'SIGTERM');
           } catch {
             // Already dead
           }

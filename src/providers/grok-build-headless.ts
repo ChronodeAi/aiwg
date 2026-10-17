@@ -1,4 +1,5 @@
 /** Bounded Grok Build headless transport. The caller owns task authorization. */
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn } from 'node:child_process';
 
 export type GrokOutputFormat = 'plain' | 'json' | 'streaming-json';
@@ -57,10 +58,10 @@ function isError(event: Record<string, unknown>): boolean {
 }
 
 function stopProcess(child: ReturnType<typeof spawn>): void {
-  if (child.pid && process.platform !== 'win32') {
-    try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* process already exited */ }
+  if (Number.isSafeInteger(child.pid) && child.pid! > 0 && process.platform !== 'win32') {
+    try { process.kill(-child.pid!, 'SIGTERM'); return; } catch { /* process already exited */ }
   }
-  child.kill('SIGTERM');
+  signalChild(child, 'SIGTERM');
 }
 
 export async function runGrokHeadless(options: GrokHeadlessOptions): Promise<GrokHeadlessResult> {

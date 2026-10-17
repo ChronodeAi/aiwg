@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /** Credential-gated live Grok Build smoke. No secret values enter output. */
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { observeProviderHealthEvent } from '../ralph-external/lib/worker-health.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 const skipped = (reason) => {
   process.stdout.write(`${JSON.stringify({ provider: 'grok-build', status: 'skipped', reason })}\n`);
@@ -63,10 +65,10 @@ const acceptEvent = event => {
   if (observation?.kind === 'error' && observation.fatal) { terminal = true; errorEvent = true; }
 };
 const stop = () => {
-  if (child.pid && process.platform !== 'win32') {
+  if (Number.isSafeInteger(child.pid) && child.pid > 0 && process.platform !== 'win32') {
     try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* already exited */ }
   }
-  child.kill('SIGTERM');
+  signalChild(child, 'SIGTERM');
 };
 const timeout = setTimeout(() => {
   stop();

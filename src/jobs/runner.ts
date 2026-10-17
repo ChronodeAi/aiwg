@@ -192,8 +192,8 @@ async function acquireLock(stateRoot: string, flow: ExternalJobFlow): Promise<()
       const lock = JSON.parse(await fs.readFile(file, 'utf8')) as { pid?: number; startedAt?: string };
       const tooOld = !lock.startedAt || Date.now() - Date.parse(lock.startedAt) > (flow.spec.workItem.claimTtlSeconds ?? 900) * 1000;
       let alive = false;
-      if (typeof lock.pid === 'number') {
-        try { process.kill(lock.pid, 0); alive = true; } catch { /* process is gone or inaccessible */ }
+      if (Number.isSafeInteger(lock.pid) && (lock.pid ?? 0) > 0) {
+        try { process.kill(lock.pid!, 0); alive = true; } catch { /* process is gone or inaccessible */ }
       }
       stale = tooOld && !alive;
     } catch { stale = true; }

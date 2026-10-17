@@ -9,6 +9,7 @@
  * @issue #33
  */
 
+import { signalChild } from '../../process/signal-child.mjs';
 import { spawn } from 'child_process';
 import path from 'path';
 import { HandlerResult, ScriptRunner, ScriptRunnerOptions } from './types.js';
@@ -81,9 +82,9 @@ export class DefaultScriptRunner implements ScriptRunner {
           // Request graceful termination first, then escalate if the child
           // does not exit within the deadline. Both kill() calls are wrapped
           // because they can throw ESRCH on an already-exited child.
-          try { child.kill('SIGTERM'); } catch { /* already exited */ }
+          try { signalChild(child, 'SIGTERM'); } catch { /* already exited */ }
           killEscalationId = setTimeout(() => {
-            try { child.kill('SIGKILL'); } catch { /* already exited */ }
+            try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
           }, killDeadlineMs);
           killEscalationId.unref?.();
           resolve({

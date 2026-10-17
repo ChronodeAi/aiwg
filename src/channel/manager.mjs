@@ -9,6 +9,7 @@
  * @version 2024.12.0
  */
 
+import { signalChild } from '../process/signal-child.mjs';
 import fs from 'fs/promises';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
@@ -53,9 +54,9 @@ async function runWithTimeout(cmd, args, options = {}) {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
-      try { child.kill('SIGTERM'); } catch { /* already exited */ }
+      try { signalChild(child, 'SIGTERM'); } catch { /* already exited */ }
       const kill9 = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
       }, 5_000);
       kill9.unref?.();
       settled = true;

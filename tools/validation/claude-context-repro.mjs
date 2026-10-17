@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { importImpl } from '../_resolve-impl.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export const DEFAULT_REPRO_PROMPT =
   'docSync code2doc then make sure the blog post is fully covering our work for the month then commit-and-push, we will review before release';
@@ -60,7 +62,7 @@ async function run(command, args, options = {}) {
     });
     if (options.timeoutMs) {
       setTimeout(() => {
-        child.kill('SIGTERM');
+        signalChild(child, 'SIGTERM');
       }, options.timeoutMs).unref();
     }
   });

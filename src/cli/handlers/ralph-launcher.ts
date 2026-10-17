@@ -409,6 +409,7 @@ export function saveLauncherRegistry(projectRoot: string, registry: LauncherRegi
  * Check if a process is still running
  */
 export function isProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;

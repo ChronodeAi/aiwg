@@ -1,4 +1,5 @@
 /** Grok Build ACP stdio client. Separate from one-shot headless execution. */
+import { signalChild } from '../process/signal-child.mjs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { redactGrokOutput } from './grok-build-headless.js';
 
@@ -184,8 +185,8 @@ export class GrokAcpClient {
     this.terminated = true;
     this.failAll(new Error('Grok ACP connection closed'));
     this.child.stdin.end();
-    if (!this.child.kill('SIGTERM')) return;
-    const forceTimer = setTimeout(() => this.child.kill('SIGKILL'), 2_000);
+    if (!signalChild(this.child, 'SIGTERM')) return;
+    const forceTimer = setTimeout(() => signalChild(this.child, 'SIGKILL'), 2_000);
     forceTimer.unref();
     this.child.once('close', () => clearTimeout(forceTimer));
   }

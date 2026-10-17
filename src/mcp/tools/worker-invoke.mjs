@@ -157,6 +157,7 @@
  * @issues #2892, #2896 (review reference, not reused as-is)
  */
 
+import { signalChild } from '../../process/signal-child.mjs';
 import { z } from 'zod';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -707,7 +708,7 @@ async function defaultLaunchShellWorker(invocation, { memoryMaxGb = DEFAULT_MCP_
 const MCP_TRANSPORT_MAX_BUFFER_BYTES = MAX_MCP_FRAME_BYTES;
 
 export class ChildProcessTransport {
-  constructor(child, { terminate = () => child.kill('SIGKILL'),
+  constructor(child, { terminate = () => signalChild(child, 'SIGKILL'),
     deadlineAtMs = null, now = () => Date.now(), isCancelled } = {}) {
     this._child = child;
     this._terminate = terminate;
@@ -890,11 +891,11 @@ export class ChildProcessTransport {
     try { child.stdin?.end(); } catch { /* already gone */ }
     await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
     if (child.exitCode === null && child.signalCode === null) {
-      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      try { signalChild(child, 'SIGTERM'); } catch { /* already gone */ }
       await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
     }
     if (child.exitCode === null && child.signalCode === null) {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      try { signalChild(child, 'SIGKILL'); } catch { /* already gone */ }
     }
     this._buffer = undefined;
   }
@@ -1122,7 +1123,7 @@ async function defaultCallMcpWorkerBaseline(mcpBinding, server, options = {}) {
           await client.notification({ method: 'notifications/cancelled', params: { requestId: transport.lastRequestId, reason: 'operator-cancel' } });
           return true;
         } catch {
-          try { child.kill('SIGTERM'); return true; } catch { return false; }
+          try { return signalChild(child, 'SIGTERM'); } catch { return false; }
         }
       },
     };
@@ -1352,7 +1353,7 @@ async function defaultCallMcpWorkerGated(mcpBinding, server, options = {}) {
           await client.notification({ method: 'notifications/cancelled', params: { requestId: transport.lastRequestId, reason: 'operator-cancel' } });
           return true;
         } catch {
-          try { child.kill('SIGTERM'); return true; } catch { return false; }
+          try { return signalChild(child, 'SIGTERM'); } catch { return false; }
         }
       },
     };

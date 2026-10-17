@@ -15,6 +15,7 @@
  * @implements #892
  */
 
+import { signalChild } from '../../process/signal-child.mjs';
 import { readFile, mkdir, symlink, access, readdir, chmod, lstat, open } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -417,7 +418,7 @@ function spawnCodexLoginWithApiKey(
       child.removeListener('error', onChildError);
       child.removeListener('exit', onExit);
       if (result.error && child.exitCode === null && child.signalCode === null) {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        try { signalChild(child, 'SIGKILL'); } catch { /* already gone */ }
       }
       resolve(result);
     };

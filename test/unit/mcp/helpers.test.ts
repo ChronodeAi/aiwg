@@ -175,6 +175,7 @@ describe("MCP helpers — isolated allow-list sources and cache", () => {
 
   function helpChild(stdout: string, code = 0) {
     const child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdout: new EventEmitter(), stderr: new EventEmitter(),
       stdin: Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn() }), kill: vi.fn(),
     });
@@ -589,6 +590,7 @@ describe("MCP helpers — CLI process boundary", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     child = Object.assign(new EventEmitter(), {
+      pid: 54321,
       stdout: new EventEmitter(), stderr: new EventEmitter(),
       stdin: Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn() }), kill: vi.fn(),
     });

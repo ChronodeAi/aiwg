@@ -73,6 +73,10 @@ async function installPackage(bytes: Buffer) {
   const relative = path.relative(path.join(base, 'src', 'models'), target);
   await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
     `export * from ${JSON.stringify(relative)};\n`);
+  // The transport signals children through process/signal-child.mjs (#3194).
+  await mkdir(path.join(base, 'src', 'process'), { recursive: true, mode: 0o755 });
+  await writeFile(path.join(base, 'src', 'process', 'signal-child.mjs'),
+    `export * from ${JSON.stringify(path.relative(path.join(base, 'src', 'process'), path.resolve('src/process/signal-child.mjs')))};\n`);
   await mkdir(path.join(base, 'src', 'mission-protocol'), { recursive: true, mode: 0o755 });
   const missionTarget = path.resolve('src/mission-protocol/index.ts');
   const missionRelative = path.relative(path.join(base, 'src', 'mission-protocol'), missionTarget);

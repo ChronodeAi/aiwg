@@ -10,7 +10,7 @@ export async function sweepWorkerStdin(root = tmpdir(), { staleMs = 86400000, no
   try {
     for (const name of await readdir(root)) {
       const match = /^aiwg-worker-stdin-(\d+)-[A-Za-z0-9]+$/.exec(name);
-      if (!match || isAlive(Number(match[1]))) continue;
+      if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0 || isAlive(Number(match[1]))) continue;
       const directory = path.join(root, name);
       try {
         const stat = await lstat(directory);

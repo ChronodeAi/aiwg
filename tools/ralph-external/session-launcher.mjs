@@ -49,6 +49,7 @@ import { ScopedFailureBreaker, attributeFailureScope } from './lib/consecutive-f
 import { launcherRecoveryEvidence, observeLauncherRecoveryOutcome, recordLauncherRecoveryHint } from './lib/launcher-recovery-evidence.mjs';
 export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence.mjs';
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
 const { getWorkerRecoveryCapabilities, workerVersionProbeEnvironment } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
@@ -213,12 +214,21 @@ export function terminateChildWithGrace(child, { graceMs = 5000 } = {}) {
   return new Promise(resolve => {
     const exited = () => child.exitCode !== null || child.signalCode !== null;
     if (exited()) { resolve({ terminated: true }); return; }
+    // A spawn without a PID cannot have started. Avoid waiting for ENOENT;
+    // signalChild still validates every PID at both signal boundaries.
+    if (!child.pid) { resolve({ terminated: false }); return; }
     let settled = false;
-    const done = terminated => { if (settled) return; settled = true; resolve({ terminated }); };
-    child.once('exit', () => done(true));
-    try { child.kill('SIGTERM'); } catch { done(exited()); return; }
+    const done = terminated => {
+      if (settled) return;
+      settled = true;
+      child.removeListener('exit', onExit);
+      resolve({ terminated });
+    };
+    const onExit = () => done(true);
+    child.once('exit', onExit);
+    try { signalChild(child, 'SIGTERM'); } catch { done(exited()); return; }
     const killTimer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      try { signalChild(child, 'SIGKILL'); } catch { /* already exited */ }
       setTimeout(() => done(exited()), 100);
     }, graceMs);
     if (killTimer.unref) killTimer.unref();
@@ -3983,7 +3993,7 @@ export class SessionLauncher extends EventEmitter {
       });
 
       const child = this.currentProcess;
-      const terminate = (signal) => { try { if (isOmp && process.platform !== 'win32') { if (isSafeWorkerGroupTarget(child.pid)) process.kill(-child.pid, signal); } else child.kill(signal); } catch { /* process already exited */ } };
+      const terminate = (signal) => { try { if (isOmp && process.platform !== 'win32') { if (isSafeWorkerGroupTarget(child.pid)) process.kill(-child.pid, signal); } else signalChild(child, signal); } catch { /* process already exited */ } };
 
       // Capture stdout
       child.stdout.on('data', (chunk) => {
@@ -4379,7 +4389,7 @@ export class SessionLauncher extends EventEmitter {
         try { process.kill(-child.pid, signal); } catch { /* already exited */ }
         const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null && isSafeWorkerGroupTarget(child.pid)) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } } }, 500);
         timer.unref();
-      } else this.currentProcess.kill(signal);
+      } else signalChild(this.currentProcess, signal);
     }
   }
 

@@ -8,8 +8,10 @@
  * @tests @test/unit/daemon/agent-supervisor.test.js
  */
 
+import { importImpl } from '../_resolve-impl.mjs';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.mjs');
 
 export class AgentSupervisor extends EventEmitter {
   constructor(options = {}) {
@@ -73,12 +75,11 @@ export class AgentSupervisor extends EventEmitter {
     const entry = this.running.get(taskId);
     if (entry) {
       try {
-        entry.process.kill('SIGTERM');
+        // Cleanup happens in the exit handler; refusal is not delivery.
+        return signalChild(entry.process, 'SIGTERM');
       } catch {
-        // Process may have already exited
+        return false;
       }
-      // Cleanup happens in exit handler
-      return true;
     }
 
     return false;
@@ -145,7 +146,7 @@ export class AgentSupervisor extends EventEmitter {
         // Force kill remaining
         for (const [taskId, entry] of this.running) {
           try {
-            entry.process.kill('SIGKILL');
+            signalChild(entry.process, 'SIGKILL');
           } catch {
             // Already dead
           }
@@ -230,7 +231,7 @@ export class AgentSupervisor extends EventEmitter {
     // Timeout handler
     const timeoutTimer = setTimeout(() => {
       try {
-        proc.kill('SIGTERM');
+        signalChild(proc, 'SIGTERM');
       } catch {
         // Already dead
       }
