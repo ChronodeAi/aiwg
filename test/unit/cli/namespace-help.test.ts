@@ -54,6 +54,8 @@ describe('namespace help routing', () => {
   });
 
   it.each([
+    ['models', '', ['list', 'audit', 'resolve', 'validate', 'sources', 'refresh', 'set-default', 'set', 'migrate', '--role', '--task', '--group', '--brief', '--workdir', '--final-output', '--transport', '--format', '--authorize-premium']],
+    ['models', 'resolve', ['--task', '--group', '--brief', '--workdir', '--final-output', '--transport', '--format', '--authorize-premium']],
     ['corpus', '', ['snapshot', 'radar-init', 'curator-init', '--write', '--out', '--cadence', '--cluster', '--format']],
     ['corpus', 'snapshot', ['snapshot', '--write', '--out', '--format', '--compute-only', '--delta-only']],
     ['corpus', 'radar-init', ['--ref', '--all-missing', '--cadence', '--cluster', '--write']],
