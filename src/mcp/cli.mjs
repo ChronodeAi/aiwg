@@ -197,6 +197,9 @@ Inject Options:
 Serve Options:
   --transport <type>   Transport type: stdio (default), http
   --port <number>      Port for HTTP transport (default: 3100)
+  --toolsets <csv>     Opt-in toolsets: flows, missions, memory, kb, research,
+                       activity-log, index, ralph, mc, ops, sandbox, decision, workers
+                       all excludes workers; enable explicitly with --toolsets all,workers
 
 Examples:
   # Define MCP servers
@@ -589,7 +592,7 @@ POSITIONING:
   MCP is optional and provider-agnostic. Baseline AIWG reachability is file
   deployment plus CLI discovery: aiwg discover / aiwg show <type> <name>.
 
-CORE TOOLS (15, always registered):
+CORE TOOLS (16, always registered):
   discover                         Cross-type ranked catalog search
   skill-list / skill-show           Skill catalog and SKILL.md body fetch
   command-list / command-show       CLI command catalog and command spec fetch
@@ -599,10 +602,11 @@ CORE TOOLS (15, always registered):
   template-render                   Render AIWG template with variables
   command-run                       Allow-listed CLI dispatch; confirmation-gated when needed
   artifact-read / artifact-write    Project .aiwg/ artifact IO
+  ask-user                         Structured user question via elicitation or Markdown
 
-OPT-IN TOOLSETS (60 additional tools):
+OPT-IN TOOLSETS (71 additional tools, including explicit workers):
   flows          flow-list / flow-show / flow-run
-  missions       mission-guide / mission-dispatch / mission-status
+  missions       mission-guide / mission-dispatch / mission-status / worker-resolve
   memory         memory-* and reflections-* storage operations
   kb             kb-* storage operations
   research       provenance-* and research-store-* storage operations
@@ -612,10 +616,13 @@ OPT-IN TOOLSETS (60 additional tools):
   mc             start / dispatch / status / stop / list
   ops            status / list / use / push
   sandbox        fleet inventory / mutation / reconciliation and governed activity
+  decision       validation / evaluation / rules / features / calibration
+  workers        worker-invoke (explicit opt-in; all excludes workers)
 
 Enable opt-in tools:
   AIWG_MCP_TOOLSETS=flows,missions,memory,kb,ralph,sandbox aiwg mcp serve
-  aiwg mcp serve --toolsets=all
+  aiwg mcp serve --toolsets all
+  aiwg mcp serve --toolsets all,workers  # explicitly enable worker-invoke
 
 RESOURCES:
   aiwg://prompts/catalog              List of prompt templates
@@ -636,7 +643,7 @@ TRANSPORTS:
 
 ENVIRONMENT:
   AIWG_ROOT          Path to AIWG installation (default: ~/.local/share/ai-writing-guide)
-  AIWG_MCP_TOOLSETS  Comma-separated opt-in toolsets; use all for every toolset
+  AIWG_MCP_TOOLSETS  Comma-separated opt-in toolsets; all excludes workers
   AIWG_SANDBOX_MANAGEMENT_URL         Sandbox management API origin (HTTPS except loopback)
   AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE  Mode-0600 management bearer file for sandbox tools
 

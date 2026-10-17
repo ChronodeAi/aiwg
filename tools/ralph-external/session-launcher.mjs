@@ -51,7 +51,7 @@ export { observeLauncherRecoveryOutcome } from './lib/launcher-recovery-evidence
 import { checkWorkerDispatch, detectWorkerIsolation, launchIsolatedWorker, getWorkerIsolationStatus, stopWorkerUnit, readUnitControlGroup } from './lib/worker-isolation.mjs';
 
 // Resolve the same installation owner as CLI/MCP inputs in source and packaged layouts.
-const { getWorkerRecoveryCapabilities } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
+const { getWorkerRecoveryCapabilities, workerVersionProbeEnvironment } = await importImpl(import.meta.url, 'models/worker-installation.mjs');
 
 /**
  * Kernel-verified containment gate for any candidate worker identity,
@@ -4491,6 +4491,7 @@ export async function isClaudeAvailable() {
   return new Promise((resolve) => {
     const child = spawn('claude', ['--version'], {
       stdio: 'pipe',
+      env: workerVersionProbeEnvironment(),
     });
 
     child.on('close', (code) => {
@@ -4513,6 +4514,7 @@ export async function getClaudeVersion() {
 
     const child = spawn('claude', ['--version'], {
       stdio: 'pipe',
+      env: workerVersionProbeEnvironment(),
     });
 
     child.stdout.on('data', (chunk) => {

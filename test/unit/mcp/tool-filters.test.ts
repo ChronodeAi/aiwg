@@ -260,7 +260,9 @@ describe.each([
   it("creates and rewrites user settings privately", async () => {
     const registry = new Registry(join(root, "config"));
     await registry.add(servers[0]);
-    const options = { scope: "user" as const, toolFilters: { deny: ["tracker__delete_issue"], allow: [] } };
+    const projectDir = join(root, "project");
+    mkdirSync(projectDir);
+    const options = { projectDir, scope: "user" as const, toolFilters: { deny: ["tracker__delete_issue"], allow: [] } };
     const settings = join(root, "home", ".claude", "settings.json");
     await inject(registry, "claude", options);
     if (process.platform !== "win32") {

@@ -5874,7 +5874,7 @@ describe('review 9 bounded recovery regressions', () => {
       const b = await reserveDirectWorkerAllowance({ ...args, invocationId: 'b' });
       await debitDirectWorkerAllowance(b);
       const names = trace.map(target => path.basename(String(target)));
-      const expected = ['.', path.basename(os.tmpdir()), path.basename(root), 'new', 'parent', 'capture', 'ledger'];
+      const expected = ['.', ...path.resolve(captureRoot, 'ledger').split(path.sep).filter(Boolean)];
       // A has created every directory but has synced none of their parents.
       // B must independently publish the entire ancestry, outermost first.
       expect(names.slice(0, expected.length)).toEqual(expected);
