@@ -328,7 +328,7 @@ export const initHandler: CommandHandler = {
           ui.dim(`  Would ${describeWorkerDispatchWrite(workerDispatchArg)} (--dry-run writes nothing).`);
         } else if (workerDispatchArg === 'enable') {
           await writeAiwgConfig(projectDir, { ...existing, parallelism: { ...existing.parallelism, worker_dispatch: true } });
-          ui.success('  Enabled parallelism.worker_dispatch.');
+          ui.success('  Enabled parallelism.worker_dispatch. Next: aiwg doctor --probe-workers --qualify.');
         } else {
           await writeAiwgConfig(projectDir, { ...existing, setup: { ...existing.setup, worker_dispatch_offer: 'declined' } });
           ui.success('  Recorded worker-dispatch decline (setup.worker_dispatch_offer).');
@@ -341,6 +341,7 @@ export const initHandler: CommandHandler = {
           const decision = await askWorkerDispatchOffer(rl, existing.parallelism, existing.setup, ctx.signal);
           if (decision?.kind === 'enable') {
             await writeAiwgConfig(projectDir, { ...existing, parallelism: { ...existing.parallelism, worker_dispatch: true } });
+            ui.info('Next: aiwg doctor --probe-workers --qualify.');
           } else if (decision?.kind === 'decline') {
             await writeAiwgConfig(projectDir, { ...existing, setup: { ...existing.setup, worker_dispatch_offer: 'declined' } });
           }
@@ -459,6 +460,7 @@ export const initHandler: CommandHandler = {
 
     // Write
     await writeAiwgConfig(projectDir, config);
+    if (workerDispatchDecision?.kind === 'enable') ui.info('Next: aiwg doctor --probe-workers --qualify.');
     const normalizedAiwgMdPath = await writeNormalizedAiwgMd(projectDir);
     const workspace = await ensureWorkspaceContext(projectDir);
 

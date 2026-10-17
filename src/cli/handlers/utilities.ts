@@ -541,6 +541,10 @@ Options:
   --bundle <name>       Limit deployment verification to one bundle
   --scope <scope>       Verification scope: project or user
   --user                Alias for --scope user
+  --qualify             With --probe-workers, record installation and configured model/role approval
+  --yes                 Confirm worker qualification without a terminal
+  --dry-run             With --probe-workers, preview qualification without writes
+  --cli NAME            Limit worker probes/qualification to one configured CLI
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
   --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification)
@@ -574,9 +578,9 @@ export const doctorHandler: CommandHandler = {
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Validate before any early-return mode: deployment and user-scope doctor
     // never invoke doctor.mjs, so they must enforce the same flag contract.
-    const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens'];
+    const valueFlags = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
     const knownFlags = new Set([
-      ...valueFlags, '--all-providers', '--probe-workers', '--no-budget-check', '--strict-context', '--json',
+      ...valueFlags, '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
       '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
     ]);
     const hasSwitch = (name: string): boolean => hasPositionalOrSwitch(ctx.args, name, valueFlags);
@@ -593,6 +597,9 @@ export const doctorHandler: CommandHandler = {
         if (!knownFlags.has(name) || (token.includes('=') && !valueFlags.includes(name))) {
           throw new Error(`Unknown flag: ${name}`);
         }
+      }
+      if (['--qualify', '--cli', '--yes', '--dry-run'].some(flag => hasSwitch(flag) || values.get(flag)) && !hasSwitch('--probe-workers')) {
+        throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
       }
       if (hasSwitch('--json') && !hasSwitch('--probe-workers') && !hasSwitch('--deployment')) {
         throw new Error('--json requires --probe-workers or --deployment');
@@ -643,7 +650,7 @@ export const doctorHandler: CommandHandler = {
     // printed exactly one JSON document (or a usage error) on its own
     // stdio — every section below writes human-readable text, so returning
     // here keeps stdout to the JSON document alone.
-    if (hasSwitch('--json') || result.exitCode === 2) return result;
+    if (hasSwitch('--json') || hasSwitch('--qualify') || hasSwitch('--cli') || hasSwitch('--dry-run') || result.exitCode === 2) return result;
     let agentSkillsFailure = false;
 
     try {
