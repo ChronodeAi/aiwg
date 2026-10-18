@@ -8,6 +8,7 @@ import { getGraphIndexDir, loadUserGraphConfigs } from '../../../src/artifacts/t
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
 import { SessionRepository } from '../../../src/sessions/repository.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 let root: string;
 let workspace: string;
@@ -56,7 +57,7 @@ afterEach(() => {
 });
 
 describe('index refresh', () => {
-  it('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
+  itWithSqlite('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
     const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
     fs.mkdirSync(path.dirname(database), { recursive: true });
     new SessionRepository(database).close();
@@ -84,7 +85,7 @@ describe('index refresh', () => {
     expect(fs.existsSync(path.join(workspace, '.aiwg/sessions/discovery-manifest.json'))).toBe(false);
   });
 
-  it('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
+  itWithSqlite('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
     const other = path.join(root, 'zz-other');
     config(other);
     for (const ws of [workspace, other]) {
