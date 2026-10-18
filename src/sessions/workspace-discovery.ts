@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import {
-  access, mkdir, readFile, realpath, rename, stat, writeFile,
+  access, mkdir, readFile, readdir, realpath, rename, stat, writeFile,
 } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -57,6 +57,13 @@ export interface DiscoveryProviderReport {
   dateRangeBasis: 'source-mtime';
   reasonCode: string | null;
   remediation: string | null;
+  rootCounts?: Array<{
+    root: string;
+    rootId: string;
+    status: 'checked' | 'unavailable';
+    sourceCount: number;
+    duplicateCount: number;
+  }>;
   museSourceInspections?: Array<MuseWorkspaceInspection & {
     sourceKey: string;
     redactedLocator: string;
@@ -84,6 +91,7 @@ export interface DiscoverWorkspaceOptions {
   providerHome?: string;
   operatorHome?: string;
   codexRoot?: string;
+  codexRoots?: readonly string[];
   ompRoot?: string;
   museRoot?: string;
   dshRoot?: string;
@@ -140,11 +148,8 @@ export async function discoverWorkspaceHistories(
     },
     {
       provider: 'codex',
-      roots: options.codexRoot
-        ? [resolve(options.codexRoot)]
-        : options.providerHome
-          ? [join(resolve(options.providerHome), '.codex', 'sessions')]
-          : [],
+      roots: options.authorizedRoots || !expectedProviders.includes('codex')
+        ? [] : await codexDiscoveryRoots(options),
     },
     {
       provider: 'cursor',
@@ -187,14 +192,26 @@ export async function discoverWorkspaceHistories(
     if (!expectedProviders.includes(entry.provider) || !supportedProviders.has(entry.provider)) continue;
     const adapter = registry.get(entry.provider);
     if (adapter.disposition === 'unsupported' || !adapter.supportedOperations.includes('discover')) continue;
-    const availableRoots = [];
+    const availableRoots: string[] = [];
+    const rootCounts = new Map<string, NonNullable<DiscoveryProviderReport['rootCounts']>[number]>();
     for (const root of options.authorizedRoots ? options.authorizedRoots[entry.provider] ?? [] : entry.roots) {
       if (await pathExists(root)) {
         const canonical = await canonicalPath(root);
         if (options.authorizedRoots && canonical !== root) {
           throw new SessionContractError('INVALID_ARGUMENT', 'previously authorized provider root changed; rediscover with explicit authorization');
         }
-        availableRoots.push(canonical);
+        if (entry.provider !== 'codex' || !availableRoots.includes(canonical)) {
+          availableRoots.push(canonical);
+          rootCounts.set(canonical, {
+            root: redactSourceLocator(canonical), rootId: sha256(canonical),
+            status: 'checked', sourceCount: 0, duplicateCount: 0,
+          });
+        }
+      } else {
+        rootCounts.set(root, {
+          root: redactSourceLocator(root), rootId: sha256(root),
+          status: 'unavailable', sourceCount: 0, duplicateCount: 0,
+        });
       }
     }
     if (availableRoots.length === 0) {
@@ -214,6 +231,7 @@ export async function discoverWorkspaceHistories(
           ? `Pass --${entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider}-root with an explicitly authorized sessions root.`
           : `No authorized ${entry.provider} workspace history root was found.`,
       ));
+      if (entry.provider === 'codex') reports.get(entry.provider)!.rootCounts = [...rootCounts.values()];
       continue;
     }
     authorizedRoots[entry.provider] = availableRoots;
@@ -260,11 +278,20 @@ export async function discoverWorkspaceHistories(
         selectedPath: locator,
         allowedRoots: [authorizedRoot],
       });
-      const dedupeKey = `${entry.provider}\0${fingerprint.digest}\0${fingerprint.size}`;
-      if (seen.has(dedupeKey)) continue;
+      const rolloutId = entry.provider === 'codex' && descriptor.locatorClass === 'codex-rollout-jsonl'
+        ? await codexRolloutId(locator) : undefined;
+      const dedupeKey = rolloutId
+        ? `codex\0rollout\0${rolloutId}`
+        : `${entry.provider}\0${fingerprint.digest}\0${fingerprint.size}`;
+      const rootCount = rootCounts.get(authorizedRoot)!;
+      if (seen.has(dedupeKey)) {
+        rootCount.duplicateCount += 1;
+        continue;
+      }
       seen.add(dedupeKey);
       if (workspaceMatch === 'subfolder') matchedBySubfolder += 1;
       if (workspaceMatch === 'worktree') matchedByWorktree += 1;
+      rootCount.sourceCount += 1;
       const source = sourceFromDescriptor(
         descriptor,
         locator,
@@ -310,6 +337,7 @@ export async function discoverWorkspaceHistories(
     }
     report.matchedBySubfolder = matchedBySubfolder;
     report.matchedByWorktree = matchedByWorktree;
+    if (entry.provider === 'codex') report.rootCounts = [...rootCounts.values()];
     reports.set(entry.provider, report);
   }
 
@@ -363,6 +391,7 @@ export async function discoverWorkspaceHistories(
       reasonCode: provider.reasonCode,
       ...(provider.matchedBySubfolder !== undefined ? { matchedBySubfolder: provider.matchedBySubfolder } : {}),
       ...(provider.matchedByWorktree !== undefined ? { matchedByWorktree: provider.matchedByWorktree } : {}),
+      ...(provider.rootCounts ? { rootCounts: provider.rootCounts } : {}),
       ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
@@ -501,10 +530,53 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
       reasonCode: provider.reasonCode,
       ...(provider.matchedBySubfolder !== undefined ? { matchedBySubfolder: provider.matchedBySubfolder } : {}),
       ...(provider.matchedByWorktree !== undefined ? { matchedByWorktree: provider.matchedByWorktree } : {}),
+      ...(provider.rootCounts ? { rootCounts: provider.rootCounts } : {}),
       ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
   return sha256(JSON.stringify(identity));
+}
+
+async function codexDiscoveryRoots(options: DiscoverWorkspaceOptions): Promise<string[]> {
+  const explicit = [...(options.codexRoots ?? []), ...(options.codexRoot ? [options.codexRoot] : [])];
+  if (explicit.length > 0) return [...new Set(explicit.map((root) => resolve(root)))];
+  // Shared stores require the same explicit provider-home authorization as the default root.
+  if (!options.providerHome) return [];
+  const codexHome = join(resolve(options.providerHome), '.codex');
+  const roots = [join(codexHome, 'sessions')];
+  if (process.env.CODEX_HOME) roots.push(resolve(process.env.CODEX_HOME, 'sessions'));
+  try {
+    const roles = await readdir(join(codexHome, 'roles-runtime'), { withFileTypes: true });
+    for (const role of roles.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (role.isDirectory() || role.isSymbolicLink()) {
+        roots.push(join(codexHome, 'roles-runtime', role.name, '.codex', 'sessions'));
+      }
+    }
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+  }
+  return [...new Set(roots)];
+}
+
+async function codexRolloutId(locator: string): Promise<string | undefined> {
+  const input = createReadStream(locator, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let count = 0;
+  try {
+    for await (const line of lines) {
+      if (++count > 50) break;
+      let value: unknown;
+      try { value = JSON.parse(line); } catch { continue; }
+      const record = asObject(value);
+      const id = asObject(record.payload).id;
+      if (record.type === 'session_meta' && typeof id === 'string' && id.length > 0) return id;
+    }
+    return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+      .exec(basename(locator))?.[1];
+  } finally {
+    lines.close();
+    input.destroy();
+  }
 }
 
 async function codexSourceWorkspaceMatch(
