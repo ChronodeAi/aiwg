@@ -139,6 +139,32 @@ describe('decision ledger', () => {
   // Baseline acceptance criteria (#2946)
   // ---------------------------------------------------------------------
 
+  it('records sampling telemetry and groups answered hit rates by pass policy and escalation', async () => {
+    const projectRoot = await tempRoot();
+    const aggregate: NonNullable<DecisionAskResult['aggregate']> = {
+      algorithm: 'majority-v1', semantics: 'stability-signal-not-correctness',
+      passesRequested: 10, escalationPasses: 20, passesRun: 10, escalated: false, earlyStop: null,
+      agreementRatio: 1, votes: { true: 10, false: 0 }, answer: true,
+      confidenceSummary: { count: 10, missing: 0, mean: 0.93, min: 0.93, max: 0.93 }, passes: [],
+    };
+    const answered = buildDecisionLedgerRecord(yesNoInput, { ...answeredResult, aggregate }, buildContext({ projectRoot }));
+    const fallback = buildDecisionLedgerRecord(yesNoInput, { ...fallbackResult, reason: 'low-agreement',
+      aggregate: { ...aggregate, passesRun: 14, escalated: true, earlyStop: 'certain-failure', agreementRatio: 0.5 } }, buildContext({ projectRoot }));
+    expect(answered).toMatchObject({ passesRequested: 10, escalationPasses: 20, passesRun: 10, escalated: false,
+      agreementRatio: 1, passConfidenceSummary: { mean: 0.93 } });
+    await appendDecisionLedgerRecord(answered, { projectRoot });
+    await appendDecisionLedgerRecord(fallback, { projectRoot });
+    await appendDecisionLedgerRecord(buildDecisionLedgerRecord(yesNoInput, answeredResult, buildContext({ projectRoot })), { projectRoot });
+    const policies = await decisionLedgerStats(projectRoot, { groupBy: 'passes' });
+    expect(policies.skipped).toBe(0);
+    expect(policies.groups.find(group => group.key === '10/20')).toMatchObject({ totalCalls: 2, answered: 1, fallback: 1,
+      hitRate: 0.5, escalatedCalls: 1, passesRun: 24, agreement: { count: 2, mean: 0.75 } });
+    expect(policies.groups.find(group => group.key === '1/1')).toMatchObject({ hitRate: 1 });
+    const escalation = await decisionLedgerStats(projectRoot, { groupBy: 'escalation' });
+    expect(escalation.groups.find(group => group.key === 'true')).toMatchObject({ totalCalls: 1, hitRate: 0 });
+    expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);
+  });
+
   it('appends exactly one ledger record per call, including fallback and not-configured outcomes', async () => {
     const projectRoot = await tempRoot();
     await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot));

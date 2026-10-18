@@ -73,6 +73,12 @@ describe('decision-ask MCP tool ledger parity (#2946)', () => {
     expect(response.structuredContent.result).toMatchObject({ status: 'fallback', reason: 'not-configured' });
   });
 
+  it('passes sampling overrides and project context to the shared ask runtime', async () => {
+    await captureTools().get('decision-ask')!.handler({ question: 'Proceed?', yes_no: true, passes: 10, escalation_passes: 20 });
+    expect(askDecisionMock).toHaveBeenCalledWith(expect.objectContaining({ passes: 10, escalationPasses: 20 }),
+      expect.objectContaining({ cwd: process.cwd() }));
+  });
+
   it('tags caller null when the optional caller input is omitted', async () => {
     const tools = captureTools();
     await tools.get('decision-ask')!.handler({ question: 'Proceed?', yes_no: true });

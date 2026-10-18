@@ -1,3 +1,4 @@
+import { validateDecisionConfig, type DecisionConfig } from './decision-config.js';
 /**
  * Project-Level AIWG Config
  *
@@ -466,6 +467,7 @@ export interface ProjectLocalConfig {
  * Top-level shape of .aiwg/aiwg.config
  */
 export interface AiwgConfig {
+  decision?: DecisionConfig;
   sessions?: {
     /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
     codex_roots?: string[];
@@ -2022,6 +2024,7 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
     ...validateProjectConfig(parsed.project),
     ...validateParallelismConfig(parsed.parallelism),
+    ...validateDecisionConfig(parsed.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
@@ -2072,6 +2075,7 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
     ...validateThreatAssessmentConfig(config.security?.threatAssessment),
     ...validateProjectConfig(config.project),
     ...validateParallelismConfig(config.parallelism),
+    ...validateDecisionConfig(config.decision),
   ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);

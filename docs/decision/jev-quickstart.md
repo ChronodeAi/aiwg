@@ -47,6 +47,22 @@ project files. Region defaults to `"us"`; change it with `--region`. The
 endpoint is the official `https://api.typesafe.ai/v1/systemone` unless
 `--endpoint` names a custom origin that passes the adapter allowlist rules.
 
+Enable the decision runtime persistently for this project:
+
+```bash
+aiwg config set --project decision.enabled true
+aiwg decision status
+```
+
+Enablement precedence is `AIWG_DECISION_ENABLED=0|1` > project
+`.aiwg/aiwg.config` (`decision.enabled`) > user `config.yaml`
+(`decision.enabled`) > `false`. Use `aiwg config set decision.enabled true`
+for the user setting. Status reports the effective `enabled` value and
+`enabledSource` (`env`, `project`, `user`, or `default`) without reading credentials.
+This setting allows `evaluate`; Jev still needs a configured token.
+The credential file setup opt-in continues to enable `ask` when none of
+these layers sets enablement. An explicit `false` overrides that opt-in.
+
 ## 3. Verify
 
 The `--verify` flag in step 2 makes one tiny live yes/no call and reports status, model, and
@@ -58,7 +74,8 @@ and otherwise exits 2 with instructions.
 ```
 aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5)
                   [--context "<text>" | --context-file <path> | --context-stdin]
-                  [--threshold 0.8] [--timeout-ms 15000] [--json]
+                  [--threshold 0.8] [--timeout-ms 15000]
+                  [--passes N] [--escalation-passes N] [--json]
 ```
 
 ```bash
@@ -82,10 +99,89 @@ Jev sees only the description, so bare ids produce more low-confidence
 fallbacks. `--scale lo-hi` allows at most 10 levels and answers the most
 likely level. Context is untrusted
 data capped at 32 KiB — larger context exits 2 with
-`reason: "context-too-large"`. Nothing is written and nothing is executed.
+`reason: "context-too-large"`. Completed asks append telemetry to the decision
+ledger; question/context text requires `--record-text`.
 
 Without `--json`, output is one line: `answer (confidence 0.93, jev-1.13.0)`
 or `FALLBACK to LLM: <reason>`.
+
+### Passes, escalation, and telemetry
+
+Project `.aiwg/aiwg.config` can opt into independent repeated Jev requests:
+
+```json
+{
+  "decision": {
+    "ask": { "passes": 10, "escalation_passes": 20 }
+  }
+}
+```
+
+The product default is 5 initial passes with an escalation total of 10 when
+`decision.ask` is unset. `escalation_passes` defaults to twice `passes`, so a
+project that sets `passes: 10` escalates to 20 unless it says otherwise. Both must be positive safe integers,
+and escalation must be at least the initial count; the config loader validates
+this relationship. CLI `--passes N` and `--escalation-passes N` override the
+corresponding project values. MCP `decision-ask` accepts `passes` and
+`escalation_passes` with the same precedence and validation. Programmatic
+`askDecision` callers supply `options.cwd` to load project defaults, or pass
+`passes`/`escalationPasses` directly. Setup verification remains a single pass.
+
+Each pass is a separate request with no retries. Up to four requests run at
+once, in bounded waves. One `--timeout-ms` budget covers credential lookup and
+all waves, including escalation; pending requests are aborted and no further
+wave starts at the deadline. Provider rate-limit errors cause fallback through
+the normal error path, without a retry burst.
+
+Aggregation reuses the ensemble modal-vote calculation (`majority-v1`): yes/no
+passes vote for their most likely boolean, choices vote for the selected id,
+and scales vote for the most likely integer level (a **modal bucket**, rather
+than averaging adjacent levels). Ties select the lowest canonical string
+value, as in ensemble aggregation. Agreement is the largest vote count divided
+by passes run; errors and abstentions have no vote but remain in the denominator.
+Per-pass confidence follows the single-pass rules above. Reported answered
+`confidence = agreementRatio × mean(per-pass confidence)`; this is a stability
+signal, not calibrated evidence of correctness. For yes/no, `probability` is
+the mean raw true probability across successful passes.
+
+A round is problematic if agreement or mean confidence is below `--threshold`
+(default 0.8), confidence is missing, or any pass abstains or errors. Escalation
+adds requests **up to the total**, retaining the first round's observations.
+A persistently problematic ask returns `status: "fallback"` with
+`reason: "low-agreement"`, `low-confidence`, or the existing error/abstention
+reason. An error or abstention cannot be repaired by later successful passes.
+The two threshold checks use agreement and mean confidence separately, so an
+answered result's agreement-weighted confidence can be below the threshold.
+
+Calls stop early when failure is mathematically certain even if every remaining
+pass voted for the leading answer with confidence 1, or when an error,
+abstention, or missing confidence makes acceptance impossible. This can stop
+a problematic initial round before its full count; `escalated` records the
+extended budget considered. Successful asks run the entire initial or escalated
+round: an unseen pass could still fail, so early success cannot be guaranteed
+under the any-error rule. `earlyStop` records `certain-failure`, `timeout`, or
+null; `passesRun` counts started passes, including interrupted ones.
+
+`--json` includes `aggregate`: requested/total/run counts, escalation and early
+stop, votes, modal answer, agreement, confidence summary, and each pass's status,
+answer, confidence, probability (yes/no), model, token usage, and latency. Top-level
+usage sums known token counts across all passes; latency covers the whole ask.
+The ledger stores compact pass/confidence summaries, counts, agreement, escalation,
+early stop, total usage, and total latency. Individual pass answers stay in JSON
+output, keeping the ledger's existing record-size and redaction limits.
+
+```bash
+aiwg decision ask --question "Proceed?" --yes-no --passes 10 --escalation-passes 20 --json
+aiwg decision stats --group-by passes --json
+aiwg decision stats --group-by escalation --json
+```
+
+Stats report `hitRate = answered / totalCalls`, mean agreement, escalation count,
+passes run, and token usage. `passes` groups by initial/escalation policy (e.g.
+`10/20`), while `escalation` groups by whether the extended budget was considered.
+Legacy ledger entries count as policy `1/1`, with no agreement observation. Use
+these measurements to compare hit rates, latency in history, and token costs
+before reducing sampling counts.
 
 ## 5. How agents use it
 
