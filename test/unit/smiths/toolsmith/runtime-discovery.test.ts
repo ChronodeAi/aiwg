@@ -351,6 +351,26 @@ describe.sequential('RuntimeDiscovery', () => {
       vi.unstubAllEnvs();
     });
 
+    it('uses an explicit workspace and suppresses refresh logs and resource warnings in quiet mode', async () => {
+      const originalCwd = process.cwd();
+      const basePath = join(testDir, 'quiet-catalog');
+      const quiet = new RuntimeDiscovery(basePath, { cwd: testDir, quiet: true });
+      const first = await quiet.discover();
+      expect(first.environment.workingDir).toBe(testDir);
+      expect(boundedProcess.boundedExecFileSync).toHaveBeenCalledWith(
+        'df', ['-k', '.'], 'quick', expect.objectContaining({ cwd: testDir }),
+      );
+      expect(await quiet.discover()).toEqual(first);
+      const other = join(testDir, 'other-workspace');
+      await mkdir(other);
+      const changed = await new RuntimeDiscovery(basePath, { cwd: other, quiet: true }).discover();
+      expect(changed.environment.workingDir).toBe(other);
+      expect(changed.inputFingerprint).not.toBe(first.inputFingerprint);
+      expect(console.log).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
+      expect(process.cwd()).toBe(originalCwd);
+    });
+
     it('finds allowlisted Cargo and local tools under a narrow PATH without probing arbitrary executables', async () => {
       const rg = await installTool('.cargo/bin', 'rg');
       const fd = await installTool('.local/bin', 'fd');

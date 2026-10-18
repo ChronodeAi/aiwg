@@ -9,6 +9,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `aiwg index refresh` also refreshes the runtime (toolsmith), models and local issues
+  indexes, selectable with `--only runtime|models|issues` (#330, Gitea #3251).
 - Add design documents for account-scoped Grok Bot sessions (#316, Gitea #3232),
   live session tail and attach (#311, Gitea #3228), and native Grok Build and Hermes
   session discovery (#312, Gitea #3229). Documentation only.
@@ -21,6 +23,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg index refresh` treats per-source session rejections as a partial import
+  rather than a job error, and clears its checkpoint after every finished run so
+  later runs no longer skip completed jobs (#328, Gitea #3249).
+- `aiwg index refresh` accepts repeatable `--root`, follows symlinked workspace
+  directories with cycle protection, and matches sessions recorded under the logical
+  (symlinked) workspace path (#329, Gitea #3250).
+- Session refresh uses every authorized discovery manifest recorded for a workspace
+  and reports workspaces without one (`noManifest`) instead of skipping them
+  silently (#331, Gitea #3252).
+- `aiwg sessions discover --json` drains stdout before exiting, so piped output is
+  complete (#332, Gitea #3253).
+- Install-identity diagnostics name the running and registered installs and give
+  adoption or removal guidance; `doctor` detects shadowing copies on PATH and in other
+  nvm Node versions (#334, Gitea #3255).
 - Evaluate inferred session lifecycle against the current time on catalog reads, so
   provisional `active` sessions age out after the inactivity threshold without
   re-import (#308, Gitea #3225).

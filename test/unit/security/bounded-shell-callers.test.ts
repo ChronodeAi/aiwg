@@ -148,7 +148,7 @@ describe('bounded argv callers', () => {
       });
     }
     expect(mocks.execFile).toHaveBeenCalledWith('man', ['-w', tool], 'quick', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
-    expect(mocks.execFile).toHaveBeenCalledWith('df', ['-k', '.'], 'quick', { encoding: 'utf-8' });
+    expect(mocks.execFile).toHaveBeenCalledWith('df', ['-k', '.'], 'quick', { encoding: 'utf-8', cwd: process.cwd() });
     expect(await discovery.checkTool('missing')).toMatchObject({ available: false });
     expect(mocks.shell).not.toHaveBeenCalled();
   });

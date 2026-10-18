@@ -147,6 +147,23 @@ describe('aiwg-config', () => {
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
 
   describe('readAiwgConfig', () => {
+    it('reads an explicit discovery manifest list', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({
+        sessions: { discovery_manifests: ['custom.json', '/tmp/manifest.json'] },
+      }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.discovery_manifests)
+        .toEqual(['custom.json', '/tmp/manifest.json']);
+    });
+
+    it.each([null, 'manifest.json', [null], [' ']])(
+      'rejects malformed discovery manifest configuration %j', async (discovery_manifests) => {
+        mkdirSync(join(tmpDir, '.aiwg'));
+        writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { discovery_manifests } }));
+        await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.discovery_manifests must be an array of non-empty paths');
+      },
+    );
+
     it('reads an explicit Codex discovery root list', async () => {
       mkdirSync(join(tmpDir, '.aiwg'));
       writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({

@@ -32,6 +32,7 @@ import {
   adoptInstallation,
   assertCanonicalInstallation,
   createInstallationIdentity,
+  formatInstallationDiagnostic,
   inspectInstallation,
   installationFile,
   loadInstallationIdentity,
@@ -136,6 +137,34 @@ describe('canonical installation identity', () => {
     const status = inspectInstallation({ configDir, actualRoot: brewRoot });
     expect(status.state).toBe('mismatch');
     expect(status.drift.join(' ')).toContain('differs from canonical root');
+  });
+
+  it('names running and registered roots and explicit recovery in drift diagnostics', () => {
+    const registered = packageRoot();
+    const running = packageRoot();
+    const identity = createInstallationIdentity({ actualRoot: registered, managerExecutable: process.execPath });
+    const status = inspectInstallation({ actualRoot: running, identity });
+    const message = formatInstallationDiagnostic(status);
+    expect(message).toContain(`Running installation: npm at ${running}`);
+    expect(message).toContain(`Registered installation: npm at ${registered}`);
+    expect(message).toContain('aiwg doctor');
+    expect(message).toContain('aiwg installation adopt --method npm --yes');
+    expect(message).toContain('npm uninstall -g aiwg');
+    expect(formatInstallationDiagnostic(status, { readOnlyCommand: 'doctor' })).toContain('`doctor` is read-only and continues');
+  });
+
+  it('requires explicit adoption even for a same-version npm copy', () => {
+    const configDir = tempDir('config');
+    const registered = packageRoot();
+    const running = packageRoot();
+    for (const root of [registered, running]) {
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'aiwg', version: '1.0.0' }));
+    }
+    saveInstallationIdentity(createInstallationIdentity({ actualRoot: registered, managerExecutable: process.execPath }), { configDir });
+    expect(() => assertCanonicalInstallation({ actualRoot: running, configDir })).toThrow('installation identity drift');
+    expect(loadInstallationIdentity({ configDir })?.root).toBe(registered);
+    expect(adoptInstallation({ actualRoot: running, configDir, managerExecutable: process.execPath }).state).toBe('aligned');
+    expect(loadInstallationIdentity({ configDir })?.root).toBe(running);
   });
 
   it('treats an edge launcher redirect as aligned, not drift (#2505)', () => {

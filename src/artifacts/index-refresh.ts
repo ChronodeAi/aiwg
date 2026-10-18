@@ -3,12 +3,13 @@ import * as fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { projectControlPath } from '../config/project-artifacts.js';
+import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 import { getUserStateDir } from '../config/user-state.js';
 import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
+import type { BatchImportReceipt } from '../sessions/batch-import.js';
 import {
   BUILTIN_GRAPH_CONFIGS, GRAPH_CONFIGS, INDEX_EXTRACTOR_VERSION, INDEX_VERSION,
   getGraphIndexDir, graphBuildOrder, loadGlobalGraphConfigs, loadUserGraphConfigs,
@@ -18,22 +19,25 @@ import {
 export interface RefreshOptions {
   cwd?: string;
   workspaces?: string[];
-  root?: string;
+  root?: string | string[];
   full?: boolean;
-  only?: 'graphs' | 'sessions' | 'caches';
+  only?: 'graphs' | 'sessions' | 'caches' | 'runtime' | 'models' | 'issues';
   dryRun?: boolean;
   lockWaitMs?: number;
   signal?: AbortSignal;
 }
 
 export interface RefreshJob {
-  kind: 'graph' | 'cache' | 'sessions';
+  kind: 'graph' | 'cache' | 'sessions' | 'runtime' | 'models' | 'issues';
   workspace: string;
   graph?: string;
   status: 'planned' | 'ok' | 'skipped' | 'deferred' | 'error';
   wallMs: number;
   reason?: string;
   error?: string;
+  sessionImport?: BatchImportReceipt;
+  sessionImports?: BatchImportReceipt[];
+  noManifest?: number;
 }
 
 export interface RefreshReport {
@@ -44,7 +48,7 @@ export interface RefreshReport {
   reason?: string;
   messages: string[];
   jobs: RefreshJob[];
-  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; wallMs: number };
+  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; wallMs: number };
 }
 
 interface Checkpoint {
@@ -86,27 +90,47 @@ function loadWorkspaceGraphs(workspace: string): void {
   loadGlobalGraphConfigs();
 }
 
-function workspacePaths(options: RefreshOptions): string[] {
+function workspacePaths(options: RefreshOptions): Map<string, string[]> {
   const cwd = options.cwd ?? process.cwd();
-  const found = new Set<string>();
+  const found = new Map<string, string[]>();
   const add = (directory: string) => {
     const canonical = fs.realpathSync(directory);
     if (!fs.statSync(canonical).isDirectory()) throw new Error(`workspace is not a directory: ${directory}`);
-    found.add(canonical);
+    const aliases = found.get(canonical) ?? [canonical];
+    if (!aliases.includes(directory)) aliases.push(directory);
+    found.set(canonical, aliases);
   };
   for (const workspace of options.workspaces ?? []) add(path.resolve(cwd, workspace));
-  if (options.root) {
+  const roots = typeof options.root === 'string' ? [options.root] : options.root ?? [];
+  if (roots.length) {
     const excluded = new Set(['node_modules', '.git', '.aiwg', '.cache', '.worktrees', 'worktrees', 'aiwg-wt', '.aiwg-worktrees']);
+    // Track ancestors rather than all visits so other logical routes retain their aliases.
+    const ancestors = new Set<string>();
     const scan = (directory: string, depth: number): void => {
+      const canonical = fs.realpathSync(directory);
+      if (ancestors.has(canonical)) return;
+      ancestors.add(canonical);
       if (fs.existsSync(path.join(directory, '.aiwg')) && fs.statSync(path.join(directory, '.aiwg')).isDirectory()) add(directory);
-      if (depth === 4) return;
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (entry.isDirectory() && !excluded.has(entry.name)) scan(path.join(directory, entry.name), depth + 1);
+      if (depth < 4) {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          if (excluded.has(entry.name)) continue;
+          const child = path.join(directory, entry.name);
+          if (entry.isSymbolicLink()) {
+            try {
+              if (!fs.statSync(child).isDirectory()) continue;
+            } catch (error) {
+              if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+              throw error;
+            }
+          } else if (!entry.isDirectory()) continue;
+          scan(child, depth + 1);
+        }
       }
+      ancestors.delete(canonical);
     };
-    scan(fs.realpathSync(path.resolve(cwd, options.root)), 0);
+    for (const root of roots) scan(path.resolve(cwd, root), 0);
   }
-  if (!options.root && !options.workspaces?.length) {
+  if (!roots.length && !options.workspaces?.length) {
     let current = fs.realpathSync(cwd);
     while (!fs.existsSync(path.join(current, '.aiwg')) && !fs.existsSync(path.join(current, '.git'))) {
       const parent = path.dirname(current);
@@ -114,15 +138,25 @@ function workspacePaths(options: RefreshOptions): string[] {
       current = parent;
     }
     add(current);
+    // Keep the physical project boundary when cwd itself links into a subdirectory.
+    const canonical = fs.realpathSync(current);
+    for (let logical = path.resolve(cwd); ; logical = path.dirname(logical)) {
+      if (fs.realpathSync(logical) === canonical) { add(logical); break; }
+      if (path.dirname(logical) === logical) break;
+    }
   }
-  return [...found].sort();
+  return new Map([...found.keys()].sort().map(workspace => [workspace, found.get(workspace)!.sort()]));
 }
 
 export function planIndexRefresh(options: RefreshOptions): RefreshJob[] {
+  return planWorkspaceRefresh(options, workspacePaths(options));
+}
+
+function planWorkspaceRefresh(options: RefreshOptions, workspaces: Map<string, string[]>): RefreshJob[] {
   const saved = { ...GRAPH_CONFIGS };
   try {
     const jobs: RefreshJob[] = [];
-    for (const workspace of workspacePaths(options)) {
+    for (const workspace of workspaces.keys()) {
       loadWorkspaceGraphs(workspace);
       const graphs = collectIndexStatus(workspace).graphs
         .sort((a, b) => graphBuildOrder(a.name, GRAPH_CONFIGS[a.name]) - graphBuildOrder(b.name, GRAPH_CONFIGS[b.name]) || a.name.localeCompare(b.name));
@@ -142,7 +176,12 @@ export function planIndexRefresh(options: RefreshOptions): RefreshJob[] {
         }
       }
       if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
-        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0 });
+        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0, noManifest: 0 });
+      }
+      for (const kind of ['runtime', 'models', 'issues'] as const) {
+        if (options.only && options.only !== kind) continue;
+        if (kind === 'issues' && !fs.existsSync(projectAiwgPath(workspace, 'issues'))) continue;
+        jobs.push({ kind, workspace, status: 'planned', wallMs: 0 });
       }
     }
     return jobs;
@@ -188,7 +227,7 @@ async function graphFingerprint(workspace: string, graph: string): Promise<strin
   ])).digest('hex');
 }
 
-async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<void> {
+async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: string[]): Promise<void> {
   const workspace = job.workspace;
   if (job.kind === 'graph') {
     const graph = job.graph!;
@@ -224,20 +263,71 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
       return;
     }
     syncFortemiCoreIndex(workspace, { graph: job.graph });
+  } else if (job.kind === 'runtime' || job.kind === 'issues') {
+    const directory = job.kind === 'runtime'
+      ? projectAiwgPath(workspace, 'smiths', 'toolsmith') : projectAiwgPath(workspace, 'issues');
+    const output = path.join(directory, job.kind === 'runtime' ? 'runtime.json' : 'index/issues.index.json');
+    const before = outputStamp(output);
+    if (job.kind === 'runtime') {
+      const { RuntimeDiscovery } = await import('../smiths/toolsmith/runtime-discovery.mjs');
+      await new RuntimeDiscovery(directory, { cwd: workspace, quiet: true }).discover({ force: Boolean(options.full) });
+    } else {
+      const { LocalIssueProviderCore } = await import('../issues/local.js');
+      await new LocalIssueProviderCore(directory).rebuildIssueIndex({ force: Boolean(options.full) });
+    }
+    if (!options.full && before !== undefined && before === outputStamp(output)) {
+      job.status = 'skipped'; job.reason = 'unchanged';
+      return;
+    }
+  } else if (job.kind === 'models') {
+    const { getFrameworkRoot } = await import('../channel/manager.mjs');
+    const { collectProviderInventory } = await import('../providers/provider-inventory.js');
+    const { resolveDynamicModelCatalog } = await import('../models/model-discovery.js');
+    const catalog = await resolveDynamicModelCatalog({
+      aiwgRoot: await getFrameworkRoot(), inventory: await collectProviderInventory(workspace),
+      homeDir: process.env.HOME, allowNetwork: true, forceRefresh: Boolean(options.full),
+      omp: { cwd: workspace }, grokBuild: { cwd: workspace, env: process.env },
+    });
+    if (catalog.discovery?.source === 'cache') {
+      job.status = 'skipped'; job.reason = 'unchanged';
+      return;
+    }
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
-    const reason = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal);
-    if (reason) {
+    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases);
+    if (typeof result === 'string') {
       job.status = 'skipped';
-      job.reason = reason;
+      job.reason = result;
+      job.noManifest = result === 'no authorized discovery manifest' ? 1 : 0;
       return;
+    }
+    if (result) {
+      const receipts = Array.isArray(result) ? result : [result];
+      if (Array.isArray(result)) job.sessionImports = result;
+      else job.sessionImport = result;
+      if (receipts.some(receipt => receipt.run.status === 'partial')) {
+        const rejected = receipts.reduce((sum, receipt) => sum + receipt.totals.rejected, 0);
+        const pending = receipts.reduce((sum, receipt) => sum + receipt.totals.pending, 0);
+        job.reason = `session import partial: ${rejected} rejected, ${pending} pending`;
+      }
     }
   }
   job.status = 'ok';
 }
 
-function jobKey(job: RefreshJob): string {
-  return JSON.stringify([job.kind, job.workspace, job.graph ?? null]);
+function outputStamp(file: string): string | undefined {
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+function jobKey(job: RefreshJob, aliases: string[]): string {
+  return JSON.stringify([job.kind, job.workspace, job.graph ?? null,
+    ...(job.kind === 'sessions' && aliases.length > 1 ? [aliases] : [])]);
 }
 
 export async function refreshIndexes(
@@ -245,19 +335,25 @@ export async function refreshIndexes(
   dependencies: RefreshDependencies = {},
 ): Promise<RefreshReport> {
   const start = Date.now();
-  const jobs = planIndexRefresh(options);
+  const workspaces = workspacePaths(options);
+  const jobs = planWorkspaceRefresh(options, workspaces);
   const report: RefreshReport = {
     contractVersion: '1.0.0', command: 'index.refresh', status: 'ok',
     mode: options.full ? 'full' : 'incremental', jobs, messages: [],
-    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, wallMs: 0 },
+    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, wallMs: 0 },
   };
   const finish = () => {
+    for (const job of jobs.filter(job => job.noManifest)) {
+      const command = `aiwg sessions discover --workspace '${job.workspace.replace(/'/g, "'\\''")}'`;
+      report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);
+    }
     report.totals = {
       jobs: jobs.length,
       ok: jobs.filter(job => job.status === 'ok').length,
       skipped: jobs.filter(job => job.status === 'skipped').length,
       deferred: jobs.filter(job => job.status === 'deferred').length,
       errors: jobs.filter(job => job.status === 'error').length,
+      noManifest: jobs.reduce((sum, job) => sum + (job.noManifest ?? 0), 0),
       wallMs: Date.now() - start,
     };
     return report;
@@ -279,7 +375,7 @@ export async function refreshIndexes(
   const saved = { ...GRAPH_CONFIGS };
   try {
     const checkpointPath = path.join(stateDir, 'index-refresh-checkpoint.json');
-    const keys = jobs.map(jobKey);
+    const keys = jobs.map(job => jobKey(job, workspaces.get(job.workspace)!));
     const previous = readJson<Checkpoint>(checkpointPath);
     const checkpoint: Checkpoint = previous?.mode === report.mode
       && Array.isArray(previous.completed) && JSON.stringify(previous.jobs) === JSON.stringify(keys)
@@ -288,7 +384,8 @@ export async function refreshIndexes(
     let sqliteAvailable: boolean | undefined;
     for (const job of jobs) {
       options.signal?.throwIfAborted();
-      const key = jobKey(job);
+      const aliases = workspaces.get(job.workspace)!;
+      const key = jobKey(job, aliases);
       if (checkpoint.completed.includes(key)) {
         job.status = 'skipped'; job.reason = 'checkpoint';
         continue;
@@ -314,22 +411,27 @@ export async function refreshIndexes(
             const message = 'Session refresh skipped: run `aiwg features install sqlite`.';
             if (!report.messages.includes(message)) report.messages.push(message);
             job.status = 'skipped'; job.reason = 'sqlite unavailable';
-          } else await executeJob(job, options);
-        } else await executeJob(job, options);
+          } else await executeJob(job, options, aliases);
+        } else await executeJob(job, options, aliases);
       } catch (error) {
         job.status = 'error'; job.error = error instanceof Error ? error.message : String(error);
       } finally {
         job.wallMs = Date.now() - jobStart;
       }
-      if (job.status !== 'error' && job.reason !== 'graph failed') checkpoint.completed.push(key);
+      if (job.status !== 'error' && job.reason !== 'graph failed'
+        && job.reason !== 'no authorized discovery manifest') checkpoint.completed.push(key);
       writeJson(checkpointPath, checkpoint);
       dependencies.afterJob?.(job, checkpoint.completed.length);
     }
+    options.signal?.throwIfAborted();
+    const deferred = jobs.some(job => job.status === 'deferred');
+    if (!deferred) fs.rmSync(checkpointPath, { force: true });
     const errors = jobs.filter(job => job.status === 'error').length;
     if (errors) report.status = errors === jobs.length ? 'error' : 'partial';
-    else if (report.status !== 'deferred') {
-      fs.rmSync(checkpointPath, { force: true });
-      if (jobs.some(job => job.reason === 'sqlite unavailable' || job.reason?.startsWith('no authorized'))) report.status = 'partial';
+    else if (!deferred) {
+      if (jobs.some(job => job.sessionImport?.run.status === 'partial'
+        || job.sessionImports?.some(receipt => receipt.run.status === 'partial')
+        || job.reason === 'sqlite unavailable' || job.reason?.startsWith('no authorized'))) report.status = 'partial';
     }
     return finish();
   } finally {
@@ -340,7 +442,7 @@ export async function refreshIndexes(
 }
 
 export async function runIndexRefresh(args: string[], cwd = process.cwd(), signal?: AbortSignal): Promise<RefreshReport> {
-  const options: RefreshOptions = { cwd, signal, workspaces: [] };
+  const options: RefreshOptions = { cwd, signal, workspaces: [], root: [] };
   let json = args.includes('--json');
   try {
     for (let i = 0; i < args.length; i++) {
@@ -352,9 +454,12 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
-        else if (flag === '--root') options.root = value;
+        else if (flag === '--root') (options.root as string[]).push(value);
         else if (flag === '--only') {
-          if (value !== 'graphs' && value !== 'sessions' && value !== 'caches') throw new Error('--only must be graphs, sessions, or caches');
+          if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
+            && value !== 'runtime' && value !== 'models' && value !== 'issues') {
+            throw new Error('--only must be graphs, sessions, caches, runtime, models, or issues');
+          }
           options.only = value;
         } else {
           if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('--lock-wait-ms must be a non-negative integer');
@@ -375,7 +480,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
     const report: RefreshReport = {
       contractVersion: '1.0.0', command: 'index.refresh', status: 'error', mode: options.full ? 'full' : 'incremental',
       jobs: [], messages: [error instanceof Error ? error.message : String(error)],
-      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, wallMs: 0 },
+      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, noManifest: 0, wallMs: 0 },
     };
     console.log(json ? JSON.stringify(report, null, 2) : `Index refresh: error: ${report.messages[0]}`);
     process.exitCode = 1;

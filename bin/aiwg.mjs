@@ -533,7 +533,7 @@ async function main() {
       console.error(`  Or switch back: aiwg --use-stable`);
       process.exit(1);
     }
-    const { assertCanonicalInstallation } = await import(pathToFileURL(identityPath).href);
+    const { assertCanonicalInstallation, formatInstallationDiagnostic } = await import(pathToFileURL(identityPath).href);
     const readOnlyPreview = args.includes('--dry-run') || indexRefresh;
     try {
       assertCanonicalInstallation({
@@ -553,12 +553,7 @@ async function main() {
         drift,
       });
       process.stderr.write(
-        `aiwg: warning: installation identity drift detected; \`${args[0]}\` is read-only and continues, ` +
-        'but update, refresh, and deployment stay blocked until the identity is repaired.\n' +
-        drift.map((item) => `- ${item}\n`).join('') +
-        'Inspect: aiwg installation show\n' +
-        'Adopt this installation: aiwg installation adopt\n' +
-        'Switch deliberately: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]\n',
+        `aiwg: warning: ${formatInstallationDiagnostic(error.status, { readOnlyCommand: args[0] })}\n`,
       );
     }
   }

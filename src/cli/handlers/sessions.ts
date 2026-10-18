@@ -233,8 +233,8 @@ Analytics / forensics:
   --authorize-forensics  Required for each authorized forensic invocation
   --markdown      Render a sanitized forensic timeline table`;
 
-function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): HandlerResult {
-  if (ctx.args.includes('--json')) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
+async function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): Promise<HandlerResult> {
+  if (ctx.args.includes('--json')) await emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
   else console.log(HELP);
   return { exitCode };
 }
@@ -258,7 +258,7 @@ export const sessionsHandler: CommandHandler = {
     } catch (error) {
       const normalized = normalizeError(error);
       const output = envelope('sessions', 'error', null, normalized.error);
-      if (json) emit(output);
+      if (json) await emit(output);
       else console.error(`${normalized.error.code}: ${normalized.error.message}`);
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
@@ -268,13 +268,13 @@ export const sessionsHandler: CommandHandler = {
     }
     try {
       const result = await executeCommand(ctx, parsed);
-      if (json) emit(result.envelope);
+      if (json) await emit(result.envelope);
       else printHuman(result.envelope);
       return { exitCode: result.exitCode };
     } catch (error) {
       const normalized = normalizeError(error);
       const output = envelope(`sessions.${parsed.command}`, 'error', null, normalized.error);
-      if (json) emit(output);
+      if (json) await emit(output);
       else console.error(`${normalized.error.code}: ${normalized.error.message}`);
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
@@ -2312,8 +2312,13 @@ function envelope(
   return { contractVersion: JSON_CONTRACT_VERSION, command, status, data, error };
 }
 
-function emit(value: Envelope): void {
+async function emit(value: Envelope): Promise<void> {
   console.log(JSON.stringify(value, null, 2));
+  // The launcher and router may force exit after the handler returns. A write
+  // callback waits for the JSON already queued on stdout, including on pipes.
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write('', (error) => error ? reject(error) : resolve());
+  });
 }
 
 function printHuman(value: Envelope): void {

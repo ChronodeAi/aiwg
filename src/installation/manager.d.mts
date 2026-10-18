@@ -36,7 +36,14 @@ export function createInstallationIdentity(options: Record<string, any>): Instal
 export function saveInstallationIdentity(identity: InstallationIdentity, options?: Record<string, any>): InstallationIdentity;
 export function loadInstallationIdentity(options?: Record<string, any>): InstallationIdentity | null;
 export function inspectInstallation(options: Record<string, any>): InstallationStatus;
-export function formatInstallationDiagnostic(status: InstallationStatus): string;
+export interface InstallationCopy {
+  root: string;
+  executables: string[];
+  onPath: boolean;
+  registered: boolean;
+}
+export function inspectInstallationCopies(options?: Record<string, any>): InstallationCopy[];
+export function formatInstallationDiagnostic(status: InstallationStatus, options?: { readOnlyCommand?: string }): string;
 export function assertCanonicalInstallation(options: Record<string, any>): InstallationStatus;
 export function adoptInstallation(options: Record<string, any>): InstallationStatus;
 export function switchInstallation(options: Record<string, any>): InstallationStatus;
