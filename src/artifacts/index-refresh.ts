@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findPackageRoot } from '../cli/find-package-root.js';
@@ -27,9 +28,7 @@ export interface RefreshOptions {
   signal?: AbortSignal;
 }
 
-export interface RefreshJob {
-  kind: 'graph' | 'cache' | 'sessions' | 'runtime' | 'models' | 'issues';
-  workspace: string;
+export type RefreshJob = {
   graph?: string;
   status: 'planned' | 'ok' | 'skipped' | 'deferred' | 'error';
   wallMs: number;
@@ -38,7 +37,8 @@ export interface RefreshJob {
   sessionImport?: BatchImportReceipt;
   sessionImports?: BatchImportReceipt[];
   noManifest?: number;
-}
+} & ({ kind: 'models'; scope: 'host'; workspace?: never }
+  | { kind: 'graph' | 'cache' | 'sessions' | 'runtime' | 'issues'; scope?: 'workspace'; workspace: string });
 
 export interface RefreshReport {
   contractVersion: '1.0.0';
@@ -178,11 +178,14 @@ function planWorkspaceRefresh(options: RefreshOptions, workspaces: Map<string, s
       if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
         jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0, noManifest: 0 });
       }
-      for (const kind of ['runtime', 'models', 'issues'] as const) {
+      for (const kind of ['runtime', 'issues'] as const) {
         if (options.only && options.only !== kind) continue;
         if (kind === 'issues' && !fs.existsSync(projectAiwgPath(workspace, 'issues'))) continue;
         jobs.push({ kind, workspace, status: 'planned', wallMs: 0 });
       }
+    }
+    if (!options.only || options.only === 'models') {
+      jobs.push({ kind: 'models', scope: 'host', status: 'planned', wallMs: 0 });
     }
     return jobs;
   } finally {
@@ -227,8 +230,57 @@ async function graphFingerprint(workspace: string, graph: string): Promise<strin
   ])).digest('hex');
 }
 
-async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: string[]): Promise<void> {
-  const workspace = job.workspace;
+interface SharedRuntime {
+  catalog: {
+    generated: string;
+    inputFingerprint: string;
+    environment: Record<string, unknown>;
+    resources: Record<string, unknown>;
+    tools: { id: string }[];
+    [key: string]: unknown;
+  };
+  info: string;
+}
+
+async function refreshWorkspaceRuntime(workspace: string, full: boolean, runtime: SharedRuntime): Promise<void> {
+  const directory = projectAiwgPath(workspace, 'smiths', 'toolsmith');
+  const output = path.join(directory, 'runtime.json');
+  const infoPath = path.join(directory, 'runtime-info.md');
+  const loaded = readJson<SharedRuntime['catalog']>(output);
+  const previous = Array.isArray(loaded?.tools) ? loaded : undefined;
+  if (!full && previous?.inputFingerprint === runtime.catalog.inputFingerprint
+    && previous.generated === runtime.catalog.generated && previous.environment?.workingDir === workspace
+    && fs.existsSync(infoPath)) return;
+
+  let diskFreeGb = 0;
+  try {
+    const disk = fs.statfsSync(workspace);
+    diskFreeGb = Math.round(disk.bavail * disk.bsize / (1024 ** 3) * 10) / 10;
+  } catch { /* Match discovery's unavailable-resource fallback. */ }
+  const previousIds = new Set((previous?.tools ?? []).map(tool => tool.id));
+  const currentIds = new Set(runtime.catalog.tools.map(tool => tool.id));
+  const catalog = {
+    ...runtime.catalog,
+    environment: { ...runtime.catalog.environment, workingDir: workspace },
+    resources: { ...runtime.catalog.resources, diskFreeGb },
+    delta: {
+      added: [...currentIds].filter(id => !previousIds.has(id)),
+      removed: [...previousIds].filter(id => !currentIds.has(id)),
+    },
+  };
+  const info = runtime.info.split('\n').map(line => {
+    if (line.startsWith('- **Working Directory**:')) return `- **Working Directory**: ${workspace}`;
+    if (line.startsWith('- **Disk Free**:')) return `- **Disk Free**: ${diskFreeGb} GB`;
+    if (line.startsWith('- **Catalog**:')) return `- **Catalog**: ${output}`;
+    return line;
+  }).join('\n');
+  fs.mkdirSync(directory, { recursive: true });
+  writeJson(output, catalog);
+  fs.writeFileSync(infoPath, info, { mode: 0o600 });
+}
+
+async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: string[], runtime: () => Promise<SharedRuntime>): Promise<void> {
+  const workspace = job.workspace ?? process.env.HOME ?? homedir();
   if (job.kind === 'graph') {
     const graph = job.graph!;
     const config = GRAPH_CONFIGS[graph];
@@ -269,8 +321,7 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
     const output = path.join(directory, job.kind === 'runtime' ? 'runtime.json' : 'index/issues.index.json');
     const before = outputStamp(output);
     if (job.kind === 'runtime') {
-      const { RuntimeDiscovery } = await import('../smiths/toolsmith/runtime-discovery.mjs');
-      await new RuntimeDiscovery(directory, { cwd: workspace, quiet: true }).discover({ force: Boolean(options.full) });
+      await refreshWorkspaceRuntime(workspace, Boolean(options.full), await runtime());
     } else {
       const { LocalIssueProviderCore } = await import('../issues/local.js');
       await new LocalIssueProviderCore(directory).rebuildIssueIndex({ force: Boolean(options.full) });
@@ -326,6 +377,7 @@ function outputStamp(file: string): string | undefined {
 }
 
 function jobKey(job: RefreshJob, aliases: string[]): string {
+  if (job.scope === 'host') return JSON.stringify([job.kind, 'host', job.graph ?? null]);
   return JSON.stringify([job.kind, job.workspace, job.graph ?? null,
     ...(job.kind === 'sessions' && aliases.length > 1 ? [aliases] : [])]);
 }
@@ -344,7 +396,7 @@ export async function refreshIndexes(
   };
   const finish = () => {
     for (const job of jobs.filter(job => job.noManifest)) {
-      const command = `aiwg sessions discover --workspace '${job.workspace.replace(/'/g, "'\\''")}'`;
+      const command = `aiwg sessions discover --workspace '${job.workspace!.replace(/'/g, "'\\''")}'`;
       report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);
     }
     report.totals = {
@@ -375,16 +427,24 @@ export async function refreshIndexes(
   const saved = { ...GRAPH_CONFIGS };
   try {
     const checkpointPath = path.join(stateDir, 'index-refresh-checkpoint.json');
-    const keys = jobs.map(job => jobKey(job, workspaces.get(job.workspace)!));
+    const keys = jobs.map(job => jobKey(job, workspaces.get(job.workspace ?? '') ?? []));
     const previous = readJson<Checkpoint>(checkpointPath);
     const checkpoint: Checkpoint = previous?.mode === report.mode
       && Array.isArray(previous.completed) && JSON.stringify(previous.jobs) === JSON.stringify(keys)
       ? previous : { runId: randomUUID(), mode: report.mode, jobs: keys, completed: [] };
     writeJson(checkpointPath, checkpoint);
     let sqliteAvailable: boolean | undefined;
+    let runtime: Promise<SharedRuntime> | undefined;
+    const discoverRuntime = () => runtime ??= (async () => {
+      const { RuntimeDiscovery } = await import('../smiths/toolsmith/runtime-discovery.mjs');
+      const directory = path.join(stateDir, 'index-refresh-runtime');
+      const catalog = await new RuntimeDiscovery(directory, { cwd: process.env.HOME ?? homedir(), quiet: true })
+        .discover({ force: Boolean(options.full) });
+      return { catalog, info: fs.readFileSync(path.join(directory, 'runtime-info.md'), 'utf8') };
+    })();
     for (const job of jobs) {
       options.signal?.throwIfAborted();
-      const aliases = workspaces.get(job.workspace)!;
+      const aliases = workspaces.get(job.workspace ?? '') ?? [];
       const key = jobKey(job, aliases);
       if (checkpoint.completed.includes(key)) {
         job.status = 'skipped'; job.reason = 'checkpoint';
@@ -392,13 +452,14 @@ export async function refreshIndexes(
       }
       const jobStart = Date.now();
       try {
-        const gate = await (dependencies.gate ?? refreshResourceGate)(job.workspace);
+        const gateWorkspace = job.workspace ?? workspaces.keys().next().value ?? options.cwd ?? process.cwd();
+        const gate = await (dependencies.gate ?? refreshResourceGate)(gateWorkspace);
         if (!gate.ok) {
           job.status = 'deferred'; job.reason = gate.reason;
           report.status = 'deferred'; report.reason = gate.reason;
           break;
         }
-        loadWorkspaceGraphs(job.workspace);
+        if (job.workspace) loadWorkspaceGraphs(job.workspace);
         if (job.kind === 'cache' && jobs.some(other => other.kind === 'graph'
           && other.workspace === job.workspace && other.graph === job.graph && other.status === 'error')) {
           job.status = 'skipped'; job.reason = 'graph failed';
@@ -411,8 +472,8 @@ export async function refreshIndexes(
             const message = 'Session refresh skipped: run `aiwg features install sqlite`.';
             if (!report.messages.includes(message)) report.messages.push(message);
             job.status = 'skipped'; job.reason = 'sqlite unavailable';
-          } else await executeJob(job, options, aliases);
-        } else await executeJob(job, options, aliases);
+          } else await executeJob(job, options, aliases, discoverRuntime);
+        } else await executeJob(job, options, aliases, discoverRuntime);
       } catch (error) {
         job.status = 'error'; job.error = error instanceof Error ? error.message : String(error);
       } finally {
@@ -471,7 +532,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
     if (json) console.log(JSON.stringify(report, null, 2));
     else {
       console.log(`Index refresh: ${report.status} (${report.mode})${report.reason ? `: ${report.reason}` : ''}`);
-      for (const job of report.jobs) console.log(`  ${job.status}: ${job.kind} ${job.workspace}${job.graph ? ` [${job.graph}]` : ''}${job.error || job.reason ? `: ${job.error ?? job.reason}` : ''}`);
+      for (const job of report.jobs) console.log(`  ${job.status}: ${job.kind} ${job.scope === 'host' ? '[host]' : job.workspace}${job.graph ? ` [${job.graph}]` : ''}${job.error || job.reason ? `: ${job.error ?? job.reason}` : ''}`);
       for (const message of report.messages) console.log(message);
     }
     if (report.totals.errors) process.exitCode = 1;
