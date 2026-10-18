@@ -38,6 +38,7 @@ import { spawn } from 'child_process';
 import { load as loadYaml } from 'js-yaml';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -269,7 +270,8 @@ export async function deployCommands(targetDir, srcRoot, opts) {
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
-      cwd: helperRoot
+      cwd: helperRoot,
+      env: opts.deploymentHome ? { ...process.env, HOME: opts.deploymentHome } : process.env
     });
 
     child.on('close', (code) => {
@@ -318,7 +320,8 @@ export async function deploySkills(targetDir, srcRoot, opts) {
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
-      cwd: helperRoot
+      cwd: helperRoot,
+      env: opts.deploymentHome ? { ...process.env, HOME: opts.deploymentHome } : process.env
     });
 
     child.on('close', (code) => {
@@ -332,7 +335,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
   // Self-heal: prune AIWG-managed skill dirs left behind in the legacy
   // ~/.codex/skills/ home location by pre-fix versions, so codex-rs stops
   // listing each skill twice.
-  pruneLegacyCodexSkills(opts);
+  pruneLegacyCodexSkills(opts, opts.legacyCodexSkills || legacyHomeSkillsDir);
 }
 
 /**
@@ -398,17 +401,16 @@ export function deployRules(ruleFiles, targetDir, opts) {
  * Aggregate agents to single AGENTS.md file
  */
 export function aggregateToAgentsMd(agentFiles, destPath, opts) {
-  const blocks = [];
-  for (const f of agentFiles) {
-    let content = fs.readFileSync(f, 'utf8');
-    content = transformAgent(f, content, opts);
-    if (!content.endsWith('\n')) content += '\n';
-    blocks.push(content);
+  const lines = ['# AIWG agent definitions', '', 'Read the selected definition before invoking an agent.', ''];
+  for (const file of agentFiles) {
+    const { metadata } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+    const name = metadata.name || path.basename(file, '.md');
+    lines.push(`- ${name}: .codex/agents/${path.basename(file, '.md')}.toml`);
   }
-  const out = blocks.join('\n');
+  const out = `${lines.join('\n')}\n`;
   if (opts.dryRun) console.log(`[dry-run] write ${destPath}`);
   else fs.writeFileSync(destPath, out, 'utf8');
-  console.log(`wrote ${path.relative(process.cwd(), destPath)} with ${agentFiles.length} agents`);
+
 }
 
 // ============================================================================
@@ -536,6 +538,10 @@ export function getFileExtension(type) {
  * Main deployment function for Codex provider
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -628,6 +634,7 @@ export async function deploy(opts) {
       // Aggregate to single AGENTS.md
       const destPath = path.join(target, 'AGENTS.md');
       console.log(`\nAggregating ${agentFiles.length} agents to AGENTS.md...`);
+      deployAgents(agentFiles, target, opts);
       aggregateToAgentsMd(agentFiles, destPath, opts);
     } else {
       console.log(`\nDeploying ${agentFiles.length} agents...`);

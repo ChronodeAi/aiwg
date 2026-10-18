@@ -27,6 +27,8 @@ const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { deploy as deployActivatedRules, transformRule } from '../agents/providers/cursor.mjs';
+import { parseRuleActivation } from '../agents/providers/base.mjs';
 
 const RULES_SUBDIR = '.cursor/rules';
 
@@ -38,6 +40,8 @@ function parseArgs() {
     mode: 'all',
     dryRun: false,
     force: false,
+    strict: false,
+    reportOnly: true,
     prefix: 'aiwg'
   };
 
@@ -53,6 +57,8 @@ function parseArgs() {
     else if (a === '--mode' && args[i + 1]) cfg.mode = String(args[++i]).toLowerCase();
     else if (a === '--dry-run') cfg.dryRun = true;
     else if (a === '--force') cfg.force = true;
+    else if (a === '--strict') cfg.strict = true;
+    else if (a === '--report-only') cfg.reportOnly = true;
     else if (a === '--prefix' && args[i + 1]) cfg.prefix = args[++i];
   }
 
@@ -146,6 +152,13 @@ function getGlobsForCommand(commandName) {
  * Transform AIWG command to Cursor MDC rule format
  */
 function transformToCursorRule(commandPath, prefix) {
+  const source = fs.readFileSync(commandPath, 'utf8');
+  const activation = parseRuleActivation(source);
+  if (!activation.valid) throw new Error(`${commandPath}: invalid activation contract`);
+  if (activation.rule.tagged) {
+    if (['bound', 'on-demand'].includes(activation.rule.activation)) return null;
+    return { name: `${prefix ? prefix + '-' : ''}${path.basename(commandPath, '.md')}`, content: transformRule(commandPath, source, {}) };
+  }
   const parsed = parseCommandFile(commandPath);
   const commandName = path.basename(commandPath, '.md');
 
@@ -297,6 +310,9 @@ function getCommandDirectories(srcRoot, mode) {
   if (dryRun) console.log(`  [DRY RUN]`);
   console.log();
 
+  // Canonical rules use the shared transaction and five-mode provider mapping.
+  await deployActivatedRules({ srcRoot, target: path.dirname(path.dirname(target)), mode, dryRun, force, strict: cfg.strict, reportOnly: cfg.reportOnly, provider: 'cursor', rulesOnly: true, deployRules: true, quiet: true });
+
   // Create target directory
   if (!dryRun) {
     ensureDir(target);
@@ -316,6 +332,7 @@ function getCommandDirectories(srcRoot, mode) {
     for (const commandFile of commandFiles) {
       try {
         const rule = transformToCursorRule(commandFile, prefix);
+        if (!rule) { totalSkipped++; continue; }
         const result = deployRule(rule, target, { force, dryRun });
         if (result.action === 'deploy') totalDeployed++;
         else totalSkipped++;

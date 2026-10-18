@@ -24,6 +24,7 @@ import path from 'path';
 import os from 'os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   deploySkillDir,
@@ -297,6 +298,21 @@ surface as provider-agnostic tools when configured.
 **Artifacts** (project-required, .aiwg/ directory):
 - \`mcp_aiwg_artifact_read\` / \`mcp_aiwg_artifact_write\``;
 
+function mergeHermesContext(file, generated, kind) {
+  let existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  existing = existing.replace(/\n?<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->\n?/g, '');
+  const start = `<!-- AIWG:hermes-${kind}:start -->`;
+  const end = `<!-- AIWG:hermes-${kind}:end -->`;
+  const managed = `${start}\n${generated}\n${end}`;
+  if (existing.includes(start)) return existing.slice(0, existing.indexOf(start)) + managed + existing.slice(existing.indexOf(end) + end.length);
+  if (kind === 'context' && existing.startsWith('# AIWG Integration') && existing.includes(HERMES_AGENTS_MD_FOOTER)) {
+    existing = existing.slice(existing.indexOf(HERMES_AGENTS_MD_FOOTER) + HERMES_AGENTS_MD_FOOTER.length);
+  } else if (kind === 'routing' && existing.includes(generated)) {
+    existing = existing.replace(generated, '');
+  }
+  return existing ? `${existing.trimEnd()}\n\n${managed}\n` : `${managed}\n`;
+}
+
 export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {
   const { dryRun } = opts;
 
@@ -339,11 +355,13 @@ Fetch on demand via \`mcp_aiwg_artifact_read\`:
   const onDemandSection = opts.srcRoot
     ? renderOnDemandRuleSection(listOnDemandRuleFiles(opts.srcRoot))
     : '';
-  const sections = [header, CRITICAL_RULE_DIRECTIVES];
+  const migrated = new Set((opts.ruleDelivery?.rules || []).filter(rule => rule.tagged).map(rule => rule.name));
+  const directives = CRITICAL_RULE_DIRECTIVES.split(/(?=^### Rule: )/m).filter(section => !migrated.has(section.match(/^### Rule: ([^ \n]+)/)?.[1])).join('');
+  const sections = [header, directives];
   if (onDemandSection) sections.push(onDemandSection);
   sections.push(HERMES_AGENTS_MD_FOOTER);
-  const output = sections.join('\n\n');
   const destPath = path.join(targetDir, 'AGENTS.md');
+  const output = mergeHermesContext(destPath, sections.join('\n\n'), 'context');
 
   if (output.length > HERMES_AGENTS_MD_HARD_CAP) {
     throw new Error(
@@ -397,7 +415,7 @@ when the full AIWG project context is needed.
   if (dryRun) {
     console.log(`[dry-run] Would write .hermes.md (${body.length} chars)`);
   } else {
-    fs.writeFileSync(destPath, body, 'utf8');
+    fs.writeFileSync(destPath, mergeHermesContext(destPath, body, 'routing'), 'utf8');
     console.log(`  Created .hermes.md (${body.length} chars)`);
   }
   return 1;
@@ -417,7 +435,7 @@ when the full AIWG project context is needed.
  */
 export function deploySkills(skillDirs, opts) {
   const standardDestDir = paths.skills;
-  const kernelDestDir = kernelSkillsPath;
+  const kernelDestDir = opts.kernelSkillsPath || kernelSkillsPath;
 
   if (!opts.dryRun) {
     console.log(`  Deploying ${skillDirs.length} skills (kernel + standard split)...`);
@@ -431,6 +449,10 @@ export function deploySkills(skillDirs, opts) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -509,7 +531,7 @@ export async function deploy(opts) {
     const kernelNames = computeAllKernelNames(srcRoot);
     if (kernelNames != null) {
       const desiredKernel = [...kernelNames, 'aiwg-orchestrate'];
-      pruneStaleAiwgSkills(kernelSkillsPath, desiredKernel, opts);
+      pruneStaleAiwgSkills(opts.kernelSkillsPath || kernelSkillsPath, desiredKernel, opts);
 
       // Register kernel skills in Hermes's bundled manifest so the Curator
       // (v0.12.0+, 7-day archival cycle) does not archive them. Standard
@@ -603,7 +625,7 @@ export async function deploy(opts) {
  */
 export function updateBundledManifest(kernelSkillNames, opts) {
   const { dryRun, quiet } = opts;
-  const manifestPath = path.join(kernelSkillsPath, '.bundled_manifest');
+  const manifestPath = path.join(opts.kernelSkillsPath || kernelSkillsPath, '.bundled_manifest');
   const aiwgTag = 'aiwg-managed';
 
   // Read existing manifest (if any) and split into "ours" vs "theirs"
@@ -668,7 +690,7 @@ export function migrateLegacySkillPath(opts) {
   // this provider (env var first, platform default otherwise): with
   // HERMES_HOME set, the legacy tree lives under that root — never under
   // the process home directory.
-  const legacyPath = path.join(getHermesHome(), '.aiwg', 'skills');
+  const legacyPath = opts.hermesLegacySkills || path.join(getHermesHome(), '.aiwg', 'skills');
   const newPath = paths.skills;
 
   let legacyExists = false;
@@ -754,7 +776,7 @@ function deployAiwgOrchestrateSkill(srcRoot, opts) {
     return;
   }
 
-  const destDir = path.join(kernelSkillsPath, 'aiwg-orchestrate');
+  const destDir = path.join(opts.kernelSkillsPath || kernelSkillsPath, 'aiwg-orchestrate');
   const destPath = path.join(destDir, 'SKILL.md');
 
   if (fs.existsSync(destPath)) {

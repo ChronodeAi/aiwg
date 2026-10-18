@@ -236,7 +236,22 @@ export async function isOverwriteSafe(filePath: string): Promise<boolean> {
  *
  * Per ADR-4 §4 atomic write requirement; on failure no partial state is persisted.
  */
-async function atomicWrite(filePath: string, content: string): Promise<void> {
+async function atomicWrite(filePath: string, content: string, provider?: string): Promise<number> {
+  // Rule delivery owns this block. Context regeneration runs after deployment
+  // and must retain the selected kernel even when rebuilding the adapter.
+  const existing = await fs.readFile(filePath, 'utf8').catch(() => '');
+  for (const owner of ['rule-startup', 'hermes-context', 'hermes-routing', 'warp-context']) {
+    if (content.includes(`<!-- AIWG:${owner}:start -->`)) continue;
+    const managed = existing.match(new RegExp(`<!-- AIWG:${owner}:start -->[\\s\\S]*?<!-- AIWG:${owner}:end -->`));
+    if (managed) content = `${content.trimEnd()}\n\n${managed[0]}\n`;
+  }
+  const bytes = Buffer.byteLength(content, 'utf8');
+  if (provider === 'codex' && path.basename(filePath) === 'AGENTS.md' && bytes >= 32768) {
+    throw new Error('Codex AGENTS.md exceeds its 32 KB hard cap');
+  }
+  if (provider === 'hermes' && ['AGENTS.md', '.hermes.md'].includes(path.basename(filePath)) && content.length > 19000) {
+    throw new Error(`Hermes ${path.basename(filePath)} exceeds hard cap of 19000 characters`);
+  }
   const dir = path.dirname(filePath);
   const tmp = path.join(dir, `.${path.basename(filePath)}.tmp.${process.pid}`);
   await fs.mkdir(dir, { recursive: true });
@@ -248,6 +263,7 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
     await fs.unlink(tmp).catch(() => undefined);
     throw err;
   }
+  return bytes;
 }
 
 /**
@@ -350,7 +366,7 @@ async function writeTwinFiles(
       }
     }
 
-    await atomicWrite(twinPath, twinContent);
+    await atomicWrite(twinPath, twinContent, provider);
     result.twinPaths.push(twinPath);
   }
 }
@@ -461,9 +477,8 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
     // write, and as the twin content downstream.
     const built = await buildAgentsMd(opts);
     if (canWrite) {
-      await atomicWrite(agentsMdPath, built.content);
+      result.agentsMdBytes = await atomicWrite(agentsMdPath, built.content, opts.provider);
       result.agentsMdPath = agentsMdPath;
-      result.agentsMdBytes = Buffer.byteLength(built.content, 'utf8');
       result.warnings.push(...built.warnings);
       if (built.splitOccurred) {
         await writeSpilloverBlock(opts.projectPath, built.spilloverContent, result);

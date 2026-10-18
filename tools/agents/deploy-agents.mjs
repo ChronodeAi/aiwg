@@ -19,7 +19,9 @@
  *   --deploy-rules           Deploy rules in addition to agents
  *   --commands-only          Deploy only commands (skip agents)
  *   --skills-only            Deploy only skills (skip agents)
- *   --rules-only             Deploy only rules (skip agents)
+ *   --strict                 Fail startup budget overruns before deployment promotion
+  --report-only            Warn on startup budget overruns (migration default; CI remains strict)
+  --rules-only             Deploy only rules (skip agents)
  *   --dry-run                Show what would be deployed without writing
  *   --force                  Overwrite existing files
  *   --provider <name>        Target provider: antigravity (agy), claude (default), openai, codex, cursor, opencode, copilot, factory, grokbot, grok-build, muse, pi, omp, deepseek-harness (dsh), warp, devin, hermes, openhuman, or openclaw
@@ -497,6 +499,8 @@ export function parseArgs(args = process.argv.slice(2)) {
     commandsOnly: false,
     skillsOnly: false,
     rulesOnly: false,
+    strict: false,
+    reportOnly: true,
     kernelOnly: false,
     filter: null,           // Glob pattern for agent names
     filterRole: null,       // Filter by role: reasoning|coding|efficiency
@@ -548,6 +552,8 @@ export function parseArgs(args = process.argv.slice(2)) {
     else if (a === '--commands-only') cfg.commandsOnly = true;
     else if (a === '--skills-only') cfg.skillsOnly = true;
     else if (a === '--rules-only') cfg.rulesOnly = true;
+    else if (a === '--strict') { cfg.strict = true; cfg.reportOnly = false; }
+    else if (a === '--report-only') cfg.reportOnly = true;
     else if (a === '--kernel-only') cfg.kernelOnly = true;
     else if (a === '--deploy-behaviors') cfg.deployBehaviors = true;
     else if (a === '--filter' && args[i + 1]) cfg.filter = args[++i];
@@ -1033,6 +1039,8 @@ export async function main() {
     commandsOnly: cfg.commandsOnly,
     skillsOnly: cfg.skillsOnly || cfg.kernelOnly,
     rulesOnly: cfg.rulesOnly,
+    strict: cfg.strict,
+    reportOnly: cfg.reportOnly,
     kernelOnly: cfg.kernelOnly,
     filter: cfg.filter,
     filterRole: cfg.filterRole,
@@ -1091,7 +1099,7 @@ export async function main() {
     // or removed (the flat-file analogue of the skills holistic prune). #1627.
     pruneStaleAiwgArtifacts(provider, cfg.target, srcRoot, opts, cfg.source);
 
-    if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) {
+    if (!['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw'].includes(provider.name) && !opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) {
       const behaviorDirs = collectBehaviorDirs(srcRoot);
       const behaviorCount = deployEmulatedBehaviors(behaviorDirs, provider.name, cfg.target, opts);
       if (behaviorCount > 0 && !cfg.quiet) {

@@ -27,6 +27,8 @@ try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs;
 import path from 'path';
 import { spawn } from 'child_process';
 import {
+  withRuleDeployment,
+  parseRuleActivation,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -117,25 +119,20 @@ export function transformCommand(srcPath, content, opts) {
   return content;
 }
 
-/**
- * Transform rule content for Cursor — inject MDC frontmatter with the
- * activation mode mapping per ADR-2 (rule activation mode schema).
- *
- * Reads the source rule's `activation:` field (or defaults to alwaysApply
- * per ADR-2 §2 default-preservation) and emits the corresponding MDC
- * frontmatter fields:
- *   - alwaysApply (true): activation === 'alwaysApply' (default)
- *   - alwaysApply (false), no globs: activation === 'auto'
- *   - globs: activation === 'glob' + globs: '<pattern>'
- *   - alwaysApply (false), description: activation === 'manual'
- *
- * Per ADR-2 §5: until the live-Cursor smoke test gate is in CI, all rules
- * deploy with alwaysApply: true regardless of source `activation` value
- * (with a deploy-time warning when the source declared a non-alwaysApply
- * mode). The deploy-time warning is emitted by the deployer, not this
- * transform.
- */
+/** Compile the shared five-mode activation contract to native MDC. */
 export function transformRule(srcPath, content, opts) {
+  const parsed = parseRuleActivation(content);
+  if (!parsed.valid) throw new Error(`${srcPath}: ${parsed.diagnostics.map(d => d.message).join('; ')}`);
+  if (parsed.rule.tagged) {
+    const rule = parsed.rule;
+    // Bound/on-demand rules have no auto-selection description or glob hint.
+    const fields = rule.activation === 'paths'
+      ? `globs: ${JSON.stringify(rule.paths)}\nalwaysApply: false`
+      : rule.activation === 'summary'
+        ? `description: ${JSON.stringify(rule.summary)}\nalwaysApply: false`
+        : `alwaysApply: ${rule.activation === 'kernel'}`;
+    return `---\n${fields}\n---\n${parsed.body}`;
+  }
   // Detect proper YAML frontmatter — must close within the first 30 lines.
   // Files with `---` horizontal rules deeper in markdown content (like
   // RULES-INDEX.md) can have multiple `---` lines without being frontmatter;
@@ -451,6 +448,10 @@ export function getFileExtension(type) {
  * Orchestrates deployment of agents, commands, skills, and rules
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath, transformRule }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

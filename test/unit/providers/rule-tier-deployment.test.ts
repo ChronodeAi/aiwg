@@ -389,7 +389,7 @@ describe('inline rule budget (#2562)', () => {
     expect(resolveRulesInlineBudgetTokens({})).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
     expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '10000' })).toBe(10_000);
     expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: '0' })).toBe(0);
-    expect(resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: 'nope' })).toBe(DEFAULT_RULES_INLINE_BUDGET_TOKENS);
+    expect(() => resolveRulesInlineBudgetTokens({ AIWG_RULES_INLINE_BUDGET_TOKENS: 'nope' })).toThrow('non-negative safe integer');
   });
 
   it('keeps every rule inline when the set fits the budget', async () => {
@@ -401,7 +401,7 @@ describe('inline rule budget (#2562)', () => {
     expect(result.demoted).toEqual([]);
   });
 
-  it('demotes HIGH rules largest-first and never demotes CRITICAL rules or indexes', async () => {
+  it('keeps all activation-selected rules even when the budget is exceeded', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const critical = await ruleFile(root, 'critical-big', 'critical', 4_000, true);
@@ -412,19 +412,19 @@ describe('inline rule budget (#2562)', () => {
     await writeFile(index, '# index\n' + 'y'.repeat(4_000));
     // 5 files ≈ 3.2K tokens; a 2.3K budget forces exactly one demotion — the largest HIGH.
     const result = applyInlineRuleBudget([critical, highBig, highSmall, unlabelled, index], 2_300);
-    expect(result.demoted).toEqual([highBig]);
-    expect(result.inline).toEqual([critical, highSmall, unlabelled, index]);
+    expect(result.demoted).toEqual([]);
+    expect(result.inline).toEqual([critical, highBig, highSmall, unlabelled, index]);
   });
 
-  it('demotes unlabelled rules only after every HIGH rule, and leaves CRITICAL over-budget sets intact', async () => {
+  it('preserves HIGH, unlabelled and CRITICAL rules when over budget', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const critical = await ruleFile(root, 'critical', 'critical', 8_000);
     const high = await ruleFile(root, 'high', 'high', 400);
     const unlabelled = await ruleFile(root, 'unlabelled', null, 4_000);
     const result = applyInlineRuleBudget([critical, high, unlabelled], 1_000);
-    expect(result.demoted).toEqual([high, unlabelled]);
-    expect(result.inline).toEqual([critical]);
+    expect(result.demoted).toEqual([]);
+    expect(result.inline).toEqual([critical, high, unlabelled]);
   });
 
   it('is disabled when the budget is zero', async () => {
@@ -452,42 +452,17 @@ describe('inline rule budget (#2562)', () => {
     expect(content.split('ops-safety').length).toBe(3);
   });
 
-  it('reconciles a deployed rule directory against the budget across passes and records the sidecar', async () => {
+  it('retires stale demotion state without deleting activation-selected or operator rules', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-rule-budget-'));
     roots.push(root);
     const dest = join(root, '.claude', 'rules');
     await mkdir(dest, { recursive: true });
-    const managed = async (name: string, level: string, bytes: number) => {
-      await writeFile(join(dest, `${name}.md`), `---\n# aiwg:managed v1.0.0 bundled\nenforcement: ${level}\n---\n${'x'.repeat(bytes)}`);
-    };
-    await managed('critical', 'critical', 4_000);
-    await managed('high-big', 'high', 4_000);
-    await managed('high-small', 'high', 400);
-    await writeFile(join(dest, 'operator.md'), `---\nenforcement: high\n---\n${'o'.repeat(8_000)}`); // unmanaged: never touched
-    await writeFile(join(dest, 'RULES-INDEX.md'), '# index');
-
-    // Pass 1: ~2.1K managed tokens over a 1.5K budget → the largest HIGH leaves.
-    const first = reconcileInlineRuleBudget(dest, 1_500);
-    expect(first.removed).toEqual(['high-big']);
-    expect(first.demoted).toEqual(['high-big']);
-    expect(existsSync(join(dest, 'high-big.md'))).toBe(false);
-    expect(existsSync(join(dest, 'critical.md'))).toBe(true);
+    await writeFile(join(dest, 'large.md'), `<!-- aiwg:managed -->\n${'x'.repeat(8000)}`);
+    await writeFile(join(dest, 'operator.md'), '# Operator');
+    await writeFile(join(dest, RULE_BUDGET_SIDECAR), JSON.stringify({ budgetTokens: 1, demoted: ['large'] }));
+    expect(reconcileInlineRuleBudget(dest, 1)).toEqual({ demoted: [], removed: [] });
+    expect(existsSync(join(dest, 'large.md'))).toBe(true);
     expect(existsSync(join(dest, 'operator.md'))).toBe(true);
-    expect(readRuleBudgetSidecar(dest)).toEqual({ budgetTokens: 1_500, demoted: ['high-big'] });
-
-    // Pass 2 adds another HIGH rule that fits: nothing else is removed, the sidecar carries.
-    await managed('high-late', 'high', 400);
-    const second = reconcileInlineRuleBudget(dest, 1_500);
-    expect(second.removed).toEqual([]);
-    expect(second.demoted).toEqual(['high-big']);
-
-    // A different budget recomputes from what is on disk (~1.23K managed tokens).
-    const third = reconcileInlineRuleBudget(dest, 1_150);
-    expect(third.removed).toEqual(['high-late']);
-    expect(third.demoted).toEqual(['high-late']);
-
-    // Disabling the budget clears the sidecar.
-    reconcileInlineRuleBudget(dest, 0);
     expect(existsSync(join(dest, RULE_BUDGET_SIDECAR))).toBe(false);
   });
 
