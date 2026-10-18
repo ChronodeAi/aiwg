@@ -25,7 +25,8 @@ import { resolveSyncProcessTimeoutMs } from "../../../src/process/bounded-child-
 
 vi.mock("os", async importOriginal => {
   const os = await importOriginal<typeof import("os")>();
-  return { ...os, homedir: vi.fn(() => os.tmpdir()) };
+  const homedir = vi.fn(() => os.tmpdir());
+  return { ...os, homedir, default: { ...os, homedir } };
 });
 
 // Spies through to the real implementation by default; the "stays alive
@@ -342,6 +343,26 @@ describe("Codex runtime-home config permissions", () => {
       expect(options?.env?.HOME).toBe(runtimeHome);
       expect(options?.env?.CODEX_HOME).toBe(runtimeHome);
     }
+  });
+
+  it.each(["legacy", "xdg", "explicit"])("preserves %s AIWG configuration across the profile HOME change", async (kind) => {
+    vi.stubEnv("AIWG_CONFIG", "");
+    const configDir = kind === "legacy" ? join(root, ".aiwg")
+      : kind === "xdg" ? join(root, ".config", "aiwg") : join(root, "operator-config");
+    mkdirSync(configDir, { recursive: true });
+    if (kind === "explicit") vi.stubEnv("AIWG_CONFIG", configDir);
+    writeFileSync(join(configDir, "installation.json"), JSON.stringify({ runMode: "development" }));
+    const runtimeHome = await ensureRuntimeHome("isolated");
+    vi.mocked(spawnSync).mockClear();
+    launchWithProfile("isolated", ["--version"]);
+    await loginInProfile("isolated");
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+    for (const [, , options] of vi.mocked(spawnSync).mock.calls) {
+      expect(options?.env?.AIWG_CONFIG).toBe(configDir);
+      expect(options?.env?.HOME).toBe(runtimeHome);
+      expect(options?.env?.CODEX_HOME).toBe(runtimeHome);
+    }
+    expect(process.env.HOME).toBe(root);
   });
 
   describe("headless launch/login (#3062)", () => {

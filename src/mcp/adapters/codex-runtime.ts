@@ -29,6 +29,7 @@ import { assertCredentialPolicy, resolveCredentialPolicy, type McpCredentialPoli
 import { planToolFilters, type ToolFilters } from '../tool-filters.mjs';
 import { assertConfigDestination, writeConfigAtomic } from '../config-file.mjs';
 import { stripMcpServers } from '../toml-strip-mcp.mjs';
+import { resolveUserConfigDir } from '../../config/user-config-dir.mjs';
 
 // ─────────────────────────────────────────────
 // Types
@@ -247,6 +248,9 @@ export function launchWithProfile(
     ...(process.env as Record<string, string>),
     HOME: rtHome,
     CODEX_HOME: rtHome,
+    // Resolve before HOME changes so the child retains the operator's
+    // installation identity, channel and other provider-neutral configuration.
+    AIWG_CONFIG: resolveUserConfigDir(),
   };
 
   if (isNonInteractiveCodexInvocation(extraArgs)) {
@@ -500,6 +504,7 @@ export async function loginInProfile(
     ...(process.env as Record<string, string>),
     HOME: rtHome,
     CODEX_HOME: rtHome,
+    AIWG_CONFIG: resolveUserConfigDir(),
   };
 
   // `options.apiKey` (go/no-go review, blocker 1C) is the already-resolved
