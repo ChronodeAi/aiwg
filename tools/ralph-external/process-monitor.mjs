@@ -7,6 +7,7 @@
  * @implements @.aiwg/requirements/use-cases/UC-273-multi-loop-supervisor.md
  */
 
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'events';
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, readdirSync } from 'fs';
@@ -42,7 +43,12 @@ let importImpl;
 try {
   ({ importImpl } = await import('../_resolve-impl.mjs'));
 } catch (error) {
-  if (error?.code !== 'ERR_MODULE_NOT_FOUND' || error.url !== new URL('../_resolve-impl.mjs', import.meta.url).href) throw error;
+  // Only a missing resolver is tolerated. Loaders report its location as a
+  // file URL (Node) or a path in the message (Vitest), so check both forms.
+  const resolverUrl = new URL('../_resolve-impl.mjs', import.meta.url);
+  const missingResolver = error?.code === 'ERR_MODULE_NOT_FOUND'
+    && (error.url === resolverUrl.href || String(error.message).includes(fileURLToPath(resolverUrl)));
+  if (!missingResolver) throw error;
   processHealthUnavailableReason = 'bounded-child-process helper unavailable: resolver missing (tools/_resolve-impl.mjs)';
 }
 if (importImpl) {
