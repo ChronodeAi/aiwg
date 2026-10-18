@@ -104,13 +104,18 @@ describe('Wave 1 canonical rule delivery (#2941)', () => {
       'decision-offload': 'offload bounded decisions to Jev',
       'debug-source-not-output': 'debug generated output or canonical source',
     };
+    // Build the framework index in this isolated HOME so the result does not depend on test order.
+    const discoverEnv = { PATH: process.env.PATH, HOME: home, AIWG_ROOT: repo,
+      XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
+      XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
+      AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
+    execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'), 'index', 'build', '--graph', 'framework', '--force'], {
+      cwd: repo, env: discoverEnv, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
+    });
     for (const [name, phrase] of Object.entries(needs)) {
       const result = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'bin/aiwg.mjs'),
         'discover', phrase, '--type', 'rule', '--json'], {
-        cwd: repo, env: { PATH: process.env.PATH, HOME: home, AIWG_ROOT: repo,
-          XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
-          XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
-          AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' },
+        cwd: repo, env: discoverEnv,
         encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
       }));
       expect(result.results.slice(0, 3).map((entry: any) => entry.name), phrase).toContain(name);
