@@ -113,8 +113,12 @@ describe('activation-selected provider deployment (#2939)', () => {
     // Freeze the legacy delivery input independently of later corpus migrations
     // and #3222's tagged behaviors; this fixture tests untagged tier fallback.
     const legacy = join(root, 'legacy');
+    // Wave 4 intentionally changes these bodies; its six-provider fixture
+    // checks complete delivery. Retain the historical hashes for other rules.
+    const wave4 = new Set(['human-authorization', 'instruction-comprehension', 'research-before-decision', 'skill-discovery', 'artifact-output-policy']);
     cpSync(join(repo, 'agentic/code'), join(legacy, 'agentic/code'), { recursive: true,
       filter: file => !file.includes('/plugins/') &&
+        ![...wave4].some(name => file.endsWith(`/${name}-guidance.md`)) &&
         (statSync(file).isDirectory() || file.includes('/rules/') || file.endsWith('/manifest.json') || file.endsWith('/RULES-INDEX.md')) });
     for (const file of walk(legacy).filter(file => file.endsWith('.md'))) {
       const content = readFileSync(file, 'utf8');
@@ -204,6 +208,30 @@ describe('activation-selected provider deployment (#2939)', () => {
     ] });
     expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
     expect(walk(join(root, 'target')).filter(file => file.endsWith('/fixture-flow/SKILL.md'))).toEqual([]);
+  }, 90_000);
+
+  it('promotes empty resource directories along with the validated deployment', () => {
+    const root = setup();
+    mkdirSync(join(root, 'source/skills/fixture-skill/empty-resource'), { recursive: true });
+    deploy(root, 'claude');
+    const resource = join(root, 'target/.claude/skills/fixture-skill/empty-resource');
+    expect(existsSync(resource)).toBe(true);
+    expect(readdirSync(resource)).toEqual([]);
+  }, 90_000);
+
+  it('refreshes an invocation index snapshot when a later pass declares a new target', () => {
+    const root = setup();
+    const env = { AIWG_RULE_BINDING_INDEX_CACHE: join(root, 'binding-cache'),
+      XDG_DATA_HOME: join(root, 'xdg-data'), XDG_CONFIG_HOME: join(root, 'xdg-config') };
+    deploy(root, 'claude', { bindingEntries: undefined, env });
+    writeFileSync(join(root, 'source/agents/late-agent.md'), '---\nname: late-agent\ndescription: Late target\n---\n# Late agent\n');
+    writeFileSync(join(root, 'source/rules/late-rule.md'), '---\nname: late-rule\nactivation: bound\nsummary: Follow the late policy.\nbound_to:\n  agents: [late-agent]\n---\nLATE_RULE_BODY\n');
+    deploy(root, 'claude', { bindingEntries: undefined, env });
+    const late = readFileSync(join(root, 'target/.claude/agents/late-agent.md'), 'utf8');
+    expect(late).toContain('aiwg show rule late-rule');
+    expect(late.match(/<!-- AIWG:bound-rules:start -->/g)).toHaveLength(1);
+    expect(readFileSync(join(root, 'target/.claude/agents/fixture-agent.md'), 'utf8'))
+      .toContain('aiwg show rule fixture-bound');
   }, 90_000);
 
   it('rebuilds a stale non-empty source index when a bound agent is missing', () => {

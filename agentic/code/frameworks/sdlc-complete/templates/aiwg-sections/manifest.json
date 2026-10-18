@@ -18,9 +18,9 @@
     {
       "id": "discover-first",
       "file": "02b-discover-first.md",
-      "title": "Discover-First Protocol",
+      "title": "Capability Routing",
       "required": true,
-      "description": "Mandates `aiwg discover` + `aiwg show` before declining requests or improvising workflows. Closes hookup-matrix Finding #2 (#1344) — the discover-first protocol now reaches every provider that loads AIWG.md (Codex, Windsurf, OpenCode, Hermes, plus Warp via twin emission)."
+      "description": "Points to the canonical kernel routing rule and capability quickref without duplicating their normative text."
     },
     {
       "id": "aiwg-rules",

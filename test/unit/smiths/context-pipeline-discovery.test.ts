@@ -238,11 +238,11 @@ describe('ensureClaudeMdHook (#1437)', () => {
     expect(content).toContain(CLAUDE_HOOK_END);
     expect(content).toContain('@AIWG.md');
     expect(content).toContain('@.aiwg/aiwg.config');
-    expect(content).toContain('Provider-native presentation/export: explicit-only');
-    expect(content).toContain('Never substitute, relocate, or omit the canonical AIWG plan/review artifact');
+    expect(content).toContain('aiwg show rule artifact-output-policy');
+    expect(content).not.toContain('Never substitute');
   });
 
-  it('compiles the resolved Claude Design destination policy into the managed block', async () => {
+  it('points to the kernel authority and loads config instead of restating destination policy', async () => {
     await fs.mkdir(path.join(tmpDir, '.aiwg'), { recursive: true });
     await fs.writeFile(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
       version: '1', providers: ['claude'], installed: {}, scripts: {},
@@ -250,8 +250,9 @@ describe('ensureClaudeMdHook (#1437)', () => {
     }));
     const result = await ensureClaudeMdHook(tmpDir);
     const content = await fs.readFile(result.claudeMdPath, 'utf8');
-    expect(content).toContain('Provider-native presentation/export: disabled');
-    expect(content).toContain('Claude Design: disabled by project policy');
+    expect(content).toContain('@.aiwg/aiwg.config');
+    expect(content).toContain('aiwg show rule artifact-output-policy');
+    expect(content).not.toContain('Claude Design:');
   });
 
   it('appends the hook block when CLAUDE.md exists without the markers', async () => {

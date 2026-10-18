@@ -18,6 +18,8 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { projectControlPath } from '../../config/project-artifacts.js';
+import { buildClaudeHookBlock, CLAUDE_HOOK_START, CLAUDE_HOOK_END } from './claude-hook.js';
+import { dominantLineEnding, withLineEnding } from './line-endings.js';
 import { buildParallelismSection, replaceOrAppendParallelismBlock } from './parallelism-section.js';
 import { buildContextFinalizationBlock, replaceOrAppendFinalizationBlock } from './finalization.js';
 import {
@@ -68,6 +70,15 @@ export async function buildAiwgMdContent(
   if (claudeMdContent) {
     // Insert the AIWG signature comment as the second line.
     // Top line is typically `# AIWG` or `# Project` heading; preserve it.
+    // Regenerate may mirror CLAUDE.md before its hook updater runs. Normalize
+    // that managed block here too so legacy duplicate policy never reaches
+    // AIWG.md, even on the first refresh. Operator content stays untouched.
+    const start = claudeMdContent.indexOf(CLAUDE_HOOK_START);
+    const end = claudeMdContent.indexOf(CLAUDE_HOOK_END, start);
+    if (start >= 0 && end >= start) {
+      const hook = withLineEnding(buildClaudeHookBlock(), dominantLineEnding(claudeMdContent));
+      claudeMdContent = claudeMdContent.slice(0, start) + hook + claudeMdContent.slice(end + CLAUDE_HOOK_END.length);
+    }
     const lines = claudeMdContent.split('\n');
 
     // #1268: strip `@AIWG.md` self-include directives. CLAUDE.md uses

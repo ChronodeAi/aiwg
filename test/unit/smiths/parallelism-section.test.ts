@@ -156,35 +156,15 @@ describe('buildParallelismSection (#1362)', () => {
     );
   });
 
-  it('includes the MIN-of-caps composition guidance', async () => {
-    await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
-    const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('take the MIN of');
-    expect(section).toContain('AIWG_CONTEXT_WINDOW');
-    expect(section).toContain('framework-specific caps');
-    expect(section).toContain('natural task decomposition');
-    expect(section).toContain('aiwg config set --project');
-  });
-
-  it('emits the wrapper selection rubric and primary-agent responsibilities', async () => {
+  it('keeps project caps and provider facts while referring delegation policy to its rule', async () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('assess whether it contains independent, bounded subtasks');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
-    expect(section).toContain('The primary agent retains orchestration');
+    expect(section).toContain('max_parallel_subagents');
+    expect(section).toContain('aiwg show rule subagent-scoping');
     expect(section).toContain('native custom subagents');
-  });
-
-  it('documents no-delegation edge cases', async () => {
-    await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
-    const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('trivial work');
-    expect(section).toContain('tightly coupled changes');
-    expect(section).toContain('serial dependencies');
-    expect(section).toContain('collide in shared state');
-    expect(section).toContain('coordination costs');
+    expect(section).not.toContain('take the MIN of');
+    expect(section).not.toContain('The primary agent retains orchestration');
+    expect(section).not.toContain('coordination costs');
   });
 
   it.each([
@@ -270,10 +250,9 @@ describe('orchestration groups block (#2893 / #2914)', () => {
     return cfg;
   }
 
-  // Byte-for-byte rendering of buildParallelismSection() at HEAD (before the
-  // orchestration-guidance block existed) for emptyConfig(['codex']): no
-  // worker_dispatch, no groups. Regenerate only from HEAD sources.
-  const PRE_DISPATCH_GOLDEN = `<!-- AIWG-PARALLELISM-CAP:START -->
+  // Compact caps and authority pointer for emptyConfig(['codex']) after
+  // Wave 4 deduplication, with dispatch disabled and no groups.
+  const COMPACT_CAP_GOLDEN = `<!-- AIWG-PARALLELISM-CAP:START -->
 ## Parallelism Cap
 
 This project caps parallel agent fan-out (#1359):
@@ -284,17 +263,7 @@ This project caps parallel agent fan-out (#1359):
 
 *Rationale*: Provider default for codex — adjust via 'aiwg config set --project parallelism.max_parallel_subagents N'
 
-### Model-selected delegation rubric
-
-For each non-trivial task, assess whether it contains independent, bounded subtasks that can run concurrently. When delegation is supported, prefer the deployed model-pinned wrappers by task characteristics and consequence:
-
-- \`aiwg-model-efficiency-worker\`: discovery, inventory, focused edits, and other bounded low-cost work.
-- \`aiwg-model-coding-worker\`: implementation, tests, debugging, and routine technical delivery.
-- \`aiwg-model-reasoning-worker\`: architecture, synthesis, difficult analysis, and high-consequence review.
-
-Do not delegate trivial work, tightly coupled changes, serial dependencies, or tasks likely to collide in shared state; also keep work local when coordination costs exceed the expected benefit. Parallelize only independent work, and take the MIN of provider limits, \`max_parallel_subagents\`, \`AIWG_CONTEXT_WINDOW\` budget, framework-specific caps (including the RLM 7-agent hard cap for RLM dispatches), and natural task decomposition. Bump the project cap via \`aiwg config set --project parallelism.max_parallel_subagents N\`.
-
-The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.
+Delegation policy and model-worker selection: \`aiwg show rule subagent-scoping\`.
 
 **Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
 
@@ -303,17 +272,17 @@ The primary agent retains orchestration, final integration, conflict resolution,
 <!-- AIWG-PARALLELISM-CAP:END -->
 `;
 
-  it('dispatch disabled renders byte-identical output to the pre-dispatch rendering', async () => {
+  it('dispatch disabled renders compact caps and the rule pointer', async () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
-    expect(await buildParallelismSection(tmpDir)).toBe(PRE_DISPATCH_GOLDEN);
+    expect(await buildParallelismSection(tmpDir)).toBe(COMPACT_CAP_GOLDEN);
   });
 
-  it('dispatch explicitly false renders byte-identical output even with groups configured', async () => {
+  it('dispatch explicitly false renders the same compact section even with groups configured', async () => {
     const cfg = groupConfig();
     cfg.parallelism.worker_dispatch = false;
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toBe(PRE_DISPATCH_GOLDEN);
+    expect(section).toBe(COMPACT_CAP_GOLDEN);
     expect(section).not.toContain('Orchestration groups');
   });
 
@@ -376,7 +345,7 @@ The primary agent retains orchestration, final integration, conflict resolution,
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('Configured groups: none');
-    expect(section).toContain('the native delegation rubric above applies unchanged');
+    expect(section).toContain('the subagent-scoping rule applies');
     expect(section).not.toContain('Available groups');
     expect(section).not.toContain('keep work local or add a group');
   });
@@ -421,10 +390,9 @@ The primary agent retains orchestration, final integration, conflict resolution,
     // Everything that does not depend on the worker-model defaults still renders.
     expect(section).toContain('max_parallel_subagents');
     expect(section).toContain('*Rationale*:');
-    expect(section).toContain('### Model-selected delegation rubric');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('aiwg show rule subagent-scoping');
+    expect(section).not.toContain('### Model-selected delegation rubric');
+    expect(section).toContain('aiwg show rule subagent-scoping');
     expect(section).toContain('native custom subagents');
     // Only the orchestration/health details that need the defaults are omitted.
     expect(section).not.toContain('### Orchestration groups');
@@ -519,9 +487,7 @@ The primary agent retains orchestration, final integration, conflict resolution,
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('max_parallel_subagents');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('aiwg show rule subagent-scoping');
   });
 
   it('describes health-window scaling as the largest applicable factor, never a product, and limits only the hard deadline/grace periods by wall-transport ceilings', async () => {

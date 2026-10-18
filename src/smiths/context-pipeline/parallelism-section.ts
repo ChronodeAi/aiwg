@@ -245,26 +245,15 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
     lines.push(`*Rationale*: ${resolved.rationale}`);
   }
   lines.push('');
-  lines.push('### Model-selected delegation rubric');
-  lines.push('');
-  lines.push('For each non-trivial task, assess whether it contains independent, bounded subtasks that can run concurrently. When delegation is supported, prefer the deployed model-pinned wrappers by task characteristics and consequence:');
-  lines.push('');
-  lines.push('- `aiwg-model-efficiency-worker`: discovery, inventory, focused edits, and other bounded low-cost work.');
-  lines.push('- `aiwg-model-coding-worker`: implementation, tests, debugging, and routine technical delivery.');
-  lines.push('- `aiwg-model-reasoning-worker`: architecture, synthesis, difficult analysis, and high-consequence review.');
-  lines.push('');
-  lines.push('Do not delegate trivial work, tightly coupled changes, serial dependencies, or tasks likely to collide in shared state; also keep work local when coordination costs exceed the expected benefit. Parallelize only independent work, and take the MIN of provider limits, `max_parallel_subagents`, `AIWG_CONTEXT_WINDOW` budget, framework-specific caps (including the RLM 7-agent hard cap for RLM dispatches), and natural task decomposition. Bump the project cap via `aiwg config set --project parallelism.max_parallel_subagents N`.');
-  lines.push('');
-  lines.push('The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.');
+  lines.push('Delegation policy and model-worker selection: `aiwg show rule subagent-scoping`.');
   lines.push('');
   lines.push(delegationSupport(primary));
   lines.push('');
   lines.push(workerDispatchStateLine(cfg.parallelism, cfg.setup));
   lines.push('');
   // Group dispatch disabled (worker_dispatch unset/false): the resolver reports
-  // `disabled`, so no group block renders — the native-delegation rubric above
-  // applies unchanged and the output stays byte-identical to the pre-dispatch
-  // rendering.
+  // `disabled`, so no group block renders — the subagent-scoping pointer above
+  // remains available.
   if (cfg.parallelism?.worker_dispatch === true && healthUnresolved) {
     lines.push(PARALLELISM_HEALTH_UNRESOLVED_NOTE);
     lines.push('');
@@ -284,7 +273,7 @@ export async function buildParallelismSection(projectPath: string, deps: Paralle
       const hidden = entries.length - MAX_SHOWN_GROUPS;
       lines.push(`Configured groups: ${shown}${hidden > 0 ? ` (+${hidden} more)` : ''}`);
     } else {
-      lines.push('Configured groups: none — group dispatch is enabled but no groups are configured; the native delegation rubric above applies unchanged.');
+      lines.push('Configured groups: none — group dispatch is enabled but no groups are configured; the subagent-scoping rule applies.');
     }
     lines.push('');
     lines.push('A group above shown as configured, with excluded members or an uncovered required role listed, is a static config read — not a live eligibility verdict. Eligibility is resolved per (group, member, effort) tuple against the current catalog and request; see `aiwg models resolve` below to check a specific role/task/group.');
