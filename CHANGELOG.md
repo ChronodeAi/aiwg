@@ -15,6 +15,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Attribute Codex, Muse and OMP sessions started in a workspace subfolder or a
+  linked git worktree to the nearest enclosing workspace, without sibling-prefix
+  matches; discovery reports subfolder and worktree match counts (#324, Gitea #3240).
+- Discover Codex sessions across the default root, `CODEX_HOME`, role-profile homes
+  under `~/.codex/roles-runtime/*` and configured `sessions.codex_roots`, deduplicating
+  rollouts by session id and reporting per-root counts (#325, Gitea #3241).
 - Rebuild session analytics only for sessions affected by committed incremental
   imports, index source/batch totals and aggregate them in one query, and skip
   verified analytics scans and use covering indexes for FTS checks on open,

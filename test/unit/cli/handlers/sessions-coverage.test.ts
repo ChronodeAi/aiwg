@@ -11,10 +11,12 @@ import { itWithSqlite } from '../../../helpers/sqlite.js';
 let root: string;
 let log: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
+  vi.stubEnv('CODEX_HOME', '');
   root = mkdtempSync(join(tmpdir(), 'sessions-coverage-cli-'));
   log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   rmSync(root, { recursive: true, force: true });
 });
@@ -24,6 +26,47 @@ async function cli(args: string[]) {
 }
 
 describe('sessions coverage CLI', () => {
+  it('combines configured Codex roots with repeated flags and resolves each relative base', async () => {
+    const workspace = join(root, 'workspace');
+    mkdirSync(join(workspace, '.aiwg'), { recursive: true });
+    writeFileSync(join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { codex_roots: ['configured'] },
+    }));
+    const configured = join(workspace, 'configured');
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    for (const [index, path] of [configured, first, second].entries()) {
+      mkdirSync(path);
+      writeFileSync(join(path, 'rollout.jsonl'), JSON.stringify({
+        type: 'session_meta', payload: { id: `session-${index}`, cwd: workspace },
+      }) + '\n');
+    }
+    const manifestPath = join(root, 'discovery.json');
+    const result = await cli(['discover', '--workspace', workspace, '--expected-providers', 'codex',
+      '--codex-root', 'first', '--codex-root', 'second', '--codex-root', 'first',
+      '--manifest', manifestPath, '--json']);
+    expect(result.exitCode).toBe(0);
+    expect(result.data.manifest.totals.sources).toBe(3);
+    expect(result.data.manifest.providers[0].rootCounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ root: '<session-source>/configured', sourceCount: 1 }),
+      expect.objectContaining({ root: '<session-source>/first', sourceCount: 1 }),
+      expect.objectContaining({ root: '<session-source>/second', sourceCount: 1 }),
+    ]));
+    expect(JSON.stringify(result.data.manifest.providers)).not.toContain(root);
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).authorizedRoots.codex).toEqual([configured, first, second]);
+
+    const configuredOnly = await cli(['discover', '--workspace', workspace, '--expected-providers', 'codex',
+      '--dry-run', '--json']);
+    expect(configuredOnly.exitCode).toBe(0);
+    expect(configuredOnly.data.manifest.totals.sources).toBe(1);
+  });
+
+  it('rejects a repeated Codex root flag without its value', async () => {
+    const result = await cli(['discover', '--workspace', root, '--codex-root', 'first', '--codex-root', '--json']);
+    expect(result.exitCode).toBe(2);
+    expect(result.error.code).toBe('MISSING_OPTION_VALUE');
+  });
+
   it('reports actual runtime and every expected provider without requiring SQLite', async () => {
     const result = await cli(['sources', '--expected-providers', 'muse,future-provider', '--json']);
     expect(result.exitCode).toBe(0);
