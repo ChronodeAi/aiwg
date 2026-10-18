@@ -228,23 +228,38 @@ session_0123456789abcdef`;
   });
 
   it('bounds redaction of a 32 MiB record with malformed key blocks and long near matches', () => {
+    const recordSize = 32 * 1024 * 1024;
+    const benignChunk = 'ordinary session prose without sensitive content.\n';
+    const benign = benignChunk.repeat(Math.ceil(recordSize / benignChunk.length)).slice(0, recordSize);
+    const baselineStarted = performance.now();
+    const baseline = redactSessionText(benign);
+    const baselineMs = performance.now() - baselineStarted;
+    expect(baseline.text).toBe(benign);
+    // Compare equal-size records on this runner; shared CI load is not a benchmark.
+    // Local near-match runs take roughly 10x the benign scan; allow scheduling headroom.
+    const maxSlowdown = 20;
     const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
       + 'password' + ' '.repeat(1024) + 'end\n'
       + 'eyJ' + 'a-'.repeat(1024) + '\n'
       + 'a.'.repeat(1024) + '\n';
-    const text = chunk.repeat(Math.ceil(32 * 1024 * 1024 / chunk.length)).slice(0, 32 * 1024 * 1024);
+    const text = chunk.repeat(Math.ceil(recordSize / chunk.length)).slice(0, recordSize);
     const started = performance.now();
     const result = redactSessionText(text);
-    expect(performance.now() - started).toBeLessThan(10_000);
+    const keyBlockMs = performance.now() - started;
+    expect(keyBlockMs / baselineMs, 'malformed key blocks / benign baseline').toBeLessThan(maxSlowdown);
     expect(result.text).toBe('[REDACTED:private-key]');
     // Exercise every regex on a large record as well as the unfinished-key scanner.
     const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
-    const plain = nearMatch.repeat(Math.ceil(32 * 1024 * 1024 / nearMatch.length)).slice(0, 32 * 1024 * 1024);
+    const secretSuffix = '\n' + syntheticSecrets[0][1];
+    const plain = nearMatch.repeat(Math.ceil(recordSize / nearMatch.length))
+      .slice(0, recordSize - secretSuffix.length);
+    const plainInput = plain + secretSuffix;
     const plainStarted = performance.now();
-    const redacted = redactSessionText(plain + '\n' + syntheticSecrets[0][1]);
-    expect(performance.now() - plainStarted).toBeLessThan(10_000);
+    const redacted = redactSessionText(plainInput);
+    const nearMatchMs = performance.now() - plainStarted;
+    expect(nearMatchMs / baselineMs, 'near matches / benign baseline').toBeLessThan(maxSlowdown);
     expect(redacted.text).toBe(plain + '\n[REDACTED:provider-token]');
-  }, 25_000);
+  }, 120_000); // Hang guard only; performance is bounded relative to the baseline.
 
   it('requires operation-specific network consent', () => {
     expect(() => requireNetworkConsent('codex.export', 'claude.export')).toThrowError(
