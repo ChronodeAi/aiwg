@@ -16,4 +16,8 @@ activation: kernel
 - On failure, MUST investigate root cause through source, docs, or diagnostics before a single informed retry; blind variations are FORBIDDEN. Three or more sequential failed attempts in one category without intervening search/read MUST trigger: stop → research → understand root cause → one informed attempt.
 - In TAO, Thought MUST identify research needs, Action MUST search/read before modification, and Observation MUST extract facts for the next action. Thought → Edit → Error without Read/Search/Grep is a violation.
 
+- For configuration decisions and configuration-related failures, read the actual configuration file and use its actual values rather than guessed defaults.
+- When selecting a library, check the project's dependency manifest and use what already exists in the project.
+- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.
+
 Supporting rationale and examples: [research-before-decision-guidance](./research-before-decision-guidance.md) (`aiwg show rule research-before-decision-guidance`, on-demand).

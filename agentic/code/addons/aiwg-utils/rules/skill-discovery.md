@@ -17,4 +17,7 @@ activation: kernel
 - After discover returns a path, MUST fetch with `aiwg show <type> <name>`; find/ls/Glob/Grep/Read on that path is FORBIDDEN. After native Skill errors, use show, then show with `--json` for a path/content envelope. Only if the CLI is broken may you read the canonical `$AIWG_ROOT/agentic/code/{frameworks,addons}/<bundle>/skills/<name>/SKILL.md` corpus directly, then repair via aiwg-doctor → aiwg-refresh. Searching provider skill mirrors is never a valid fallback.
 - MUST tell the user when querying and name the top candidate(s) with a one-line capability summary. If discovery was skipped or followed by filesystem navigation, stop and recover with discover → show → apply. Use parsed intent for AIWG research; a discovery match does not authorize destructive invocation. Decompose complex multi-skill flows rather than absorbing them.
 
+- Subject to the listed query exemptions, for any request mentioning AIWG, a framework name (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator), or a capability keyword (skill, agent, rule, command, addon, workflow, flow, template), aiwg discover MUST be the first information-gathering call.
+- Before declining an AIWG capability, run aiwg discover with the appropriate --type and read the top result's capability rather than only its name.
+
 Supporting rationale and examples: [skill-discovery-guidance](./skill-discovery-guidance.md) (`aiwg show rule skill-discovery-guidance`, on-demand).

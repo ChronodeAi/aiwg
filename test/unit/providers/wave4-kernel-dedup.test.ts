@@ -36,7 +36,8 @@ describe('Wave 4 compact kernel and startup deduplication (#2944)', () => {
       expect(meta(guidance).activation, name).toBe('on-demand');
       expect(kernel).toContain(`(./${name}-guidance.md)`);
       expect(kernel).toContain(`aiwg show rule ${name}-guidance`);
-      expect(Buffer.byteLength(kernel), name).toBeLessThan(3300);
+      // Discovery's restored first-call scope and typed pre-decline query need 3,302 B.
+      expect(Buffer.byteLength(kernel), name).toBeLessThan(name === 'skill-discovery' ? 3400 : 3300);
       expect(kernel).not.toMatch(/## (?:Overview|Problem Statement|Detection Patterns|Checklist)|```/);
     }
     // Obligations that can easily disappear when examples/rationale are extracted.

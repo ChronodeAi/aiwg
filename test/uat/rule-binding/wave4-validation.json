@@ -658,5 +658,448 @@
         "log": "/tmp/aiwg-2944-evidence/real-regenerate.log"
       }
     ]
+  },
+  "restorations": {
+    "review": "crit4/review.md",
+    "obligations": [
+      {
+        "rule": "human-authorization",
+        "review_row": "H03",
+        "new_line": "- Before any listed high-stakes action, the agent MUST confirm with the user, even when the action seems obviously correct.",
+        "line_number": 25
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H06",
+        "new_line": "- Removal includes unregistering components even when their files remain.",
+        "line_number": 26
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H25",
+        "new_line": "- Apply these authorization checks whenever considering an operation that cannot be trivially undone, including an operation recoverable only with effort.",
+        "line_number": 27
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H32",
+        "new_line": "- Before acting, agents MUST both understand what they are doing through research and have authorization to do it; neither requirement substitutes for the other.",
+        "line_number": 28
+      },
+      {
+        "rule": "human-authorization",
+        "review_row": "H35",
+        "new_line": "- Before any unrequested action, verify whether it is reversible without side effects.",
+        "line_number": 29
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I19",
+        "new_line": "- Before starting a multi-part request, create a tracking list recording each requested part and its completion state.",
+        "line_number": 21
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I27",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I28",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I29",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I30",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I31",
+        "new_line": "- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.",
+        "line_number": 22
+      },
+      {
+        "rule": "instruction-comprehension",
+        "review_row": "I37",
+        "new_line": "- Before writing code, agents MUST both understand WHAT the user wants and research HOW to accomplish it.",
+        "line_number": 23
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R04",
+        "new_line": "- For configuration decisions and configuration-related failures, read the actual configuration file and use its actual values rather than guessed defaults.",
+        "line_number": 19
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R06",
+        "new_line": "- When selecting a library, check the project's dependency manifest and use what already exists in the project.",
+        "line_number": 20
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R38",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R39",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R40",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R41",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "research-before-decision",
+        "review_row": "R42",
+        "new_line": "- Before making a technical decision, verify that you have read the relevant source code, checked existing project patterns, read error messages completely, searched actual file and function locations, verified types and signatures from source rather than memory, and confirmed that dependencies exist in the project.",
+        "line_number": 21
+      },
+      {
+        "rule": "skill-discovery",
+        "review_row": "S18",
+        "new_line": "- Subject to the listed query exemptions, for any request mentioning AIWG, a framework name (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator), or a capability keyword (skill, agent, rule, command, addon, workflow, flow, template), aiwg discover MUST be the first information-gathering call.",
+        "line_number": 20
+      },
+      {
+        "rule": "skill-discovery",
+        "review_row": "S45",
+        "new_line": "- Before declining an AIWG capability, run aiwg discover with the appropriate --type and read the top result's capability rather than only its name.",
+        "line_number": 21
+      }
+    ],
+    "measurement_fixture": {
+      "claude": "tools/rules/measure-startup-context.mjs; sdlc; test/fixtures/rule-binding/project",
+      "codex_hermes": "wave4-kernel-dedup.test.ts six-provider fixture: five kernels and companions plus aiwg-utils-quickref; isolated project/home",
+      "note": "Before is the compact Wave 4 state immediately before restoration; after includes the 21 restored review rows. Existing Wave 4 measurements above are preserved."
+    },
+    "claude_rule_bytes": [
+      {
+        "rule": "human-authorization",
+        "before": 1913,
+        "after": 2516
+      },
+      {
+        "rule": "instruction-comprehension",
+        "before": 1909,
+        "after": 2423
+      },
+      {
+        "rule": "research-before-decision",
+        "before": 1687,
+        "after": 2275
+      },
+      {
+        "rule": "skill-discovery",
+        "before": 2698,
+        "after": 3186
+      },
+      {
+        "rule": "artifact-output-policy",
+        "before": 1499,
+        "after": 1499
+      }
+    ],
+    "claude_startup_bytes": {
+      "before": 93863,
+      "after": 96056,
+      "before_deployment_exit_code": 0,
+      "after_deployment_exit_code": 0
+    },
+    "provider_characters": {
+      "codex": {
+        "agents_md": {
+          "before": 269,
+          "after": 269
+        },
+        "startup_contributors": {
+          "before": [
+            {
+              "path": "AIWG.md",
+              "characters": 9228
+            },
+            {
+              "path": "AGENTS.md",
+              "characters": 269
+            }
+          ],
+          "after": [
+            {
+              "path": "AIWG.md",
+              "characters": 11421
+            },
+            {
+              "path": "AGENTS.md",
+              "characters": 269
+            }
+          ]
+        },
+        "reported_startup_characters": {
+          "before": 9497,
+          "after": 11690
+        }
+      },
+      "hermes": {
+        "agents_md": {
+          "before": 13913,
+          "after": 16106
+        },
+        "startup_contributors": {
+          "before": [
+            {
+              "path": "AGENTS.md",
+              "characters": 13913
+            },
+            {
+              "path": ".hermes.md",
+              "characters": 811
+            }
+          ],
+          "after": [
+            {
+              "path": "AGENTS.md",
+              "characters": 16106
+            },
+            {
+              "path": ".hermes.md",
+              "characters": 811
+            }
+          ]
+        },
+        "reported_startup_characters": {
+          "before": 14724,
+          "after": 16917
+        },
+        "agents_md_cap": 19000
+      }
+    },
+    "validation": {
+      "typecheck": "passed",
+      "package_plugins": "passed",
+      "lint_plugin_copies": "passed",
+      "vitest": {
+        "commands": [
+          "nice -n 19 node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=3 test/unit/providers/wave4-kernel-dedup.test.ts test/unit/providers/rule-activation-deployment.test.ts",
+          "nice -n 19 node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=3 test/unit/lint test/unit/rules test/unit/smiths"
+        ],
+        "passed": 697,
+        "skipped": 1,
+        "files_passed": 38,
+        "results": [
+          {
+            "file": "test/unit/providers/wave4-kernel-dedup.test.ts",
+            "passed": 8,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/providers/rule-activation-deployment.test.ts",
+            "passed": 24,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/runner.test.ts",
+            "passed": 34,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/mcpsmith/cli-analyzer.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/research-regressions.test.ts",
+            "passed": 33,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-muse-bridge.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/rule-probes.test.mjs",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-overflow.test.ts",
+            "passed": 18,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline.test.ts",
+            "passed": 48,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/workspace-context.test.ts",
+            "passed": 41,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/workspace-context-home-walk.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/agentsmith/generator.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/fortemi-npm-pack.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/rule-triggers.test.mjs",
+            "passed": 4,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-pipeline-discovery.test.ts",
+            "passed": 29,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/agent-def-sizes.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/rule-activation.test.ts",
+            "passed": 12,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/toolsmith/runtime-discovery.test.ts",
+            "passed": 39,
+            "skipped": 1
+          },
+          {
+            "file": "test/unit/rules/inline-budget.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/parallelism-section.test.ts",
+            "passed": 38,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/hook-bridge.test.ts",
+            "passed": 26,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/claude-context-inventory.test.ts",
+            "passed": 5,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/startup-context.test.mjs",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/legacy-inject.test.ts",
+            "passed": 3,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/activation.test.ts",
+            "passed": 64,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/commandsmith.test.ts",
+            "passed": 1,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/platform-paths-openhuman.test.ts",
+            "passed": 6,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/skillsmith.test.ts",
+            "passed": 13,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/orchestration-guidance.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/codex-sidecar.test.ts",
+            "passed": 10,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/skillsmith-namespace.test.ts",
+            "passed": 10,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/loader.test.ts",
+            "passed": 8,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/lint/reporters.test.ts",
+            "passed": 14,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/collision-detector.test.ts",
+            "passed": 11,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/namespace-adapter.test.ts",
+            "passed": 43,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-size-guard.test.ts",
+            "passed": 2,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/rules/delivery-policy-preflight.test.ts",
+            "passed": 1,
+            "skipped": 0
+          },
+          {
+            "file": "test/unit/smiths/context-hook-symlink.test.ts",
+            "passed": 4,
+            "skipped": 0
+          }
+        ]
+      },
+      "kernel_size_ceiling_change": "skill-discovery only: 3300 to 3400 bytes, accommodating the exact restoration sentences at 3302 bytes; other rule ceilings remain 3300."
+    }
   }
 }

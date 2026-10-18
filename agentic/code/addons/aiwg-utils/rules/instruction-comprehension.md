@@ -18,4 +18,8 @@ activation: kernel
 - On instruction drift, MUST stop, re-read the original (not memory), identify what drifted and why, acknowledge it to the user, and resume from the corrected understanding.
 - In TAO, the first Thought MUST parse instructions; references to user intent MUST reflect the actual request. Compare Observations to original instructions; the next Thought MUST acknowledge and correct observed drift.
 
+- Before starting a multi-part request, create a tracking list recording each requested part and its completion state.
+- Treat unrequested improvements, changes of approach without user prompting, requested-format mismatches, solving a similar-but-different problem, and the user pasting instructions again as instruction-drift or comprehension-failure signals, and immediately apply the recovery protocol.
+- Before writing code, agents MUST both understand WHAT the user wants and research HOW to accomplish it.
+
 Supporting rationale and examples: [instruction-comprehension-guidance](./instruction-comprehension-guidance.md) (`aiwg show rule instruction-comprehension-guidance`, on-demand).

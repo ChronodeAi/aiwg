@@ -22,4 +22,10 @@ activation: kernel
 - When authoring analysis/review/research agents or skills, MUST produce reports/recommendations/findings rather than unauthorized commits, changes, or side effects. Build confirmation checkpoints at analysis-to-action transitions: discover → report → await authorization → act. Never treat an agent's own conclusions as authorization.
 - MUST revert out-of-scope changes and ask about them separately; report opportunistic findings without acting on them. Verify authorization, reversibility, effects on others, and concrete options before any unrequested action; ask first if any answer raises doubt.
 
+- Before any listed high-stakes action, the agent MUST confirm with the user, even when the action seems obviously correct.
+- Removal includes unregistering components even when their files remain.
+- Apply these authorization checks whenever considering an operation that cannot be trivially undone, including an operation recoverable only with effort.
+- Before acting, agents MUST both understand what they are doing through research and have authorization to do it; neither requirement substitutes for the other.
+- Before any unrequested action, verify whether it is reversible without side effects.
+
 Supporting rationale and examples: [human-authorization-guidance](./human-authorization-guidance.md) (`aiwg show rule human-authorization-guidance`, on-demand).
