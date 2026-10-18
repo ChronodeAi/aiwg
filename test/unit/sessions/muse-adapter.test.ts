@@ -193,6 +193,28 @@ describe('Muse Code session adapter', () => {
     await expect(collect(adapter.stream(source))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
   });
 
+  it.each(['complete', 'provisional'] as const)(
+    'imports raw U+2028 and U+2029 in %s native logs with byte-exact references', async (consistency) => {
+      const root = mkdtempSync(resolve(tmpdir(), 'muse-unicode-'));
+      temporaryRoots.push(root);
+      const locator = resolve(root, 'session.jsonl');
+      const first = JSON.stringify({
+        sequence: 0, payload_type: 'runtime.session', payload: { operation: 'a\u2028b\u2029c' },
+      }) + '\r\n\r\n';
+      const last = JSON.stringify({
+        sequence: 1, payload_type: consistency === 'complete' ? 'session.end' : 'runtime.session',
+      });
+      writeFileSync(locator, first + last);
+      const source = selectedPath(locator, 'muse-unicode', root);
+      await expect(adapter.inspect(source)).resolves.toMatchObject({ consistency, operationalState: 'available' });
+      const events = await collect(adapter.stream(source));
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.rawReference.offset)).toEqual([0, Buffer.byteLength(first)]);
+      expect(events.map((event) => event.sourceCursor)).toEqual(['1', '2']);
+      expect(events.every((event) => event.sourceBytes === Buffer.byteLength(first + last))).toBe(true);
+    },
+  );
+
   it.each(['envelope', 'retained-child', 'retained-frame'] as const)(
     'reports content-free native schema paths for a malformed %s', async (shape) => {
       const root = mkdtempSync(resolve(tmpdir(), 'muse-schema-detail-'));
