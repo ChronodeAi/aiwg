@@ -1,0 +1,2734 @@
+{
+  "version": 1,
+  "framework": "sdlc",
+  "token_estimate": "sum(ceil(UTF-8 bytes per file / 4)); not a tokenizer",
+  "metric": "Emitted native rule surfaces, including indexes and Claude behavior rules. Context adapters are separate; do not add context_files to startup (may overlap).",
+  "providers": {
+    "claude": {
+      "rules": {
+        "bytes": 207444,
+        "estimated_tokens": 51876,
+        "files": [
+          {
+            "path": ".claude/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".claude/rules/agent-deployment.md",
+            "bytes": 4881,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".claude/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".claude/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".claude/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".claude/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1442,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".claude/rules/browser-control-safety.md",
+            "bytes": 7084,
+            "estimated_tokens": 1771
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".claude/rules/daemon-interaction.md",
+            "bytes": 4704,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/escalation-discipline.md",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".claude/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".claude/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".claude/rules/god-session.md",
+            "bytes": 4671,
+            "estimated_tokens": 1168
+          },
+          {
+            "path": ".claude/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 8634,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".claude/rules/native-ux-tools.md",
+            "bytes": 6621,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".claude/rules/network-analysis-safety.md",
+            "bytes": 1656,
+            "estimated_tokens": 414
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".claude/rules/prose-resolution.md",
+            "bytes": 3063,
+            "estimated_tokens": 766
+          },
+          {
+            "path": ".claude/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".claude/rules/quiet-mode.md",
+            "bytes": 4029,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".claude/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 8280,
+            "estimated_tokens": 2070
+          },
+          {
+            "path": ".claude/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".claude/rules/respect-repo-access-manifest.md",
+            "bytes": 4178,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".claude/rules/rlm-context-management.md",
+            "bytes": 7950,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 1816,
+            "estimated_tokens": 454
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 3681,
+            "estimated_tokens": 921
+          },
+          {
+            "path": ".claude/rules/schema-first.md",
+            "bytes": 807,
+            "estimated_tokens": 202
+          },
+          {
+            "path": ".claude/rules/sdlc-right-sizing.md",
+            "bytes": 8723,
+            "estimated_tokens": 2181
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 8587,
+            "estimated_tokens": 2147
+          },
+          {
+            "path": ".claude/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".claude/rules/test-conformance-evidence.md",
+            "bytes": 2249,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/tool-quota.md",
+            "bytes": 7539,
+            "estimated_tokens": 1885
+          },
+          {
+            "path": ".claude/rules/twelve-factor-evidence.md",
+            "bytes": 1168,
+            "estimated_tokens": 292
+          },
+          {
+            "path": ".claude/rules/vague-discretion.md",
+            "bytes": 4728,
+            "estimated_tokens": 1182
+          },
+          {
+            "path": ".claude/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 33315,
+        "estimated_tokens": 8331,
+        "files": [
+          {
+            "path": ".claude/rules/behaviors/artifact-sync.md",
+            "bytes": 2222,
+            "estimated_tokens": 556
+          },
+          {
+            "path": ".claude/rules/behaviors/build-monitor.md",
+            "bytes": 2596,
+            "estimated_tokens": 649
+          },
+          {
+            "path": ".claude/rules/behaviors/concierge.md",
+            "bytes": 14202,
+            "estimated_tokens": 3551
+          },
+          {
+            "path": ".claude/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2808,
+            "estimated_tokens": 702
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-bot.md",
+            "bytes": 2633,
+            "estimated_tokens": 659
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2788,
+            "estimated_tokens": 697
+          },
+          {
+            "path": ".claude/rules/behaviors/security-sentinel.md",
+            "bytes": 3236,
+            "estimated_tokens": 809
+          },
+          {
+            "path": ".claude/rules/behaviors/test-watcher.md",
+            "bytes": 2830,
+            "estimated_tokens": 708
+          }
+        ]
+      },
+      "startup": {
+        "bytes": 240759,
+        "estimated_tokens": 60207,
+        "files": [
+          {
+            "path": ".claude/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".claude/rules/agent-deployment.md",
+            "bytes": 4881,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".claude/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".claude/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".claude/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".claude/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1442,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".claude/rules/browser-control-safety.md",
+            "bytes": 7084,
+            "estimated_tokens": 1771
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".claude/rules/daemon-interaction.md",
+            "bytes": 4704,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/escalation-discipline.md",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".claude/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".claude/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".claude/rules/god-session.md",
+            "bytes": 4671,
+            "estimated_tokens": 1168
+          },
+          {
+            "path": ".claude/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 8634,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".claude/rules/native-ux-tools.md",
+            "bytes": 6621,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".claude/rules/network-analysis-safety.md",
+            "bytes": 1656,
+            "estimated_tokens": 414
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".claude/rules/prose-resolution.md",
+            "bytes": 3063,
+            "estimated_tokens": 766
+          },
+          {
+            "path": ".claude/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".claude/rules/quiet-mode.md",
+            "bytes": 4029,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".claude/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 8280,
+            "estimated_tokens": 2070
+          },
+          {
+            "path": ".claude/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".claude/rules/respect-repo-access-manifest.md",
+            "bytes": 4178,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".claude/rules/rlm-context-management.md",
+            "bytes": 7950,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 1816,
+            "estimated_tokens": 454
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 3681,
+            "estimated_tokens": 921
+          },
+          {
+            "path": ".claude/rules/schema-first.md",
+            "bytes": 807,
+            "estimated_tokens": 202
+          },
+          {
+            "path": ".claude/rules/sdlc-right-sizing.md",
+            "bytes": 8723,
+            "estimated_tokens": 2181
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 8587,
+            "estimated_tokens": 2147
+          },
+          {
+            "path": ".claude/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".claude/rules/test-conformance-evidence.md",
+            "bytes": 2249,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/tool-quota.md",
+            "bytes": 7539,
+            "estimated_tokens": 1885
+          },
+          {
+            "path": ".claude/rules/twelve-factor-evidence.md",
+            "bytes": 1168,
+            "estimated_tokens": 292
+          },
+          {
+            "path": ".claude/rules/vague-discretion.md",
+            "bytes": 4728,
+            "estimated_tokens": 1182
+          },
+          {
+            "path": ".claude/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          },
+          {
+            "path": ".claude/rules/behaviors/artifact-sync.md",
+            "bytes": 2222,
+            "estimated_tokens": 556
+          },
+          {
+            "path": ".claude/rules/behaviors/build-monitor.md",
+            "bytes": 2596,
+            "estimated_tokens": 649
+          },
+          {
+            "path": ".claude/rules/behaviors/concierge.md",
+            "bytes": 14202,
+            "estimated_tokens": 3551
+          },
+          {
+            "path": ".claude/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2808,
+            "estimated_tokens": 702
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-bot.md",
+            "bytes": 2633,
+            "estimated_tokens": 659
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2788,
+            "estimated_tokens": 697
+          },
+          {
+            "path": ".claude/rules/behaviors/security-sentinel.md",
+            "bytes": 3236,
+            "estimated_tokens": 809
+          },
+          {
+            "path": ".claude/rules/behaviors/test-watcher.md",
+            "bytes": 2830,
+            "estimated_tokens": 708
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "context_files": {
+        "bytes": 10532,
+        "estimated_tokens": 2634,
+        "files": [
+          {
+            "path": "CLAUDE.md",
+            "bytes": 1695,
+            "estimated_tokens": 424
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 6095,
+            "estimated_tokens": 1524
+          }
+        ]
+      },
+      "budget": {
+        "budgetTokens": 64000,
+        "demoted": [
+          "anti-laziness",
+          "auto-compact-continue",
+          "cli-secondary",
+          "debug-source-not-output",
+          "delivery-policy",
+          "subagent-scoping"
+        ]
+      },
+      "deployment": {
+        "command": "aiwg use sdlc --provider claude",
+        "exit_code": 0
+      }
+    },
+    "codex": {
+      "rules": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 236612,
+        "estimated_tokens": 59167,
+        "files": [
+          {
+            "path": ".codex/rules/agent-deployment.md",
+            "bytes": 4881,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".codex/rules/artifact-output-policy.md",
+            "bytes": 1442,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".codex/rules/auto-compact-continue.md",
+            "bytes": 8822,
+            "estimated_tokens": 2206
+          },
+          {
+            "path": ".codex/rules/browser-control-safety.md",
+            "bytes": 7084,
+            "estimated_tokens": 1771
+          },
+          {
+            "path": ".codex/rules/cli-secondary.md",
+            "bytes": 9261,
+            "estimated_tokens": 2316
+          },
+          {
+            "path": ".codex/rules/daemon-interaction.md",
+            "bytes": 4704,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".codex/rules/debug-source-not-output.md",
+            "bytes": 9602,
+            "estimated_tokens": 2401
+          },
+          {
+            "path": ".codex/rules/delivery-policy.md",
+            "bytes": 14325,
+            "estimated_tokens": 3582
+          },
+          {
+            "path": ".codex/rules/escalation-discipline.md",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".codex/rules/god-session.md",
+            "bytes": 4671,
+            "estimated_tokens": 1168
+          },
+          {
+            "path": ".codex/rules/human-authorization.md",
+            "bytes": 8634,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".codex/rules/instruction-comprehension.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".codex/rules/native-ux-tools.md",
+            "bytes": 6621,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".codex/rules/network-analysis-safety.md",
+            "bytes": 1656,
+            "estimated_tokens": 414
+          },
+          {
+            "path": ".codex/rules/prose-resolution.md",
+            "bytes": 3063,
+            "estimated_tokens": 766
+          },
+          {
+            "path": ".codex/rules/quiet-mode.md",
+            "bytes": 4029,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".codex/rules/research-before-decision.md",
+            "bytes": 8280,
+            "estimated_tokens": 2070
+          },
+          {
+            "path": ".codex/rules/respect-repo-access-manifest.md",
+            "bytes": 4178,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".codex/rules/rlm-context-management.md",
+            "bytes": 7950,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".codex/rules/RULES-INDEX.md",
+            "bytes": 13616,
+            "estimated_tokens": 3404
+          },
+          {
+            "path": ".codex/rules/RULES-ONDEMAND.md",
+            "bytes": 2968,
+            "estimated_tokens": 742
+          },
+          {
+            "path": ".codex/rules/schema-first.md",
+            "bytes": 807,
+            "estimated_tokens": 202
+          },
+          {
+            "path": ".codex/rules/sdlc-right-sizing.md",
+            "bytes": 8723,
+            "estimated_tokens": 2181
+          },
+          {
+            "path": ".codex/rules/skill-discovery.md",
+            "bytes": 8587,
+            "estimated_tokens": 2147
+          },
+          {
+            "path": ".codex/rules/subagent-scoping.md",
+            "bytes": 27471,
+            "estimated_tokens": 6868
+          },
+          {
+            "path": ".codex/rules/test-conformance-evidence.md",
+            "bytes": 2249,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".codex/rules/tool-quota.md",
+            "bytes": 7539,
+            "estimated_tokens": 1885
+          },
+          {
+            "path": ".codex/rules/twelve-factor-evidence.md",
+            "bytes": 1168,
+            "estimated_tokens": 292
+          },
+          {
+            "path": ".codex/rules/vague-discretion.md",
+            "bytes": 4728,
+            "estimated_tokens": 1182
+          },
+          {
+            "path": ".codex/rules/behaviors/artifact-sync.md",
+            "bytes": 2215,
+            "estimated_tokens": 554
+          },
+          {
+            "path": ".codex/rules/behaviors/build-monitor.md",
+            "bytes": 2589,
+            "estimated_tokens": 648
+          },
+          {
+            "path": ".codex/rules/behaviors/concierge.md",
+            "bytes": 14195,
+            "estimated_tokens": 3549
+          },
+          {
+            "path": ".codex/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2801,
+            "estimated_tokens": 701
+          },
+          {
+            "path": ".codex/rules/behaviors/quiet-bot.md",
+            "bytes": 2626,
+            "estimated_tokens": 657
+          },
+          {
+            "path": ".codex/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2781,
+            "estimated_tokens": 696
+          },
+          {
+            "path": ".codex/rules/behaviors/security-sentinel.md",
+            "bytes": 3229,
+            "estimated_tokens": 808
+          },
+          {
+            "path": ".codex/rules/behaviors/test-watcher.md",
+            "bytes": 2823,
+            "estimated_tokens": 706
+          }
+        ]
+      },
+      "context_files": {
+        "bytes": 10165,
+        "estimated_tokens": 2543,
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "bytes": 1334,
+            "estimated_tokens": 334
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 6089,
+            "estimated_tokens": 1523
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider codex",
+        "exit_code": 0
+      }
+    },
+    "cursor": {
+      "rules": {
+        "bytes": 291937,
+        "estimated_tokens": 73001,
+        "files": [
+          {
+            "path": ".cursor/rules/actionable-feedback.mdc",
+            "bytes": 5737,
+            "estimated_tokens": 1435
+          },
+          {
+            "path": ".cursor/rules/agent-deployment.mdc",
+            "bytes": 4899,
+            "estimated_tokens": 1225
+          },
+          {
+            "path": ".cursor/rules/agent-fallback.mdc",
+            "bytes": 4034,
+            "estimated_tokens": 1009
+          },
+          {
+            "path": ".cursor/rules/agent-friendly-code.mdc",
+            "bytes": 3783,
+            "estimated_tokens": 946
+          },
+          {
+            "path": ".cursor/rules/agent-generation-guardrails.mdc",
+            "bytes": 3115,
+            "estimated_tokens": 779
+          },
+          {
+            "path": ".cursor/rules/anti-laziness.mdc",
+            "bytes": 10370,
+            "estimated_tokens": 2593
+          },
+          {
+            "path": ".cursor/rules/artifact-discovery.mdc",
+            "bytes": 4686,
+            "estimated_tokens": 1172
+          },
+          {
+            "path": ".cursor/rules/artifact-output-policy.mdc",
+            "bytes": 1460,
+            "estimated_tokens": 365
+          },
+          {
+            "path": ".cursor/rules/auto-compact-continue.mdc",
+            "bytes": 8840,
+            "estimated_tokens": 2210
+          },
+          {
+            "path": ".cursor/rules/browser-control-safety.mdc",
+            "bytes": 7102,
+            "estimated_tokens": 1776
+          },
+          {
+            "path": ".cursor/rules/citation-policy.mdc",
+            "bytes": 7620,
+            "estimated_tokens": 1905
+          },
+          {
+            "path": ".cursor/rules/cli-secondary.mdc",
+            "bytes": 9279,
+            "estimated_tokens": 2320
+          },
+          {
+            "path": ".cursor/rules/daemon-interaction.mdc",
+            "bytes": 4722,
+            "estimated_tokens": 1181
+          },
+          {
+            "path": ".cursor/rules/debug-source-not-output.mdc",
+            "bytes": 9620,
+            "estimated_tokens": 2405
+          },
+          {
+            "path": ".cursor/rules/delivery-policy.mdc",
+            "bytes": 14343,
+            "estimated_tokens": 3586
+          },
+          {
+            "path": ".cursor/rules/escalation-discipline.mdc",
+            "bytes": 8174,
+            "estimated_tokens": 2044
+          },
+          {
+            "path": ".cursor/rules/executable-feedback.mdc",
+            "bytes": 3059,
+            "estimated_tokens": 765
+          },
+          {
+            "path": ".cursor/rules/failure-mitigation.mdc",
+            "bytes": 4650,
+            "estimated_tokens": 1163
+          },
+          {
+            "path": ".cursor/rules/god-session.mdc",
+            "bytes": 4689,
+            "estimated_tokens": 1173
+          },
+          {
+            "path": ".cursor/rules/hitl-gates.mdc",
+            "bytes": 3780,
+            "estimated_tokens": 945
+          },
+          {
+            "path": ".cursor/rules/human-authorization.mdc",
+            "bytes": 8652,
+            "estimated_tokens": 2163
+          },
+          {
+            "path": ".cursor/rules/instruction-comprehension.mdc",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".cursor/rules/lfd-control-tiers.mdc",
+            "bytes": 5470,
+            "estimated_tokens": 1368
+          },
+          {
+            "path": ".cursor/rules/native-ux-tools.mdc",
+            "bytes": 6639,
+            "estimated_tokens": 1660
+          },
+          {
+            "path": ".cursor/rules/network-analysis-safety.mdc",
+            "bytes": 1674,
+            "estimated_tokens": 419
+          },
+          {
+            "path": ".cursor/rules/no-attribution.mdc",
+            "bytes": 7000,
+            "estimated_tokens": 1750
+          },
+          {
+            "path": ".cursor/rules/prose-resolution.mdc",
+            "bytes": 3081,
+            "estimated_tokens": 771
+          },
+          {
+            "path": ".cursor/rules/provenance-tracking.mdc",
+            "bytes": 5805,
+            "estimated_tokens": 1452
+          },
+          {
+            "path": ".cursor/rules/quiet-mode.mdc",
+            "bytes": 4047,
+            "estimated_tokens": 1012
+          },
+          {
+            "path": ".cursor/rules/reproducibility-validation.mdc",
+            "bytes": 5920,
+            "estimated_tokens": 1480
+          },
+          {
+            "path": ".cursor/rules/research-before-decision.mdc",
+            "bytes": 8298,
+            "estimated_tokens": 2075
+          },
+          {
+            "path": ".cursor/rules/research-metadata.mdc",
+            "bytes": 4239,
+            "estimated_tokens": 1060
+          },
+          {
+            "path": ".cursor/rules/respect-repo-access-manifest.mdc",
+            "bytes": 4196,
+            "estimated_tokens": 1049
+          },
+          {
+            "path": ".cursor/rules/rlm-context-management.mdc",
+            "bytes": 7968,
+            "estimated_tokens": 1992
+          },
+          {
+            "path": ".cursor/rules/RULES-INDEX.mdc",
+            "bytes": 9346,
+            "estimated_tokens": 2337
+          },
+          {
+            "path": ".cursor/rules/schema-first.mdc",
+            "bytes": 825,
+            "estimated_tokens": 207
+          },
+          {
+            "path": ".cursor/rules/sdlc-right-sizing.mdc",
+            "bytes": 8741,
+            "estimated_tokens": 2186
+          },
+          {
+            "path": ".cursor/rules/skill-discovery.mdc",
+            "bytes": 8605,
+            "estimated_tokens": 2152
+          },
+          {
+            "path": ".cursor/rules/subagent-scoping.mdc",
+            "bytes": 27489,
+            "estimated_tokens": 6873
+          },
+          {
+            "path": ".cursor/rules/tao-loop.mdc",
+            "bytes": 4975,
+            "estimated_tokens": 1244
+          },
+          {
+            "path": ".cursor/rules/test-conformance-evidence.mdc",
+            "bytes": 2267,
+            "estimated_tokens": 567
+          },
+          {
+            "path": ".cursor/rules/token-security.mdc",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".cursor/rules/tool-quota.mdc",
+            "bytes": 7557,
+            "estimated_tokens": 1890
+          },
+          {
+            "path": ".cursor/rules/twelve-factor-evidence.mdc",
+            "bytes": 1186,
+            "estimated_tokens": 297
+          },
+          {
+            "path": ".cursor/rules/vague-discretion.mdc",
+            "bytes": 4746,
+            "estimated_tokens": 1187
+          },
+          {
+            "path": ".cursor/rules/versioning.mdc",
+            "bytes": 2937,
+            "estimated_tokens": 735
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 291937,
+        "estimated_tokens": 73001,
+        "files": [
+          {
+            "path": ".cursor/rules/actionable-feedback.mdc",
+            "bytes": 5737,
+            "estimated_tokens": 1435
+          },
+          {
+            "path": ".cursor/rules/agent-deployment.mdc",
+            "bytes": 4899,
+            "estimated_tokens": 1225
+          },
+          {
+            "path": ".cursor/rules/agent-fallback.mdc",
+            "bytes": 4034,
+            "estimated_tokens": 1009
+          },
+          {
+            "path": ".cursor/rules/agent-friendly-code.mdc",
+            "bytes": 3783,
+            "estimated_tokens": 946
+          },
+          {
+            "path": ".cursor/rules/agent-generation-guardrails.mdc",
+            "bytes": 3115,
+            "estimated_tokens": 779
+          },
+          {
+            "path": ".cursor/rules/anti-laziness.mdc",
+            "bytes": 10370,
+            "estimated_tokens": 2593
+          },
+          {
+            "path": ".cursor/rules/artifact-discovery.mdc",
+            "bytes": 4686,
+            "estimated_tokens": 1172
+          },
+          {
+            "path": ".cursor/rules/artifact-output-policy.mdc",
+            "bytes": 1460,
+            "estimated_tokens": 365
+          },
+          {
+            "path": ".cursor/rules/auto-compact-continue.mdc",
+            "bytes": 8840,
+            "estimated_tokens": 2210
+          },
+          {
+            "path": ".cursor/rules/browser-control-safety.mdc",
+            "bytes": 7102,
+            "estimated_tokens": 1776
+          },
+          {
+            "path": ".cursor/rules/citation-policy.mdc",
+            "bytes": 7620,
+            "estimated_tokens": 1905
+          },
+          {
+            "path": ".cursor/rules/cli-secondary.mdc",
+            "bytes": 9279,
+            "estimated_tokens": 2320
+          },
+          {
+            "path": ".cursor/rules/daemon-interaction.mdc",
+            "bytes": 4722,
+            "estimated_tokens": 1181
+          },
+          {
+            "path": ".cursor/rules/debug-source-not-output.mdc",
+            "bytes": 9620,
+            "estimated_tokens": 2405
+          },
+          {
+            "path": ".cursor/rules/delivery-policy.mdc",
+            "bytes": 14343,
+            "estimated_tokens": 3586
+          },
+          {
+            "path": ".cursor/rules/escalation-discipline.mdc",
+            "bytes": 8174,
+            "estimated_tokens": 2044
+          },
+          {
+            "path": ".cursor/rules/executable-feedback.mdc",
+            "bytes": 3059,
+            "estimated_tokens": 765
+          },
+          {
+            "path": ".cursor/rules/failure-mitigation.mdc",
+            "bytes": 4650,
+            "estimated_tokens": 1163
+          },
+          {
+            "path": ".cursor/rules/god-session.mdc",
+            "bytes": 4689,
+            "estimated_tokens": 1173
+          },
+          {
+            "path": ".cursor/rules/hitl-gates.mdc",
+            "bytes": 3780,
+            "estimated_tokens": 945
+          },
+          {
+            "path": ".cursor/rules/human-authorization.mdc",
+            "bytes": 8652,
+            "estimated_tokens": 2163
+          },
+          {
+            "path": ".cursor/rules/instruction-comprehension.mdc",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".cursor/rules/lfd-control-tiers.mdc",
+            "bytes": 5470,
+            "estimated_tokens": 1368
+          },
+          {
+            "path": ".cursor/rules/native-ux-tools.mdc",
+            "bytes": 6639,
+            "estimated_tokens": 1660
+          },
+          {
+            "path": ".cursor/rules/network-analysis-safety.mdc",
+            "bytes": 1674,
+            "estimated_tokens": 419
+          },
+          {
+            "path": ".cursor/rules/no-attribution.mdc",
+            "bytes": 7000,
+            "estimated_tokens": 1750
+          },
+          {
+            "path": ".cursor/rules/prose-resolution.mdc",
+            "bytes": 3081,
+            "estimated_tokens": 771
+          },
+          {
+            "path": ".cursor/rules/provenance-tracking.mdc",
+            "bytes": 5805,
+            "estimated_tokens": 1452
+          },
+          {
+            "path": ".cursor/rules/quiet-mode.mdc",
+            "bytes": 4047,
+            "estimated_tokens": 1012
+          },
+          {
+            "path": ".cursor/rules/reproducibility-validation.mdc",
+            "bytes": 5920,
+            "estimated_tokens": 1480
+          },
+          {
+            "path": ".cursor/rules/research-before-decision.mdc",
+            "bytes": 8298,
+            "estimated_tokens": 2075
+          },
+          {
+            "path": ".cursor/rules/research-metadata.mdc",
+            "bytes": 4239,
+            "estimated_tokens": 1060
+          },
+          {
+            "path": ".cursor/rules/respect-repo-access-manifest.mdc",
+            "bytes": 4196,
+            "estimated_tokens": 1049
+          },
+          {
+            "path": ".cursor/rules/rlm-context-management.mdc",
+            "bytes": 7968,
+            "estimated_tokens": 1992
+          },
+          {
+            "path": ".cursor/rules/RULES-INDEX.mdc",
+            "bytes": 9346,
+            "estimated_tokens": 2337
+          },
+          {
+            "path": ".cursor/rules/schema-first.mdc",
+            "bytes": 825,
+            "estimated_tokens": 207
+          },
+          {
+            "path": ".cursor/rules/sdlc-right-sizing.mdc",
+            "bytes": 8741,
+            "estimated_tokens": 2186
+          },
+          {
+            "path": ".cursor/rules/skill-discovery.mdc",
+            "bytes": 8605,
+            "estimated_tokens": 2152
+          },
+          {
+            "path": ".cursor/rules/subagent-scoping.mdc",
+            "bytes": 27489,
+            "estimated_tokens": 6873
+          },
+          {
+            "path": ".cursor/rules/tao-loop.mdc",
+            "bytes": 4975,
+            "estimated_tokens": 1244
+          },
+          {
+            "path": ".cursor/rules/test-conformance-evidence.mdc",
+            "bytes": 2267,
+            "estimated_tokens": 567
+          },
+          {
+            "path": ".cursor/rules/token-security.mdc",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".cursor/rules/tool-quota.mdc",
+            "bytes": 7557,
+            "estimated_tokens": 1890
+          },
+          {
+            "path": ".cursor/rules/twelve-factor-evidence.mdc",
+            "bytes": 1186,
+            "estimated_tokens": 297
+          },
+          {
+            "path": ".cursor/rules/vague-discretion.mdc",
+            "bytes": 4746,
+            "estimated_tokens": 1187
+          },
+          {
+            "path": ".cursor/rules/versioning.mdc",
+            "bytes": 2937,
+            "estimated_tokens": 735
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 36243,
+        "estimated_tokens": 9064,
+        "files": [
+          {
+            "path": ".cursor/rules/RULES-ONDEMAND.md",
+            "bytes": 2968,
+            "estimated_tokens": 742
+          },
+          {
+            "path": ".cursor/rules/behaviors/artifact-sync.md",
+            "bytes": 2217,
+            "estimated_tokens": 555
+          },
+          {
+            "path": ".cursor/rules/behaviors/build-monitor.md",
+            "bytes": 2591,
+            "estimated_tokens": 648
+          },
+          {
+            "path": ".cursor/rules/behaviors/concierge.md",
+            "bytes": 14197,
+            "estimated_tokens": 3550
+          },
+          {
+            "path": ".cursor/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2803,
+            "estimated_tokens": 701
+          },
+          {
+            "path": ".cursor/rules/behaviors/quiet-bot.md",
+            "bytes": 2628,
+            "estimated_tokens": 657
+          },
+          {
+            "path": ".cursor/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2783,
+            "estimated_tokens": 696
+          },
+          {
+            "path": ".cursor/rules/behaviors/security-sentinel.md",
+            "bytes": 3231,
+            "estimated_tokens": 808
+          },
+          {
+            "path": ".cursor/rules/behaviors/test-watcher.md",
+            "bytes": 2825,
+            "estimated_tokens": 707
+          }
+        ]
+      },
+      "context_files": {
+        "bytes": 10172,
+        "estimated_tokens": 2544,
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "bytes": 1334,
+            "estimated_tokens": 334
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 6096,
+            "estimated_tokens": 1524
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider cursor",
+        "exit_code": 0
+      }
+    },
+    "hermes": {
+      "rules": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 33363,
+        "estimated_tokens": 8343,
+        "files": [
+          {
+            "path": ".hermes/behaviors/artifact-sync.md",
+            "bytes": 2228,
+            "estimated_tokens": 557
+          },
+          {
+            "path": ".hermes/behaviors/build-monitor.md",
+            "bytes": 2602,
+            "estimated_tokens": 651
+          },
+          {
+            "path": ".hermes/behaviors/concierge.md",
+            "bytes": 14208,
+            "estimated_tokens": 3552
+          },
+          {
+            "path": ".hermes/behaviors/quality-gate-watcher.md",
+            "bytes": 2814,
+            "estimated_tokens": 704
+          },
+          {
+            "path": ".hermes/behaviors/quiet-bot.md",
+            "bytes": 2639,
+            "estimated_tokens": 660
+          },
+          {
+            "path": ".hermes/behaviors/quiet-business-bot.md",
+            "bytes": 2794,
+            "estimated_tokens": 699
+          },
+          {
+            "path": ".hermes/behaviors/security-sentinel.md",
+            "bytes": 3242,
+            "estimated_tokens": 811
+          },
+          {
+            "path": ".hermes/behaviors/test-watcher.md",
+            "bytes": 2836,
+            "estimated_tokens": 709
+          }
+        ]
+      },
+      "context_files": {
+        "bytes": 10205,
+        "estimated_tokens": 2553,
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "bytes": 1334,
+            "estimated_tokens": 334
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 6129,
+            "estimated_tokens": 1533
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider hermes",
+        "exit_code": 0
+      }
+    },
+    "warp": {
+      "rules": {
+        "bytes": 206988,
+        "estimated_tokens": 51747,
+        "files": [
+          {
+            "path": "WARP.md#AIWG Rules",
+            "bytes": 206988,
+            "estimated_tokens": 51747
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 206988,
+        "estimated_tokens": 51747,
+        "files": [
+          {
+            "path": "WARP.md#AIWG Rules",
+            "bytes": 206988,
+            "estimated_tokens": 51747
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 33371,
+        "estimated_tokens": 8346,
+        "files": [
+          {
+            "path": ".warp/rules/behaviors/artifact-sync.md",
+            "bytes": 2229,
+            "estimated_tokens": 558
+          },
+          {
+            "path": ".warp/rules/behaviors/build-monitor.md",
+            "bytes": 2603,
+            "estimated_tokens": 651
+          },
+          {
+            "path": ".warp/rules/behaviors/concierge.md",
+            "bytes": 14209,
+            "estimated_tokens": 3553
+          },
+          {
+            "path": ".warp/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2815,
+            "estimated_tokens": 704
+          },
+          {
+            "path": ".warp/rules/behaviors/quiet-bot.md",
+            "bytes": 2640,
+            "estimated_tokens": 660
+          },
+          {
+            "path": ".warp/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2795,
+            "estimated_tokens": 699
+          },
+          {
+            "path": ".warp/rules/behaviors/security-sentinel.md",
+            "bytes": 3243,
+            "estimated_tokens": 811
+          },
+          {
+            "path": ".warp/rules/behaviors/test-watcher.md",
+            "bytes": 2837,
+            "estimated_tokens": 710
+          }
+        ]
+      },
+      "context_files": {
+        "bytes": 1067316,
+        "estimated_tokens": 266829,
+        "files": [
+          {
+            "path": "WARP.md",
+            "bytes": 1067316,
+            "estimated_tokens": 266829
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider warp",
+        "exit_code": 1,
+        "error": "ERROR Model wrapper deployment invalid for warp: missing aiwg-model-reasoning-worker, aiwg-model-coding-worker, aiwg-model-efficiency-worker"
+      }
+    },
+    "openclaw": {
+      "rules": {
+        "bytes": 314990,
+        "estimated_tokens": 78765,
+        "files": [
+          {
+            "path": ".openclaw/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".openclaw/rules/agent-deployment.md",
+            "bytes": 4883,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".openclaw/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".openclaw/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".openclaw/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".openclaw/rules/anti-laziness.md",
+            "bytes": 10352,
+            "estimated_tokens": 2588
+          },
+          {
+            "path": ".openclaw/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".openclaw/rules/artifact-output-policy.md",
+            "bytes": 1444,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".openclaw/rules/auto-compact-continue.md",
+            "bytes": 8824,
+            "estimated_tokens": 2206
+          },
+          {
+            "path": ".openclaw/rules/browser-control-safety.md",
+            "bytes": 7086,
+            "estimated_tokens": 1772
+          },
+          {
+            "path": ".openclaw/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".openclaw/rules/cli-secondary.md",
+            "bytes": 9263,
+            "estimated_tokens": 2316
+          },
+          {
+            "path": ".openclaw/rules/daemon-interaction.md",
+            "bytes": 4706,
+            "estimated_tokens": 1177
+          },
+          {
+            "path": ".openclaw/rules/debug-source-not-output.md",
+            "bytes": 9604,
+            "estimated_tokens": 2401
+          },
+          {
+            "path": ".openclaw/rules/delivery-policy.md",
+            "bytes": 14327,
+            "estimated_tokens": 3582
+          },
+          {
+            "path": ".openclaw/rules/escalation-discipline.md",
+            "bytes": 8158,
+            "estimated_tokens": 2040
+          },
+          {
+            "path": ".openclaw/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".openclaw/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".openclaw/rules/god-session.md",
+            "bytes": 4673,
+            "estimated_tokens": 1169
+          },
+          {
+            "path": ".openclaw/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".openclaw/rules/human-authorization.md",
+            "bytes": 8636,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".openclaw/rules/instruction-comprehension.md",
+            "bytes": 8140,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".openclaw/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".openclaw/rules/native-ux-tools.md",
+            "bytes": 6623,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".openclaw/rules/network-analysis-safety.md",
+            "bytes": 1658,
+            "estimated_tokens": 415
+          },
+          {
+            "path": ".openclaw/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".openclaw/rules/prose-resolution.md",
+            "bytes": 3065,
+            "estimated_tokens": 767
+          },
+          {
+            "path": ".openclaw/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".openclaw/rules/quiet-mode.md",
+            "bytes": 4031,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".openclaw/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".openclaw/rules/research-before-decision.md",
+            "bytes": 8282,
+            "estimated_tokens": 2071
+          },
+          {
+            "path": ".openclaw/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".openclaw/rules/respect-repo-access-manifest.md",
+            "bytes": 4180,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".openclaw/rules/rlm-context-management.md",
+            "bytes": 7952,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".openclaw/rules/RULES-INDEX.md",
+            "bytes": 30188,
+            "estimated_tokens": 7547
+          },
+          {
+            "path": ".openclaw/rules/RULES-ONDEMAND.md",
+            "bytes": 2968,
+            "estimated_tokens": 742
+          },
+          {
+            "path": ".openclaw/rules/schema-first.md",
+            "bytes": 809,
+            "estimated_tokens": 203
+          },
+          {
+            "path": ".openclaw/rules/sdlc-right-sizing.md",
+            "bytes": 8725,
+            "estimated_tokens": 2182
+          },
+          {
+            "path": ".openclaw/rules/skill-discovery.md",
+            "bytes": 8589,
+            "estimated_tokens": 2148
+          },
+          {
+            "path": ".openclaw/rules/subagent-scoping.md",
+            "bytes": 27473,
+            "estimated_tokens": 6869
+          },
+          {
+            "path": ".openclaw/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".openclaw/rules/test-conformance-evidence.md",
+            "bytes": 2251,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".openclaw/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".openclaw/rules/tool-quota.md",
+            "bytes": 7541,
+            "estimated_tokens": 1886
+          },
+          {
+            "path": ".openclaw/rules/twelve-factor-evidence.md",
+            "bytes": 1170,
+            "estimated_tokens": 293
+          },
+          {
+            "path": ".openclaw/rules/vague-discretion.md",
+            "bytes": 4730,
+            "estimated_tokens": 1183
+          },
+          {
+            "path": ".openclaw/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "startup": {
+        "bytes": 314990,
+        "estimated_tokens": 78765,
+        "files": [
+          {
+            "path": ".openclaw/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".openclaw/rules/agent-deployment.md",
+            "bytes": 4883,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".openclaw/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".openclaw/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".openclaw/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".openclaw/rules/anti-laziness.md",
+            "bytes": 10352,
+            "estimated_tokens": 2588
+          },
+          {
+            "path": ".openclaw/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".openclaw/rules/artifact-output-policy.md",
+            "bytes": 1444,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".openclaw/rules/auto-compact-continue.md",
+            "bytes": 8824,
+            "estimated_tokens": 2206
+          },
+          {
+            "path": ".openclaw/rules/browser-control-safety.md",
+            "bytes": 7086,
+            "estimated_tokens": 1772
+          },
+          {
+            "path": ".openclaw/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".openclaw/rules/cli-secondary.md",
+            "bytes": 9263,
+            "estimated_tokens": 2316
+          },
+          {
+            "path": ".openclaw/rules/daemon-interaction.md",
+            "bytes": 4706,
+            "estimated_tokens": 1177
+          },
+          {
+            "path": ".openclaw/rules/debug-source-not-output.md",
+            "bytes": 9604,
+            "estimated_tokens": 2401
+          },
+          {
+            "path": ".openclaw/rules/delivery-policy.md",
+            "bytes": 14327,
+            "estimated_tokens": 3582
+          },
+          {
+            "path": ".openclaw/rules/escalation-discipline.md",
+            "bytes": 8158,
+            "estimated_tokens": 2040
+          },
+          {
+            "path": ".openclaw/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".openclaw/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".openclaw/rules/god-session.md",
+            "bytes": 4673,
+            "estimated_tokens": 1169
+          },
+          {
+            "path": ".openclaw/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".openclaw/rules/human-authorization.md",
+            "bytes": 8636,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".openclaw/rules/instruction-comprehension.md",
+            "bytes": 8140,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".openclaw/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".openclaw/rules/native-ux-tools.md",
+            "bytes": 6623,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".openclaw/rules/network-analysis-safety.md",
+            "bytes": 1658,
+            "estimated_tokens": 415
+          },
+          {
+            "path": ".openclaw/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".openclaw/rules/prose-resolution.md",
+            "bytes": 3065,
+            "estimated_tokens": 767
+          },
+          {
+            "path": ".openclaw/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".openclaw/rules/quiet-mode.md",
+            "bytes": 4031,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".openclaw/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".openclaw/rules/research-before-decision.md",
+            "bytes": 8282,
+            "estimated_tokens": 2071
+          },
+          {
+            "path": ".openclaw/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".openclaw/rules/respect-repo-access-manifest.md",
+            "bytes": 4180,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".openclaw/rules/rlm-context-management.md",
+            "bytes": 7952,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".openclaw/rules/RULES-INDEX.md",
+            "bytes": 30188,
+            "estimated_tokens": 7547
+          },
+          {
+            "path": ".openclaw/rules/RULES-ONDEMAND.md",
+            "bytes": 2968,
+            "estimated_tokens": 742
+          },
+          {
+            "path": ".openclaw/rules/schema-first.md",
+            "bytes": 809,
+            "estimated_tokens": 203
+          },
+          {
+            "path": ".openclaw/rules/sdlc-right-sizing.md",
+            "bytes": 8725,
+            "estimated_tokens": 2182
+          },
+          {
+            "path": ".openclaw/rules/skill-discovery.md",
+            "bytes": 8589,
+            "estimated_tokens": 2148
+          },
+          {
+            "path": ".openclaw/rules/subagent-scoping.md",
+            "bytes": 27473,
+            "estimated_tokens": 6869
+          },
+          {
+            "path": ".openclaw/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".openclaw/rules/test-conformance-evidence.md",
+            "bytes": 2251,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".openclaw/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".openclaw/rules/tool-quota.md",
+            "bytes": 7541,
+            "estimated_tokens": 1886
+          },
+          {
+            "path": ".openclaw/rules/twelve-factor-evidence.md",
+            "bytes": 1170,
+            "estimated_tokens": 293
+          },
+          {
+            "path": ".openclaw/rules/vague-discretion.md",
+            "bytes": 4730,
+            "estimated_tokens": 1183
+          },
+          {
+            "path": ".openclaw/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 26060,
+        "estimated_tokens": 6518,
+        "files": [
+          {
+            "path": ".openclaw/behaviors/artifact-sync/BEHAVIOR.md",
+            "bytes": 1305,
+            "estimated_tokens": 327
+          },
+          {
+            "path": ".openclaw/behaviors/build-monitor/BEHAVIOR.md",
+            "bytes": 1696,
+            "estimated_tokens": 424
+          },
+          {
+            "path": ".openclaw/behaviors/concierge/BEHAVIOR.md",
+            "bytes": 13311,
+            "estimated_tokens": 3328
+          },
+          {
+            "path": ".openclaw/behaviors/quality-gate-watcher/BEHAVIOR.md",
+            "bytes": 1882,
+            "estimated_tokens": 471
+          },
+          {
+            "path": ".openclaw/behaviors/quiet-bot/BEHAVIOR.md",
+            "bytes": 1737,
+            "estimated_tokens": 435
+          },
+          {
+            "path": ".openclaw/behaviors/quiet-business-bot/BEHAVIOR.md",
+            "bytes": 1859,
+            "estimated_tokens": 465
+          },
+          {
+            "path": ".openclaw/behaviors/security-sentinel/BEHAVIOR.md",
+            "bytes": 2335,
+            "estimated_tokens": 584
+          },
+          {
+            "path": ".openclaw/behaviors/test-watcher/BEHAVIOR.md",
+            "bytes": 1935,
+            "estimated_tokens": 484
+          }
+        ]
+      },
+      "context_files": {
+        "bytes": 2742,
+        "estimated_tokens": 686,
+        "files": [
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 2742,
+            "estimated_tokens": 686
+          }
+        ]
+      },
+      "budget": null,
+      "deployment": {
+        "command": "aiwg use sdlc --provider openclaw",
+        "exit_code": 0
+      }
+    }
+  },
+  "existing_project": {
+    "available": false,
+    "note": "Read-only worktree inspection; absence is not a zero-byte deployed baseline.",
+    "claude": null
+  },
+  "gates": [
+    {
+      "gate": "deployment",
+      "provider": "claude",
+      "pass": true
+    },
+    {
+      "gate": "deployment",
+      "provider": "codex",
+      "pass": true
+    },
+    {
+      "gate": "deployment",
+      "provider": "cursor",
+      "pass": true
+    },
+    {
+      "gate": "deployment",
+      "provider": "hermes",
+      "pass": true
+    },
+    {
+      "gate": "deployment",
+      "provider": "warp",
+      "pass": false
+    },
+    {
+      "gate": "deployment",
+      "provider": "openclaw",
+      "pass": true
+    },
+    {
+      "gate": "PO",
+      "category": "rules",
+      "expected": 207444,
+      "actual": 207444,
+      "pass": true
+    },
+    {
+      "gate": "PO",
+      "category": "behaviors",
+      "expected": 33411,
+      "actual": 33315,
+      "pass": true
+    }
+  ],
+  "repository_redeployment": {
+    "basis": "Fresh isolated deployment of current repository root context and package metadata; no .aiwg config or .claude deployment exists in this worktree.",
+    "fixture_files": [
+      "WORKSPACE.md",
+      "AIWG.md",
+      "CLAUDE.md",
+      "AGENTS.md",
+      "README.md",
+      "package.json",
+      "package-lock.json"
+    ],
+    "claude": {
+      "rules": {
+        "bytes": 207444,
+        "estimated_tokens": 51876,
+        "files": [
+          {
+            "path": ".claude/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".claude/rules/agent-deployment.md",
+            "bytes": 4881,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".claude/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".claude/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".claude/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".claude/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1442,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".claude/rules/browser-control-safety.md",
+            "bytes": 7084,
+            "estimated_tokens": 1771
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".claude/rules/daemon-interaction.md",
+            "bytes": 4704,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/escalation-discipline.md",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".claude/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".claude/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".claude/rules/god-session.md",
+            "bytes": 4671,
+            "estimated_tokens": 1168
+          },
+          {
+            "path": ".claude/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 8634,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".claude/rules/native-ux-tools.md",
+            "bytes": 6621,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".claude/rules/network-analysis-safety.md",
+            "bytes": 1656,
+            "estimated_tokens": 414
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".claude/rules/prose-resolution.md",
+            "bytes": 3063,
+            "estimated_tokens": 766
+          },
+          {
+            "path": ".claude/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".claude/rules/quiet-mode.md",
+            "bytes": 4029,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".claude/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 8280,
+            "estimated_tokens": 2070
+          },
+          {
+            "path": ".claude/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".claude/rules/respect-repo-access-manifest.md",
+            "bytes": 4178,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".claude/rules/rlm-context-management.md",
+            "bytes": 7950,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 1816,
+            "estimated_tokens": 454
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 3681,
+            "estimated_tokens": 921
+          },
+          {
+            "path": ".claude/rules/schema-first.md",
+            "bytes": 807,
+            "estimated_tokens": 202
+          },
+          {
+            "path": ".claude/rules/sdlc-right-sizing.md",
+            "bytes": 8723,
+            "estimated_tokens": 2181
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 8587,
+            "estimated_tokens": 2147
+          },
+          {
+            "path": ".claude/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".claude/rules/test-conformance-evidence.md",
+            "bytes": 2249,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/tool-quota.md",
+            "bytes": 7539,
+            "estimated_tokens": 1885
+          },
+          {
+            "path": ".claude/rules/twelve-factor-evidence.md",
+            "bytes": 1168,
+            "estimated_tokens": 292
+          },
+          {
+            "path": ".claude/rules/vague-discretion.md",
+            "bytes": 4728,
+            "estimated_tokens": 1182
+          },
+          {
+            "path": ".claude/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          }
+        ]
+      },
+      "behaviors": {
+        "bytes": 33315,
+        "estimated_tokens": 8331,
+        "files": [
+          {
+            "path": ".claude/rules/behaviors/artifact-sync.md",
+            "bytes": 2222,
+            "estimated_tokens": 556
+          },
+          {
+            "path": ".claude/rules/behaviors/build-monitor.md",
+            "bytes": 2596,
+            "estimated_tokens": 649
+          },
+          {
+            "path": ".claude/rules/behaviors/concierge.md",
+            "bytes": 14202,
+            "estimated_tokens": 3551
+          },
+          {
+            "path": ".claude/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2808,
+            "estimated_tokens": 702
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-bot.md",
+            "bytes": 2633,
+            "estimated_tokens": 659
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2788,
+            "estimated_tokens": 697
+          },
+          {
+            "path": ".claude/rules/behaviors/security-sentinel.md",
+            "bytes": 3236,
+            "estimated_tokens": 809
+          },
+          {
+            "path": ".claude/rules/behaviors/test-watcher.md",
+            "bytes": 2830,
+            "estimated_tokens": 708
+          }
+        ]
+      },
+      "startup": {
+        "bytes": 240759,
+        "estimated_tokens": 60207,
+        "files": [
+          {
+            "path": ".claude/rules/actionable-feedback.md",
+            "bytes": 5719,
+            "estimated_tokens": 1430
+          },
+          {
+            "path": ".claude/rules/agent-deployment.md",
+            "bytes": 4881,
+            "estimated_tokens": 1221
+          },
+          {
+            "path": ".claude/rules/agent-fallback.md",
+            "bytes": 4016,
+            "estimated_tokens": 1004
+          },
+          {
+            "path": ".claude/rules/agent-friendly-code.md",
+            "bytes": 3765,
+            "estimated_tokens": 942
+          },
+          {
+            "path": ".claude/rules/agent-generation-guardrails.md",
+            "bytes": 3097,
+            "estimated_tokens": 775
+          },
+          {
+            "path": ".claude/rules/artifact-discovery.md",
+            "bytes": 4668,
+            "estimated_tokens": 1167
+          },
+          {
+            "path": ".claude/rules/artifact-output-policy.md",
+            "bytes": 1442,
+            "estimated_tokens": 361
+          },
+          {
+            "path": ".claude/rules/browser-control-safety.md",
+            "bytes": 7084,
+            "estimated_tokens": 1771
+          },
+          {
+            "path": ".claude/rules/citation-policy.md",
+            "bytes": 7602,
+            "estimated_tokens": 1901
+          },
+          {
+            "path": ".claude/rules/daemon-interaction.md",
+            "bytes": 4704,
+            "estimated_tokens": 1176
+          },
+          {
+            "path": ".claude/rules/escalation-discipline.md",
+            "bytes": 8156,
+            "estimated_tokens": 2039
+          },
+          {
+            "path": ".claude/rules/executable-feedback.md",
+            "bytes": 3041,
+            "estimated_tokens": 761
+          },
+          {
+            "path": ".claude/rules/failure-mitigation.md",
+            "bytes": 4632,
+            "estimated_tokens": 1158
+          },
+          {
+            "path": ".claude/rules/god-session.md",
+            "bytes": 4671,
+            "estimated_tokens": 1168
+          },
+          {
+            "path": ".claude/rules/hitl-gates.md",
+            "bytes": 3762,
+            "estimated_tokens": 941
+          },
+          {
+            "path": ".claude/rules/human-authorization.md",
+            "bytes": 8634,
+            "estimated_tokens": 2159
+          },
+          {
+            "path": ".claude/rules/instruction-comprehension.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/lfd-control-tiers.md",
+            "bytes": 5451,
+            "estimated_tokens": 1363
+          },
+          {
+            "path": ".claude/rules/native-ux-tools.md",
+            "bytes": 6621,
+            "estimated_tokens": 1656
+          },
+          {
+            "path": ".claude/rules/network-analysis-safety.md",
+            "bytes": 1656,
+            "estimated_tokens": 414
+          },
+          {
+            "path": ".claude/rules/no-attribution.md",
+            "bytes": 6982,
+            "estimated_tokens": 1746
+          },
+          {
+            "path": ".claude/rules/prose-resolution.md",
+            "bytes": 3063,
+            "estimated_tokens": 766
+          },
+          {
+            "path": ".claude/rules/provenance-tracking.md",
+            "bytes": 5787,
+            "estimated_tokens": 1447
+          },
+          {
+            "path": ".claude/rules/quiet-mode.md",
+            "bytes": 4029,
+            "estimated_tokens": 1008
+          },
+          {
+            "path": ".claude/rules/reproducibility-validation.md",
+            "bytes": 5902,
+            "estimated_tokens": 1476
+          },
+          {
+            "path": ".claude/rules/research-before-decision.md",
+            "bytes": 8280,
+            "estimated_tokens": 2070
+          },
+          {
+            "path": ".claude/rules/research-metadata.md",
+            "bytes": 4221,
+            "estimated_tokens": 1056
+          },
+          {
+            "path": ".claude/rules/respect-repo-access-manifest.md",
+            "bytes": 4178,
+            "estimated_tokens": 1045
+          },
+          {
+            "path": ".claude/rules/rlm-context-management.md",
+            "bytes": 7950,
+            "estimated_tokens": 1988
+          },
+          {
+            "path": ".claude/rules/RULES-INDEX.md",
+            "bytes": 1816,
+            "estimated_tokens": 454
+          },
+          {
+            "path": ".claude/rules/RULES-ONDEMAND.md",
+            "bytes": 3681,
+            "estimated_tokens": 921
+          },
+          {
+            "path": ".claude/rules/schema-first.md",
+            "bytes": 807,
+            "estimated_tokens": 202
+          },
+          {
+            "path": ".claude/rules/sdlc-right-sizing.md",
+            "bytes": 8723,
+            "estimated_tokens": 2181
+          },
+          {
+            "path": ".claude/rules/skill-discovery.md",
+            "bytes": 8587,
+            "estimated_tokens": 2147
+          },
+          {
+            "path": ".claude/rules/tao-loop.md",
+            "bytes": 4957,
+            "estimated_tokens": 1240
+          },
+          {
+            "path": ".claude/rules/test-conformance-evidence.md",
+            "bytes": 2249,
+            "estimated_tokens": 563
+          },
+          {
+            "path": ".claude/rules/token-security.md",
+            "bytes": 8138,
+            "estimated_tokens": 2035
+          },
+          {
+            "path": ".claude/rules/tool-quota.md",
+            "bytes": 7539,
+            "estimated_tokens": 1885
+          },
+          {
+            "path": ".claude/rules/twelve-factor-evidence.md",
+            "bytes": 1168,
+            "estimated_tokens": 292
+          },
+          {
+            "path": ".claude/rules/vague-discretion.md",
+            "bytes": 4728,
+            "estimated_tokens": 1182
+          },
+          {
+            "path": ".claude/rules/versioning.md",
+            "bytes": 2919,
+            "estimated_tokens": 730
+          },
+          {
+            "path": ".claude/rules/behaviors/artifact-sync.md",
+            "bytes": 2222,
+            "estimated_tokens": 556
+          },
+          {
+            "path": ".claude/rules/behaviors/build-monitor.md",
+            "bytes": 2596,
+            "estimated_tokens": 649
+          },
+          {
+            "path": ".claude/rules/behaviors/concierge.md",
+            "bytes": 14202,
+            "estimated_tokens": 3551
+          },
+          {
+            "path": ".claude/rules/behaviors/quality-gate-watcher.md",
+            "bytes": 2808,
+            "estimated_tokens": 702
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-bot.md",
+            "bytes": 2633,
+            "estimated_tokens": 659
+          },
+          {
+            "path": ".claude/rules/behaviors/quiet-business-bot.md",
+            "bytes": 2788,
+            "estimated_tokens": 697
+          },
+          {
+            "path": ".claude/rules/behaviors/security-sentinel.md",
+            "bytes": 3236,
+            "estimated_tokens": 809
+          },
+          {
+            "path": ".claude/rules/behaviors/test-watcher.md",
+            "bytes": 2830,
+            "estimated_tokens": 708
+          }
+        ]
+      },
+      "conditional": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "mirrors": {
+        "bytes": 0,
+        "estimated_tokens": 0,
+        "files": []
+      },
+      "context_files": {
+        "bytes": 15395,
+        "estimated_tokens": 3850,
+        "files": [
+          {
+            "path": "CLAUDE.md",
+            "bytes": 1827,
+            "estimated_tokens": 457
+          },
+          {
+            "path": "WORKSPACE.md",
+            "bytes": 5893,
+            "estimated_tokens": 1474
+          },
+          {
+            "path": "AIWG.md",
+            "bytes": 7675,
+            "estimated_tokens": 1919
+          }
+        ]
+      },
+      "budget": {
+        "budgetTokens": 64000,
+        "demoted": [
+          "anti-laziness",
+          "auto-compact-continue",
+          "cli-secondary",
+          "debug-source-not-output",
+          "delivery-policy",
+          "subagent-scoping"
+        ]
+      },
+      "deployment": {
+        "command": "aiwg use sdlc --provider claude",
+        "exit_code": 0
+      }
+    }
+  },
+  "source": {
+    "revision": "c59e7a9e1edac9f85896737a3fd984c7d0c41fa0",
+    "package_version": "2026.10.3"
+  }
+}
