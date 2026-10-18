@@ -1226,6 +1226,67 @@ describeWithSqlite('transactional session repository and importer', () => {
     repository.close();
   });
 
+  it.each([1, 2, 5])(
+    'lists newest sessions first with stable ties, undated sessions last, and page size %i',
+    async (limit) => {
+      const repository = new SessionRepository();
+      try {
+        const importer = new IncrementalSessionImporter(repository);
+        const workspaceId = 'workspace-list-order';
+        const entries = [
+          ['oldest', '2026-07-24T00:00:00.000Z'],
+          ['tied-a', '2026-07-26T00:00:00.000Z'],
+          ['undated-a', undefined],
+          ['newest', '2026-07-28T00:00:00.000Z'],
+          ['middle', '2026-07-25T00:00:00.000Z'],
+          ['tied-b', '2026-07-26T00:00:00.000Z'],
+          ['undated-b', undefined],
+        ] as const;
+        await importer.import({
+          source,
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId,
+            authorizedScope: { workspaceId, allowedRoots: ['/fixture'] },
+          },
+          adapter: adapter(entries.map(([name, occurredAt], index): ProviderRecord => ({
+            nativeSessionId: name, nativeEventId: `event-${name}`, sequence: 0,
+            kind: 'message', occurredAt, text: 'session ordering',
+            rawReference: { locatorClass: 'fixture', sequence: index },
+          }))),
+          workspaceId, policyVersion: '1.0.0',
+        });
+        const id = (name: string) => stableSessionId('generic', source.sourceId, name);
+        const expected = [
+          id('newest'),
+          ...[id('tied-a'), id('tied-b')].sort().reverse(),
+          id('middle'), id('oldest'),
+          ...[id('undated-a'), id('undated-b')].sort().reverse(),
+        ];
+        let page = repository.listSessions({ workspaceId, limit });
+        const snapshotRowid = page.snapshotRowid;
+        const seen: string[] = [];
+        for (let offset = 0; offset < expected.length; offset += limit) {
+          expect(page.items.map((item) => item.sessionId)).toEqual(expected.slice(offset, offset + limit));
+          expect(page.total).toBe(expected.length);
+          expect(page.snapshotRowid).toBe(snapshotRowid);
+          seen.push(...page.items.map((item) => item.sessionId));
+          if (offset + limit < expected.length) {
+            expect(page.nextCursor).not.toBeNull();
+            page = repository.listSessions({ workspaceId, limit, cursor: page.nextCursor! });
+          } else {
+            expect(page.nextCursor).toBeNull();
+          }
+        }
+        expect(seen).toEqual(expected);
+        expect(repository.listSessions({ workspaceId, limit, offset: 1 }).items
+          .map((item) => item.sessionId)).toEqual(expected.slice(1, 1 + limit));
+      } finally {
+        repository.close();
+      }
+    },
+  );
+
   it('lists sessions with a scope-bound snapshot cursor across concurrent imports', async () => {
     const repository = new SessionRepository();
     const importer = new IncrementalSessionImporter(repository);
@@ -1246,6 +1307,8 @@ describeWithSqlite('transactional session repository and importer', () => {
       workspaceId: 'workspace-list', policyVersion: '1.0.0',
     });
     const first = repository.listSessions({ workspaceId: 'workspace-list', limit: 1 });
+    expect(first.items.map((item) => item.nativeSessionId)).toEqual(['session-2']);
+    expect(first.total).toBe(3);
     expect(first.nextCursor).not.toBeNull();
 
     const concurrentSource = { ...source, sourceId: 'list-concurrent-source' };
@@ -1264,6 +1327,10 @@ describeWithSqlite('transactional session repository and importer', () => {
     });
     expect(new Set([...first.items, ...second.items].map((item) => item.sessionId)).size).toBe(3);
     expect(second.items).toHaveLength(2);
+    expect(second.items.map((item) => item.nativeSessionId)).toEqual(['session-1', 'session-0']);
+    expect(second.total).toBe(3);
+    expect(second.snapshotRowid).toBe(first.snapshotRowid);
+    expect(second.nextCursor).toBeNull();
     expect(() => repository.listSessions({
       workspaceId: 'other-workspace', limit: 10, cursor: first.nextCursor!,
     })).toThrow(/cursor does not match the requested scope/);
@@ -1458,13 +1525,14 @@ describeWithSqlite('transactional session repository and importer', () => {
 
     const scoped = repository.listSessions({
       workspaceId: 'workspace-bulk', limit: 10, offset: 0,
-    }).items[2];
+    }).items.find((item) => item.nativeSessionId === 'bulk-session-0')!;
     const first = repository.authorizedSearchDocumentPage({
       workspaceId: 'workspace-bulk',
       sessionIds: [scoped.sessionId],
       limit: 100,
     });
     expect(first.items.every((item) => item.sessionId === scoped.sessionId)).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
     expect(() => repository.authorizedSearchDocumentPage({
       workspaceId: 'workspace-other',
       sessionIds: [scoped.sessionId],

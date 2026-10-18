@@ -80,7 +80,7 @@ aiwg sessions import-discovered --workspace <path>
                                 [--dry-run] [--json]
 aiwg sessions import <file> --source-id <id> [--workspace <id>] [--dry-run] [--json]
 aiwg sessions list [--provider <id>] [--workspace <id>] [--tag <tag>]
-                   [--limit <1..500>] [--cursor <offset>]
+                   [--limit <1..500>] [--cursor <opaque>]
                    [--min-coverage <0..1>] [--json]
 aiwg sessions timeline [--workspace <id>] [--gap <duration>]
                        [--min-coverage <0..1>] [--json]
@@ -131,6 +131,12 @@ aiwg sessions forensics evidence <event-id|fact-id|candidate-id>
                         --workspace <id> --authorize-forensics [--json]
 aiwg sessions doctor [--json]
 ```
+
+`aiwg sessions list` returns sessions newest first by `updatedAt`, with session
+IDs descending to break timestamp ties. Sessions without an update timestamp
+appear last. `--limit N` returns the N most recently updated sessions; pass the
+opaque `page.nextCursor` as `--cursor` with the same filters to continue through
+older sessions.
 
 ## Discover and import a workspace history
 
