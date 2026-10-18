@@ -18,7 +18,7 @@ import {
   type BatchImportRun,
   type SessionCoverageReport,
 } from './batch-contracts.js';
-import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
+import { redactSessionText, redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
 import type { TimelineInput } from './timeline.js';
 import { effectiveSessionLifecycle } from './lifecycle.js';
 import {
@@ -693,6 +693,7 @@ export class SessionRepository {
 
   private emitMutation(input: Omit<MutationEvent, 'contractVersion' | 'resource'
     | 'instrumentationScope' | 'integrityDigest'>): MutationEvent {
+    input = redactSessionValue(input).value;
     const unsigned = {
       contractVersion: '1.0.0' as const,
       ...input,
@@ -851,6 +852,16 @@ export class SessionRepository {
     checkpoint: ImportCheckpoint,
     publish = true,
   ): ImportReceipt {
+    // Guard callers that submit normalized batches directly as well as adapters.
+    batch = redactSessionValue({
+      ...batch,
+      source: { ...batch.source, extensions: sanitizeNativeExtensions(batch.source.extensions).value },
+      sessions: batch.sessions.map((session) => ({
+        ...session, extensions: sanitizeSessionExtensions(session.extensions, session.provider),
+      })),
+      events: batch.events.map(sanitizeSessionEvent),
+    }).value;
+    checkpoint = redactSessionValue(checkpoint).value;
     const apply = this.maintainedAnalyticsTransaction((): ImportReceipt => {
       const existing = this.db.prepare(
         'SELECT outcome, counts, checkpoint FROM import_receipts WHERE import_run_id = ?',
@@ -1199,6 +1210,7 @@ export class SessionRepository {
   }
 
   saveBatchImportRun(run: BatchImportRun): void {
+    run = redactSessionValue(run).value;
     const save = this.db.transaction(() => {
       const prior = this.db.prepare(
         'SELECT manifest_id, workspace_id FROM batch_import_runs WHERE batch_run_id=?',
@@ -1354,6 +1366,7 @@ export class SessionRepository {
   }
 
   tagSession(sessionId: string, tag: string, workspaceId?: string): boolean {
+    tag = redactSessionText(tag).text;
     const mutate = this.db.transaction(() => {
       if (!this.getSession(sessionId, workspaceId)) return false;
       const changed = this.db.prepare(
@@ -1774,7 +1787,9 @@ export class SessionRepository {
         }
       }
       const saved = candidates.map((input) => {
-        const parsed = IntelligenceCandidateSchema.parse(input);
+        const redacted = redactSessionValue(input);
+        const parsed = IntelligenceCandidateSchema.parse(redacted.value);
+        if (redacted.classes.length) parsed.sensitivity = 'sensitive';
         this.assertCandidateEvidence(parsed);
         const priorRow = this.db.prepare(
           `SELECT data FROM intelligence_candidates
@@ -1874,6 +1889,7 @@ export class SessionRepository {
     securityAcknowledged?: boolean;
     workspaceId?: string;
   }): CandidateReviewReceipt {
+    input = redactSessionValue(input).value;
     const review = this.db.transaction(() => {
       const candidate = this.getCandidate(input.candidateId, input.version, input.workspaceId);
       if (!candidate) {
@@ -1956,7 +1972,7 @@ export class SessionRepository {
 
   recordPromotion(receiptInput: PromotionReceipt): PromotionReceipt {
     const record = this.db.transaction(() => {
-      const receipt = PromotionReceiptSchema.parse(receiptInput);
+      const receipt = PromotionReceiptSchema.parse(redactSessionValue(receiptInput).value);
       const existing = this.getPromotionReceipt(
         receipt.candidateId,
         receipt.candidateVersion,
@@ -2059,6 +2075,7 @@ export class SessionRepository {
   }
 
   relocateSource(sourceId: string, redactedLocator: string, workspaceId?: string): void {
+    redactedLocator = redactSessionText(redactedLocator).text;
     const relocate = this.db.transaction(() => {
       const row = this.db.prepare(
         `SELECT src.data FROM session_sources src
@@ -2315,6 +2332,7 @@ export class SessionRepository {
     reasonCode: string;
     decisions: PromotionDependencyDecision[];
   }): DeletionReceipt {
+    input = redactSessionValue(input).value;
     const existing = this.db.prepare(
       'SELECT data FROM deletion_receipts WHERE operation_id=?',
     ).get(input.preview.operationId);

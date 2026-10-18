@@ -63,6 +63,72 @@ function configureManifests(files: string[]): void {
 }
 
 describe('session refresh integration boundaries', () => {
+  it.each([
+    [{}, { maxRecordBytes: 67108864, maxTotalBytes: 1073741824, limitOrigins: { maxRecordBytes: 'default', maxTotalBytes: 'default' } }],
+    [{ maxRecordBytes: '4096', maxSourceBytes: '0' }, { maxRecordBytes: 4096, maxTotalBytes: 0, limitOrigins: { maxRecordBytes: 'flag', maxTotalBytes: 'flag' } }],
+  ])('threads resolved import limits into refresh imports (%j)', async (flags, expected) => {
+    await saveAuthorization();
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], flags);
+    expect(mocks.importBatch.mock.calls[0][0].limits).toEqual(expected);
+  });
+
+  it('passes additive config, env and flag exclusions through discovery and the session import guard', async () => {
+    await saveAuthorization();
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { exclude: ['one'] } },
+    }));
+    fs.writeFileSync(path.join(authorized, 'one.jsonl'), 'invalid synthetic data');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], { exclude: ['flag-one', '/flag/**'] });
+    expect(mocks.importBatch).toHaveBeenCalledWith(expect.objectContaining({
+      exclude: ['one', 'env-id', 'flag-one', '/flag/**'],
+      manifest: expect.objectContaining({ sources: [expect.objectContaining({ status: 'excluded',
+        exclusion: { entry: 'one', kind: 'session-id' } })] }),
+    }));
+  });
+
+  it('uses workspace import config and lets flags override individual limits', async () => {
+    await saveAuthorization();
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 1024, max_source_bytes: 8192 } },
+    }));
+    await refreshSessionCatalog(workspace, false, 0);
+    expect(mocks.importBatch.mock.calls[0][0].limits).toEqual({
+      maxRecordBytes: 1024, maxTotalBytes: 8192,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'config' },
+    });
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], { maxSourceBytes: '0' });
+    expect(mocks.importBatch.mock.calls[1][0].limits).toEqual({
+      maxRecordBytes: 1024, maxTotalBytes: 0,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'flag' },
+    });
+  });
+
+  it('passes env limits ahead of config to session refresh and lets flags override them', async () => {
+    await saveAuthorization();
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 1024, max_source_bytes: 8192 } },
+    }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '2048');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '16384');
+    await refreshSessionCatalog(workspace, false, 0);
+    expect(mocks.importBatch.mock.calls[0][0].limits).toEqual({
+      maxRecordBytes: 2048, maxTotalBytes: 16384,
+      limitOrigins: { maxRecordBytes: 'env', maxTotalBytes: 'env' },
+    });
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], { maxSourceBytes: '0' });
+    expect(mocks.importBatch.mock.calls[1][0].limits).toEqual({
+      maxRecordBytes: 2048, maxTotalBytes: 0,
+      limitOrigins: { maxRecordBytes: 'env', maxTotalBytes: 'flag' },
+    });
+  });
+
+  it.each(['MAX_RECORD_BYTES', 'MAX_SOURCE_BYTES'])('rejects invalid env %s before session refresh', async setting => {
+    vi.stubEnv(`AIWG_SESSIONS_IMPORT_${setting}`, 'invalid');
+    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow(/env.*safe integer/);
+    expect(mocks.importBatch).not.toHaveBeenCalled();
+  });
+
   it('discovers new files only within saved authorized roots and confirms the exact saved manifest under the import lease', async () => {
     await saveAuthorization();
     fs.writeFileSync(path.join(authorized, 'two.jsonl'), JSON.stringify({

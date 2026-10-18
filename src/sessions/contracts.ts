@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { redactSessionText, redactSessionValue } from './policy.js';
 export const SESSION_CONTRACT_VERSION = '1.0.0' as const;
 export const SESSION_PROVIDER_IDS = [
   'claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
@@ -399,7 +400,7 @@ export interface AuthorizedScope {
   authorizedAccounts?: string[];
   networkOperation?: string;
 }
-export interface SourceDescriptor { provider: SessionProviderId; locator: string; locatorClass: string }
+export interface SourceDescriptor { provider: SessionProviderId; locator: string; locatorClass: string; nativeSessionId?: string }
 export interface SelectedSource extends SourceDescriptor { sourceId: string; authorizedScope: AuthorizedScope }
 export interface SourceProbe {
   sourceSchemaVersion: string;
@@ -498,7 +499,8 @@ function stableId(prefix: string, ...parts: Array<string | number>): string {
 }
 
 export const SessionRejectionDetailSchema = z.union([
-  z.object({ limit: z.string(), configured: z.number(), observed: z.number() }),
+  z.object({ limit: z.string(), configured: z.number(), observed: z.number(),
+    setting: z.string().optional(), origin: z.enum(['flag', 'env', 'config', 'default']).optional() }),
   z.object({ issues: z.array(z.object({ path: z.string(), code: z.string() })) }),
 ]);
 export type SessionRejectionDetail = z.infer<typeof SessionRejectionDetailSchema>;
@@ -529,7 +531,7 @@ export function schemaRejectionDetail(error: z.ZodError): SessionRejectionDetail
     }
   };
   visit(error.issues);
-  return { issues };
+  return redactSessionValue({ issues }).value;
 }
 
 export class SessionContractError extends Error {
@@ -538,7 +540,8 @@ export class SessionContractError extends Error {
     message: string,
     public readonly detail?: SessionRejectionDetail,
   ) {
-    super(message);
+    super(redactSessionText(message).text);
+    this.detail = redactSessionValue(detail).value;
     this.name = 'SessionContractError';
   }
 }

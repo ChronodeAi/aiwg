@@ -407,6 +407,14 @@ arguments, URLs, secret values, or native payloads. Provider extensions are
 already allowlisted/redacted before classification; opaque or malformed
 extensions yield indicators rather than executable content.
 
+Import redacts credential patterns in all canonical string fields and object
+keys before persistence or indexing. Events record classification counts in
+`extensions["native.redaction"].decisions` as `{ classification, count }` entries;
+matched values are never recorded. Native content, including attachment byte
+arrays and data URLs, is replaced by policy markers. Export omits these removed
+attachments and does not reopen redacted file URLs. Separately registered output
+files retain their explicit export workflow.
+
 Forensic views require `--authorize-forensics` on every invocation. This is an
 explicit local-operator authorization boundary, not a persistent preference.
 Timeline and indicator output is reconstructed from cited normalized facts.
@@ -591,11 +599,12 @@ event text, identifiers (native session/event id, source id, provider,
 model, tool-call id), and timestamps are preserved and verified lossless by a
 build/recover round-trip test against the real `@fortemi/core` library.
 
-Byte embedding is explicit rather than automatic. Without `--include-bytes`,
-session-event attachments and registered outputs remain reference records with
-their locator, digest, and media type. With `--include-bytes`, locally present
-OpenCode data-URL attachments and registered-output files are packed into the
-native `blobs/<blake3>` sidecar and linked from the owning Fortemi note.
+Byte embedding requires `--include-bytes`. New imports remove provider-native
+attachment payloads and file URLs before storage; export omits those removed
+attachments. Registered outputs remain reference records with their locator,
+digest, and media type by default. With `--include-bytes`, registered-output
+files and available legacy catalog attachments are packed into the native
+`blobs/<blake3>` sidecar and linked from the owning Fortemi note.
 Remote URLs are never fetched. Build re-hashes every selected output and local
 attachment against the reviewed plan, rejects drift, rejects symlinks and
 paths outside the project, and enforces `--max-attachment-bytes` (64 MiB by

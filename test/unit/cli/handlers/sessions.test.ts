@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease, GrokbotSessionAdapter, SessionRepository } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter, IncrementalSessionImporter, SessionRepository } from '../../../../src/sessions/index.js';
 import {
   encodeGrokbotKey, grokbotTranscriptReplicaFilename,
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
@@ -105,11 +105,30 @@ describe('sessions CLI contracts', () => {
         .toContain('--workspace <path-or-id>');
     }
     expect(usage).toContain('--db <path>');
+    expect(usage).toContain('--max-record-bytes <n>');
+    expect(usage).toContain('--max-source-bytes <n>');
+    expect(usage).toContain('default 67108864');
+    expect(usage).toContain('default 1073741824, 1 GiB; 0 unlimited');
+    expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES');
+    expect(usage).toContain('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES');
+    expect(usage).toContain('CLI flag > env var > workspace config > default');
     expect(usage).toContain('relative paths resolve from cwd');
     expect(usage).toContain('provider-native IDs');
     expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
     expect(usage).toContain('reindex --workspace <path-or-id> | --all-workspaces');
     expect(usage).toContain('Reindex every workspace in the selected catalog');
+  });
+
+  it.each([
+    ['--max-record-bytes', '0'], ['--max-record-bytes', '-1'],
+    ['--max-source-bytes', '-1'], ['--max-source-bytes', '1.5'],
+  ])('rejects invalid import byte limit %s %s before inspection', async (flag, value) => {
+    const result = await sessionsHandler.execute(context([
+      'import', '/missing/source.jsonl', '--source-id', 'synthetic', flag, value, '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(2);
+    expect(jsonOutput(log).error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(jsonOutput(log).error.message).toContain('sessions.import.');
   });
 
   it('returns one explicit deterministic disposition for every canonical provider', async () => {
@@ -672,6 +691,167 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['max_record_bytes', '--max-record-bytes', '4096'],
+    ['max_source_bytes', '--max-source-bytes', '0'],
+  ])('applies workspace %s config to import inspection and lets its flag override it', async (setting, flag, value) => {
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { [setting]: 1 } } }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify({
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    }) + '\n');
+    const args = ['import', transcript, '--provider', 'claude', '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).not.toBe(0);
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED', details: { setting: `sessions.import.${setting}`, configured: 1, origin: 'config' },
+    });
+    expect((await sessionsHandler.execute(context([...args, flag, value], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.totals.eventsInserted).toBe(1);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: expect.objectContaining({
+      [setting === 'max_record_bytes' ? 'maxRecordBytes' : 'maxTotalBytes']: Number(value),
+    }) }));
+  });
+
+  it.each(['claude', 'codex'])('passes env limits to %s CLI readers and importer ahead of config', async provider => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 2, max_source_bytes: 1 } },
+    }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify(provider === 'claude' ? {
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    } : { type: 'session_meta', payload: { id: 'synthetic', cwd: root } }) + '\n');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', '1');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '0');
+    const args = ['import', transcript, '--provider', provider, '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).not.toBe(0);
+    expect(jsonOutput(log).error).toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', details: {
+      setting: 'sessions.import.max_record_bytes', configured: 1, origin: 'env',
+    } });
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES', 'invalid');
+    expect((await sessionsHandler.execute(context([...args, '--max-record-bytes', '4096'], root))).exitCode).toBe(0);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: {
+      maxRecordBytes: 4096, maxTotalBytes: 0,
+      limitOrigins: { maxRecordBytes: 'flag', maxTotalBytes: 'env' },
+    } }));
+  });
+
+  it('passes workspace config limits to the single CLI importer', async () => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 4096, max_source_bytes: 8192 } },
+    }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: 'synthetic', cwd: root } }) + '\n');
+    const importer = vi.spyOn(IncrementalSessionImporter.prototype, 'import');
+    const args = ['import', transcript, '--provider', 'codex', '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(importer).toHaveBeenCalledWith(expect.objectContaining({ limits: {
+      maxRecordBytes: 4096, maxTotalBytes: 8192,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'config' },
+    } }));
+  });
+
+  it('adds config, env and repeated exclusion flags to discovered import and preview', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    const ids = ['config-id', 'env-id', 'flag-one', 'flag-two'];
+    for (const id of ids) writeFileSync(resolve(providerRoot, `${id}.jsonl`), JSON.stringify({
+      type: 'session_meta', payload: { id, cwd: root },
+    }) + '\n');
+    const { discoverWorkspaceHistories, writeDiscoveryManifest } = await import('../../../../src/sessions/workspace-discovery.js');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: root, expectedProviders: ['codex'], codexRoot: providerRoot,
+    });
+    const manifestPath = resolve(root, 'manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['config-id'] } } }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    for (const id of ids) rmSync(resolve(providerRoot, `${id}.jsonl`));
+    const args = ['import-discovered', '--workspace', root, '--manifest', manifestPath,
+      '--db', resolve(root, 'catalog.sqlite'), '--json', '--exclude', 'flag-one', '--exclude', 'flag-two'];
+    expect((await sessionsHandler.execute(context([...args, '--dry-run'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals).toMatchObject({ excluded: 4, rejected: 0, pending: 0 });
+    expect((await sessionsHandler.execute(context([...args, '--confirm'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({ resumable: false,
+      receipt: { run: { status: 'complete' }, totals: { excluded: 4, rejected: 0, pending: 0 } } });
+    expect(jsonOutput(log).data.receipt.run.sources.map((source: any) => source.exclusion.entry).sort()).toEqual(ids.sort());
+  });
+
+  it('applies config and env exclusions to CLI discovery before reading sources', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    writeFileSync(resolve(providerRoot, 'config-id.jsonl'), 'invalid synthetic data');
+    writeFileSync(resolve(providerRoot, 'env-id.jsonl'), 'invalid synthetic data');
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['config-id'] } } }));
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_EXCLUDE', 'env-id');
+    const args = ['discover', '--workspace', root, '--expected-providers', 'codex',
+      '--codex-root', providerRoot, '--manifest', resolve(root, 'manifest.json'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.manifest.totals).toMatchObject({ sources: 2, excluded: 2 });
+    expect(jsonOutput(log).data.manifest.sources.every((source: any) => source.status === 'excluded')).toBe(true);
+  });
+
+  it('uses a saved session_meta ID to exclude a renamed rollout before rediscovery reads', async () => {
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    const locator = resolve(providerRoot, 'renamed.jsonl');
+    writeFileSync(locator, JSON.stringify({ type: 'session_meta', payload: { id: 'metadata-id', cwd: root } }) + '\n');
+    const args = ['discover', '--workspace', root, '--expected-providers', 'codex',
+      '--codex-root', providerRoot, '--manifest', resolve(root, 'manifest.json'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { exclude: ['metadata-id'] } } }));
+    writeFileSync(locator, 'invalid synthetic data');
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.manifest).toMatchObject({ totals: { excluded: 1 }, sources: [{
+      status: 'excluded', nativeSessionId: 'metadata-id', exclusion: { entry: 'metadata-id', kind: 'session-id' },
+    }] });
+  });
+
+  it('threads config and flag source limits through discovered batch import', async () => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { max_source_bytes: 1 } } }));
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    writeFileSync(resolve(providerRoot, 'synthetic.jsonl'), JSON.stringify({
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    }) + '\n');
+    const { discoverWorkspaceHistories, writeDiscoveryManifest } = await import('../../../../src/sessions/workspace-discovery.js');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: root, expectedProviders: ['claude'], authorizedRoots: { claude: [providerRoot] },
+    });
+    const manifestPath = resolve(root, 'manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const args = ['import-discovered', '--workspace', root, '--manifest', manifestPath,
+      '--db', resolve(root, 'catalog.sqlite'), '--confirm', '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.rejected).toBe(1);
+    expect(jsonOutput(log).data.receipt.run.sources[0].detail).toMatchObject({
+      setting: 'sessions.import.max_source_bytes', configured: 1, origin: 'config',
+    });
+    vi.stubEnv('AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES', '2');
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.run.sources[0].detail).toMatchObject({
+      setting: 'sessions.import.max_source_bytes', configured: 2, origin: 'env',
+    });
+    expect((await sessionsHandler.execute(context([...args, '--max-source-bytes', '0'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.rejected).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.accepted).toBe(1);
   });
 
   it('lists an imported provisional session as inactive after 24 hours without re-import', async () => {

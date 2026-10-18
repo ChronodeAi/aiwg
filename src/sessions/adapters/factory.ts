@@ -15,7 +15,7 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
@@ -90,6 +90,12 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === 'factory-droid-jsonl') {
+      const records = this.stream(source);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      if (result.value) return result.value;
+    }
     const parsed = await this.readSource(source);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -98,7 +104,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
     };
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe | undefined> {
     if (source.locatorClass === 'factory-droid-jsonl') {
       const input = await streamBoundedJsonLines({
         selectedPath: source.locator,
@@ -109,6 +115,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
       let establishedId: string | undefined;
       let schemaVersion: string | null = null;
       let sawRecord = false;
+      let complete = false;
       for await (const line of input) {
         sawRecord = true;
         const parsed = FactoryRecordSchema.safeParse(line.value);
@@ -128,18 +135,25 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError('DUPLICATE_NATIVE_ID', 'Factory source changes session identity');
         }
         establishedId = currentId;
-        for (const record of normalize([line], source, establishedId).records) {
+        const normalized = normalize([line], source, establishedId);
+        complete ||= normalized.complete;
+        for (const record of normalized.records) {
           if (outputIndex++ >= start) yield record;
         }
       }
       if (!sawRecord && !input.incompleteTail) {
         throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty', schemaIssueDetail('<root>'));
       }
-      return;
+      return {
+        sourceSchemaVersion: schemaVersion ?? FACTORY_SOURCE_SCHEMA_VERSION,
+        consistency: complete && !input.incompleteTail ? 'complete' : 'provisional',
+        operationalState: 'available',
+      };
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+    return undefined;
   }
 
   private async readSource(source: SelectedSource): Promise<{
@@ -147,19 +161,8 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
     consistency: 'provisional' | 'complete';
     records: ProviderRecord[];
   }> {
-    let input: BoundedJsonRecord[];
-    let incompleteTail = false;
-    if (source.locatorClass === 'factory-droid-jsonl') {
-      const result = await readBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, { consistency: 'provisional', limits: this.limits });
-      input = result.records;
-      incompleteTail = result.incompleteTail;
-    } else {
-      input = await this.remoteRecords(source);
-    }
-    if (input.length === 0 && !incompleteTail) {
+    const input = await this.remoteRecords(source);
+    if (input.length === 0) {
       throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty', schemaIssueDetail('<root>'));
     }
     const schemaVersion = declaredVersion(input);
@@ -167,7 +170,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
     const normalized = normalize(input, source);
     return {
       schemaVersion,
-      consistency: normalized.complete && !incompleteTail ? 'complete' : 'provisional',
+      consistency: normalized.complete ? 'complete' : 'provisional',
       records: normalized.records,
     };
   }

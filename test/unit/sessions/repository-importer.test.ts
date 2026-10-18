@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
 import {
   appendFile, readFile, rename, rm, stat, utimes, writeFile,
@@ -7,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CandidateExtractionService,
+  buildSessionExportPlan,
+  buildSessionAiwgFortemiIndexExport,
   IncrementalSessionImporter,
   GenericSessionInterchangeAdapter,
   SessionImportFailure,
@@ -25,9 +28,12 @@ import {
   type SessionSource,
   type SessionSourceAdapter,
 } from '../../../src/sessions/index.js';
+import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
 import { describeWithSqlite } from '../../helpers/sqlite.js';
 // File-owned temp dirs are removed after the file, even when a test fails (#3018).
 import { mkdtemp } from '../../helpers/temp-dir.js';
+
+afterEach(() => vi.unstubAllEnvs());
 
 function adapter(records: ProviderRecord[]): SessionSourceAdapter {
   return {
@@ -78,6 +84,203 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it('keeps synthetic credentials out of every catalog table, derived index, receipt and export', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-redaction-gate-'));
+    const path = join(root, 'catalog.sqlite');
+    const repository = new SessionRepository(path);
+    const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+    const raw = new Database(path);
+    const canary = 'redaction-canary-metadata';
+    const nativeSessionId = `session-${canary}`;
+    const sessionId = stableSessionId('generic', source.sourceId, nativeSessionId);
+    const noSecrets = (value: unknown): void => {
+      const text = typeof value === 'string' ? value : JSON.stringify(value);
+      expect(text).not.toContain(canary);
+      for (const [, secret] of syntheticSecrets) expect(text).not.toContain(secret);
+      expect(text).not.toContain('FAKEPRIVATEKEYBODY');
+      expect(text).not.toContain('fake-netrc-value');
+    };
+    try {
+      const receipts = await new IncrementalSessionImporter(repository).import({
+        source: { ...source, providerProfile: canary, redactedLocator: canary,
+          extensions: { 'native.generic': { [canary]: { name: canary } } } },
+        selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: canary,
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        adapter: adapter([{
+          nativeSessionId, nativeEventId: canary, sequence: 0,
+          kind: 'tool-call', role: 'user', participant: canary, toolName: canary,
+          toolCallId: canary, model: canary, entities: [canary], extractionState: canary,
+          text: 'Decision: retain safe prose ' + syntheticSecrets[0][1] + '\n'
+            + syntheticSecrets.slice(1).map(([, value]) => value).join('\n'),
+          rawReference: { locatorClass: canary, sequence: 0 },
+          extensions: { [canary]: { name: canary }, status: canary,
+            items: [{ name: canary }], dataBytes: [...Buffer.from(canary)] },
+        }, { nativeSessionId, nativeEventId: 'summary-event', sequence: 1, kind: 'summary',
+          text: canary, rawReference: { locatorClass: 'fixture' },
+        }]), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+      });
+      noSecrets(receipts);
+      const event = repository.listEvents(sessionId)[0];
+      noSecrets(event);
+      expect(event.sensitivity.classes).toEqual(expect.arrayContaining([
+        'provider-token', 'private-key', 'environment-assignment', 'fixture-credential',
+      ]));
+      expect(event.extensions['native.redaction']).toMatchObject({
+        decisions: expect.arrayContaining([{ classification: 'provider-token', count: 12 }]),
+      });
+      expect(repository.search({ query: 'FAKE00000000000000000000', workspaceId: 'workspace-1', limit: 10 }).items).toHaveLength(0);
+      expect(repository.search({ query: '"redaction-canary-metadata"', workspaceId: 'workspace-1', limit: 10 }).items).toHaveLength(0);
+      for (const [, secret] of syntheticSecrets) {
+        expect(repository.search({ query: `"${secret.replaceAll('"', '""')}"`,
+          workspaceId: 'workspace-1', controlEvents: 'include', limit: 10 }).items).toHaveLength(0);
+      }
+      const analytics = repository.analyticsSummary({ workspaceId: 'workspace-1' });
+      expect(analytics.totals.toolCalls).toBe(1);
+      noSecrets(analytics);
+      noSecrets(repository.getAnalyticsEvidence(event.eventId, 'workspace-1'));
+      const candidates = await new CandidateExtractionService(repository).extract({
+        documents: repository.authorizedSearchDocuments({ workspaceId: 'workspace-1', controlEvents: 'include', limit: 50 }),
+        extractor: new StructuralCandidateExtractor(),
+        policy: { version: '1.0.0', projectScope: 'workspace-1', temporalScope: 'source-event', minimumConfidence: 0.5 },
+      });
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0].evidence[0].quote).toContain('[REDACTED:provider-token]');
+      const [candidate] = repository.saveCandidates([{ ...candidates[0],
+        assertion: `retain safe prose ${canary}`, model: canary, projectScope: canary }]);
+      noSecrets(candidate);
+      repository.reviewCandidate({ candidateId: candidate.candidateId, version: candidate.version,
+        toState: 'accepted', reviewer: canary, reason: canary, securityAcknowledged: true });
+      repository.recordPromotion({ contractVersion: '1.0.0', receiptId: 'promotion-fixture',
+        operationId: 'promotion-operation', candidateId: candidate.candidateId, candidateVersion: candidate.version,
+        consumer: canary, destinationRef: canary, reviewer: canary, approvedAt: '2026-10-01T00:00:00.000Z',
+        evidenceEventIds: [event.eventId], conflictsWith: [], supersedes: [],
+        beforeHash: null, afterHash: sha256('safe'), dryRun: false, duplicate: false });
+      repository.saveBatchImportRun({ schemaVersion: '1.0.0', runId: 'batch-fixture', manifestId: 'manifest-fixture',
+        workspaceId: 'workspace-1', status: 'partial', startedAt: '2026-10-01T00:00:00.000Z',
+        updatedAt: '2026-10-01T00:00:00.000Z', completedAt: null, providers: [],
+        sources: [{ sourceId: source.sourceId, provider: 'generic', status: 'rejected', attempts: 1,
+          sessionsAccepted: 0, eventsAccepted: 0, errorCode: 'MALFORMED_SOURCE', diagnostic: canary,
+          detail: { issues: [{ path: canary, code: 'custom' }] }, updatedAt: '2026-10-01T00:00:00.000Z' }] });
+      repository.tagSession(sessionId, canary, 'workspace-1');
+      repository.relocateSource(source.sourceId, canary, 'workspace-1');
+      repository.reindex('workspace-1');
+      noSecrets(repository.listCandidates());
+      noSecrets(repository.listMutationEvents({ workspaceId: 'workspace-1', limit: 50 }));
+      noSecrets(repository.getBatchImportRun('batch-fixture'));
+      const selection = buildSessionExportPlan(repository, { workspaceId: 'workspace-1', sessionIds: [sessionId] });
+      noSecrets(selection.plan);
+      noSecrets(buildSessionAiwgFortemiIndexExport('workspace-1', selection.sessions, selection.eventsBySessionId));
+      const scanTables = (): void => {
+        for (const { name } of raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()) {
+          const rows = raw.prepare(`SELECT * FROM "${String(name).replaceAll('"', '""')}"`).all();
+          for (const row of rows) for (const value of Object.values(row)) {
+            noSecrets(Buffer.isBuffer(value) ? value.toString('utf8') : value);
+          }
+        }
+      };
+      scanTables();
+      const preview = repository.previewPurge(sessionId, 'workspace-1');
+      repository.purgeSession({ preview, actorClass: canary, reasonCode: canary,
+        decisions: preview.promotedDependents.map((item) => ({ dependentId: item.dependentId,
+          action: 'origin_unavailable' as const, basis: canary })) });
+      scanTables();
+    } finally { raw.close(); repository.close(); }
+  });
+
+  it('redacts direct normalized imports before storage, indexing and intent derivation', () => {
+    const repository = new SessionRepository();
+    try {
+      const canary = 'redaction-canary-direct';
+      const checkpoint = { cursor: `native:${canary}`, recordsRead: 1, bytesRead: 1 };
+      repository.applyImport({ source, run: { contractVersion: '1.0.0', importRunId: 'direct-run',
+        sourceId: source.sourceId, parserVersion: '1.0.0', policyVersion: '1.0.0', sourceSchemaVersion: '1.0.0',
+        consistency: 'complete', status: 'running', checkpoint, startedAt: '2026-10-01T00:00:00.000Z', completedAt: null, errorCode: null },
+        sessions: [{ contractVersion: '1.0.0', sessionId: 'direct-session', sourceId: source.sourceId,
+          provider: 'generic', nativeSessionId: canary, workspaceId: 'workspace-1', startedAt: null,
+          updatedAt: null, consistency: 'complete', lifecycle: 'complete', sourceDigest: sha256('safe'),
+          intent: { status: 'selected', eventId: 'direct-event', sequence: 0, title: canary, summary: canary }, extensions: {} }],
+        events: [{ contractVersion: '1.0.0', eventId: 'direct-event', sessionId: 'direct-session', sourceId: source.sourceId,
+          importRunId: 'direct-run', nativeId: canary, sequence: 0, kind: 'message', role: 'user', participant: canary,
+          toolName: canary, toolCallId: canary, model: canary, entities: [canary], extractionState: canary,
+          occurredAt: null, activityBoundary: null, activityBoundaryBasis: canary, activityBoundaryConfidence: null,
+          origin: 'user-authored', originRule: canary, originClassifierVersion: '1.0.0', searchableText: canary,
+          digest: sha256('safe'), rawReference: { locatorClass: canary }, adapterVersion: '1.0.0', consistency: 'complete',
+          sensitivity: { classification: 'none', classes: [] }, opaque: false, extensions: {} }],
+      }, checkpoint);
+      expect(JSON.stringify(repository.getSession('direct-session'))).not.toContain(canary);
+      expect(JSON.stringify(repository.listEvents('direct-session'))).not.toContain(canary);
+      expect(JSON.stringify(repository.getCheckpoint(source.sourceId, '1.0.0'))).not.toContain(canary);
+      expect(repository.search({ query: '"redaction-canary-direct"', workspaceId: 'workspace-1', limit: 10 }).items).toHaveLength(0);
+    } finally { repository.close(); }
+  });
+
+  it('redacts failure messages, receipt coordinates and validator paths', () => {
+    const canary = 'redaction-canary-error';
+    const failure = new SessionImportFailure({ contractVersion: '1.0.0', outcome: 'terminal-failure',
+      sourceId: canary, sourceGeneration: canary, consistency: 'complete',
+      committedPrefix: { batches: 0, records: 0, events: 0 },
+      resumableCheckpoint: { cursor: canary, recordsRead: 0, bytesRead: 0 },
+      errorCode: 'MALFORMED_SOURCE', detail: { issues: [{ path: canary, code: 'custom' }] },
+    }, new SessionContractError('MALFORMED_SOURCE', canary, { issues: [{ path: canary, code: 'custom' }] }));
+    expect(failure.message).not.toContain(canary);
+    expect(JSON.stringify(failure)).not.toContain(canary);
+    expect(failure.code).toBe('MALFORMED_SOURCE');
+  });
+
+  it.each([1, 3])('propagates only sanitized Codex lineage to sessions with batch size %s', async (batchSize) => {
+    const repository = new SessionRepository();
+    const lineage = { forkedFromId: 'parent', parentThreadId: 'parent', depth: 1 };
+    const codexSource = { ...source, provider: 'codex' as const, extensions: { 'native.codex': {} } };
+    const codexAdapter = {
+      ...adapter([
+        { ...records[1], nativeEventId: 'before', extensions: {} },
+        { ...records[1], nativeEventId: 'replay', sequence: 2, extensions: {
+          lineage, inheritedFromId: 'parent', replayed: true, futureField: 42,
+        } },
+        { ...records[1], nativeEventId: 'after', sequence: 3, extensions: {} },
+      ]),
+      provider: 'codex' as const,
+    };
+    try {
+      await new IncrementalSessionImporter(repository).import({
+        source: codexSource, adapter: codexAdapter,
+        selectedSource: { provider: 'codex', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: codexSource.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        workspaceId: 'workspace-1', policyVersion: '1.0.0', limits: { batchSize },
+      });
+      const id = stableSessionId('codex', codexSource.sourceId, 'native-1');
+      const native = repository.getSession(id)?.extensions['native.codex'];
+      expect(native).toMatchObject({ lineage });
+      expect(native).not.toHaveProperty('inheritedFromId');
+      expect(native).not.toHaveProperty('replayed');
+      expect(native).not.toHaveProperty('futureField');
+      expect(repository.listEvents(id)[1].extensions['native.codex'])
+        .toMatchObject({ lineage, inheritedFromId: 'parent', replayed: true, futureField: 42 });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it.each(['config', 'env'] as const)('enforces %s byte limits at the importer boundary', async (origin) => {
+    for (const setting of ['max_record_bytes', 'max_source_bytes'] as const) {
+      const repository = new SessionRepository();
+      if (origin === 'env') vi.stubEnv(`AIWG_SESSIONS_IMPORT_${setting.toUpperCase()}`, '1');
+      try {
+        await expect(new IncrementalSessionImporter(repository).import({
+          source, adapter: adapter(records), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+          selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+          limits: origin === 'config' ? resolveImportLimits({ [setting]: 1 }) : { batchSize: 1 },
+        })).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+          setting: `sessions.import.${setting}`, configured: 1, origin,
+        }, failureReceipt: { detail: { setting: `sessions.import.${setting}`, configured: 1, origin } } });
+      } finally {
+        repository.close();
+        vi.unstubAllEnvs();
+      }
+    }
+  });
+
   it.each(['maxRecordBytes', 'maxTotalBytes', 'maxRecords'] as const)(
     'preserves configured and observed %s in import failure details', async (limit) => {
       const repository = new SessionRepository();
@@ -88,17 +291,55 @@ describeWithSqlite('transactional session repository and importer', () => {
           source, adapter: adapter([record]), workspaceId: 'workspace-1', policyVersion: '1.0.0',
           selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
             sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
-          limits: { [limit]: 0 },
+          limits: { [limit]: limit === 'maxRecords' ? 0 : 1 },
         })).rejects.toMatchObject({
           name: 'SessionImportFailure', code: 'RESOURCE_LIMIT_EXCEEDED',
-          detail: { limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)) },
+          detail: { limit, configured: limit === 'maxRecords' ? 0 : 1, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)) },
           failureReceipt: { detail: {
-            limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)),
+            limit, configured: limit === 'maxRecords' ? 0 : 1, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)),
           } },
         });
       } finally { repository.close(); }
     },
   );
+
+  it('bounds import batches by bytes for large records with no source cap', async () => {
+    const repository = new SessionRepository();
+    const apply = vi.spyOn(repository, 'applyImport');
+    const large = Array.from({ length: 3 }, (_, sequence) => ({
+      nativeSessionId: 'large', sequence, kind: 'message',
+      text: 'x'.repeat(3 * 1024 * 1024), rawReference: { locatorClass: 'fixture' },
+    }));
+    try {
+      const receipts = await new IncrementalSessionImporter(repository).import({
+        source, adapter: adapter(large), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        limits: { maxTotalBytes: 0 },
+      });
+      expect(receipts).toHaveLength(3);
+      expect(apply.mock.calls.map(([batch]) => batch.events.length)).toEqual([1, 1, 1]);
+    } finally { repository.close(); }
+  });
+
+  it.each([2, 3])('applies the per-source cap to source bytes rather than normalized bytes (%s)', async (maxTotalBytes) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-source-bytes-'));
+    const path = join(root, 'source.jsonl');
+    await writeFile(path, '{}\n');
+    const repository = new SessionRepository();
+    try {
+      const imported = new IncrementalSessionImporter(repository).import({
+        source, adapter: adapter(records), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        selectedSource: { provider: 'generic', locator: path, locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [root] } },
+        limits: { maxTotalBytes, limitOrigins: { maxTotalBytes: 'config' } },
+      });
+      if (maxTotalBytes === 3) await expect(imported).resolves.toHaveLength(1);
+      else await expect(imported).rejects.toMatchObject({ detail: {
+        setting: 'sessions.import.max_source_bytes', configured: 2, observed: 3, origin: 'config',
+      } });
+    } finally { repository.close(); }
+  });
 
   it('preserves adapter validator detail through an import failure', async () => {
     const repository = new SessionRepository();

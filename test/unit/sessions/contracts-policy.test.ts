@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
+import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
   SESSION_PROVIDER_IDS,
   SessionContractError,
@@ -15,6 +17,7 @@ import {
   DeletionReceiptSchema,
   defineSessionAdapterFixture,
   redactSessionText,
+  redactSessionValue,
   sanitizeNativeExtensions,
   requireNetworkConsent,
   prefilterAuthorizedSearchScope,
@@ -22,6 +25,12 @@ import {
 } from '../../../src/sessions/index.js';
 
 describe('session contracts', () => {
+  it.each(['flag', 'env', 'config', 'default'])('preserves %s byte-limit origin in rejection details', origin => {
+    const detail = { limit: 'maxTotalBytes', configured: 1, observed: 2,
+      setting: 'sessions.import.max_source_bytes', origin };
+    expect(SessionRejectionDetailSchema.parse(detail)).toEqual(detail);
+  });
+
   it('extracts bounded paths and codes from nested validator failures without input values', () => {
     const schema = z.object({ events: z.array(z.union([
       z.object({ role: z.literal('user') }), z.object({ role: z.literal('assistant') }),
@@ -36,6 +45,16 @@ describe('session contracts', () => {
     const many = z.array(z.string()).safeParse(Array(30).fill(null));
     if (many.success) throw new Error('expected validator failure');
     expect(schemaRejectionDetail(many.error)).toHaveProperty('issues.length', 20);
+  });
+
+  it('redacts session diagnostics and dynamic validator paths before they can reach receipts', () => {
+    const canary = 'redaction-canary-diagnostic';
+    const error = new SessionContractError('MALFORMED_SOURCE', canary, { issues: [{ path: canary, code: 'custom' }] });
+    expect(error.message).not.toContain(canary);
+    expect(JSON.stringify(error.detail)).not.toContain(canary);
+    const result = z.record(z.string()).safeParse({ [canary]: 42 });
+    if (result.success) throw new Error('expected validator failure');
+    expect(JSON.stringify(schemaRejectionDetail(result.error))).not.toContain(canary);
   });
 
   it('asserts every canonical provider ID with documented compatibility aliases', () => {
@@ -157,6 +176,75 @@ describe('session source and content policy', () => {
     expect(result.sensitivity).toBe('sensitive');
     expect(result.decisions).not.toHaveProperty('value');
   });
+
+  it.each(syntheticSecrets)('redacts synthetic %s and records its classification count (%#)', (classification, value) => {
+    const result = redactSessionText(value);
+    expect(result.text).toBe(`[REDACTED:${classification}]`);
+    expect(result.decisions[classification]).toBe(1);
+  });
+
+  it('redacts JWTs with large claims and lower-case AWS configuration assignments', () => {
+    const jwt = `eyJ${'a'.repeat(12)}.${'b'.repeat(16_384)}.${'c'.repeat(128)}`;
+    expect(redactSessionText(jwt + '.').text).toBe('[REDACTED:provider-token].');
+    expect(redactSessionText('aws_secret_access_key = FAKE000000000000000000000000000000000000').text)
+      .toBe('[REDACTED:environment-assignment]');
+    expect(redactSessionText('api_key' + ' '.repeat(4096) + '= FAKE0000000000').text)
+      .toBe('[REDACTED:credential]');
+  });
+
+  it('preserves ordinary prose, digests, UUIDs and session IDs', () => {
+    const text = `The password should remain private. A token represents a word.
+${sha256('safe')}
+019d0000-0000-7000-8000-000000000101
+session_0123456789abcdef`;
+    expect(redactSessionText(text)).toMatchObject({ text, classes: [], decisions: {} });
+  });
+
+  it('redacts space-separated generated credentials but keeps keyword prose', () => {
+    const value = 'FAKE' + '0a1b2c3d4e'.repeat(3);
+    for (const keyword of ['token', 'api_key', 'API-KEY', 'secret']) {
+      expect(redactSessionText(`${keyword} ${value}`).text).toBe('[REDACTED:credential]');
+    }
+    const prose = 'token count 123456, a secret ingredient, token budget exceeded, api key rotation';
+    expect(redactSessionText(prose)).toMatchObject({ text: prose, classes: [] });
+  });
+
+  it('redacts nested keys and arrays without prototype mutation or input mutation', () => {
+    const input = { nested: [{ ['redaction-canary-key']: 'redaction-canary-value' }], id: 'session-1' };
+    const result = redactSessionValue(input);
+    expect(JSON.stringify(result.value)).not.toContain('redaction-canary');
+    expect(result.value.id).toBe('session-1');
+    expect(input.nested[0]['redaction-canary-key']).toBe('redaction-canary-value');
+    expect(result.decisions['fixture-credential']).toBe(2);
+    const native = sanitizeNativeExtensions({
+      ['redaction-canary-native-key']: { name: 'safe' },
+      password: { name: 'otherwise-safe' },
+      dataBytes: [70, 65, 75, 69],
+    });
+    expect(JSON.stringify(native.value)).not.toContain('redaction-canary');
+    expect(native.value.password).toBe('[REDACTED:sensitive-field]');
+    expect(sanitizeNativeExtensions({ tokenCount: 42 }).value.tokenCount).toBe(42);
+    expect(native.value.dataBytes).toBe('[REDACTED:content]');
+  });
+
+  it('bounds redaction of a 32 MiB record with malformed key blocks and long near matches', () => {
+    const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
+      + 'password' + ' '.repeat(1024) + 'end\n'
+      + 'eyJ' + 'a-'.repeat(1024) + '\n'
+      + 'a.'.repeat(1024) + '\n';
+    const text = chunk.repeat(Math.ceil(32 * 1024 * 1024 / chunk.length)).slice(0, 32 * 1024 * 1024);
+    const started = performance.now();
+    const result = redactSessionText(text);
+    expect(performance.now() - started).toBeLessThan(10_000);
+    expect(result.text).toBe('[REDACTED:private-key]');
+    // Exercise every regex on a large record as well as the unfinished-key scanner.
+    const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
+    const plain = nearMatch.repeat(Math.ceil(32 * 1024 * 1024 / nearMatch.length)).slice(0, 32 * 1024 * 1024);
+    const plainStarted = performance.now();
+    const redacted = redactSessionText(plain + '\n' + syntheticSecrets[0][1]);
+    expect(performance.now() - plainStarted).toBeLessThan(10_000);
+    expect(redacted.text).toBe(plain + '\n[REDACTED:provider-token]');
+  }, 25_000);
 
   it('requires operation-specific network consent', () => {
     expect(() => requireNetworkConsent('codex.export', 'claude.export')).toThrowError(

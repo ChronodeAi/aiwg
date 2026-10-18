@@ -9,6 +9,8 @@
  * @implements #621
  */
 
+import { validateImportExclusions } from '../sessions/import-exclusions.js';
+
 import { resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 export { DEFAULT_DISPATCH_HOST_THRESHOLDS, resolveDispatchHostThresholds } from './dispatch-thresholds-runtime.mjs';
 
@@ -469,6 +471,12 @@ export interface AiwgConfig {
     codex_roots?: string[];
     /** Additional authorized discovery manifests for refresh, relative to the workspace or absolute. */
     discovery_manifests?: string[];
+    /** Import limits and exclusions; source cap 0 means unlimited. */
+    import?: {
+      max_record_bytes?: number;
+      max_source_bytes?: number;
+      exclude?: string[];
+    };
   };
   $schema?: string;
   version: '1';
@@ -1976,6 +1984,21 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     || !parsed.sessions.discovery_manifests.every((file) => typeof file === 'string' && file.trim().length > 0)
   )) {
     throw new Error('sessions.discovery_manifests must be an array of non-empty paths');
+  }
+
+  if (parsed.sessions?.import !== undefined) {
+    const limits = parsed.sessions.import;
+    if (limits === null || typeof limits !== 'object' || Array.isArray(limits)) {
+      throw new Error('sessions.import must be an object');
+    }
+    if (limits.exclude !== undefined) validateImportExclusions(limits.exclude);
+    for (const key of ['max_record_bytes', 'max_source_bytes'] as const) {
+      const value = limits[key];
+      const minimum = key === 'max_source_bytes' ? 0 : 1;
+      if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum)) {
+        throw new Error(`sessions.import.${key} must be a ${minimum ? 'positive' : 'non-negative'} integer`);
+      }
+    }
   }
 
   const externalLinkErrors = validateExternalLinks(parsed.externalLinks);

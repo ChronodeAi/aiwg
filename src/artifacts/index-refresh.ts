@@ -10,6 +10,8 @@ import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
+import { resolveImportExclusions } from '../sessions/import-exclusions.js';
+import { resolveImportLimits } from '../sessions/import-limits.js';
 import type { BatchImportReceipt } from '../sessions/batch-import.js';
 import {
   BUILTIN_GRAPH_CONFIGS, GRAPH_CONFIGS, INDEX_EXTRACTOR_VERSION, INDEX_VERSION,
@@ -26,6 +28,9 @@ export interface RefreshOptions {
   dryRun?: boolean;
   lockWaitMs?: number;
   signal?: AbortSignal;
+  maxRecordBytes?: string | number;
+  maxSourceBytes?: string | number;
+  exclude?: string[];
 }
 
 export type RefreshJob = {
@@ -48,7 +53,7 @@ export interface RefreshReport {
   reason?: string;
   messages: string[];
   jobs: RefreshJob[];
-  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; wallMs: number };
+  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; excluded: number; wallMs: number };
 }
 
 interface Checkpoint {
@@ -345,7 +350,10 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
     }
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
-    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases);
+    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases, {
+      maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes,
+      ...(options.exclude?.length ? { exclude: options.exclude } : {}),
+    });
     if (typeof result === 'string') {
       job.status = 'skipped';
       job.reason = result;
@@ -392,7 +400,7 @@ export async function refreshIndexes(
   const report: RefreshReport = {
     contractVersion: '1.0.0', command: 'index.refresh', status: 'ok',
     mode: options.full ? 'full' : 'incremental', jobs, messages: [],
-    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, wallMs: 0 },
+    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, excluded: 0, wallMs: 0 },
   };
   const finish = () => {
     for (const job of jobs.filter(job => job.noManifest)) {
@@ -406,6 +414,8 @@ export async function refreshIndexes(
       deferred: jobs.filter(job => job.status === 'deferred').length,
       errors: jobs.filter(job => job.status === 'error').length,
       noManifest: jobs.reduce((sum, job) => sum + (job.noManifest ?? 0), 0),
+      excluded: jobs.reduce((sum, job) => sum + (job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : []))
+        .reduce((total, receipt) => total + (receipt.totals.excluded ?? 0), 0), 0),
       wallMs: Date.now() - start,
     };
     return report;
@@ -511,11 +521,14 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       if (flag === '--full') options.full = true;
       else if (flag === '--dry-run') options.dryRun = true;
       else if (flag === '--json') json = true;
-      else if (['--workspace', '--root', '--only', '--lock-wait-ms'].includes(flag)) {
+      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude'].includes(flag)) {
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
         else if (flag === '--root') (options.root as string[]).push(value);
+        else if (flag === '--max-record-bytes') options.maxRecordBytes = value;
+        else if (flag === '--max-source-bytes') options.maxSourceBytes = value;
+        else if (flag === '--exclude') (options.exclude ??= []).push(value);
         else if (flag === '--only') {
           if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
             && value !== 'runtime' && value !== 'models' && value !== 'issues') {
@@ -528,11 +541,21 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         }
       } else throw new Error(`unknown refresh option: ${flag}`);
     }
+    resolveImportLimits(undefined, { maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes });
+    resolveImportExclusions(undefined, options.exclude);
     const report = await refreshIndexes(options);
     if (json) console.log(JSON.stringify(report, null, 2));
     else {
       console.log(`Index refresh: ${report.status} (${report.mode})${report.reason ? `: ${report.reason}` : ''}`);
       for (const job of report.jobs) console.log(`  ${job.status}: ${job.kind} ${job.scope === 'host' ? '[host]' : job.workspace}${job.graph ? ` [${job.graph}]` : ''}${job.error || job.reason ? `: ${job.error ?? job.reason}` : ''}`);
+      for (const job of report.jobs) {
+        for (const receipt of job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : [])) {
+          for (const source of receipt.run.sources) {
+            if (source.status === 'excluded') console.log(`    excluded: ${source.sourceId} ${source.exclusion?.kind} ${source.exclusion?.entry}`);
+          }
+        }
+      }
+      console.log(`  Excluded session sources: ${report.totals.excluded}`);
       for (const message of report.messages) console.log(message);
     }
     if (report.totals.errors) process.exitCode = 1;
@@ -541,7 +564,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
     const report: RefreshReport = {
       contractVersion: '1.0.0', command: 'index.refresh', status: 'error', mode: options.full ? 'full' : 'incremental',
       jobs: [], messages: [error instanceof Error ? error.message : String(error)],
-      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, noManifest: 0, wallMs: 0 },
+      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, noManifest: 0, excluded: 0, wallMs: 0 },
     };
     console.log(json ? JSON.stringify(report, null, 2) : `Index refresh: error: ${report.messages[0]}`);
     process.exitCode = 1;

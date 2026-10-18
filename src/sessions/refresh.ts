@@ -2,6 +2,9 @@ import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { requireFeaturePackage } from '../features/runtime.js';
 import { readAiwgConfig } from '../config/aiwg-config.js';
+import { createSessionAdapterRegistry } from './adapter-registry.js';
+import { resolveImportExclusions } from './import-exclusions.js';
+import { resolveImportLimits } from './import-limits.js';
 import { acquireImportLease } from './import-lease.js';
 import { SessionRepository } from './repository.js';
 import { importDiscoveryManifest, type BatchImportReceipt } from './batch-import.js';
@@ -32,12 +35,15 @@ export async function refreshSessionCatalog(
   waitMs: number,
   signal?: AbortSignal,
   workspaceAliases: string[] = [],
+  flags: { maxRecordBytes?: string | number; maxSourceBytes?: string | number; exclude?: string[] } = {},
 ): Promise<string | BatchImportReceipt | BatchImportReceipt[] | undefined> {
   const canonicalWorkspace = realpathSync(workspace);
+  const config = await readAiwgConfig(canonicalWorkspace);
+  const limits = resolveImportLimits(config?.sessions?.import, flags);
+  const exclude = resolveImportExclusions(config?.sessions?.import, flags.exclude);
   const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
   const manifests: Array<{ path: string; manifest: SessionDiscoveryManifest }> = [];
   if (!full) {
-    const config = await readAiwgConfig(canonicalWorkspace);
     const paths = new Set([
       defaultDiscoveryManifestPath(canonicalWorkspace),
       ...(config?.sessions?.discovery_manifests ?? []).map(file => path.resolve(canonicalWorkspace, file)),
@@ -63,6 +69,9 @@ export async function refreshSessionCatalog(
         workspaceAliases: [workspace, ...workspaceAliases],
         expectedProviders: providers,
         authorizedRoots,
+        registry: createSessionAdapterRegistry(limits),
+        exclude,
+        knownSources: previous.sources,
       });
       manifests.push({ path: manifestPath, manifest });
     }
@@ -81,7 +90,7 @@ export async function refreshSessionCatalog(
           if (prior?.status === 'complete') continue;
           // Persist the exact discovered batch before its confirmed import.
           await writeDiscoveryManifest(entry.path, entry.manifest);
-          const receipt = await importDiscoveryManifest({ manifest: entry.manifest, repository, signal });
+          const receipt = await importDiscoveryManifest({ manifest: entry.manifest, repository, signal, limits, exclude });
           if (receipt.totals.pending) {
             throw new Error(`session import incomplete: ${receipt.totals.rejected} rejected, ${receipt.totals.pending} pending`);
           }

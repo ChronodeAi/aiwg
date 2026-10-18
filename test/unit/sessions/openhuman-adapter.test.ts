@@ -1,5 +1,6 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   IncrementalSessionImporter,
   OPENHUMAN_ADAPTER_VERSION,
@@ -26,6 +27,25 @@ function selected(name: string, locatorClass = 'openhuman-enriched-jsonl'): Sele
 }
 
 describe('OpenHuman session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new OpenHumanSessionAdapter();
+      const selection = selected('complete.jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new OpenHumanSessionAdapter();
 
   it('reports explicit full-fidelity JSONL acquisition', () => {

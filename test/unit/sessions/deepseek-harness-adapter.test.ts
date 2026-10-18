@@ -1,5 +1,6 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarnessSessionAdapter } from '../../../src/sessions/adapters/deepseek-harness.js';
 
 const root = resolve('test/fixtures/sessions/deepseek-harness');
@@ -12,6 +13,25 @@ const source = {
 };
 
 describe('DeepSeekHarnessSessionAdapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new DeepSeekHarnessSessionAdapter();
+      const selection = source;
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   it('inspects and streams native v2 JSONL with conservative redaction', async () => {
     const adapter = new DeepSeekHarnessSessionAdapter();
     await expect(adapter.inspect(source)).resolves.toMatchObject({ sourceSchemaVersion: '2.0.0', operationalState: 'available' });

@@ -17,7 +17,6 @@ import {
   type SourceProbe,
 } from '../contracts.js';
 import {
-  readBoundedJsonLines,
   readBoundedText,
   streamBoundedJsonLines,
   type BoundedJsonRecord,
@@ -126,6 +125,14 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === 'cursor-cli-stream-json'
+      || source.locatorClass === 'cursor-cloud-events-jsonl'
+      || source.locatorClass === 'cursor-agent-transcript-jsonl') {
+      const records = this.stream(source);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      if (result.value) return result.value;
+    }
     const parsed = await this.readSource(source);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -134,9 +141,10 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
     };
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe | undefined> {
     if (source.locatorClass === 'cursor-cli-stream-json'
-      || source.locatorClass === 'cursor-cloud-events-jsonl') {
+      || source.locatorClass === 'cursor-cloud-events-jsonl'
+      || source.locatorClass === 'cursor-agent-transcript-jsonl') {
       const input = await streamBoundedJsonLines({
         selectedPath: source.locator,
         allowedRoots: source.authorizedScope.allowedRoots,
@@ -148,6 +156,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
       let agentId: string | undefined;
       let runId: string | undefined;
       let sawRecord = false;
+      let complete = false;
       for await (const line of input) {
         sawRecord = true;
         const raw = asObject(line.value);
@@ -170,7 +179,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
           }
           cliSessionId = event.session_id;
           record = normalizeCli([line]).records[0];
-        } else {
+        } else if (source.locatorClass === 'cursor-cloud-events-jsonl') {
           const parsed = CloudEventSchema.safeParse(line.value);
           if (!parsed.success) {
             throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Cloud Agent event is malformed', schemaRejectionDetail(parsed.error));
@@ -186,25 +195,35 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
           }
           agentId = nextAgentId;
           runId = nextRunId;
-          record = normalizeCloud([{
+          const normalized = normalizeCloud([{
             ...line,
             value: {
               ...event,
               agent: event.agent ?? (agentId ? { id: agentId } : undefined),
               run: event.run ?? (runId ? { id: runId } : undefined),
             },
-          }]).records[0];
+          }]);
+          complete ||= normalized.complete;
+          record = normalized.records[0];
+        } else {
+          record = normalizeAgentTranscript([line], source.locator).records[0];
         }
+        complete ||= record.extensions?.lifecycle === 'complete';
         if (outputIndex++ >= start) yield record;
       }
       if (!sawRecord && !input.incompleteTail) {
         throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty', schemaIssueDetail('<root>'));
       }
-      return;
+      return {
+        sourceSchemaVersion: schemaVersion ?? CURSOR_SOURCE_SCHEMA_VERSION,
+        consistency: complete && !input.incompleteTail ? 'complete' : 'provisional',
+        operationalState: 'available',
+      };
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+    return undefined;
   }
 
   private async readSource(source: SelectedSource): Promise<{
@@ -228,39 +247,6 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
         schemaVersion: CURSOR_SOURCE_SCHEMA_VERSION,
         consistency: 'complete',
         records: normalizeMarkdown(input.value, source.locator),
-      };
-    }
-    const input = await readBoundedJsonLines(
-      authorization,
-      { consistency: 'provisional', limits: this.limits },
-    );
-    if (input.records.length === 0 && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty', schemaIssueDetail('<root>'));
-    }
-    const schemaVersion = declaredVersion(input.records);
-    assertSupportedSchemaMajor(schemaVersion);
-    if (source.locatorClass === 'cursor-cli-stream-json') {
-      const normalized = normalizeCli(input.records);
-      return {
-        schemaVersion,
-        consistency: normalized.complete && !input.incompleteTail ? 'complete' : 'provisional',
-        records: normalized.records,
-      };
-    }
-    if (source.locatorClass === 'cursor-cloud-events-jsonl') {
-      const normalized = normalizeCloud(input.records);
-      return {
-        schemaVersion,
-        consistency: normalized.complete && !input.incompleteTail ? 'complete' : 'provisional',
-        records: normalized.records,
-      };
-    }
-    if (source.locatorClass === 'cursor-agent-transcript-jsonl') {
-      const normalized = normalizeAgentTranscript(input.records, source.locator);
-      return {
-        schemaVersion,
-        consistency: normalized.complete && !input.incompleteTail ? 'complete' : 'provisional',
-        records: normalized.records,
       };
     }
     throw new SessionContractError('UNSUPPORTED_OPERATION', 'unsupported Cursor source class');
@@ -514,17 +500,6 @@ function messageText(value: unknown): string {
     if (typeof block.content === 'string') return block.content;
     return '';
   }).filter(Boolean).join('\n');
-}
-
-function declaredVersion(records: BoundedJsonRecord[]): string {
-  const versions = new Set(records.map((line) => {
-    const value = asObject(line.value);
-    return typeof value.schemaVersion === 'string' ? value.schemaVersion : CURSOR_SOURCE_SCHEMA_VERSION;
-  }));
-  if (versions.size !== 1) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'Cursor source declares mixed schema versions', schemaIssueDetail('schemaVersion'));
-  }
-  return [...versions][0];
 }
 
 function declaredEventVersion(event: { schemaVersion?: string }): string {

@@ -23,6 +23,7 @@ import { createSessionAdapterRegistry } from './adapter-registry.js';
 import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
 import { fingerprintSourceFile, streamJsonLines } from './readers.js';
 import { matchSessionWorkspace, type WorkspaceMatchKind } from './workspace-matching.js';
+import { matchImportExclusion, nativeSessionIdFromLocator, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
 
 export const DISCOVERY_MANIFEST_VERSION = '1.0.0' as const;
 
@@ -42,6 +43,9 @@ export interface DiscoveryManifestSource {
   modifiedAt: string;
   sizeBytes: number;
   digest: string;
+  nativeSessionId?: string;
+  status?: 'excluded';
+  exclusion?: SourceExclusion;
 }
 
 export interface DiscoveryProviderReport {
@@ -84,6 +88,8 @@ export interface SessionDiscoveryManifest {
 
 export interface DiscoverWorkspaceOptions {
   workspace: string;
+  exclude?: string[];
+  knownSources?: readonly DiscoveryManifestSource[];
   /** Logical paths to the same canonical workspace, used for provider project keys. */
   workspaceAliases?: readonly string[];
   expectedProviders?: readonly string[];
@@ -116,6 +122,7 @@ export async function discoverWorkspaceHistories(
   options: DiscoverWorkspaceOptions,
 ): Promise<SessionDiscoveryManifest> {
   const registry = options.registry ?? createSessionAdapterRegistry();
+  const exclusions = resolveImportExclusions(undefined, options.exclude);
   const expectedProviders = expectedSessionProviders(options.expectedProviders ?? SESSION_PROVIDER_IDS);
   const supportedProviders = new Set(registry.list().map((adapter) => adapter.provider));
   const workspacePath = await canonicalPath(options.workspace);
@@ -251,6 +258,27 @@ export async function discoverWorkspaceHistories(
     let matchedByWorktree = 0;
     const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
     for await (const descriptor of adapter.discover(scope)) {
+      const known = options.knownSources?.find(source => source.provider === descriptor.provider && source.locator === descriptor.locator);
+      const nativeSessionId = known?.nativeSessionId ?? descriptor.nativeSessionId ?? nativeSessionIdFromLocator(descriptor);
+      const exclusion = matchImportExclusion({ ...descriptor, nativeSessionId }, exclusions);
+      if (exclusion) {
+        const locator = resolve(descriptor.locator);
+        const authorizedRoot = scope.allowedRoots.find(root => locator === root || locator.startsWith(`${root}/`));
+        if (!authorizedRoot) continue;
+        const key = `excluded\0${entry.provider}\0${locator}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const source: DiscoveryManifestSource = {
+          sourceId: known?.sourceId ?? sha256(key), provider: entry.provider,
+          locator, redactedLocator: redactSourceLocator(locator), locatorClass: descriptor.locatorClass,
+          authorizedRoot, modifiedAt: '', sizeBytes: 0, digest: '', nativeSessionId,
+          status: 'excluded', exclusion,
+        };
+        rootCounts.get(authorizedRoot)!.sourceCount += 1;
+        providerSources.push(source);
+        candidates.push(source);
+        continue;
+      }
       let workspaceMatch: WorkspaceMatchKind | null = null;
       if (entry.provider === 'muse') {
         const inspection = await inspectMuseNativeWorkspace({
@@ -309,6 +337,7 @@ export async function discoverWorkspaceHistories(
         details,
         fingerprint.digest,
       );
+      source.nativeSessionId = rolloutId ?? ompHeader?.id ?? nativeSessionId;
       if (ompHeader) source.sourceId = sha256(['omp-native-source-v1', workspaceId, ompHeader.id].join('\0'));
       if (entry.provider === 'grokbot') {
         // The replica is rewritten wholesale as its sliding window evicts
@@ -394,6 +423,8 @@ export async function discoverWorkspaceHistories(
       modifiedAt: source.modifiedAt,
       sizeBytes: source.sizeBytes,
       digest: source.digest,
+      ...(source.nativeSessionId ? { nativeSessionId: source.nativeSessionId } : {}),
+      ...(source.status ? { status: source.status, exclusion: source.exclusion } : {}),
     })),
     providers: providers.map((provider) => ({
       provider: provider.provider,
@@ -465,6 +496,7 @@ export function publicDiscoveryManifest(manifest: SessionDiscoveryManifest): Rec
     totals: {
       providers: manifest.providers.length,
       sources: manifest.sources.length,
+      excluded: manifest.sources.filter(source => source.status === 'excluded').length,
       matchedBySubfolder: manifest.providers.reduce((sum, provider) => sum + (provider.matchedBySubfolder ?? 0), 0),
       matchedByWorktree: manifest.providers.reduce((sum, provider) => sum + (provider.matchedByWorktree ?? 0), 0),
     },
@@ -501,7 +533,7 @@ function providerReport(
   reasonCode: string | null,
   remediation: string | null,
 ): DiscoveryProviderReport {
-  const timestamps = sources.map((source) => source.modifiedAt).sort();
+  const timestamps = sources.map((source) => source.modifiedAt).filter(Boolean).sort();
   return {
     provider,
     status,
@@ -533,6 +565,8 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
       modifiedAt: source.modifiedAt,
       sizeBytes: source.sizeBytes,
       digest: source.digest,
+      ...(source.nativeSessionId ? { nativeSessionId: source.nativeSessionId } : {}),
+      ...(source.status ? { status: source.status, exclusion: source.exclusion } : {}),
     })),
     providers: manifest.providers.map((provider) => ({
       provider: provider.provider,

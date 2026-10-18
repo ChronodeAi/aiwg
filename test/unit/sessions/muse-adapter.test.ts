@@ -1,9 +1,10 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import {
   mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MUSE_ADAPTER_VERSION,
   MUSE_EXPORT_SCHEMA_VERSION,
@@ -42,6 +43,25 @@ async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('Muse Code session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new MuseSessionAdapter();
+      const selection = selectedPath(resolve(fixturesRoot, 'native/2026/09/25/00000000-0000-4000-8000-000000000002/session.jsonl'), 'muse-streaming', resolve(fixturesRoot, 'native'));
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new MuseSessionAdapter();
   const temporaryRoots: string[] = [];
 
