@@ -54,6 +54,49 @@ describe('sessions CLI contracts', () => {
     expect(handlers.get('sessions')).toBe(sessionsHandler);
   });
 
+  it.each([
+    { args: ['sources', '--json'], exitCode: 0 },
+    { args: ['discover', '--json'], exitCode: 2 },
+    { args: ['sources', '--limit', '--json'], exitCode: 2 },
+    { args: ['--json'], exitCode: 2 },
+    { args: ['--help', '--json'], exitCode: 0 },
+  ])('waits for stdout before returning JSON for $args', async ({ args, exitCode }) => {
+    let flush: (() => void) | undefined;
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk, callback: any) => {
+      flush = callback;
+      return false;
+    });
+    let completed = false;
+    const pending = sessionsHandler.execute(context(args)).then((result) => {
+      completed = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(flush).toBeTypeOf('function'));
+    expect(completed).toBe(false);
+    flush!();
+    expect((await pending).exitCode).toBe(exitCode);
+    expect(completed).toBe(true);
+    expect(jsonOutput(log).contractVersion).toBe('1.0.0');
+  });
+
+  it('waits for stdout when JSON help is called directly', async () => {
+    let flush: (() => void) | undefined;
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk, callback: any) => {
+      flush = callback;
+      return false;
+    });
+    let completed = false;
+    const pending = sessionsHandler.help!(context(['--help', '--json'])).then((result) => {
+      completed = true;
+      return result;
+    });
+    expect(completed).toBe(false);
+    expect(flush).toBeTypeOf('function');
+    flush!();
+    expect((await pending).exitCode).toBe(0);
+    expect(jsonOutput(log).command).toBe('sessions.help');
+  });
+
   it('documents workspace selection, catalog overrides and native IDs in help', async () => {
     expect((await sessionsHandler.execute(context(['--help', '--json']))).exitCode).toBe(0);
     const usage = jsonOutput(log).data.usage;
