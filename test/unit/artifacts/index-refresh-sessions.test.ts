@@ -49,11 +49,17 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function saveAuthorization(): Promise<void> {
+async function saveAuthorization(file = defaultDiscoveryManifestPath(workspace), providerRoot = authorized): Promise<void> {
   const manifest = await discoverWorkspaceHistories({
-    workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [providerRoot] },
   });
-  await writeDiscoveryManifest(defaultDiscoveryManifestPath(workspace), manifest);
+  await writeDiscoveryManifest(file, manifest);
+}
+
+function configureManifests(files: string[]): void {
+  fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+    sessions: { discovery_manifests: files },
+  }));
 }
 
 describe('session refresh integration boundaries', () => {
@@ -86,6 +92,66 @@ describe('session refresh integration boundaries', () => {
     expect(mocks.importBatch).not.toHaveBeenCalled();
     expect(mocks.close).not.toHaveBeenCalled();
     expect(fs.existsSync(defaultDiscoveryManifestPath(workspace))).toBe(false);
+  });
+
+  it('refreshes a configured non-default manifest without creating a default manifest', async () => {
+    const saved = path.join(root, 'custom-manifest.json');
+    await saveAuthorization(saved);
+    configureManifests([saved]);
+    fs.writeFileSync(path.join(authorized, 'two.jsonl'), JSON.stringify({
+      type: 'user', sessionId: 'two', cwd: workspace, message: { role: 'user', content: 'second' },
+    }) + '\n');
+    mocks.importBatch.mockImplementationOnce(async ({ manifest }) => {
+      expect(fs.existsSync(`${database}.import.lock`)).toBe(true);
+      expect(await readDiscoveryManifest(saved)).toEqual(manifest);
+      expect(manifest.sources).toHaveLength(2);
+      return { totals: { rejected: 0, pending: 0 } };
+    });
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBeUndefined();
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+    expect(fs.existsSync(defaultDiscoveryManifestPath(workspace))).toBe(false);
+  });
+
+  it('refreshes default and configured manifests once each with workspace-relative paths', async () => {
+    await saveAuthorization();
+    const otherRoot = path.join(root, 'other-authorized');
+    fs.mkdirSync(otherRoot);
+    fs.writeFileSync(path.join(otherRoot, 'two.jsonl'), JSON.stringify({
+      type: 'user', sessionId: 'two', cwd: workspace, message: { role: 'user', content: 'second' },
+    }) + '\n');
+    const saved = path.join(workspace, 'custom.json');
+    await saveAuthorization(saved, otherRoot);
+    configureManifests(['custom.json', saved, defaultDiscoveryManifestPath(workspace)]);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBeUndefined();
+    expect(mocks.importBatch).toHaveBeenCalledTimes(2);
+    expect(mocks.importBatch.mock.calls.map(([{ manifest }]) => manifest.authorizedRoots))
+      .toEqual([{ claude: [authorized] }, { claude: [otherRoot] }]);
+
+    mocks.importBatch.mockClear();
+    mocks.prior.mockReturnValueOnce({ status: 'complete' }).mockReturnValue(null);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBeUndefined();
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+    expect(mocks.importBatch.mock.calls[0][0].manifest.authorizedRoots).toEqual({ claude: [otherRoot] });
+  });
+
+  it('reports no manifest when configured files and the default are missing', async () => {
+    configureManifests(['missing.json']);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBe('no authorized discovery manifest');
+    expect(mocks.importBatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a configured manifest belonging to another workspace before importing any batch', async () => {
+    await saveAuthorization();
+    const other = path.join(root, 'other');
+    fs.mkdirSync(other);
+    const manifest = await discoverWorkspaceHistories({
+      workspace: other, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    });
+    const saved = path.join(root, 'wrong-workspace.json');
+    await writeDiscoveryManifest(saved, manifest);
+    configureManifests([saved]);
+    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow('discovery manifest workspace mismatch');
+    expect(mocks.importBatch).not.toHaveBeenCalled();
   });
 
   it('rejects a saved root redirected through a symlink without importing', async () => {

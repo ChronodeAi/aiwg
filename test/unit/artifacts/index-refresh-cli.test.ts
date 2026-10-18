@@ -5,6 +5,13 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { main } from '../../../src/artifacts/cli.js';
 import { run } from '../../../src/cli/router.js';
+import { SessionRepository } from '../../../src/sessions/repository.js';
+
+vi.mock('../../../tools/scripts/resource-preflight.mjs', () => ({
+  resolveDispatchThresholds: () => ({}),
+  readLiveHostResources: () => ({}),
+  evaluateDispatchGate: () => ({ ok: true, failures: [] }),
+}));
 
 let root: string;
 let output: ReturnType<typeof vi.spyOn>;
@@ -29,6 +36,35 @@ afterEach(() => {
 });
 
 describe('index refresh CLI routing', () => {
+  it('prints a workspace-specific discovery remedy and reports noManifest counts in JSON', async () => {
+    const workspaces = [root, path.join(root, 'other')];
+    for (const workspace of workspaces) {
+      fs.mkdirSync(path.join(workspace, '.aiwg/sessions'), { recursive: true });
+      const repository = new SessionRepository(path.join(workspace, '.aiwg/sessions/catalog.sqlite'));
+      repository.close();
+    }
+    fs.writeFileSync(path.join(root, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { discovery_manifests: ['missing.json'] },
+    }));
+    const args = ['refresh', '--only', 'sessions', ...workspaces.flatMap(workspace => ['--workspace', workspace])];
+    await main(args);
+    const text = output.mock.calls.map(call => call[0]).join('\n');
+    for (const workspace of workspaces) {
+      expect(text).toContain(`Session refresh skipped for ${workspace}`);
+      expect(text).toContain(`aiwg sessions discover --workspace '${workspace}'`);
+    }
+    output.mockClear();
+    await main([...args, '--json']);
+    expect(output).toHaveBeenCalledOnce();
+    const report = JSON.parse(output.mock.calls[0][0]);
+    expect(report).toMatchObject({ status: 'partial', totals: { noManifest: 2, skipped: 2, errors: 0 } });
+    expect(report.jobs).toEqual(workspaces.sort().map(workspace => expect.objectContaining({
+      kind: 'sessions', workspace, noManifest: 1, reason: 'no authorized discovery manifest',
+    })));
+    expect(report.messages).toHaveLength(2);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
   it('dispatches refresh through the artifact CLI and exposes the refresh flags in help', async () => {
     await main(['refresh', '--workspace', root, '--dry-run', '--json']);
     expect(output).toHaveBeenCalledOnce();

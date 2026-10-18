@@ -232,6 +232,22 @@ Use `--only graphs|sessions|caches`
 to narrow the work or `--dry-run` to inspect the plan without writes. Missing
 SQLite support skips sessions with `aiwg features install sqlite` as the remedy.
 
+Incremental session refresh reads the workspace's default discovery manifest and
+every path in `sessions.discovery_manifests` in `.aiwg/aiwg.config`. List custom
+manifests there, including those saved with `aiwg sessions discover --manifest`:
+
+```json
+{ "sessions": { "discovery_manifests": ["./exports/discovery.json", "/archive/home-discovery.json"] } }
+```
+
+Paths are workspace-relative or absolute. Each manifest must belong to the
+selected workspace; refresh scans only its saved authorized roots and updates
+that manifest under the catalog import lease. If none of the manifests exists,
+`messages` includes a workspace-specific `aiwg sessions discover --workspace`
+remedy. JSON session jobs include `noManifest` (1 when missing, otherwise 0),
+and `totals.noManifest` counts affected workspaces. These checks apply to existing
+catalogs during incremental runs; `--full` reindexes without discovery.
+
 A host lease prevents overlapping runs; `--lock-wait-ms <n>` optionally waits
 (default: zero). A same-host dead PID lease is reclaimed. Checkpoints in
 `$XDG_STATE_HOME/aiwg` (default `~/.local/state/aiwg`) resume matching interrupted

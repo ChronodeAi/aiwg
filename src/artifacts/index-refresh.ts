@@ -34,6 +34,7 @@ export interface RefreshJob {
   wallMs: number;
   reason?: string;
   error?: string;
+  noManifest?: number;
 }
 
 export interface RefreshReport {
@@ -44,7 +45,7 @@ export interface RefreshReport {
   reason?: string;
   messages: string[];
   jobs: RefreshJob[];
-  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; wallMs: number };
+  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; wallMs: number };
 }
 
 interface Checkpoint {
@@ -142,7 +143,7 @@ export function planIndexRefresh(options: RefreshOptions): RefreshJob[] {
         }
       }
       if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
-        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0 });
+        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0, noManifest: 0 });
       }
     }
     return jobs;
@@ -230,6 +231,7 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
     if (reason) {
       job.status = 'skipped';
       job.reason = reason;
+      job.noManifest = reason === 'no authorized discovery manifest' ? 1 : 0;
       return;
     }
   }
@@ -249,15 +251,20 @@ export async function refreshIndexes(
   const report: RefreshReport = {
     contractVersion: '1.0.0', command: 'index.refresh', status: 'ok',
     mode: options.full ? 'full' : 'incremental', jobs, messages: [],
-    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, wallMs: 0 },
+    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, wallMs: 0 },
   };
   const finish = () => {
+    for (const job of jobs.filter(job => job.noManifest)) {
+      const command = `aiwg sessions discover --workspace '${job.workspace.replace(/'/g, "'\\''")}'`;
+      report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);
+    }
     report.totals = {
       jobs: jobs.length,
       ok: jobs.filter(job => job.status === 'ok').length,
       skipped: jobs.filter(job => job.status === 'skipped').length,
       deferred: jobs.filter(job => job.status === 'deferred').length,
       errors: jobs.filter(job => job.status === 'error').length,
+      noManifest: jobs.reduce((sum, job) => sum + (job.noManifest ?? 0), 0),
       wallMs: Date.now() - start,
     };
     return report;
@@ -321,7 +328,8 @@ export async function refreshIndexes(
       } finally {
         job.wallMs = Date.now() - jobStart;
       }
-      if (job.status !== 'error' && job.reason !== 'graph failed') checkpoint.completed.push(key);
+      if (job.status !== 'error' && job.reason !== 'graph failed'
+        && job.reason !== 'no authorized discovery manifest') checkpoint.completed.push(key);
       writeJson(checkpointPath, checkpoint);
       dependencies.afterJob?.(job, checkpoint.completed.length);
     }
@@ -375,7 +383,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
     const report: RefreshReport = {
       contractVersion: '1.0.0', command: 'index.refresh', status: 'error', mode: options.full ? 'full' : 'incremental',
       jobs: [], messages: [error instanceof Error ? error.message : String(error)],
-      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, wallMs: 0 },
+      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, noManifest: 0, wallMs: 0 },
     };
     console.log(json ? JSON.stringify(report, null, 2) : `Index refresh: error: ${report.messages[0]}`);
     process.exitCode = 1;

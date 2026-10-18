@@ -7,6 +7,7 @@ import { acquireDirectoryLock } from '../../../src/artifacts/prebuilt-build-lock
 import { getGraphIndexDir, loadUserGraphConfigs } from '../../../src/artifacts/types.js';
 import { syncFortemiCoreIndex } from '../../../src/artifacts/fortemi-core-sync.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
+import { SessionRepository } from '../../../src/sessions/repository.js';
 
 let root: string;
 let workspace: string;
@@ -55,6 +56,53 @@ afterEach(() => {
 });
 
 describe('index refresh', () => {
+  it('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
+    const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
+    fs.mkdirSync(path.dirname(database), { recursive: true });
+    new SessionRepository(database).close();
+    const files = ['first.json', 'second.json'];
+    for (const [index, file] of files.entries()) {
+      const authorized = path.join(root, `authorized-${index}`);
+      write(path.join(authorized, 'one.jsonl'), JSON.stringify({
+        type: 'user', sessionId: `one-${index}`, cwd: workspace, message: { role: 'user', content: 'hello' },
+      }) + '\n');
+      const manifest = await discoverWorkspaceHistories({
+        workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+      });
+      await writeDiscoveryManifest(path.join(workspace, file), manifest);
+    }
+    write(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { discovery_manifests: files } }));
+    const first = await refreshIndexes({ cwd: workspace, only: 'sessions' }, admitted);
+    expect(first).toMatchObject({ status: 'ok', totals: { ok: 1, noManifest: 0, errors: 0 } });
+    const repository = new SessionRepository(database);
+    try {
+      expect(repository.listSessions({ workspaceId: workspace, limit: 10 }).total).toBe(2);
+    } finally { repository.close(); }
+    const second = await refreshIndexes({ cwd: workspace, only: 'sessions' }, admitted);
+    expect(second.jobs).toEqual([expect.objectContaining({ status: 'skipped', reason: 'unchanged', noManifest: 0 })]);
+    expect(second.messages).toEqual([]);
+    expect(fs.existsSync(path.join(workspace, '.aiwg/sessions/discovery-manifest.json'))).toBe(false);
+  });
+
+  it('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
+    const other = path.join(root, 'zz-other');
+    config(other);
+    for (const ws of [workspace, other]) {
+      const database = path.join(ws, '.aiwg/sessions/catalog.sqlite');
+      fs.mkdirSync(path.dirname(database), { recursive: true });
+      new SessionRepository(database).close();
+    }
+    write(path.join(other, '.aiwg/sessions/discovery-manifest.json'), '{}');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const report = await refreshIndexes({ workspaces: [workspace, other], only: 'sessions' }, admitted);
+      expect(report).toMatchObject({ status: 'partial', totals: { noManifest: 1, errors: 1 } });
+      expect(report.messages).toHaveLength(1);
+      expect(report.messages[0]).toContain(`aiwg sessions discover --workspace '${workspace}'`);
+      expect(report.jobs[0]).toMatchObject({ workspace, noManifest: 1, reason: 'no authorized discovery manifest' });
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8')).completed).toEqual([]);
+    }
+  });
+
   it('plans ordered default, configured, built, cache, and existing session jobs without writes', async () => {
     config(workspace, {
       refs: { scanDirs: ['refs'], defaultBuild: false, buildTier: 'lightweight' },
