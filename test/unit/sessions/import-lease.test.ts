@@ -57,7 +57,7 @@ describe('session import lease', () => {
       });
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(async () => {
-        expect(JSON.parse(await readFile(ownerPath, 'utf8'))).toEqual({
+        expect(JSON.parse(await readFile(ownerPath, 'utf8'))).toMatchObject({
           contractVersion: '1.0.0', runId: 'heartbeat-run', pid: process.pid,
           host: hostname(), startedAt: dates[0], heartbeatAt: dates[1],
         });
@@ -160,6 +160,119 @@ describe('session import lease', () => {
     } finally {
       await recovered.release();
     }
+  });
+
+  it('immediately reclaims a dead local owner with a fresh heartbeat', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-session-dead-lease-'));
+    roots.push(root);
+    const database = join(root, 'catalog.sqlite');
+    const lock = importLeasePath(database);
+    const timestamp = new Date().toISOString();
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify({
+      contractVersion: '1.0.0', runId: 'dead-run', pid: 424242,
+      host: hostname(), startedAt: timestamp, heartbeatAt: timestamp,
+    }));
+    const recovered = await acquireImportLease(database, 'recovered', {
+      waitMs: 0, processAlive: () => false,
+    });
+    try {
+      expect(recovered.owner.runId).toBe('recovered');
+    } finally {
+      await recovered.release();
+    }
+  });
+
+  it.each([
+    ['different-boot:200', true],
+    ['boot:200', true],
+    ['boot:100', false],
+    [null, false],
+  ] as const)('guards PID reuse with observed process identity %s', async (currentId, recoverable) => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-session-pid-reuse-'));
+    roots.push(root);
+    const database = join(root, 'catalog.sqlite');
+    const lock = importLeasePath(database);
+    const timestamp = new Date().toISOString();
+    const owner = {
+      contractVersion: '1.0.0', runId: 'original', pid: 424242,
+      host: hostname(), startedAt: timestamp, heartbeatAt: timestamp,
+      processStartId: 'boot:100',
+    };
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify(owner));
+    const acquiring = acquireImportLease(database, 'contender', {
+      waitMs: 0, processAlive: () => true,
+      processStartId: async (pid) => pid === process.pid ? 'boot:self' : currentId,
+    });
+    if (recoverable) {
+      const lease = await acquiring;
+      try {
+        expect(lease.owner.processStartId).toBe('boot:self');
+      } finally {
+        await lease.release();
+      }
+    } else {
+      await expect(acquiring).rejects.toMatchObject({ code: 'IMPORT_LOCKED', owner });
+      expect(JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8'))).toEqual(owner);
+    }
+  });
+
+  it.each([
+    ['ESRCH', true],
+    ['EPERM', false],
+    ['EIO', false],
+  ] as const)('requires confirmed process absence when probing returns %s', async (code, recoverable) => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-session-process-probe-'));
+    roots.push(root);
+    const database = join(root, 'catalog.sqlite');
+    const lock = importLeasePath(database);
+    const timestamp = new Date().toISOString();
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify({
+      contractVersion: '1.0.0', runId: 'original', pid: 424242,
+      host: hostname(), startedAt: timestamp, heartbeatAt: timestamp,
+    }));
+    const probe = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('process probe failed'), { code });
+    });
+    try {
+      const acquiring = acquireImportLease(database, 'contender', { waitMs: 0 });
+      if (recoverable) {
+        const lease = await acquiring;
+        await lease.release();
+      } else {
+        await expect(acquiring).rejects.toMatchObject({ code: 'IMPORT_LOCKED' });
+      }
+      expect(probe).toHaveBeenCalledWith(424242, 0);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it('preserves an owner whose process identity changes during recovery confirmation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-session-confirm-owner-'));
+    roots.push(root);
+    const database = join(root, 'catalog.sqlite');
+    const lock = importLeasePath(database);
+    const timestamp = new Date().toISOString();
+    const owner = {
+      contractVersion: '1.0.0', runId: 'original', pid: 424242,
+      host: hostname(), startedAt: timestamp, heartbeatAt: timestamp,
+      processStartId: 'boot:100',
+    };
+    const replacement = { ...owner, processStartId: 'boot:200' };
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner.json'), JSON.stringify(owner));
+    await expect(acquireImportLease(database, 'contender', {
+      waitMs: 0, processAlive: () => true,
+      processStartId: async (pid) => {
+        if (pid === process.pid) return 'boot:self';
+        await writeFile(join(lock, 'owner.json'), JSON.stringify(replacement));
+        return 'boot:200';
+      },
+    })).rejects.toMatchObject({ code: 'IMPORT_LOCKED' });
+    expect(JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8'))).toEqual(replacement);
   });
 
   it('preserves a stale local lease when its process is confirmed alive', async () => {

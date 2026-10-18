@@ -977,6 +977,16 @@ export async function runDoctor() {
     versionInfo = await getVersionInfo();
     const channelLabel = versionInfo.channel !== 'stable' ? ` [${versionInfo.channel}]` : '';
     check('AIWG Version', 'ok', `${versionInfo.version}${channelLabel}`);
+    if (versionInfo.launcherVersion && versionInfo.runtimeVersion) {
+      const message = `launcher ${versionInfo.launcherVersion}; runtime ${versionInfo.runtimeVersion} at ${versionInfo.runtimePath}`;
+      if (versionInfo.launcherVersion === '(unknown)' || versionInfo.runtimeVersion === '(unknown)') {
+        check('Launcher/Runtime Versions', 'warn', `Could not determine both versions: ${message}`);
+      } else if (versionInfo.launcherVersion !== versionInfo.runtimeVersion) {
+        check('Launcher/Runtime Versions', 'warn', `Version skew: ${message}`);
+      } else {
+        check('Launcher/Runtime Versions', 'ok', message);
+      }
+    }
   } catch {
     try {
       const [file, args] = cliCommand('aiwg', ['-version']);

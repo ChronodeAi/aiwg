@@ -76,6 +76,7 @@ aiwg sessions discover --workspace <path>
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
                                 [--manifest <path>] [--confirm|--yes]
+                                [--expected-providers <comma-separated-ids>]
                                 [--resume] [--lock-wait-ms <n>]
                                 [--dry-run] [--json]
 aiwg sessions import <file> --source-id <id> [--workspace <id>] [--dry-run] [--json]
@@ -228,16 +229,32 @@ failed process leaves a resumable run; repeat `import-discovered --resume
 --confirm` to process only incomplete or rejected sources. Repeated resume is
 idempotent.
 
+Batch receipts and newly saved runs use schema `2.0.0`. A finished run reports
+`run.status: complete` when all discovered sources were accepted (including
+duplicates and previously committed sources), even if other providers are
+unavailable or require exports. Rejected or skipped sources make the run
+`partial`; pending work leaves it `interrupted`. An empty manifest completes
+acquisition unless an explicitly expected provider remains unresolved.
+When discovery used `--expected-providers`, unresolved providers in that saved
+scope also make the run `partial`.
+
 Single and batch imports acquire `<catalog>.import.lock`. The lease records run
-ID, PID, host, start time, and heartbeat. A second writer waits up to
+ID, PID, host, start time, heartbeat, and (on Linux) boot ID and process start
+ticks to distinguish a reused PID. A second writer waits up to
 `--lock-wait-ms` (default 5000) and then returns `IMPORT_LOCKED` with safe owner
-metadata and recovery guidance. AIWG auto-recovers only a stale same-host lease
-whose process is confirmed dead; foreign-host ownership is never broken
-automatically. WAL readers remain available while an importer owns the lease.
+metadata and recovery guidance. A same-host lease is reclaimed immediately when
+its process is confirmed dead or its recorded process identity no longer matches.
+Live or unverifiable owners and foreign-host leases are never broken automatically.
+After acquiring the lease, either import command marks orphaned `running` batch
+runs as `interrupted` and records `interruptedAt` (the recovery timestamp). The
+batch receipt's `interruptedRuns` lists their run IDs and timestamps; single-source
+imports report the same list beside `receipts`. A resumed batch retains
+`run.interruptedAt` after completion. WAL readers remain available while an
+importer owns the lease.
 
 ## Coverage and timeline
 
-`list` and `timeline` include coverage schema `1.0.0`. Coverage distinguishes
+`list` and `timeline` include coverage schema `2.0.0`. Coverage distinguishes
 checked, unavailable, export-required, and not-checked providers and reconciles
 discovered, accepted, rejected, skipped, duplicate, previously committed, and
 pending sources. It also reports event/session totals, source/import date
@@ -245,13 +262,19 @@ ranges, manifest age, stable rejection counts, and remediation commands.
 Status is `complete`, `partial`, `stale`, or `unknown`. The independent
 `acquisitionStatus` is `complete`, `partial`, or `unknown`; database/index health
 is reported separately by `doctor`, and semantic review is `not-assessed`.
+`coverage.unresolvedProviders` lists provider gaps independently of acquisition.
+`coverage.status` retains the broader provider/runtime coverage assessment and
+manifest freshness, so it can remain `partial` or `stale` after a complete
+acquisition. Installation drift affects that coverage assessment independently
+of source acquisition.
 
 Use `--expected-providers claude,codex,muse` on `sources` and `discover` to declare
 the authorized investigation scope independently of the running adapter registry.
 Unknown provider IDs are retained as `missing-adapter` entries, not discarded.
-Without this flag the declared canonical provider set is inventoried, but complete
-acquisition requires an explicit set. Supplying the flag on `import-discovered`
-must match the saved scope; changing it requires new discovery.
+Without this flag the declared canonical provider set is inventoried; unresolved
+providers remain visible without making source acquisition partial. Supplying
+the flag on `import-discovered` must match the saved scope; changing it requires
+new discovery.
 
 `preflight` records expected/supported sets, runtime version, loaded package root,
 executable and installation identity, plus one coverage disposition per expected
@@ -259,10 +282,14 @@ provider. The manifest identity binds this preflight; batch runs retain discover
 runtime identity and recheck the current import runtime. Missing adapters or
 installation drift require deliberate runtime selection or a supported authorized
 export, never an automatic upgrade or source switch. Old manifests remain readable
-but cannot prove complete coverage without a new explicit preflight.
+but cannot prove complete provider coverage without a new explicit preflight.
+Stored `1.0.0` runs remain readable; coverage is calculated using the `2.0.0`
+semantics, and replay saves the run with the new version.
 
 Unavailable/unauthorized roots, missing exports, zero sources, empty/rejected
-imports and omitted scope keep acquisition partial. Muse's explicit `--muse-root`
+imports and omitted scope remain provider coverage gaps. They keep acquisition
+partial when those providers are explicitly expected; rejected, pending or
+skipped sources always keep acquisition partial. Muse's explicit `--muse-root`
 discovery covers matching parent logs only: nested subagent logs and full
 approval-review scope remain unresolved even when parent import succeeds. A source
 coverage ratio of 1 does not establish complete provider or session-tree coverage.

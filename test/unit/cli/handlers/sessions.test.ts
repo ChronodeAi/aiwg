@@ -631,6 +631,41 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('lists an imported provisional session as inactive after 24 hours without re-import', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    try {
+      const transcript = resolve(root, 'active.jsonl');
+      writeFileSync(transcript, JSON.stringify({
+        type: 'user', uuid: 'event-active', sessionId: 'session-active', cwd: root,
+        timestamp: now.toISOString(),
+        message: { role: 'user', content: 'Synthetic request.' },
+      }) + '\n');
+      const scope = ['--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+      expect((await sessionsHandler.execute(context([
+        'import', transcript, '--provider', 'claude', '--source-id', 'active-source', ...scope,
+      ], root))).exitCode).toBe(0);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'active',
+      }]);
+
+      vi.setSystemTime(now.getTime() + 24 * 60 * 60 * 1_000 + 1);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'inactive',
+        extensions: {
+          'native.claude': {
+            lifecycleEvidence: { basis: 'inactivity-threshold', state: 'inactive' },
+          },
+        },
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   async function importOtherWorkspace(nativeId = '00000000-0000-4000-8000-000000002820') {
     const project = resolve(root, 'project');
     const other = resolve(root, 'other');
@@ -1103,6 +1138,34 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
       });
     } finally {
       await lease.release();
+    }
+  });
+
+  it('records orphaned batch recovery on a single-source import and leaves previews read-only', async () => {
+    const database = resolve(root, 'orphaned-batch.sqlite');
+    const timestamp = '2026-10-01T00:00:00.000Z';
+    const repository = new SessionRepository(database);
+    try {
+      repository.saveBatchImportRun({
+        schemaVersion: '1.0.0', runId: 'orphan', manifestId: 'manifest',
+        manifestCreatedAt: timestamp, workspaceId: 'workspace-fixture', status: 'running',
+        startedAt: timestamp, updatedAt: timestamp, completedAt: null,
+        providers: [], sources: [],
+      });
+      const args = ['import', resolve('test/fixtures/sessions/generic/valid-v1.jsonl'),
+        '--source-id', 'generic-fixture-v1', '--workspace', 'workspace-fixture',
+        '--db', database, '--json'];
+      expect((await sessionsHandler.execute(context([...args, '--dry-run']))).exitCode).toBe(0);
+      expect(repository.getBatchImportRun('orphan')?.status).toBe('running');
+      expect((await sessionsHandler.execute(context(args))).exitCode).toBe(0);
+      const interruptedRuns = jsonOutput(log).data.interruptedRuns;
+      expect(interruptedRuns).toEqual([{ runId: 'orphan', interruptedAt: expect.any(String) }]);
+      expect(repository.getBatchImportRun('orphan')).toMatchObject({
+        status: 'interrupted', updatedAt: interruptedRuns[0].interruptedAt,
+        interruptedAt: interruptedRuns[0].interruptedAt, completedAt: null,
+      });
+    } finally {
+      repository.close();
     }
   });
 

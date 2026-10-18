@@ -12,6 +12,22 @@ export const MUSE_WORKSPACE_SCAN_LIMITS: Readonly<ReaderLimits> = Object.freeze(
   maxNestingDepth: 64,
 });
 
+export const MUSE_WORKSPACE_TAIL_BYTES = 1024 * 1024;
+
+export class MuseWorkspaceLimitError extends SessionContractError {
+  constructor(
+    public readonly limitName: keyof ReaderLimits,
+    public readonly limitValue: number,
+    observed: number,
+  ) {
+    super(
+      'RESOURCE_LIMIT_EXCEEDED',
+      `Muse workspace inspection exceeded ${limitName}=${limitValue}`,
+      { limit: limitName, configured: limitValue, observed },
+    );
+  }
+}
+
 export interface MuseScanProgress {
   recordsInspected: number;
   bytesInspected: number;
@@ -21,12 +37,16 @@ export async function* museWorkspaceScanLines(
   authorization: SourceAuthorization,
   limits: ReaderLimits,
   progress: MuseScanProgress,
+  tailBytes?: number,
 ): AsyncGenerator<unknown> {
   const allowed = await authorizeSourceFile(authorization);
   const handle = await open(allowed.canonicalPath, 'r');
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    let position = 0;
+    let position = tailBytes === undefined ? 0 : Math.max(0, allowed.size - tailBytes);
+    // A tail window may start inside a record (or a UTF-8 code point).
+    // Discard that fragment before parsing any complete JSONL records.
+    let skipPartialLine = position > 0;
     let parts: Buffer[] = [];
     let length = 0;
     while (position < allowed.size) {
@@ -44,6 +64,12 @@ export async function* museWorkspaceScanLines(
         const newline = buffer.indexOf(10, start);
         const end = newline >= 0 && newline < bytesRead ? newline + 1 : bytesRead;
         const segment = buffer.subarray(start, end);
+        if (skipPartialLine) {
+          progress.bytesInspected += segment.length;
+          start = end;
+          if (newline >= 0 && newline < bytesRead) skipPartialLine = false;
+          continue;
+        }
         if (length + segment.length > limits.maxRecordBytes) throw scanLimit('maxRecordBytes', limits.maxRecordBytes, length + segment.length);
         parts.push(Buffer.from(segment));
         length += segment.length;
@@ -114,10 +140,6 @@ export function parseMuseScanJson(line: string, maxDepth: number): unknown {
   return value;
 }
 
-function scanLimit(limit: string, configured: number, observed: number): SessionContractError {
-  return new SessionContractError(
-    'RESOURCE_LIMIT_EXCEEDED',
-    'bounded Muse workspace inspection limit exceeded',
-    { limit, configured, observed },
-  );
+function scanLimit(limit: keyof ReaderLimits, configured: number, observed: number): MuseWorkspaceLimitError {
+  return new MuseWorkspaceLimitError(limit, configured, observed);
 }

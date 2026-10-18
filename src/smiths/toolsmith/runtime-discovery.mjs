@@ -8,8 +8,9 @@
  */
 
 import { boundedExecFileSync, boundedExecSync } from '../../process/bounded-child-process.mjs';
-import { readFile, writeFile, mkdir, access } from 'fs/promises';
+import { readFile, writeFile, mkdir, access, stat } from 'fs/promises';
 import { existsSync, constants } from 'fs';
+import { createHash } from 'node:crypto';
 import { resolve, join, dirname } from 'path';
 import { platform, arch, homedir, tmpdir, cpus, totalmem, freemem } from 'os';
 import { fileURLToPath } from 'url';
@@ -28,20 +29,51 @@ export class RuntimeDiscovery {
   }
 
   /**
-   * Perform full discovery scan
+   * Refresh discovery, skipping version probes when inputs are unchanged.
    * @returns {Promise<Object>} RuntimeCatalog
    */
-  async discover() {
+  async discover({ force = false } = {}) {
     console.log('Starting runtime discovery...');
+
+    const loaded = await this.#loadCatalog().catch(error => {
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    });
+    const previous = Array.isArray(loaded?.tools) ? loaded : null;
+    const paths = new Map();
+    const inputs = [];
+    for (const name of this.#safeTools()) {
+      const toolPath = await this.#findToolPath(name);
+      paths.set(name, toolPath);
+      const metadata = toolPath ? await stat(toolPath).catch(() => null) : null;
+      inputs.push([name, toolPath, metadata && [metadata.mtimeMs, metadata.ctimeMs, metadata.size, metadata.mode]]);
+    }
+    const inputFingerprint = createHash('sha256').update(JSON.stringify([
+      1, this.knownTools, inputs, platform(), arch(), homedir(), process.cwd(),
+      process.env.PATH, process.env.PATHEXT, process.env.SHELL, process.env.ComSpec,
+    ])).digest('hex');
+    if (!force && previous?.inputFingerprint === inputFingerprint
+      && existsSync(join(this.basePath, 'runtime-info.md'))) {
+      console.log(`Discovery skipped: unchanged (${previous.tools.length} tools)`);
+      return previous;
+    }
 
     const environment = await this.getEnvironment();
     const resources = await this.getResources();
-    const tools = await this.#discoverTools();
+    const tools = await this.#discoverTools(paths);
+    const previousIds = new Set((previous?.tools || []).map(tool => tool.id));
+    const currentIds = new Set(tools.available.map(tool => tool.id));
+    const delta = {
+      added: [...currentIds].filter(id => !previousIds.has(id)),
+      removed: [...previousIds].filter(id => !currentIds.has(id)),
+    };
 
     const catalog = {
       $schema: 'https://aiwg.io/schemas/toolsmith/runtime-catalog-v1.json',
       version: '1.0',
       generated: new Date().toISOString(),
+      inputFingerprint,
+      delta,
       environment,
       resources,
       tools: tools.available,
@@ -53,6 +85,10 @@ export class RuntimeDiscovery {
     await this.#writeRuntimeInfo(catalog);
 
     console.log(`Discovery complete: ${catalog.tools.length} tools found`);
+    console.log(`Tool delta: +${delta.added.length} added, -${delta.removed.length} removed`);
+    if (delta.removed.length) {
+      console.warn(`Previously cataloged tools no longer available: ${delta.removed.join(', ')}`);
+    }
     return catalog;
   }
 
@@ -298,9 +334,9 @@ export class RuntimeDiscovery {
    * @see https://git.integrolabs.net/roctinam/aiwg/issues/820
    * @private
    */
-  async #discoverTools() {
+  #safeTools() {
     // Curated list: knownTools database + common dev tools safe to probe
-    const safeToProbe = new Set([
+    return new Set([
       // From knownTools database
       ...Object.keys(this.knownTools),
       // Aliases from knownTools
@@ -328,12 +364,13 @@ export class RuntimeDiscovery {
       'yq', 'fx', 'miller',
       'htop', 'ncdu', 'dust', 'procs', 'tokei',
     ]);
+  }
 
+  async #discoverTools(paths) {
     const available = [];
     const unavailable = [];
 
-    for (const name of safeToProbe) {
-      const toolPath = await this.#findToolPath(name);
+    for (const [name, toolPath] of paths) {
       if (!toolPath) {
         // Not installed — skip silently (not an error)
         continue;
@@ -359,7 +396,7 @@ export class RuntimeDiscovery {
   }
 
   /**
-   * Find tool path using which/where
+   * Search PATH first, then common user installation directories on Unix.
    * @private
    */
   async #findToolPath(toolName) {
@@ -370,8 +407,27 @@ export class RuntimeDiscovery {
         .split('\n')[0];
       return path;
     } catch {
-      return null;
+      // Scheduled jobs often omit user installation directories from PATH.
     }
+    if (platform() !== 'win32' && !toolName.includes('/') && !toolName.includes('\\')) {
+      const home = homedir();
+      const directories = new Set([
+        join(process.env.CARGO_HOME || join(home, '.cargo'), 'bin'),
+        join(home, '.local', 'bin'), join(home, 'bin'),
+        join(home, '.npm-global', 'bin'), join(home, 'go', 'bin'),
+        join(home, '.bun', 'bin'), join(home, '.deno', 'bin'),
+      ]);
+      for (const directory of directories) {
+        const candidate = join(directory, toolName);
+        try {
+          await access(candidate, constants.X_OK);
+          if ((await stat(candidate)).isFile()) return candidate;
+        } catch {
+          // Continue to the next user directory.
+        }
+      }
+    }
+    return null;
   }
 
   /**

@@ -1,9 +1,12 @@
+import { fork } from 'node:child_process';
 import {
   copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sessionsHandler } from '../../../src/cli/handlers/sessions.js';
 import {
   SessionRepository,
   CodexSessionAdapter,
@@ -11,6 +14,7 @@ import {
   importDiscoveryManifest,
   publicDiscoveryManifest,
   redactSourceLocator,
+  importLeasePath,
   readDiscoveryManifest,
   sha256,
   writeDiscoveryManifest,
@@ -18,6 +22,7 @@ import {
 import { itWithSqlite } from '../../helpers/sqlite.js';
 import { writeMuseLog } from '../../helpers/muse-native.js';
 import { createSessionWorktree } from '../../helpers/session-worktree.js';
+import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 
 const roots: string[] = [];
 
@@ -316,6 +321,77 @@ describe('workspace session discovery and batch import', () => {
     } finally { repository.close(); }
   });
 
+  it.each([
+    ['/tmp/x/site.example', '-tmp-x-site-example'],
+    ['/tmp/x/site example', '-tmp-x-site-example'],
+    ['/tmp/x/site_example', '-tmp-x-site-example'],
+    ['/tmp/x/site..__ example', '-tmp-x-site-----example'],
+    ['/tmp/aiwg-x.y_z with spaces/site.example', '-tmp-aiwg-x-y-z-with-spaces-site-example'],
+    ['C:\\Users\\Test User\\site.example', 'C--Users-Test-User-site-example'],
+    ['C:/Users/Test_User/site.example', 'C--Users-Test-User-site-example'],
+    ['/tmp/café/😀', '-tmp-caf----'],
+  ])('encodes the Claude project folder for %s', (workspace, expected) => {
+    expect(claudeProjectKey(workspace)).toBe(expected);
+  });
+
+  it('caps long Claude project keys at 200 characters with the original path hash', () => {
+    const boundary = `/${'a'.repeat(199)}`;
+    expect(claudeProjectKey(boundary)).toBe(`-${'a'.repeat(199)}`);
+    expect(claudeProjectKey(`/tmp/${'a'.repeat(210)}`))
+      .toBe(`-tmp-${'a'.repeat(195)}-de6m7t`);
+  });
+
+  it.each(['site.example', 'site example', 'site_example', 'site..__ example'])(
+    'discovers the Claude project folder for workspace %s', async (name) => {
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-claude.discovery with_spaces-'));
+      roots.push(root);
+      const workspace = join(root, name);
+      const providerHome = join(root, 'home');
+      const key = claudeProjectKey(workspace);
+      const project = join(providerHome, '.claude', 'projects', key);
+      await Promise.all([workspace, project].map((path) => mkdir(path, { recursive: true })));
+      const locator = join(project, 'session.jsonl');
+      await writeFile(locator, JSON.stringify({ type: 'user', cwd: workspace }) + '\n');
+
+      const manifest = await discoverWorkspaceHistories({
+        workspace, providerHome, expectedProviders: ['claude'],
+      });
+      expect(manifest.sources.map((source) => source.locator)).toEqual([locator]);
+    },
+  );
+
+  it('uses transcript cwd to disambiguate colliding Claude project folders', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-collision-'));
+    roots.push(root);
+    const workspace = join(root, 'site.example');
+    const otherWorkspace = join(root, 'site-example');
+    const providerHome = join(root, 'home');
+    const project = join(providerHome, '.claude', 'projects', claudeProjectKey(workspace));
+    await Promise.all([workspace, otherWorkspace, project].map((path) => mkdir(path, { recursive: true })));
+    await writeFile(join(project, 'matching.jsonl'), [
+      'not-json',
+      JSON.stringify({ type: 'file-history-snapshot' }),
+      JSON.stringify({ type: 'user', cwd: workspace }),
+    ].join('\n') + '\n');
+    await writeFile(join(project, 'other.jsonl'), JSON.stringify({ type: 'user', cwd: otherWorkspace }) + '\n');
+
+    const manifest = await discoverWorkspaceHistories({
+      workspace, providerHome, expectedProviders: ['claude'],
+    });
+    expect(manifest.sources.map((source) => source.locator)).toEqual([join(project, 'matching.jsonl')]);
+  });
+
+  it('keeps other provider folder encodings and legacy Claude transcripts without cwd', async () => {
+    const fixture = await providerFixture('site.example');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace,
+      providerHome: fixture.providerHome,
+      expectedProviders: ['claude', 'codex', 'cursor', 'factory'],
+    });
+    expect(manifest.sources.map((source) => source.provider))
+      .toEqual(['claude', 'codex', 'cursor', 'factory']);
+  });
+
   it('inventories only matching known roots, persists the exact manifest, and exposes export gaps', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
@@ -404,7 +480,7 @@ describe('workspace session discovery and batch import', () => {
     )).toHaveLength(0);
   });
 
-  itWithSqlite('resumes only incomplete sources and reconciles partial coverage', async () => {
+  itWithSqlite('completes accepted default-scope imports while retaining unresolved provider coverage', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
       workspace: fixture.workspace,
@@ -420,17 +496,25 @@ describe('workspace session discovery and batch import', () => {
         rejected: 0,
         pending: 0,
       });
-      expect(first.run.status).toBe('partial');
+      expect(first.schemaVersion).toBe('2.0.0');
+      expect(first.run).toMatchObject({ schemaVersion: '2.0.0', status: 'complete' });
       expect(first.coverage).toMatchObject({
+        schemaVersion: '2.0.0',
         status: 'partial',
+        acquisitionStatus: 'complete',
+        unresolvedProviders: expect.arrayContaining(['warp', 'opencode']),
         providers: { exportRequired: expect.arrayContaining(['warp', 'opencode']) },
         sources: { discovered: 4, accepted: 4 },
       });
+      repository.saveBatchImportRun({ ...first.run, schemaVersion: '1.0.0', status: 'partial' });
       const second = await importDiscoveryManifest({ manifest, repository });
+      expect(second.run.schemaVersion).toBe('2.0.0');
       expect(second.run.sources.every(
         (source) => source.status === 'previously-committed',
       )).toBe(true);
       expect(second.run.sources.every((source) => source.attempts === 1)).toBe(true);
+      expect(second.run.status).toBe('complete');
+      expect(repository.getCoverage(manifest.workspaceId).acquisitionStatus).toBe('complete');
       expect(repository.doctor()).toMatchObject({
         integrity: 'ok',
         indexIntegrity: 'ok',
@@ -440,6 +524,134 @@ describe('workspace session discovery and batch import', () => {
     } finally {
       repository.close();
     }
+  });
+
+  itWithSqlite('immediately resumes a SIGKILLed child import and reports the interrupted run', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome,
+    });
+    const manifestPath = join(fixture.root, 'manifest.json');
+    const database = join(fixture.root, 'catalog.sqlite');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const child = fork(fileURLToPath(new URL('../../fixtures/sessions/import-kill-child.ts', import.meta.url)),
+      [database, manifestPath], {
+        execArgv: ['--import', 'tsx'],
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        timeout: 15_000,
+        killSignal: 'SIGKILL',
+      });
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('message', (message) => {
+          if (message === 'source-staged') resolve();
+          else reject(new Error(`unexpected child message: ${String(message)}`));
+        });
+        child.once('error', reject);
+        child.once('exit', () => reject(new Error(`child exited before staging: ${stderr}`)));
+      });
+      const before = new SessionRepository(database);
+      const interrupted = before.getBatchImportRunForManifest(manifest.manifestId, manifest.workspaceId)!;
+      try {
+        expect(interrupted.status).toBe('running');
+        expect(interrupted.sources.filter((source) => source.status === 'committed')).toHaveLength(1);
+      } finally {
+        before.close();
+      }
+      expect(child.kill('SIGKILL')).toBe(true);
+      expect(await exited).toEqual({ code: null, signal: 'SIGKILL' });
+      const owner = JSON.parse(await readFile(join(importLeasePath(database), 'owner.json'), 'utf8'));
+      expect(Date.now() - Date.parse(owner.heartbeatAt)).toBeLessThan(30_000);
+      if (process.platform === 'linux') expect(owner.processStartId).toMatch(/^[\w-]+:\d+$/);
+
+      const args = ['import-discovered', '--workspace', fixture.workspace,
+        '--manifest', manifestPath, '--db', database, '--resume', '--confirm',
+        '--lock-wait-ms', '0', '--json'];
+      const context = { args, rawArgs: ['sessions', ...args], cwd: fixture.root, frameworkRoot: process.cwd() };
+      expect((await sessionsHandler.execute(context)).exitCode).toBe(0);
+      const receipt = JSON.parse(String(log.mock.calls.at(-1)?.[0])).data.receipt;
+      expect(receipt.interruptedRuns).toEqual([
+        { runId: interrupted.runId, interruptedAt: expect.any(String) },
+      ]);
+      expect(receipt.run.interruptedAt).toBe(receipt.interruptedRuns[0].interruptedAt);
+      expect(receipt.totals).toMatchObject({ accepted: 3, previouslyCommitted: 1, rejected: 0, pending: 0 });
+      expect(receipt.run.sources.every((source: { attempts: number }) => source.attempts === 1)).toBe(true);
+      const after = new SessionRepository(database);
+      try {
+        expect(after.getBatchImportRun(interrupted.runId)).toMatchObject({
+          status: 'complete', interruptedAt: receipt.run.interruptedAt,
+        });
+        expect(after.listSessions({ workspaceId: manifest.workspaceId, limit: 20 }).total).toBe(4);
+        expect(after.doctor()).toMatchObject({ integrity: 'ok', sessions: 4 });
+      } finally {
+        after.close();
+      }
+      expect((await sessionsHandler.execute(context)).exitCode).toBe(0);
+      const replay = JSON.parse(String(log.mock.calls.at(-1)?.[0])).data.receipt;
+      expect(replay.interruptedRuns).toEqual([]);
+      expect(replay.run.interruptedAt).toBe(receipt.run.interruptedAt);
+      expect(replay.totals).toMatchObject({ accepted: 0, previouslyCommitted: 4 });
+    } finally {
+      child.kill('SIGKILL');
+      await exited;
+      log.mockRestore();
+    }
+  });
+
+  itWithSqlite.each([
+    { expectedProviders: ['claude'], status: 'complete' },
+    { expectedProviders: ['claude', 'warp'], status: 'partial' },
+    { expectedProviders: ['claude', 'future-provider'], status: 'partial' },
+  ])('uses explicit provider scope $expectedProviders for acquisition status', async ({ expectedProviders, status }) => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders,
+    });
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.totals).toMatchObject({ discovered: 1, accepted: 1, rejected: 0, pending: 0 });
+      expect(receipt.run.status).toBe(status);
+      expect(receipt.coverage.acquisitionStatus).toBe(status);
+      expect(receipt.coverage.unresolvedProviders).toEqual(expectedProviders.filter((provider) => provider !== 'claude'));
+    } finally { repository.close(); }
+  });
+
+  itWithSqlite('keeps rejected default-scope imports partial', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace, providerHome: fixture.providerHome });
+    await writeFile(manifest.sources[0].locator, '{}\n');
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.run.status).toBe('partial');
+      expect(receipt.totals).toMatchObject({ discovered: 4, accepted: 3, rejected: 1, pending: 0 });
+      expect(receipt.coverage.acquisitionStatus).toBe('partial');
+    } finally { repository.close(); }
+  });
+
+  itWithSqlite.each([
+    { expectedProviders: undefined, status: 'complete' },
+    { expectedProviders: ['claude'], status: 'partial' },
+  ])('reports $status for empty acquisition with expectations $expectedProviders', async ({ expectedProviders, status }) => {
+    const fixture = await providerFixture();
+    const empty = join(fixture.root, 'empty');
+    await mkdir(empty);
+    const manifest = await discoverWorkspaceHistories({ workspace: empty, providerHome: empty, expectedProviders });
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.run.status).toBe(status);
+      expect(receipt.totals).toMatchObject({ discovered: 0, rejected: 0, pending: 0 });
+      expect(receipt.coverage).toMatchObject({ status: 'partial', acquisitionStatus: status, coverageRatio: null });
+      expect(receipt.coverage.unresolvedProviders.length).toBeGreaterThan(0);
+    } finally { repository.close(); }
   });
 
   itWithSqlite('reports the observed 304-discovered/35-accepted case without claiming completeness', async () => {
@@ -475,7 +687,7 @@ describe('workspace session discovery and batch import', () => {
       };
       repository.saveBatchImportRun(run);
       expect(repository.getCoverage(manifest.workspaceId)).toMatchObject({
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         status: 'partial',
         sources: {
           discovered: 304,
@@ -527,6 +739,7 @@ describe('workspace session discovery and batch import', () => {
       expect(interrupted?.status).toBe('interrupted');
 
       const resumed = await importDiscoveryManifest({ manifest, repository });
+      expect(resumed.run.status).toBe('complete');
       expect(resumed.totals).toMatchObject({
         discovered: 4,
         rejected: 0,
@@ -579,16 +792,17 @@ async function writeCodexRollout(root: string, workspace: string, id: string, fi
   await writeFile(join(root, filename), JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace } }) + '\n');
 }
 
-async function providerFixture(): Promise<{ root: string; workspace: string; providerHome: string }> {
+async function providerFixture(name = 'workspace'): Promise<{ root: string; workspace: string; providerHome: string }> {
   const root = await mkdtemp(join(tmpdir(), 'aiwg-session-discovery-'));
   roots.push(root);
-  const workspace = join(root, 'workspace');
+  const workspace = join(root, name);
   const providerHome = join(root, 'home');
   await mkdir(workspace, { recursive: true });
   const key = workspace.replace(/\\/g, '/').replace(/[/:]+/g, '-');
   const cursorKey = workspace.replace(/\\/g, '/').replace(/^\/+/, '').replace(/[/:]+/g, '-');
 
-  const claude = join(providerHome, '.claude', 'projects', key, 'claude.jsonl');
+  const claudeKey = claudeProjectKey(workspace);
+  const claude = join(providerHome, '.claude', 'projects', claudeKey, 'claude.jsonl');
   const factory = join(providerHome, '.factory', 'sessions', key, 'factory.jsonl');
   const cursor = join(
     providerHome,

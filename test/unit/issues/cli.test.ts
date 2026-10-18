@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../../../src/issues/cli.js';
+import { LocalIssueProviderCore } from '../../../src/issues/local.js';
 
 describe('issues/cli', () => {
   let root: string;
@@ -46,7 +47,7 @@ describe('issues/cli', () => {
     expect(events).toContain('"type":"closed"');
     expect(output.join('\n')).toContain('# DOCS-0001: Fix docs');
     expect(output.join('\n')).toContain('Closed DOCS-0001');
-    expect(output.join('\n')).toContain('Rebuilt local issue index (2 issues)');
+    expect(output.join('\n')).toContain('Local issue index ready (2 issues)');
   });
 
   it('reads issue and comment body files', async () => {
@@ -62,6 +63,13 @@ describe('issues/cli', () => {
     expect(body).toContain('Body from file');
     const shown = await readFile(join(root, '.aiwg', 'issues', 'events', 'FILE-0001.jsonl'), 'utf-8');
     expect(shown).toContain('body_path');
+  });
+
+  it('passes --force through to local issue index rebuilding', async () => {
+    await main(['init'], root);
+    const rebuild = vi.spyOn(LocalIssueProviderCore.prototype, 'rebuildIssueIndex');
+    await main(['index', 'rebuild', '--force'], root);
+    expect(rebuild).toHaveBeenCalledWith({ force: true });
   });
 
   it('plans drafts before writing and preserves the authorization no-write gate', async () => {

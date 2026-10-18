@@ -10,6 +10,7 @@ import {
   writeDiscoveryManifest, coverageFromBatchRun, previewDiscoveryImport,
   type BatchSourceDisposition, type SessionRuntimeIdentity,
 } from '../../../src/sessions/index.js';
+import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 import { listProviderDefinitions } from '../../../src/providers/provider-definitions.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
 
@@ -156,12 +157,44 @@ describe('provider/runtime coverage preflight', () => {
     expect(report).toMatchObject({ status: 'stale', acquisitionStatus: 'complete', semanticReview: 'not-assessed' });
   });
 
+  it.each(['pending', 'running', 'rejected', 'skipped'] as const)(
+    'keeps %s sources partial without explicit provider expectations', (status) => {
+      const report = coverageFromBatchRun({
+        schemaVersion: '1.0.0', runId: 'test', manifestId: 'test', workspaceId: 'test',
+        manifestCreatedAt: new Date().toISOString(), startedAt: '', updatedAt: '', completedAt: null,
+        status: 'running', providers: [checked('claude')],
+        sources: [{ ...accepted('claude'), status }],
+      });
+      expect(report.acquisitionStatus).toBe('partial');
+    },
+  );
+
+  it.each(['committed', 'duplicate', 'previously-committed'] as const)(
+    'treats legacy %s sources as acquired while keeping coverage partial', (status) => {
+      const report = coverageFromBatchRun({
+        schemaVersion: '1.0.0', runId: 'test', manifestId: 'test', workspaceId: 'test',
+        manifestCreatedAt: new Date().toISOString(), startedAt: '', updatedAt: '', completedAt: '',
+        status: 'partial', providers: [checked('claude'), { ...checked('warp'), status: 'export-required' }],
+        sources: [{ ...accepted('claude'), status }],
+      });
+      expect(report).toMatchObject({
+        schemaVersion: '2.0.0', status: 'partial', acquisitionStatus: 'complete', unresolvedProviders: ['warp'],
+      });
+    },
+  );
+
+  it('reports unknown acquisition when no batch run exists', () => {
+    expect(coverageFromBatchRun(null)).toMatchObject({
+      schemaVersion: '2.0.0', status: 'unknown', acquisitionStatus: 'unknown', unresolvedProviders: [],
+    });
+  });
+
   itWithSqlite('completes an explicit acquired scope and rechecks runtime identity on replay', async () => {
     const root = await workspace();
-    const key = root.replace(/[/:]+/g, '-');
-    const history = join(root, '.claude', 'projects', key);
+    const history = join(root, '.claude', 'projects', claudeProjectKey(root));
     await mkdir(history, { recursive: true });
-    await writeFile(join(history, 'session.jsonl'), await readFile(resolve('test/fixtures/sessions/claude/active-session.jsonl')));
+    const fixture = await readFile(resolve('test/fixtures/sessions/claude/active-session.jsonl'), 'utf8');
+    await writeFile(join(history, 'session.jsonl'), fixture.replaceAll('"cwd":"/private/work/project"', `"cwd":${JSON.stringify(root)}`));
     const manifest = await discoverWorkspaceHistories({
       workspace: root, providerHome: root, expectedProviders: ['claude'], runtime,
     });
@@ -172,10 +205,10 @@ describe('provider/runtime coverage preflight', () => {
       expect(first.coverage.acquisitionStatus).toBe('complete');
       const currentRuntime = { ...runtime, version: '2026.10.2', installationState: 'mismatch' as const };
       const replay = await importDiscoveryManifest({ manifest, repository, runtime: currentRuntime });
-      expect(replay.run.status).toBe('partial');
+      expect(replay.run.status).toBe('complete');
       expect(replay.run.discoveryRuntime).toEqual(runtime);
       expect(replay.coverage.preflight?.runtime).toEqual(currentRuntime);
-      expect(replay.coverage.acquisitionStatus).toBe('partial');
+      expect(replay.coverage).toMatchObject({ status: 'partial', acquisitionStatus: 'complete', unresolvedProviders: [] });
       expect(replay.coverage.remediation.join(' ')).toContain('deliberately select');
       const legacy = previewDiscoveryImport({ ...manifest, preflight: undefined }, null);
       expect(legacy.coverage.acquisitionStatus).toBe('partial');

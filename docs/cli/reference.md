@@ -278,6 +278,7 @@ Show version and channel information.
 aiwg version
 aiwg -version
 aiwg --version
+aiwg --version --json
 ```
 
 **Capabilities:** cli, version, info
@@ -290,6 +291,14 @@ Shows:
 - Active channel (stable/main)
 - Installation path
 - Node.js version
+
+In dev mode, text output labels both the global launcher version and the effective
+runtime version. JSON output adds `launcherVersion`, `runtimeVersion`, and
+`runtimePath`; the existing `version` and `packageRoot` fields still describe the
+package executing the report. Plain `--version` runs in the launcher, while
+`version` and `--version --json` run through the selected runtime. An unreadable
+package version is reported as `(unknown)`. `aiwg doctor` warns when the launcher
+and runtime versions differ or either version cannot be determined.
 
 **Example output:**
 
@@ -2223,6 +2232,17 @@ Show runtime environment summary with tool discovery.
 ```bash
 aiwg runtime-info
 ```
+
+`aiwg runtime-info --discover` refreshes the tool catalog. On Unix it searches
+PATH first, then common user bin directories (`~/.cargo/bin`, `~/.local/bin`,
+`~/bin`, `~/.npm-global/bin`, `~/go/bin`, `~/.bun/bin`, and `~/.deno/bin`);
+`CARGO_HOME/bin` replaces the default Cargo directory when configured. Only the
+curated tool allowlist is probed. Refresh output reports added/removed counts
+and warns with the names of previously cataloged tools that disappeared. The
+JSON catalog includes `delta.added`, `delta.removed`, and an `inputFingerprint`.
+Unchanged tool paths, executable metadata, definitions, and lookup environment
+skip version probes and catalog writes, preserving the previous discovery time
+and delta. Use `--discover --force` to repeat all probes and resource sampling.
 
 **Capabilities:** cli, toolsmith, discovery
 **Platforms:** All
@@ -4336,6 +4356,12 @@ optional, not a runtime dependency. Account-specific native results are marked
 `local-account` and are never represented as globally available.
 `--drift` compares resolved role mappings with the committed catalog and emits
 a reviewable, non-mutating provider/role before-and-after report.
+
+Native discovery reports local filesystem access failures such as `EROFS`,
+`EACCES`, and `EPERM` as `errorKind: environment`. Stored native error diagnostics
+have ANSI controls stripped. A failed refresh retains the
+last good models, role mappings, and observation time for the same account and
+scope while recording the current error and fetch time.
 
 AIWG does not currently operate a built-in public feed. See
 [the feed decision record](../architecture/adr-optional-model-catalog-feed.md)

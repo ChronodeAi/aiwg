@@ -1135,6 +1135,7 @@ async function importSource(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipts = await new IncrementalSessionImporter(repository).import({
         source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
@@ -1144,6 +1145,7 @@ async function importSource(
         sourceId,
         ...workspaceReport,
         receipts,
+        interruptedRuns,
         totals: {
           sessionsInserted: receipts.reduce((sum, item) => sum + item.sessionsInserted, 0),
           eventsInserted: receipts.reduce((sum, item) => sum + item.eventsInserted, 0),
@@ -1585,12 +1587,14 @@ async function importDiscovered(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
         signal: ctx.signal,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
+      receipt.interruptedRuns = interruptedRuns;
       return ok('import-discovered', {
         manifestId: manifest.manifestId,
         receipt,

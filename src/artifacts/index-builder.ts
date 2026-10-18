@@ -17,7 +17,7 @@ import { load as loadYaml } from 'js-yaml';
 import { validateDecisionDocument } from '../decision/validate.js';
 import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import { validateGateDocument } from '../gates/schema.js';
-import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
+import type { MetadataEntry, ArtifactIndex, IndexStats, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   INDEX_EXTRACTOR_VERSION,
   INDEX_VERSION,
@@ -29,6 +29,7 @@ import {
   resolveGraphScanDir,
   loadUserGraphConfigs,
   loadGlobalGraphConfigs,
+  resolveGraphBackendType,
 } from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
@@ -990,13 +991,18 @@ export async function buildIndex(
   }
 
   // Load existing index for incremental updates
+  const backendType = resolveGraphBackendType(graph);
+  const buildConfigHash = createHash('sha256')
+    .update(JSON.stringify({ graphConfig, backendType }))
+    .digest('hex');
   const existingIndex = force
     ? null
     : outputDir
       ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
       : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
   const canReuseExisting = existingIndex?.version === INDEX_VERSION
-    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION;
+    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION
+    && existingIndex.buildConfigHash === buildConfigHash;
   const existingEntries = canReuseExisting ? existingIndex.entries : {};
 
   // Load checksum manifest for fast stat-based change detection (#794).
@@ -1024,6 +1030,22 @@ export async function buildIndex(
   let unchangedCount = 0;
 
   const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
+
+  const reportBuild = (buildTimeMs: number, total: number): void => {
+    log(`Artifact index built in ${buildTimeMs}ms`);
+    log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
+    log(`  Total: ${total} artifacts`);
+    if (!force && manifestStats.checked > 0) {
+      const fastPath = manifestStats.statSkipped;
+      const slowPath = manifestStats.checked - manifestStats.statSkipped;
+      log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
+      if (manifestStats.pruned > 0) {
+        log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
+      }
+    }
+    const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
+    log(`  Output: ${displayDir}`);
+  };
 
   for (const fullPath of files) {
     const relativePath = indexPathFor(cwd, fullPath, graph);
@@ -1176,6 +1198,43 @@ export async function buildIndex(
     }
   }
 
+  // Reuse derived indexes only when their complete input set is unchanged.
+  // Supplements can live outside the scanned files, so they must still be read.
+  // Configured edge extractors must run to discard stale cached edges even
+  // when source checksums match.
+  const total = Object.keys(entries).length;
+  if (canReuseExisting && !useFilenameMetadata && !graphConfig?.metadataSupplements?.length
+    && !graphConfig?.edgeExtraction
+    && newCount === 0 && updatedCount === 0
+    && total === Object.keys(existingEntries).length
+    && manifest.generated && total === Object.keys(manifest.entries).length
+    && manifestStats.pruned === 0) {
+    const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
+    const requiredFiles = ['tags.json', 'dependencies.json'];
+    if (backendType === 'sqlite') requiredFiles.push('graph.db');
+    if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
+      && stats.totalArtifacts === total
+      && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
+      // A timestamp-only source change needs a manifest refresh, but does not
+      // invalidate metadata, tags, dependencies, or the persistent backend.
+      if (manifestStats.checksumSkipped > 0) {
+        writeManifest(indexOutputDir, {
+          version: 1,
+          generated: new Date().toISOString(),
+          entries: nextManifestEntries,
+        });
+      }
+      const buildTimeMs = Date.now() - startTime;
+      writeIndexFile(effectiveOutputCwd, 'stats.json', {
+        ...stats,
+        builtAt: new Date().toISOString(),
+        buildTimeMs,
+      }, indexOutputDir);
+      reportBuild(buildTimeMs, total);
+      return;
+    }
+  }
+
   // Apply metadata supplements if configured (enriches filename-metadata nodes from sidecars)
   if (graphConfig?.metadataSupplements?.length) {
     applyMetadataSupplements(entries, graphConfig.metadataSupplements, cwd);
@@ -1313,6 +1372,7 @@ export async function buildIndex(
   const index: ArtifactIndex = {
     version: INDEX_VERSION,
     extractorVersion: INDEX_EXTRACTOR_VERSION,
+    buildConfigHash,
     builtAt: new Date().toISOString(),
     buildTimeMs,
     entries,
@@ -1325,8 +1385,6 @@ export async function buildIndex(
   // Materialize the configured backend and always retain dependencies.json as
   // the stable compatibility/export contract.
   const { createGraphBackend } = await import('./graph-backend.js');
-  const { resolveGraphBackendType } = await import('./types.js');
-  const backendType = resolveGraphBackendType(graph);
   const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
   let selectedBackend;
   try {
@@ -1403,20 +1461,5 @@ export async function buildIndex(
   }, indexOutputDir);
 
   // Report
-  const total = Object.keys(entries).length;
-  log(`Artifact index built in ${buildTimeMs}ms`);
-  log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
-  log(`  Total: ${total} artifacts`);
-  // Report manifest-driven change detection stats (only meaningful when !force
-  // and we actually went through the content-read path for at least one file)
-  if (!force && manifestStats.checked > 0) {
-    const fastPath = manifestStats.statSkipped;
-    const slowPath = manifestStats.checked - manifestStats.statSkipped;
-    log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
-    if (manifestStats.pruned > 0) {
-      log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
-    }
-  }
-  const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
-  log(`  Output: ${displayDir}`);
+  reportBuild(buildTimeMs, total);
 }

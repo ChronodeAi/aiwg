@@ -22,12 +22,20 @@ try {
   if (json) {
     console.log(JSON.stringify({
       version: info.version,
+      launcherVersion: info.launcherVersion,
+      runtimeVersion: info.runtimeVersion,
+      runtimePath: info.runtimePath,
       channel: info.channel,
       packageRoot: info.packageRoot,
       devMode: info.devMode,
     }));
   } else {
     console.log(`  ${info.version}${channelLabel}`);
+    if (info.devMode || info.launcherVersion !== info.runtimeVersion) {
+      console.log(`  launcher: ${info.launcherVersion}`);
+      console.log(`  runtime: ${info.runtimeVersion}`);
+      console.log(`  runtime path: ${info.runtimePath}`);
+    }
     console.log(`  path: ${info.packageRoot}`);
   }
 } catch (err) {
