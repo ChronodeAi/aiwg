@@ -12,6 +12,14 @@ export const MUSE_WORKSPACE_SCAN_LIMITS: Readonly<ReaderLimits> = Object.freeze(
   maxNestingDepth: 64,
 });
 
+export const MUSE_WORKSPACE_TAIL_BYTES = 1024 * 1024;
+
+export class MuseWorkspaceLimitError extends SessionContractError {
+  constructor(public readonly limitName: keyof ReaderLimits, public readonly limitValue: number) {
+    super('RESOURCE_LIMIT_EXCEEDED', `Muse workspace inspection exceeded ${limitName}=${limitValue}`);
+  }
+}
+
 export interface MuseScanProgress {
   recordsInspected: number;
   bytesInspected: number;
@@ -21,17 +29,21 @@ export async function* museWorkspaceScanLines(
   authorization: SourceAuthorization,
   limits: ReaderLimits,
   progress: MuseScanProgress,
+  tailBytes?: number,
 ): AsyncGenerator<unknown> {
   const allowed = await authorizeSourceFile(authorization);
   const handle = await open(allowed.canonicalPath, 'r');
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    let position = 0;
+    let position = tailBytes === undefined ? 0 : Math.max(0, allowed.size - tailBytes);
+    // A tail window may start inside a record (or a UTF-8 code point).
+    // Discard that fragment before parsing any complete JSONL records.
+    let skipPartialLine = position > 0;
     let parts: Buffer[] = [];
     let length = 0;
     while (position < allowed.size) {
       const remaining = limits.maxTotalBytes - progress.bytesInspected;
-      if (remaining <= 0) throw scanLimit();
+      if (remaining <= 0) throw new MuseWorkspaceLimitError('maxTotalBytes', limits.maxTotalBytes);
       const { bytesRead } = await handle.read(
         buffer, 0, Math.min(buffer.length, allowed.size - position, remaining), position,
       );
@@ -44,7 +56,15 @@ export async function* museWorkspaceScanLines(
         const newline = buffer.indexOf(10, start);
         const end = newline >= 0 && newline < bytesRead ? newline + 1 : bytesRead;
         const segment = buffer.subarray(start, end);
-        if (length + segment.length > limits.maxRecordBytes) throw scanLimit();
+        if (skipPartialLine) {
+          progress.bytesInspected += segment.length;
+          start = end;
+          if (newline >= 0 && newline < bytesRead) skipPartialLine = false;
+          continue;
+        }
+        if (length + segment.length > limits.maxRecordBytes) {
+          throw new MuseWorkspaceLimitError('maxRecordBytes', limits.maxRecordBytes);
+        }
         parts.push(Buffer.from(segment));
         length += segment.length;
         progress.bytesInspected += segment.length;
@@ -54,7 +74,9 @@ export async function* museWorkspaceScanLines(
           parts = [];
           length = 0;
           if (line.trim() !== '') {
-            if (progress.recordsInspected >= limits.maxRecords) throw scanLimit();
+            if (progress.recordsInspected >= limits.maxRecords) {
+              throw new MuseWorkspaceLimitError('maxRecords', limits.maxRecords);
+            }
             const value = parseMuseScanJson(line, limits.maxNestingDepth);
             progress.recordsInspected += 1;
             yield value;
@@ -65,7 +87,9 @@ export async function* museWorkspaceScanLines(
     if (length > 0) {
       const line = Buffer.concat(parts, length).toString('utf8');
       if (line.trim() !== '') {
-        if (progress.recordsInspected >= limits.maxRecords) throw scanLimit();
+        if (progress.recordsInspected >= limits.maxRecords) {
+          throw new MuseWorkspaceLimitError('maxRecords', limits.maxRecords);
+        }
         let value;
         try {
           value = parseMuseScanJson(line, limits.maxNestingDepth);
@@ -100,7 +124,7 @@ export function parseMuseScanJson(line: string, maxDepth: number): unknown {
   const pending = [{ value, depth: 0 }];
   while (pending.length > 0) {
     const current = pending.pop()!;
-    if (current.depth > maxDepth) throw scanLimit();
+    if (current.depth > maxDepth) throw new MuseWorkspaceLimitError('maxNestingDepth', maxDepth);
     if (current.value !== null && typeof current.value === 'object') {
       for (const child of Object.values(current.value)) {
         pending.push({ value: child, depth: current.depth + 1 });
@@ -108,8 +132,4 @@ export function parseMuseScanJson(line: string, maxDepth: number): unknown {
     }
   }
   return value;
-}
-
-function scanLimit(): SessionContractError {
-  return new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'bounded Muse workspace inspection limit exceeded');
 }

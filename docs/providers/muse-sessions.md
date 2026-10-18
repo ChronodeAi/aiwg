@@ -55,14 +55,27 @@ Discovery scans metadata incrementally and stops on matching evidence, including
 evidence inside retained-frame children. Its inspection budget is 10,000 outer
 records, 10,000 retained children, 8 MiB per outer record or decoded child,
 32 MiB total source bytes, and 64 levels of JSON nesting. Matching evidence near
-the beginning can select a log longer than the inspection budget. Import still
+the beginning can select a log longer than the inspection budget. If a limit is
+hit first, discovery retries complete records in a bounded tail window of up to
+1 MiB (or the configured total byte limit, if smaller). When the window starts
+mid-file, it discards the first line fragment and applies the same record,
+child, and depth limits to this separate scan. Tail evidence can select the source, but cannot
+prove a mismatch or complete inspection. Inspected counts include both scans;
+at most 33 MiB of source bytes are inspected with the defaults. Import still
 validates the full selected history under the normal import limits.
 
 The Muse provider report includes content-free `museSourceInspections` receipts
-with the outcome, reason code, inspected counts, and whether inspection reached
-EOF. A confirmed mismatch requires inspecting the whole source and observing
-workspace evidence without a match. Absent evidence, malformed or truncated
-input, unreadable sources, and exhausted budgets are inconclusive; they produce
+with the outcome, attribution (`matched`, `mismatch`, or `unattributed`), reason
+code, native session ID, inspected counts, and whether inspection reached EOF.
+Exhausted budgets include `limit: { name, value }` and `fallback: "bounded-tail"`, even when the
+fallback finds a match. Unresolved sources remain visible as `unattributed` in
+these persisted discovery receipts and CLI output, outside the selected import
+sources. Review the receipt and explicitly authorize a supported Muse export to
+import an unresolved session. The native session ID identifies the session under
+the authorized root without exposing its full path. A confirmed mismatch requires
+inspecting the whole source and observing workspace evidence without a match.
+Absent evidence, malformed or truncated input, unreadable sources, and exhausted
+budgets are inconclusive; they produce
 explicit diagnostics and mark Muse `not-checked`, keeping coverage partial even
 when other Muse sources were selected.
 

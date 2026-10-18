@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   inspectMuseNativeWorkspace, museNativeSourceMatchesWorkspace,
 } from '../../../src/sessions/adapters/muse.js';
-import { MUSE_WORKSPACE_SCAN_LIMITS } from '../../../src/sessions/adapters/muse-workspace-scan.js';
+import { MUSE_WORKSPACE_SCAN_LIMITS, MUSE_WORKSPACE_TAIL_BYTES } from '../../../src/sessions/adapters/muse-workspace-scan.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
 import { coverageFromBatchRun } from '../../../src/sessions/batch-contracts.js';
 import type { SelectedSource } from '../../../src/sessions/contracts.js';
@@ -64,7 +64,7 @@ describe('bounded Muse workspace inspection', () => {
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'matched', recordsInspected: 2 });
   });
 
-  it.each([undefined, 'unrelated'])('diagnoses evidence beyond the record budget even after %s evidence', async (initial) => {
+  it.each([undefined, 'unrelated'])('finds tail evidence beyond the record budget even after %s evidence', async (initial) => {
     const locator = await writeMuseLog(museRoot, 'too-late', MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1, workspace, MUSE_WORKSPACE_SCAN_LIMITS.maxRecords);
     if (initial) {
       // Valid nonmatching evidence does not prove mismatch if inspection is bounded.
@@ -72,7 +72,63 @@ describe('bounded Muse workspace inspection', () => {
       await writeFile(locator, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
     }
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
-      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', recordsInspected: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords, completeInspection: false,
+      outcome: 'matched', attribution: 'matched', reasonCode: null, completeInspection: false,
+      fallback: 'bounded-tail', limit: { name: 'maxRecords', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords },
+    });
+  });
+
+  it.each(['workspace_root', 'cwd', 'retained'] as const)('finds %s evidence after an oversized record', async (kind) => {
+    const locator = await writeMuseLog(museRoot, 'oversized-prefix', 1);
+    const metadata = kind === 'cwd'
+      ? { ...museMetadata('oversized-prefix', 1), payload: { kind: 'metadata', record: { cwd: workspace } } }
+      : museMetadata('oversized-prefix', 1, workspace);
+    const evidence = kind === 'retained'
+      ? { retained_frame: 'frame', children: [{ record_json: JSON.stringify(metadata) }] }
+      : metadata;
+    await writeFile(locator, JSON.stringify({ padding: 'x'.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes) })
+      + '\r\n' + JSON.stringify(evidence));
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
+    expect(result).toMatchObject({
+      outcome: 'matched', fallback: 'bounded-tail', completeInspection: false,
+      limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
+    });
+    expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes + MUSE_WORKSPACE_TAIL_BYTES);
+  });
+
+  it('finds workspace evidence after the default total byte budget', async () => {
+    const locator = await writeMuseLog(museRoot, 'total-byte-tail', 1);
+    const line = JSON.stringify({ ...museMetadata('large', 0), padding: 'x'.repeat(4000) }) + '\n';
+    await writeFile(locator, line.repeat(Math.ceil(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes / Buffer.byteLength(line)) + 1)
+      + JSON.stringify(museMetadata('large', 1, workspace)) + '\n');
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
+    expect(result).toMatchObject({
+      outcome: 'matched', fallback: 'bounded-tail', completeInspection: false,
+      limit: { name: 'maxTotalBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes },
+    });
+    expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes + MUSE_WORKSPACE_TAIL_BYTES);
+  });
+
+  it('does not treat a partial tail record as workspace evidence', async () => {
+    const locator = await writeMuseLog(museRoot, 'partial-tail', 1);
+    await writeFile(locator, ' '.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes + 1)
+      + JSON.stringify(museMetadata('partial-tail', 0, workspace)) + '\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
+    });
+  });
+
+  it('leaves evidence outside both windows unattributed despite unrelated prefix evidence', async () => {
+    const locator = await writeMuseLog(museRoot, 'middle-evidence', 1);
+    await writeFile(locator, [
+      museMetadata('middle-evidence', 0, root),
+      { padding: 'x'.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes) },
+      museMetadata('middle-evidence', 1, workspace),
+      { padding: 'x'.repeat(MUSE_WORKSPACE_TAIL_BYTES + 1) },
+    ].map((value) => JSON.stringify(value)).join('\n') + '\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      completeInspection: false, limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
     });
   });
 
@@ -115,7 +171,10 @@ describe('bounded Muse workspace inspection', () => {
 
   it.each(['maxTotalBytes', 'maxRecordBytes', 'maxNestingDepth', 'maxRecords'] as const)('enforces %s before positive evidence', async (limit) => {
     const locator = await writeMuseLog(museRoot, 'limited', 2, workspace, 1);
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 })).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED' });
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 })).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      limit: { name: limit, value: 1 }, fallback: 'bounded-tail',
+    });
   });
 
   it('bounds decoded retained-child depth and count', async () => {
@@ -124,9 +183,14 @@ describe('bounded Muse workspace inspection', () => {
     for (let i = 0; i < 70; i += 1) nested = { nested };
     const child = { ...museMetadata('child', 0, workspace), nested };
     await writeFile(locator, JSON.stringify({ retained_frame: 'frame', children: [{ record_json: JSON.stringify(child) }] }) + '\n');
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED' });
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
+      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      limit: { name: 'maxNestingDepth', value: MUSE_WORKSPACE_SCAN_LIMITS.maxNestingDepth },
+    });
     await writeFile(locator, JSON.stringify({ retained_frame: 'frame', children: Array.from({ length: 3 }, (_, sequence) => ({ record_json: JSON.stringify(museMetadata('child', sequence, workspace)) })) }) + '\n');
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { maxRecords: 2 })).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED' });
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { maxRecords: 2 })).toMatchObject({
+      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', limit: { name: 'maxRecords', value: 2 },
+    });
   });
 
   it.each(['record', 'total'] as const)('enforces the default %s byte budget without unbounded line buffering', async (budget) => {
@@ -139,7 +203,7 @@ describe('bounded Muse workspace inspection', () => {
     }
     const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
     expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', completeInspection: false });
-    expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes);
+    expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes + MUSE_WORKSPACE_TAIL_BYTES);
     await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED' });
   });
 
