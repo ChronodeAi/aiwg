@@ -17,6 +17,9 @@ import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { importImpl } from '../../_resolve-impl.mjs';
 
+const { parseRuleFrontmatter, inferRuleActivation } = await importImpl(import.meta.url, 'rules/activation.mjs');
+const { resolveRulesInlineBudget, DEFAULT_RULES_INLINE_BUDGET_TOKENS } = await importImpl(import.meta.url, 'rules/inline-budget.mjs');
+export { DEFAULT_RULES_INLINE_BUDGET_TOKENS, parseRuleFrontmatter as parseRuleActivation };
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const { extractFrameworkSlug, sameSkillOwner, canDeploySkill, pruneRecordedSkillFiles, releaseSkillOwnership } =
   await importImpl(import.meta.url, 'providers/skill-ownership.mjs');
@@ -246,8 +249,9 @@ export function updateSidecarManifest(dir, deployedEntries, opts) {
   const existing = readSidecarManifest(dir) || { managed: {} };
 
   for (const entry of deployedEntries) {
-    const { filename, hash, frameworkSlug, kind } = entry;
+    const { filename, hash, frameworkSlug, kind, sourcePath } = entry;
     const sidecarEntry = { hash: `sha256:${hash}`, source, version };
+    if (sourcePath) sidecarEntry.sourcePath = sourcePath;
     if (frameworkSlug) sidecarEntry.frameworkSlug = frameworkSlug;
     // `kind` marks artifacts whose lifecycle is governed elsewhere — currently
     // only `skill-command` wrappers, which follow their source skill (#2507).
@@ -745,7 +749,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
 
     // Read and transform source content (needed for content-equality check
     // and the collision-vs-duplicate distinction)
-    const srcContent = fs.readFileSync(f, 'utf8');
+    const srcContent = injectBoundRules(fs.readFileSync(f, 'utf8'), f, opts);
     let transformedContent = transformFn ? transformFn(f, srcContent, opts) : srcContent;
 
     // Rule triggers are index metadata, not something the reading agent needs.
@@ -884,7 +888,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
       if (dryRun) console.log(`[dry-run] deploy ${a.src} -> ${a.dest} (${a.reason})`);
       else writeFile(a.dest, a.content, false);
       if (verbose) console.log(`deployed ${path.basename(a.src)} -> ${path.relative(process.cwd(), a.dest)} (${a.reason})`);
-      deployedEntries.push({ filename: path.basename(a.dest), hash: a.hash, frameworkSlug: a.frameworkSlug });
+      deployedEntries.push({ filename: path.basename(a.dest), hash: a.hash, frameworkSlug: a.frameworkSlug, sourcePath: path.resolve(a.src) });
     } else if (a.type === 'skip') {
       if (verbose) console.log(`skip (${a.reason}): ${path.basename(a.dest)}`);
       // Preserve existing sidecar entries for skipped files
@@ -1613,6 +1617,8 @@ export function deploySkillDir(skillDir, destDir, opts) {
             srcContent = transformSkillMd(srcContent, opts) || srcContent;
           }
         }
+
+        if (entry.name === 'SKILL.md') srcContent = injectBoundRules(srcContent, srcPath, opts);
 
         const relative = path.relative(destSkillDir, destPath);
         managed[relative] = {
@@ -2439,15 +2445,8 @@ export function ruleEnforcementLevel(content) {
  * deployment dispatchable; `AIWG_RULES_INLINE_BUDGET_TOKENS=0` disables the
  * budget, any other value overrides it.
  */
-export const DEFAULT_RULES_INLINE_BUDGET_TOKENS = 64_000;
-const RULE_CHARS_PER_TOKEN = 4;
-
 export function resolveRulesInlineBudgetTokens(env = process.env) {
-  const raw = env.AIWG_RULES_INLINE_BUDGET_TOKENS;
-  if (raw === undefined || raw === '') return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
-  return parsed;
+  return resolveRulesInlineBudget({}, env);
 }
 
 /** Sidecar recording which rules the inline budget moved on demand (#2562). */
@@ -2463,96 +2462,13 @@ export function readRuleBudgetSidecar(destDir) {
   }
 }
 
-/**
- * Keep a provider rule directory under the inline budget (#2562).
- *
- * Rules reach the directory over several deploy passes (the framework pass,
- * then one per addon), so the budget is enforced against what is actually on
- * disk after each pass rather than against any single pass's file list. When
- * the inlined set exceeds the budget, the largest HIGH rules (then unlabelled
- * ones; never CRITICAL or the indexes) are removed from the directory and
- * recorded in the sidecar; the next pass skips re-deploying them and the
- * on-demand index lists them as binding rules fetched via `aiwg show rule`.
- * A changed budget invalidates the sidecar so the set is recomputed.
- *
- * Returns `{ demoted, removed }` — all demoted stems (sidecar state) and the
- * stems removed by this call.
- */
-export function reconcileInlineRuleBudget(destDir, budgetTokens = resolveRulesInlineBudgetTokens(), opts = {}) {
-  const sidecarPath = path.join(destDir, RULE_BUDGET_SIDECAR);
-  if (!budgetTokens || budgetTokens <= 0) {
-    if (fs.existsSync(sidecarPath) && !opts.dryRun) fs.rmSync(sidecarPath, { force: true });
-    return { demoted: [], removed: [] };
-  }
-  const previous = readRuleBudgetSidecar(destDir);
-  const carried = previous && previous.budgetTokens === budgetTokens ? previous.demoted : [];
-  let files = [];
-  try {
-    files = fs.readdirSync(destDir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
-      .map((entry) => path.join(destDir, entry.name))
-      .filter((file) => {
-        const base = path.basename(file);
-        if (base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md') return false;
-        try { return MANAGED_MARKER_RE.test(fs.readFileSync(file, 'utf8')); } catch { return false; }
-      });
-  } catch {
-    return { demoted: carried, removed: [] };
-  }
-  const { demoted } = applyInlineRuleBudget(files, budgetTokens);
-  const removed = demoted.map((file) => artifactStem(path.basename(file)));
-  if (!opts.dryRun) {
-    for (const file of demoted) fs.rmSync(file, { force: true });
-  }
-  const all = [...new Set([...carried, ...removed])].sort();
-  if (!opts.dryRun) {
-    if (all.length > 0) {
-      fs.writeFileSync(sidecarPath, `${JSON.stringify({ budgetTokens, demoted: all }, null, 2)}\n`, 'utf8');
-    } else if (fs.existsSync(sidecarPath)) {
-      fs.rmSync(sidecarPath, { force: true });
-    }
-  }
-  return { demoted: all, removed };
+// Compatibility exports: budgets never change selection or retain demotions.
+export function reconcileInlineRuleBudget(destDir, budgetTokens, opts = {}) {
+  if (!opts.dryRun) fs.rmSync(path.join(destDir, RULE_BUDGET_SIDECAR), { force: true });
+  return { demoted: [], removed: [] };
 }
-
-/**
- * Fit an always-on rule set under the inline budget (#2562).
- *
- * CRITICAL rules and the generated indexes are never demoted. When the
- * remaining set still exceeds the budget, HIGH rules are demoted largest-first
- * (fewest rules leave the always-on set), then rules with no declared level.
- * Demoted rules stay reachable via `aiwg show rule <name>` and are listed in
- * RULES-ONDEMAND.md under their own heading. Returns `{ inline, demoted }`
- * with the original order preserved for `inline`.
- */
-export function applyInlineRuleBudget(ruleFiles, budgetTokens = resolveRulesInlineBudgetTokens()) {
-  const files = [...(ruleFiles || [])];
-  if (!budgetTokens || budgetTokens <= 0) return { inline: files, demoted: [] };
-  const sized = files.map((file) => {
-    const base = path.basename(file);
-    let content = '';
-    try { content = fs.readFileSync(file, 'utf8'); } catch { /* unreadable → keep inline */ }
-    const level = base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md' ? 'critical' : ruleEnforcementLevel(content);
-    return { file, tokens: Math.ceil(Buffer.byteLength(content, 'utf8') / RULE_CHARS_PER_TOKEN), level };
-  });
-  let total = sized.reduce((sum, item) => sum + item.tokens, 0);
-  if (total <= budgetTokens) return { inline: files, demoted: [] };
-  const demotable = sized
-    .filter((item) => item.level !== 'critical')
-    .sort((a, b) => {
-      const rank = (level) => (level === 'high' ? 0 : level === null ? 1 : 2);
-      return rank(a.level) - rank(b.level) || b.tokens - a.tokens;
-    });
-  const demoted = new Set();
-  for (const item of demotable) {
-    if (total <= budgetTokens) break;
-    demoted.add(item.file);
-    total -= item.tokens;
-  }
-  return {
-    inline: files.filter((file) => !demoted.has(file)),
-    demoted: files.filter((file) => demoted.has(file)),
-  };
+export function applyInlineRuleBudget(ruleFiles) {
+  return { inline: [...(ruleFiles || [])], demoted: [] };
 }
 
 /**
@@ -2566,10 +2482,14 @@ export function isAlwaysOnRule(filePath) {
   const base = path.basename(filePath);
   if (base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md') return true;
   try {
-    const lvl = ruleEnforcementLevel(fs.readFileSync(filePath, 'utf8'));
-    return lvl !== 'medium' && lvl !== 'low';
-  } catch {
-    return true; // unreadable → keep (safe default)
+    const content = fs.readFileSync(filePath, 'utf8');
+    const parsed = parseRuleFrontmatter(content);
+    if (!parsed.valid) throw new Error(`${filePath}: ${parsed.diagnostics.map(d => d.message).join('; ')}`);
+    const activation = parsed.rule.tagged ? parsed.rule.activation : inferRuleActivation(ruleEnforcementLevel(content));
+    return activation === 'kernel' || activation === 'paths';
+  } catch (error) {
+    if (error.code === 'ENOENT') return true;
+    throw error;
   }
 }
 
@@ -2587,7 +2507,9 @@ export function listOnDemandRuleFiles(srcRoot, excludeAddons = []) {
     for (const f of listMdFiles(dir)) {
       const b = path.basename(f);
       if (b === 'RULES-INDEX.md' || b === 'RULES-ONDEMAND.md') continue;
-      if (!isAlwaysOnRule(f)) out.push(f);
+      const parsed = parseRuleFrontmatter(fs.readFileSync(f, 'utf8'));
+      if (!parsed.valid) throw new Error(`${f}: invalid rule frontmatter`);
+      if (!parsed.rule.tagged && !isAlwaysOnRule(f)) out.push(f);
     }
   };
   for (const addon of discoverAddons(aiwgRoot)) {
@@ -3404,3 +3326,25 @@ export const ProviderInterface = {
   // ── File Extension ────────────────────────────────────────────────
   getFileExtension(type) { return '.md'; }
 };
+
+/** Replace only the generated binding block; keep authored bytes intact. */
+export function replaceBoundRulesBlock(content, rules = []) {
+  const clean = content.replace(/\n?<!-- AIWG:bound-rules:start -->[\s\S]*?<!-- AIWG:bound-rules:end -->\n?/g, '');
+  if (!rules.length) return clean;
+  const unique = [...new Map(rules.map(rule => [rule.name, rule])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return `${clean}${clean.endsWith('\n') ? '' : '\n'}\n<!-- AIWG:bound-rules:start -->\n## Bound rules\n\n${unique.map(rule =>
+    `- ${rule.name} — ${rule.summary}\n  Fetch and follow before governed work: \`aiwg show rule ${rule.name}\`.`
+  ).join('\n')}\n<!-- AIWG:bound-rules:end -->\n`;
+}
+
+export function injectBoundRules(content, source, opts = {}) {
+  if (!opts.ruleDelivery) return content;
+  return replaceBoundRulesBlock(content, opts.ruleDelivery.bindings.get(path.resolve(source)) || []);
+}
+
+/** All provider output is staged; the complete startup guard runs before promotion. */
+export async function withRuleDeployment(opts, provider, deploy) {
+  const { deployWithRuleDelivery } = await import('./rule-delivery.mjs');
+  return deployWithRuleDelivery(opts, provider, deploy);
+}
