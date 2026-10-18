@@ -12,6 +12,7 @@ import os from 'os';
 import { parseFrontmatter, extractMentions, extractMarkdownLinks, buildIndex, normalizeNamedCaptures, buildFilenameMetadataEntry } from '../../../src/artifacts/index-builder.js';
 import { INDEX_DIR, GRAPH_CONFIGS, loadUserGraphConfigs, loadModuleGraphConfigs, loadGlobalGraphConfigs, normalizeEdge, normalizeEdges, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { TypedEdge, DependencyGraph } from '../../../src/artifacts/types.js';
+import { itWithSqlite, sqliteAvailable } from '../../helpers/sqlite.js';
 
 describe('loadUserGraphConfigs', () => {
   let tmpDir: string;
@@ -869,7 +870,7 @@ type: use-case
       expect(Object.keys(metadata.entries)).toHaveLength(2);
     });
 
-    it.each(['default', 'project', 'codebase', 'outputDir', 'sqlite'])(
+    it.each(['default', 'project', 'codebase', 'outputDir', ...(sqliteAvailable ? ['sqlite'] : [])])(
       'preserves index bytes and mtimes on repeated no-op builds (%s)', async variant => {
         const sourceDir = path.join(tmpDir, variant === 'codebase' ? 'src' : '.aiwg/requirements');
         fs.mkdirSync(sourceDir, { recursive: true });
@@ -975,7 +976,7 @@ type: use-case
       expect(manifest.entries['.aiwg/requirements/a.md'].mtime).toBe(fs.statSync(source).mtime.toISOString());
     });
 
-    it.each(['tags.json', 'dependencies.json', 'stats.json', 'checksum-manifest.json', 'graph.db'])(
+    it.each(['tags.json', 'dependencies.json', 'stats.json', 'checksum-manifest.json', ...(sqliteAvailable ? ['graph.db'] : [])])(
       'rebuilds when a required index file is missing (%s)', async filename => {
         const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
         fs.mkdirSync(sourceDir, { recursive: true });
@@ -1031,7 +1032,7 @@ type: use-case
       expect(tags.updated).toEqual(['.aiwg/requirements/a.md']);
     });
 
-    it('rebuilds the selected backend after configuration changes', async () => {
+    itWithSqlite('rebuilds the selected backend after configuration changes', async () => {
       const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
       fs.mkdirSync(sourceDir, { recursive: true });
       fs.writeFileSync(path.join(sourceDir, 'a.md'), '# A\n');
