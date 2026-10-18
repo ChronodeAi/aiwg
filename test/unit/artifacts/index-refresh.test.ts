@@ -194,10 +194,10 @@ describe('index refresh', () => {
 
   it('finds the current project from a subdirectory and stops at repository boundaries', () => {
     const jobs = planIndexRefresh({ cwd: path.join(workspace, 'src') });
-    expect(jobs.every(job => job.workspace === workspace)).toBe(true);
+    expect(jobs.filter(job => job.scope !== 'host').every(job => job.workspace === workspace)).toBe(true);
     const nested = path.join(workspace, 'nested');
     fs.mkdirSync(path.join(nested, '.git'), { recursive: true });
-    expect(planIndexRefresh({ cwd: nested }).every(job => job.workspace === nested)).toBe(true);
+    expect(planIndexRefresh({ cwd: nested }).filter(job => job.scope !== 'host').every(job => job.workspace === nested)).toBe(true);
   });
 
   it('keeps the physical project boundary when cwd is a symlink into a subdirectory', () => {
@@ -207,7 +207,7 @@ describe('index refresh', () => {
     expect(jobs.map(job => [job.kind, job.graph])).toEqual([
       ['graph', 'project'], ['graph', 'codebase'], ['runtime', undefined], ['models', undefined],
     ]);
-    expect(jobs.every(job => job.workspace === workspace)).toBe(true);
+    expect(jobs.filter(job => job.scope !== 'host').every(job => job.workspace === workspace)).toBe(true);
   });
 
   it('uses the dispatch gate with 8 GiB memory and 0.8 load per core, including stricter configured limits', async () => {
@@ -602,7 +602,7 @@ describe('index refresh', () => {
     const jobs = planIndexRefresh({ cwd: workspace });
     const report = await refreshIndexes({ cwd: workspace, dryRun: true });
     expect(report.jobs).toEqual(jobs);
-    expect(jobs.slice(-3).map(job => job.kind)).toEqual(['runtime', 'models', 'issues']);
+    expect(jobs.slice(-3).map(job => job.kind)).toEqual(['runtime', 'issues', 'models']);
     expect(jobs.slice(-3).every(job => job.status === 'planned')).toBe(true);
     expect(snapshot(root)).toEqual(before);
     expect(providerInventory.collectProviderInventory).not.toHaveBeenCalled();
@@ -616,7 +616,7 @@ describe('index refresh', () => {
     fs.mkdirSync(path.join(workspace, '.aiwg/issues/items'), { recursive: true });
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const report = await runIndexRefresh(['--only', only, '--dry-run', '--json'], workspace);
-    expect(report.jobs).toEqual([{ kind: only, workspace, status: 'planned', wallMs: 0 }]);
+    expect(report.jobs).toEqual([{ kind: only, ...(only === 'models' ? { scope: 'host' } : { workspace }), status: 'planned', wallMs: 0 }]);
     expect(log).toHaveBeenCalledOnce();
     expect(JSON.parse(log.mock.calls[0][0] as string)).toEqual(report);
     expect(process.exitCode).toBe(0);

@@ -229,9 +229,14 @@ option, refresh uses the current project.
 
 Refresh builds configured, existing, and default graphs incrementally, syncs
 existing Fortemi Core caches, then discovers and imports existing session catalogs.
-It also refreshes the runtime tool catalog and models catalog for each workspace,
-and rebuilds the local issues index where issue storage exists. Runtime and issue
-jobs skip unchanged inputs; models reuse a fresh catalog cache. Models discovery
+It resolves the models catalog once per host and probes runtime tools once, sharing
+that runtime catalog with each workspace while keeping its working directory and
+disk space local. JSON models jobs have `scope: "host"` and omit `workspace`;
+runtime jobs retain their workspace paths. The shared runtime cache lives in
+`$XDG_STATE_HOME/aiwg/index-refresh-runtime` (default
+`~/.local/state/aiwg/index-refresh-runtime`). Local issues indexes are rebuilt per
+workspace where issue storage exists. Runtime and issue jobs skip unchanged
+inputs; models reuse a fresh catalog cache. Models discovery
 may access the network, using the same discovery and offline fallback as
 `aiwg models refresh`.
 Session discovery uses only roots saved by an earlier authorized discovery;
