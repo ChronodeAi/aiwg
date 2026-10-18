@@ -118,7 +118,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       ? 'app-server' : null;
     let schemaVersion: string | null = null;
     const sourceArtifactSessionId = rolloutIdFromFilename(source.locator);
-    let nativeSessionId = sourceArtifactSessionId;
+    const rolloutState: RolloutState = { nativeSessionId: sourceArtifactSessionId };
     const identities = new Map<string, string>();
     let outputIndex = 0;
     let sawRecord = false;
@@ -146,25 +146,9 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
         if (!parsed.success) {
           throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed', schemaRejectionDetail(parsed.error));
         }
-        const payload = asObject(parsed.data.payload);
-        if (parsed.data.type === 'session_meta') {
-          const declaredId = stringValue(payload.id);
-          if (!declaredId) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id', schemaIssueDetail('payload.id'));
-          }
-          nativeSessionId = declaredId;
-        }
-        if (!nativeSessionId) {
-          throw new SessionContractError(
-            'MALFORMED_SOURCE',
-            'Codex rollout has no session identity before content records',
-            schemaIssueDetail('payload.id'),
-          );
-        }
-        normalized = [rolloutRecord(
-          nativeSessionId,
+        normalized = [normalizeRolloutRecord(
+          rolloutState,
           parsed.data,
-          payload,
           line,
           sourceArtifactSessionId,
         )];
@@ -266,38 +250,93 @@ function normalizeRollout(
   locator: string,
 ): { records: ProviderRecord[]; complete: false } {
   const sourceArtifactSessionId = rolloutIdFromFilename(locator);
-  let nativeSessionId = sourceArtifactSessionId;
+  const state: RolloutState = { nativeSessionId: sourceArtifactSessionId };
   const records: ProviderRecord[] = [];
   for (const line of input) {
     const parsed = RolloutEnvelopeSchema.safeParse(line.value);
     if (!parsed.success) {
       throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed', schemaRejectionDetail(parsed.error));
     }
-    const envelope = parsed.data;
-    const payload = asObject(envelope.payload);
-    if (envelope.type === 'session_meta') {
-      const declaredId = stringValue(payload.id);
-      if (!declaredId) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id', schemaIssueDetail('payload.id'));
-      }
-      nativeSessionId = declaredId;
-    }
-    if (!nativeSessionId) {
-      throw new SessionContractError(
-        'MALFORMED_SOURCE',
-        'Codex rollout has no session identity before content records',
-        schemaIssueDetail('payload.id'),
-      );
-    }
-    records.push(rolloutRecord(
-      nativeSessionId,
-      envelope,
-      payload,
+    records.push(normalizeRolloutRecord(
+      state,
+      parsed.data,
       line,
       sourceArtifactSessionId,
     ));
   }
   return { records, complete: false };
+}
+
+interface RolloutState {
+  nativeSessionId?: string;
+  metadataId?: string;
+  lineage?: Record<string, unknown>;
+  replayParentId?: string;
+}
+
+function normalizeRolloutRecord(
+  state: RolloutState,
+  envelope: z.infer<typeof RolloutEnvelopeSchema>,
+  line: BoundedJsonRecord,
+  sourceArtifactSessionId?: string,
+): ProviderRecord {
+  const payload = asObject(envelope.payload);
+  let firstMetadata = false;
+  if (envelope.type === 'session_meta') {
+    const declaredId = stringValue(payload.id);
+    if (!declaredId) {
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id', schemaIssueDetail('payload.id'));
+    }
+    if (!state.metadataId) {
+      firstMetadata = true;
+      state.metadataId = declaredId;
+      state.nativeSessionId = declaredId;
+      const spawn = asObject(asObject(asObject(payload.source).subagent).thread_spawn);
+      const lineage = Object.fromEntries(Object.entries({
+        forkedFromId: stringValue(payload.forked_from_id),
+        parentThreadId: stringValue(spawn.parent_thread_id),
+        depth: nonnegativeInteger(spawn.depth ?? payload.depth),
+        agentPath: stringValue(payload.agent_path ?? spawn.agent_path),
+        agentNickname: stringValue(payload.agent_nickname ?? spawn.agent_nickname),
+        subagentHistoryStartOrdinal: nonnegativeInteger(payload.subagent_history_start_ordinal),
+        threadSource: stringValue(payload.thread_source),
+      }).filter(([, value]) => value !== undefined));
+      if (Object.keys(lineage).length > 0) state.lineage = lineage;
+    } else if (declaredId !== state.metadataId) {
+      state.replayParentId ??= declaredId;
+    }
+  }
+  if (!state.nativeSessionId) {
+    throw new SessionContractError(
+      'MALFORMED_SOURCE',
+      'Codex rollout has no session identity before content records',
+      schemaIssueDetail('payload.id'),
+    );
+  }
+  const historyStart = state.lineage?.subagentHistoryStartOrdinal;
+  // Legacy rollouts have no ordinal boundary; a new turn ends the replay prefix.
+  if (historyStart === undefined && (envelope.type === 'turn_context'
+    || (envelope.type === 'event_msg' && payload.type === 'task_started'))) {
+    state.replayParentId = undefined;
+  }
+  const parentId = stringValue(state.lineage?.parentThreadId)
+    ?? stringValue(state.lineage?.forkedFromId)
+    ?? state.replayParentId;
+  const inherited = !firstMetadata && parentId && (typeof historyStart === 'number'
+    ? (nonnegativeInteger(envelope.ordinal) ?? line.sequence) < historyStart
+    : state.replayParentId !== undefined);
+  const record = rolloutRecord(state.nativeSessionId, envelope, payload, line, sourceArtifactSessionId);
+  if (state.lineage) record.extensions!.lineage = state.lineage;
+  if (inherited) {
+    record.extensions!.inheritedFromId = parentId;
+    record.extensions!.replayed = true;
+  }
+  return record;
+}
+
+function nonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value : undefined;
 }
 
 function threadEvidence(

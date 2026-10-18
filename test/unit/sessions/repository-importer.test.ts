@@ -78,6 +78,40 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it.each([1, 3])('propagates only sanitized Codex lineage to sessions with batch size %s', async (batchSize) => {
+    const repository = new SessionRepository();
+    const lineage = { forkedFromId: 'parent', parentThreadId: 'parent', depth: 1 };
+    const codexSource = { ...source, provider: 'codex' as const, extensions: { 'native.codex': {} } };
+    const codexAdapter = {
+      ...adapter([
+        { ...records[1], nativeEventId: 'before', extensions: {} },
+        { ...records[1], nativeEventId: 'replay', sequence: 2, extensions: {
+          lineage, inheritedFromId: 'parent', replayed: true, futureField: 42,
+        } },
+        { ...records[1], nativeEventId: 'after', sequence: 3, extensions: {} },
+      ]),
+      provider: 'codex' as const,
+    };
+    try {
+      await new IncrementalSessionImporter(repository).import({
+        source: codexSource, adapter: codexAdapter,
+        selectedSource: { provider: 'codex', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: codexSource.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+        workspaceId: 'workspace-1', policyVersion: '1.0.0', limits: { batchSize },
+      });
+      const id = stableSessionId('codex', codexSource.sourceId, 'native-1');
+      const native = repository.getSession(id)?.extensions['native.codex'];
+      expect(native).toMatchObject({ lineage });
+      expect(native).not.toHaveProperty('inheritedFromId');
+      expect(native).not.toHaveProperty('replayed');
+      expect(native).not.toHaveProperty('futureField');
+      expect(repository.listEvents(id)[1].extensions['native.codex'])
+        .toMatchObject({ lineage, inheritedFromId: 'parent', replayed: true, futureField: 42 });
+    } finally {
+      repository.close();
+    }
+  });
+
   it.each(['maxRecordBytes', 'maxTotalBytes', 'maxRecords'] as const)(
     'preserves configured and observed %s in import failure details', async (limit) => {
       const repository = new SessionRepository();
