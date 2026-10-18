@@ -1292,17 +1292,17 @@ export class SessionRepository {
     const pageParams = [...params];
     if (cursor) {
       pageWhere.push(`(
-        COALESCE(json_extract(s.data, '$.updatedAt'), '') > ?
+        COALESCE(json_extract(s.data, '$.updatedAt'), '') < ?
         OR (
           COALESCE(json_extract(s.data, '$.updatedAt'), '') = ?
-          AND s.session_id > ?
+          AND s.session_id < ?
         )
       )`);
       pageParams.push(cursor.updatedAt, cursor.updatedAt, cursor.sessionId);
     }
     const items = this.db.prepare(
       `SELECT s.data FROM sessions s WHERE ${pageWhere.join(' AND ')}
-       ORDER BY COALESCE(json_extract(s.data, '$.updatedAt'), ''), s.session_id
+       ORDER BY COALESCE(json_extract(s.data, '$.updatedAt'), '') DESC, s.session_id DESC
        LIMIT ?${options.offset ? ' OFFSET ?' : ''}`,
     ).all(...pageParams, options.limit + 1, ...(options.offset ? [options.offset] : []))
       .map((row) => JSON.parse(String(row.data)) as Session);
