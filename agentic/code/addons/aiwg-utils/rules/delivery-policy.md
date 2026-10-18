@@ -1,4 +1,34 @@
 ---
+activation: summary
+summary: Read the target repository delivery and tracker configuration before git, issue, PR, or release work; follow its branch, signing, actor, CI, and closure policy.
+bound_to:
+  skills:
+    - address-issues
+    - aiwg-delivery-pr
+    - aiwg-issue
+    - aiwg-pr
+    - commit-and-push
+    - dev-release-coordinate
+    - flow-delivery-track
+    - flow-release
+    - issue-audit
+    - issue-auto-sync
+    - issue-close
+    - issue-comment
+    - issue-create
+    - issue-driven-al
+    - issue-list
+    - issue-planner
+    - issue-sync
+    - issue-update
+    - release-publication-verify
+    - steward
+    - steward-prep-delivery
+  agents:
+    - aiwg-steward
+  flows:
+    - flow-delivery-track
+    - flow-release
 enforcement: high
 id: delivery-policy
 severity: HIGH
