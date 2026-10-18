@@ -2622,19 +2622,23 @@ export function getAddonRuleFiles(srcRoot, excludeAddons = [], options = {}) {
   for (const addon of addons) {
     if (excludeAddons.includes(addon.name)) continue;
 
-    // Skip addons with consolidated rule indexes — their rules are
-    // included via assembleRulesIndex() instead of individual files
-    if (addon.manifest?.consolidation?.deployIndexOnly) continue;
-
     const rulesDir = path.join(addon.path, 'rules');
     if (fs.existsSync(rulesDir)) {
-      files.push(...listMdFiles(rulesDir));
+      for (const file of listMdFiles(rulesDir)) {
+        // Consolidation remains a legacy inventory policy. Explicit activation
+        // owns delivery, including the desired set used by the outer prune.
+        if (addon.manifest?.consolidation?.deployIndexOnly) {
+          const parsed = parseRuleFrontmatter(fs.readFileSync(file, 'utf8'));
+          if (!parsed.valid) throw new Error(`${file}: invalid rule frontmatter`);
+          if (!parsed.rule.tagged) continue;
+        }
+        files.push(file);
+      }
     }
   }
 
-  // Tier gate (#1673): inline only always-on (CRITICAL/HIGH) rules. MEDIUM/LOW
-  // stay on-demand. Applied here so both the deploy enumeration and the prune
-  // desired-set (computeAllArtifactBasenames) exclude them for every provider.
+  // Activation selects bodies; only untagged rules use the old severity tier.
+  // The deploy enumeration and prune desired set must select the same bodies.
   return files.filter(isAlwaysOnRule);
 }
 

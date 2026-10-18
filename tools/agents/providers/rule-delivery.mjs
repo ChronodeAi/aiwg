@@ -6,7 +6,7 @@ import { importImpl } from '../../_resolve-impl.mjs';
 import {
   listMdFiles, discoverAddons, getFrameworksForMode, collectBehaviorDirs,
   resolveAiwgRoot, ruleEnforcementLevel, stripTriggersFromContent,
-  addManagedMarker, contentHash, replaceBoundRulesBlock, deployEmulatedBehaviors,
+  addManagedMarker, contentHash, replaceBoundRulesBlock, deployEmulatedBehaviors, filterAgentFiles,
 } from './base.mjs';
 
 const { parseRuleFrontmatter, inferRuleActivation, RULE_BINDING_TYPES } = await importImpl(import.meta.url, 'rules/activation.mjs');
@@ -18,6 +18,17 @@ function walk(dir) {
     const file = path.join(dir, entry.name);
     return entry.isDirectory() ? walk(file) : entry.isFile() ? [file] : [];
   });
+}
+// Empty directories are part of workspace and skill-resource scaffolds too.
+function promoteDirectories(source, destination, skip = () => false, prefix = '') {
+  const entries = fs.readdirSync(source, { withFileTypes: true });
+  if (!entries.length && !fs.existsSync(destination)) fs.mkdirSync(destination, { recursive: true });
+  for (const entry of entries) {
+    const rel = path.join(prefix, entry.name);
+    if (entry.isDirectory() && !skip(rel)) {
+      promoteDirectories(path.join(source, entry.name), path.join(destination, entry.name), skip, rel);
+    }
+  }
 }
 const read = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 const structural = file => /^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(path.basename(file));
@@ -48,35 +59,59 @@ export async function prepareRuleDelivery(opts) {
   });
   const bindings = new Map();
   const targets = [];
+  const targetKeys = new Set();
   if (rules.some(rule => Object.values(rule.bound_to).some(ids => ids.length))) {
     const { loadLocalCapabilityEntries, resolveRuleBindingTarget } = await importImpl(import.meta.url, 'artifacts/query-engine.js');
     const root = resolveAiwgRoot(opts.srcRoot) || opts.srcRoot;
-    const buildSourceEntries = async () => {
+    // Framework graph paths are package-relative; project graph paths belong
+    // to the queried project. Normalize before merging so one source cannot
+    // become two apparently ambiguous targets after a source-index rebuild.
+    const loadEntries = cwd => loadLocalCapabilityEntries(cwd).map(entry => ({ ...entry,
+      path: path.resolve(entry.path.startsWith('agentic/code/') ? root : cwd, entry.path),
+    }));
+    let rebuilt = false;
+    const cacheDir = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+    const cacheFile = cacheDir && path.join(cacheDir, `${contentHash(root)}.json`);
+    const buildSourceEntries = async (refresh = false) => {
+      if (!refresh && cacheFile && fs.existsSync(cacheFile)) return JSON.parse(read(cacheFile));
       const indexTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-rule-index-'));
       try {
         const { buildIndex } = await importImpl(import.meta.url, 'artifacts/index-builder.js');
         await buildIndex(root, { scope: root === opts.srcRoot && !fs.existsSync(path.join(root, 'agentic')) ? '.' : 'agentic/code', outputDir: indexTemp, force: true, quiet: true });
+        rebuilt = true;
         const index = JSON.parse(read(path.join(indexTemp, '.aiwg', '.index', 'metadata.json')));
-        return Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
+        const entries = Object.values(index.entries).map(entry => ({ ...entry, path: path.resolve(root, entry.path) }));
+        if (cacheFile) {
+          fs.mkdirSync(cacheDir, { recursive: true });
+          fs.writeFileSync(cacheFile, JSON.stringify(entries));
+        }
+        return entries;
       } finally { fs.rmSync(indexTemp, { recursive: true, force: true }); }
     };
-    let entries = opts.bindingEntries || loadLocalCapabilityEntries(opts.target);
-    let rebuilt = false;
+    let entries = opts.bindingEntries || loadEntries(opts.target);
     if (!opts.bindingEntries) {
-      const sourceEntries = loadLocalCapabilityEntries(root);
+      const sourceEntries = loadEntries(root);
       entries.push(...sourceEntries);
-      if (!sourceEntries.length) { entries.push(...await buildSourceEntries()); rebuilt = true; }
+      if (!sourceEntries.length) entries.push(...await buildSourceEntries());
     }
     // A stored index can predate the source tree (edge/dev checkouts). Rebuild once from source
     // before reporting a binding target as missing.
+    const resolvedTargets = new Map();
     const resolveTarget = async (type, id) => {
-      try { return resolveRuleBindingTarget(entries, type, id); }
+      const key = `${type}:${id}`;
+      if (resolvedTargets.has(key)) return resolvedTargets.get(key);
+      let target;
+      try { target = resolveRuleBindingTarget(entries, type, id); }
       catch (error) {
         if (rebuilt || opts.bindingEntries || !/^Missing /.test(error.message)) throw error;
-        entries = [...loadLocalCapabilityEntries(opts.target), ...await buildSourceEntries()];
+        entries = [...loadEntries(opts.target), ...await buildSourceEntries(true)];
         rebuilt = true;
-        return resolveRuleBindingTarget(entries, type, id);
+        target = resolveRuleBindingTarget(entries, type, id);
+        // A rebuild replaces the input set for every lookup.
+        resolvedTargets.clear();
       }
+      resolvedTargets.set(key, target);
+      return target;
     };
     for (const rule of rules.filter(rule => rule.tagged)) {
       for (const [key, type] of Object.entries(RULE_BINDING_TYPES)) {
@@ -85,7 +120,11 @@ export async function prepareRuleDelivery(opts) {
           const source = path.isAbsolute(target.path) ? target.path : path.resolve(target.path.startsWith('agentic/code/') ? root : opts.target, target.path);
           if (!fs.existsSync(source)) throw new Error(`${rule.file}: binding target content missing: ${source}`);
           bindings.set(source, [...(bindings.get(source) || []), rule]);
-          targets.push({ ...target, source });
+          const key = `${target.type}:${source}`;
+          if (!targetKeys.has(key)) {
+            targetKeys.add(key);
+            targets.push({ ...target, source });
+          }
         }
       }
     }
@@ -118,6 +157,11 @@ function block(content, body) {
   const marker = /\n?<!-- AIWG:rule-startup:start -->[\s\S]*?<!-- AIWG:rule-startup:end -->\n?/g;
   const clean = content.replace(marker, '');
   return body ? `${clean.trimEnd()}\n\n<!-- AIWG:rule-startup:start -->\n${body}\n<!-- AIWG:rule-startup:end -->\n` : clean;
+}
+
+function putStartup(file, body) {
+  const content = fs.existsSync(file) ? read(file) : '<!-- aiwg-managed -->\n';
+  put(file, block(content, body));
 }
 
 /** Tagged rules bypass legacy aggregate writers. Untagged projections retain their tier policy. */
@@ -183,18 +227,31 @@ function projectRules(opts, provider) {
     const routes = [...new Set(opts.definitionRoutes || [])];
     const routing = routes.length ? `## Invoked artifact definitions\n\nRead the complete definition before invoking its artifact:\n${routes.map(route => `- ${route}`).join('\n')}` : '';
     const body = [...kernels.map(rule => `## Rule: ${rule.name}\n\n${rule.body.trim()}`), index, routing].filter(Boolean).join('\n\n');
+    if (!body) {
+      // No activation-selected startup contract: retain legacy context owners
+      // without inventing an empty policy file or a dangling bootstrap read.
+      const contexts = ['AIWG.md', 'AGENTS.md', 'WARP.md', '.hermes.md'].map(name => path.join(opts.target, name));
+      if (opts.activeWorkspace) contexts.push(path.join(opts.activeWorkspace, 'AGENTS.md'));
+      for (const file of contexts) {
+        if (!fs.existsSync(file)) continue;
+        const content = read(file);
+        const clean = block(content, '');
+        if (clean !== content) put(file, clean);
+      }
+      return;
+    }
     if (provider.name === 'hermes') {
       const dest = path.join(opts.target, 'AGENTS.md');
-      put(dest, block(read(dest), body));
-      put(path.join(opts.target, '.hermes.md'), block(read(path.join(opts.target, '.hermes.md')), 'Read and follow `AGENTS.md` in this directory before every task and subagent task.'));
+      putStartup(dest, body);
+      putStartup(path.join(opts.target, '.hermes.md'), 'Read and follow `AGENTS.md` in this directory before every task and subagent task.');
     } else if (provider.name === 'warp') {
       const dest = path.join(opts.target, 'WARP.md');
-      put(dest, block(read(dest), body));
+      putStartup(dest, body);
     } else {
       const dest = path.join(opts.target, 'AIWG.md');
-      put(dest, block(read(dest), body));
+      putStartup(dest, body);
       const bridge = provider.name === 'openclaw' ? path.join(opts.activeWorkspace, 'AGENTS.md') : path.join(opts.target, 'AGENTS.md');
-      put(bridge, block(read(bridge), `Read and follow ${JSON.stringify(dest)} before every task and subagent task. It contains the complete activation-selected kernel and rule index.`));
+      putStartup(bridge, `Read and follow ${JSON.stringify(dest)} before every task and subagent task. It contains the complete activation-selected kernel and rule index.`);
     }
   }
 }
@@ -203,6 +260,10 @@ function projectRules(opts, provider) {
 function finishBindings(opts, provider) {
   const roots = [opts.target, opts.deploymentHome, ...Object.values(provider.paths).filter(p => path.isAbsolute(p))];
   const files = [...new Set(roots.flatMap(walk))];
+  const targetsBySource = new Map();
+  for (const target of opts.ruleDelivery.targets) {
+    targetsBySource.set(target.source, [...(targetsBySource.get(target.source) || []), target]);
+  }
   for (const file of files.filter(file => /\.(md|toml)$/.test(file))) {
     if (!/(?:[/\\](?:skills|agents|commands)[/\\])/.test(file)) continue;
     if (/[/\\]rules[/\\]/.test(file) || /[/\\]\.aiwg[/\\](?!skills[/\\])/.test(file.replace(opts.target, ''))) continue;
@@ -214,9 +275,10 @@ function finishBindings(opts, provider) {
     const sidecar = fs.existsSync(sidecarPath) ? JSON.parse(read(sidecarPath)) : null;
     const source = sidecar?.skillSource ? path.join(sidecar.skillSource, 'SKILL.md') : sidecar?.managed?.[path.basename(file)]?.sourcePath;
     const flowSource = opts.flowSkillSources?.get(file);
-    const targets = opts.ruleDelivery.targets.filter(target => target.source === flowSource || (source ? path.resolve(source) === target.source :
-      (skill ? target.type !== 'agent' : file.includes('/agents/') ? target.type === 'agent' : target.type === 'flow') &&
-      [target.name, path.basename(target.source, '.md'), path.basename(path.dirname(target.source))].includes(name)));
+    const targets = [...(flowSource ? targetsBySource.get(flowSource) || [] : []),
+      ...(source ? targetsBySource.get(path.resolve(source)) || [] : opts.ruleDelivery.targets.filter(target =>
+        (skill ? target.type !== 'agent' : file.includes('/agents/') ? target.type === 'agent' : target.type === 'flow') &&
+        [target.name, path.basename(target.source, '.md'), path.basename(path.dirname(target.source))].includes(name)))];
     const rules = targets.flatMap(target => opts.ruleDelivery.bindings.get(target.source) || []);
     if (!rules.length && !content.includes('<!-- AIWG:bound-rules:start -->')) continue;
     if (file.endsWith('.toml')) content = content.replace(/^developer_instructions = (".*")$/m, (_, value) => `developer_instructions = ${JSON.stringify(replaceBoundRulesBlock(JSON.parse(value), rules))}`);
@@ -375,8 +437,10 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
     const selectedRoots = [original.srcRoot, ...getFrameworksForMode(original.srcRoot, original.mode).map(framework => framework.path), ...discoverAddons(original.srcRoot).map(addon => addon.path)];
     const selected = entry => selectedRoots.some(root => /^(agents|skills|commands|flows|workflows)[/\\]/.test(path.relative(root, entry.source)));
     opts.definitionRoutes = [];
-    if (provider.name === 'hermes' && !opts.skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
-      for (const target of delivery.targets.filter(target => target.type === 'agent' && selected(target))) {
+    if (provider.name === 'hermes' && !opts.kernelOnly && !opts.skillsOnly && !opts.commandsOnly && !opts.rulesOnly) {
+      const agents = delivery.targets.filter(target => target.type === 'agent' && selected(target));
+      const selectedAgents = new Set(filterAgentFiles(agents.map(target => target.source), opts));
+      for (const target of agents.filter(target => selectedAgents.has(target.source))) {
         const source = target.source;
         put(path.join(stage, '.hermes', 'agents', path.basename(source)), replaceBoundRulesBlock(read(source), delivery.bindings.get(source)));
         opts.definitionRoutes.push(`${target.name}: .hermes/agents/${path.basename(source)}`);
@@ -412,7 +476,27 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         if (content.length > 15_000) console.warn(`Hermes ${name} above 15000 character soft limit (${content.length})`);
       }
     }
+    // Absolute provider roots can nest (Hermes standard skills live beneath
+    // its kernel root). A more specific mount owns that subtree exclusively;
+    // the parent's older snapshot must not resurrect pruned files/directories.
+    const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
+      && mapping.from.startsWith(`${from}${path.sep}`)
+      && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
     if (original.dryRun) {
+      // A validated plan must describe the operator's final paths, rather than
+      // exposing only the temporary paths used to assemble that plan.
+      for (const { from, to, before } of mappings) {
+        const after = new Set(walk(to).map(file => path.relative(to, file)).filter(rel => !delegated(from, rel)));
+        for (const rel of after) {
+          const file = path.join(to, rel);
+          if (!before.get(rel)?.equals(fs.readFileSync(file))) console.log(`[dry-run] Would write ${normalize(file)}`);
+        }
+        for (const rel of before.keys()) if (!delegated(from, rel) && !after.has(rel)) console.log(`[dry-run] Would remove ${path.join(from, rel)}`);
+      }
+      for (const name of rootNames) {
+        const file = path.join(stage, name);
+        if (fs.existsSync(file) && normalize(read(file)) !== read(path.join(target, name))) console.log(`[dry-run] Would write ${path.join(target, name)}`);
+      }
       console.log(`[dry-run] Planned ${provider.name} deployment: ${guarded.report.selected_bytes} startup bytes; no output promoted.`);
       return guarded.report;
     }
@@ -421,8 +505,9 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         if (before.size) fs.rmSync(from, { recursive: true, force: true });
         continue;
       }
-      const after = new Set(walk(to).map(file => path.relative(to, file)));
-      for (const rel of before.keys()) if (!after.has(rel)) {
+      promoteDirectories(to, from, rel => delegated(from, rel));
+      const after = new Set(walk(to).map(file => path.relative(to, file)).filter(rel => !delegated(from, rel)));
+      for (const rel of before.keys()) if (!delegated(from, rel) && !after.has(rel)) {
         fs.rmSync(path.join(from, rel), { force: true });
         // A pruned managed skill must disappear as a directory too. Remove
         // only empty parents absent from the staged result; preserve siblings.

@@ -2697,11 +2697,20 @@ export class UseHandler implements CommandHandler {
       || ctx.args.includes('--workspace-signals');
     if (bypassOrchestration) return this.executeCore(ctx);
 
+    // Child deployers share one source-index snapshot for this invocation. Each
+    // addon still resolves and validates its bindings through the common query
+    // engine, without rebuilding the entire corpus on every additive pass.
+    const bindingCache = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
+    const previousBindingCache = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+    process.env.AIWG_RULE_BINDING_INDEX_CACHE = bindingCache;
     this.orchestrationDepth += 1;
     try {
       return await this.executeOrchestrated(ctx, requestedBundle);
     } finally {
       this.orchestrationDepth -= 1;
+      if (previousBindingCache === undefined) delete process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+      else process.env.AIWG_RULE_BINDING_INDEX_CACHE = previousBindingCache;
+      await fs.rm(bindingCache, { recursive: true, force: true });
     }
   }
 
@@ -3925,6 +3934,15 @@ export class UseHandler implements CommandHandler {
     // Deploy all addons (excluding disallow list) unless --no-utils
     if (!skipUtils) {
       const allAddons = await getAllAddons(frameworkRoot);
+      // These root collectors already deploy every eligible addon. Re-staging
+      // the entire deployment per addon duplicates that work. Codex's skills
+      // helper includes addons only in all mode; other modes retain their pass.
+      // CLI contribution registration below still runs for every addon.
+      const selectedMode = MODE_MAP[framework as Framework];
+      const mainIncludesAddons = ((provider === 'claude' && ['general', 'sdlc', 'both', 'all'].includes(selectedMode))
+        || (provider === 'codex' && selectedMode === 'all'))
+        && !providerDeployArgs.some(arg => arg === '--source' || arg.startsWith('--source='))
+        && providerDeployArgs.filter(arg => arg === '--mode').length === 1;
       for (const addon of allAddons) {
         if (verbose) {
           console.log('');
@@ -3934,9 +3952,9 @@ export class UseHandler implements CommandHandler {
         const addonArgs = quiet
           ? ['--quiet', '--source', source, ...addonBaseArgs]
           : ['--source', source, ...addonBaseArgs];
-        const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
+        if (!mainIncludesAddons) {
+          const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
+          if (result.exitCode !== 0) return result;
         }
         try {
           await registerSourceCliCommands({

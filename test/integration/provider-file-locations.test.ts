@@ -1,3 +1,4 @@
+import { sdlcDeploymentRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Provider File Locations Integration Tests
@@ -27,6 +28,7 @@ import os from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const activationRules = sdlcDeploymentRules(REPO_ROOT);
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-git-check-'));
   try {
@@ -480,7 +482,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Edge Cases', () => {
     );
 
     expect(content).not.toBe('OLD CONTENT');
-    expect(content).toContain('# AIWG');  // Should have proper content
+    expect(content).toContain('# Rule kernel index');
   });
 });
 
@@ -512,19 +514,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
     // Should have RULES-INDEX.md
     expect(mdFiles).toContain('RULES-INDEX.md');
 
-    // Per PUW-016 (#1117): individual rule files now ship ALONGSIDE
-    // RULES-INDEX.md so the @-references in the index resolve. The original
-    // assertion that the consolidated index *replaces* individual files no
-    // longer holds. We instead assert that the index plus the individual
-    // files are both present — the union surface.
+    // ADR: kernel and native path bodies accompany the summary index;
+    // bound, summary and on-demand bodies stay outside the startup tree.
     const individualRules = mdFiles.filter(f => f !== 'RULES-INDEX.md');
-    const knownIndividualRules = [
-      'no-attribution.md', 'token-security.md', 'versioning.md',
-      'anti-laziness.md', 'executable-feedback.md', 'failure-mitigation.md',
-      'tao-loop.md', 'hitl-gates.md', 'provenance-tracking.md',
-    ];
-    for (const knownRule of knownIndividualRules) {
-      expect(individualRules, `${knownRule} should be deployed individually per PUW-016`).toContain(knownRule);
+    for (const rule of activationRules) {
+      const assertion = expect(individualRules, `${rule.name} (${rule.activation})`);
+      if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
+      else assertion.not.toContain(`${rule.name}.md`);
     }
   });
 
@@ -534,10 +530,15 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
     const indexPath = path.join(projectDir, '.claude', 'rules', 'RULES-INDEX.md');
     const content = await fs.readFile(indexPath, 'utf-8');
 
-    expect(content).toContain('# AIWG Rules Index');
-    expect(content).toContain('## Core Rules');
-    expect(content).toContain('## SDLC Rules');
-    expect(content).toContain('## Quick Reference by Context');
+    expect(content).toContain('# Rule kernel index');
+    const summaries = activationRules.filter(rule => rule.activation === 'summary');
+    expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
+      .toEqual(summaries.map(rule => rule.data.name || rule.name).sort());
+    for (const rule of summaries) {
+      expect(content).toContain(rule.data.summary);
+      expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+      expect(content).not.toContain(rule.body);
+    }
   });
 
   it('preserves operator pre-existing rule files on redeploy (#1143 default-off cleanup)', async () => {

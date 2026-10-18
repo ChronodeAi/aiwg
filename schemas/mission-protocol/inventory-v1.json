@@ -1847,6 +1847,16 @@
       "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
     },
     {
+      "path": "test/uat/rule-binding/wave5-sdlc-b-probes.yaml",
+      "owner": "test/uat",
+      "role": "fixture-or-test",
+      "currentVersion": "unversioned",
+      "statusVocabulary": [],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
       "path": "test/unit/a2a/dispatch-router.test.ts",
       "owner": "test/unit",
       "role": "fixture-or-test",

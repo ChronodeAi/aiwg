@@ -8,7 +8,8 @@ import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 import yaml from 'js-yaml';
 import Ajv from 'ajv/dist/2020.js';
-import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+const { boundedSpawnSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 import { ROOT } from './measure-startup-context.mjs';
 
 export const REQUIRED_RULES = ['human-authorization', 'instruction-comprehension', 'research-before-decision',

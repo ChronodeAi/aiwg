@@ -117,7 +117,8 @@ describe('rule tier deployment (#1673)', () => {
   describe('deploy enumerators on real source', () => {
     it('getAddonRuleFiles yields activation-selected bodies and structural indexes', () => {
       const expected = sourceRules(REPO_ROOT, 'addons')
-        .filter(rule => !rule.consolidated && rule.fileDelivered).map(rule => rule.file).sort();
+        .filter(rule => (!rule.consolidated || !rule.structural && rule.data.activation !== undefined) && rule.fileDelivered)
+        .map(rule => rule.file).sort();
       expect(getAddonRuleFiles(REPO_ROOT).sort()).toEqual(expected);
     });
 
@@ -324,14 +325,14 @@ describe('on-demand index propagation (#1675)', () => {
       expect(body).toContain('On-Demand Rules');
       expect(body).toContain('aiwg show rule ');
       expect([...body.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
-      for (const name of migratedTierNames) expect(body).not.toContain(`aiwg show rule ${name}\``);
+      for (const name of migratedTierNames) expect(body).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(body).not.toContain('{{ON_DEMAND_RULES}}');
 
       openhumanAgentsMd(target, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'), false);
       const addonPassBody = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(addonPassBody).toContain('On-Demand Rules');
       expect([...addonPassBody.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
-      for (const name of migratedTierNames) expect(addonPassBody).not.toContain(`aiwg show rule ${name}\``);
+      for (const name of migratedTierNames) expect(addonPassBody).not.toContain(`- \`${name}\` — \`aiwg show rule `);
       expect(addonPassBody).not.toContain('{{ON_DEMAND_RULES}}');
 
       await rm(target, { recursive: true, force: true });

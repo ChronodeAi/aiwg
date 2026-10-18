@@ -139,7 +139,9 @@ describe('initHandler', () => {
       expect(existsSync(normalizedPath)).toBe(true);
       const normalized = readFileSync(normalizedPath, 'utf8');
       expect(normalized).toContain('## Context Finalization');
-      expect(normalized).toContain('aiwg discover');
+      // The kernel owns discovery policy; normalized context routes to it.
+      expect(normalized).toContain('aiwg show rule skill-discovery');
+      expect(normalized).toContain('aiwg show skill aiwg-utils-quickref');
     });
 
     it('keeps control files local while honoring AIWG_ARTIFACTS_PATH for the corpus', async () => {

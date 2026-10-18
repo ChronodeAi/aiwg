@@ -427,6 +427,11 @@ describe('Deployment Scaffold', () => {
         env: {
           ...process.env,
           AIWG_ROOT: REPO_ROOT,
+          HOME: configDir, USERPROFILE: configDir,
+          XDG_CONFIG_HOME: path.join(configDir, 'config'),
+          XDG_CACHE_HOME: path.join(configDir, 'cache'),
+          XDG_DATA_HOME: path.join(configDir, 'data'),
+          XDG_STATE_HOME: path.join(configDir, 'state'),
           AIWG_CONFIG: configDir,
           NO_UPDATE_NOTIFIER: '1',
           AIWG_NO_UPDATE_CHECK: '1',

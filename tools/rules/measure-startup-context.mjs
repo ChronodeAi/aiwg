@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 
 export const ROOT = path.resolve(import.meta.dirname, '../..');
 export const PROVIDERS = ['claude', 'codex', 'cursor', 'hermes', 'warp', 'openclaw'];

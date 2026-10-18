@@ -24,10 +24,11 @@ let trustRootFile = '';
 let fixture: ReturnType<typeof createWebResourceReleaseFixture>;
 let packMetadata: { name: string; version: string; size: number; unpackedSize: number; files: Array<{ path: string }> };
 
+// Registry isolation must retain an explicit offline policy from the caller.
 function isolatedNpmEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(([key]) =>
-      !key.toLowerCase().startsWith('npm_config_') && key !== 'AIWG_ROOT' && key !== 'AIWG_CONFIG'),
+      (!key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline') && key !== 'AIWG_ROOT' && key !== 'AIWG_CONFIG'),
   );
 }
 

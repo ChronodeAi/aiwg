@@ -310,7 +310,7 @@ function mergeHermesContext(file, generated, kind) {
   } else if (kind === 'routing' && existing.includes(generated)) {
     existing = existing.replace(generated, '');
   }
-  return existing ? `${existing.trimEnd()}\n\n${managed}\n` : `${managed}\n`;
+  return existing ? `${existing.trimEnd()}\n\n${managed}\n` : `<!-- aiwg-managed -->\n${managed}\n`;
 }
 
 export function generateAgentsMd(agentCount, skillCount, targetDir, opts) {

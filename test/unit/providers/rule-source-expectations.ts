@@ -26,7 +26,17 @@ export function sourceRules(root: string, kind: 'addons' | 'frameworks' | 'exten
         body: content.slice(header?.[0].length || 0).trim(),
         fileDelivered: structural || ['kernel', 'paths'].includes(activation),
         legacyOnDemand: !structural && data.activation === undefined && activation === 'on-demand',
-        consolidated: kind === 'addons' && manifest.consolidation?.deployIndexOnly === true };
+        // Consolidation suppresses only legacy untagged body delivery. An
+        // authored activation contract remains authoritative for tagged rules.
+        consolidated: data.activation === undefined && kind === 'addons'
+          && manifest.consolidation?.deployIndexOnly === true };
     });
   });
+}
+
+/** The SDLC deploy selects its framework plus non-explicit, non-dev addons. */
+export function sdlcDeploymentRules(root: string) {
+  return [...sourceRules(root, 'addons'), ...sourceRules(root, 'frameworks').filter(rule =>
+    rule.file.startsWith(join(root, 'agentic/code/frameworks/sdlc-complete') + '/'))]
+    .filter(rule => !rule.structural);
 }

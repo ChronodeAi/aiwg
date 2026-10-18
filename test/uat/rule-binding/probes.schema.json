@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/testing/rule-binding-probes.schema.json",
   "title": "Rule binding behavioral probes",
   "type": "object",
   "additionalProperties": false,

@@ -27,7 +27,8 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
   let bundle: string;
   let entries: ArtifactIndex['entries'];
   let rules: Array<{ name: string; file: string; data: any }>;
-  const isolatedEnv = (home: string, aiwgRoot = repo) => ({ PATH: process.env.PATH, HOME: home, USERPROFILE: home,
+  const isolatedEnv = (home: string, aiwgRoot = repo) => ({ TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home,
     AIWG_ROOT: aiwgRoot, AIWG_CONFIG: path.join(home, '.config/aiwg'),
     XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
     XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
@@ -227,6 +228,15 @@ describe('Wave 5 secops canonical rule delivery (#2945)', () => {
       }
     }
     for (const file of outputs.filter(file => /\/(?:AGENTS|AIWG|WARP)\.md$/.test(file))) expect(read(file)).not.toContain('<!-- AIWG:bound-rules:start -->');
-    if (provider === 'codex') expect(fs.statSync(path.join(project, 'AGENTS.md')).size).toBeLessThan(32768);
+    if (provider === 'codex') {
+      const agents = path.join(project, 'AGENTS.md');
+      if (fs.existsSync(agents)) expect(fs.statSync(agents).size).toBeLessThan(32768);
+      else {
+        // ADR: a bound/on-demand-only selection has no startup rule contract
+        // and needs no new bridge. Automatic selections still require one.
+        expect(selectedRules.length).toBeGreaterThan(0);
+        expect(selectedRules.every(rule => ['bound', 'on-demand'].includes(rule.data.activation))).toBe(true);
+      }
+    }
   }, 180_000);
 });

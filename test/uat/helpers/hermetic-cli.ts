@@ -26,10 +26,11 @@
  */
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { afterAll } from 'vitest';
 
 // test/uat/helpers/hermetic-cli.ts -> repo root is three levels up.
 const __filename = fileURLToPath(import.meta.url);
@@ -74,7 +75,10 @@ function nodeOnlyPathDir(): string {
   cachedNodeOnlyDir = dir;
   return dir;
 }
-SYSTEM_PATH_DIRS.unshift(nodeOnlyPathDir());
+afterAll(() => {
+  if (cachedNodeOnlyDir) rmSync(cachedNodeOnlyDir, { recursive: true, force: true });
+  cachedNodeOnlyDir = null;
+});
 
 let cachedMarkerNames: string[] | null = null;
 
@@ -119,7 +123,7 @@ export interface HermeticEnvOptions {
  */
 export async function buildHermeticEnv(options: HermeticEnvOptions = {}): Promise<Record<string, string>> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-  env.PATH = [...(options.pathDirs ?? []), ...SYSTEM_PATH_DIRS].join(path.delimiter);
+  env.PATH = [...(options.pathDirs ?? []), nodeOnlyPathDir(), ...SYSTEM_PATH_DIRS].join(path.delimiter);
   // Process plumbing Node itself may need; never a credential or harness marker.
   env.NO_COLOR = '1';
   env.NO_UPDATE_NOTIFIER = '1';

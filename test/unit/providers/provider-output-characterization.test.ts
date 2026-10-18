@@ -273,8 +273,13 @@ describe('provider output characterization for registry migration', () => {
         const content = readFileSync(filePath, 'utf8');
         if (rel === 'CLAUDE.md') {
           expect(content, `${provider} ${rel}`).toContain('@AIWG.md');
+        } else if (rel === 'AIWG.md' || rel === '.aiwg/AIWG.md') {
+          // ADR: templates point to the kernel routing authority instead of
+          // duplicating its normative discovery instructions in every bridge.
+          expect(content, `${provider} ${rel}`).toContain('aiwg show rule skill-discovery');
         } else {
-          expect(content, `${provider} ${rel}`).toContain('aiwg discover');
+          expect(content, `${provider} ${rel}`).toContain('AIWG.md');
+          expect(content, `${provider} ${rel}`).toContain('WORKSPACE.md');
         }
       }
 

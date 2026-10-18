@@ -114,6 +114,16 @@ describe('installed user entry points load their shipped implementations (#3077)
       .toContain('Would remove 0 unchanged OMP-owned files');
   });
 
+  it('plans rule probes from packed defaults without invoking a model', () => {
+    const previousPath = env.PATH;
+    env.PATH = path.join(scratch, 'no-binaries');
+    try {
+      const result = run('tools/rules/run-rule-probes.mjs', ['--dry-run', '--rule', 'human-authorization', '--n', '1']);
+      expect(JSON.parse(result.stdout).call_count).toBe(3);
+      expect(existsSync(path.join(installed, 'test/fixtures/rule-binding/project/README.md'))).toBe(true);
+    } finally { env.PATH = previousPath; }
+  });
+
   it('loads the Docker manager before reporting an unavailable Docker binary', () => {
     // An empty PATH guarantees this probe cannot start a real container.
     const previousPath = env.PATH;

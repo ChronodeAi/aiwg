@@ -12,7 +12,7 @@ const REPO_ROOT = resolve(__dirname, '../..');
 const roots: string[] = [];
 const roles = ['reasoning', 'coding', 'efficiency'] as const;
 
-function deploy(provider: string, target: string, home: string, dryRun = false): string {
+function deploy(provider: string, target: string, home: string, dryRun = false, source?: string): string {
   return execFileSync(process.execPath, [
     join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'),
     '--provider', provider,
@@ -21,6 +21,7 @@ function deploy(provider: string, target: string, home: string, dryRun = false):
     '--target', target,
     '--skip-commands-migration',
     '--verbose',
+    ...(source ? ['--source', source] : []),
     ...(dryRun ? ['--dry-run'] : []),
   ], { timeout: 60_000,
     cwd: REPO_ROOT,
@@ -133,18 +134,34 @@ describe('model worker provider matrix', () => {
     const warpTarget = join(root, 'warp');
     deploy('warp', warpTarget, home);
     const warp = await readFile(join(warpTarget, 'WARP.md'), 'utf8');
-    for (const role of roles) expect(warp).toContain(`# AIWG ${role[0].toUpperCase()}${role.slice(1)} Model Worker`);
+    for (const role of roles) {
+      const definition = `.warp/agents/aiwg-model-${role}-worker.md`;
+      expect(warp).toContain(definition);
+      const content = await readFile(join(warpTarget, definition), 'utf8');
+      expect(content).toContain(`# AIWG ${role[0].toUpperCase()}${role.slice(1)} Model Worker`);
+      expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+    }
+    expect(warp).not.toContain('<!-- AIWG:bound-rules:start -->');
 
     const windsurfTarget = join(root, 'windsurf');
     deploy('windsurf', windsurfTarget, home);
     const windsurf = await readFile(join(windsurfTarget, 'AGENTS.md'), 'utf8');
     for (const role of roles) expect(windsurf).toContain(`aiwg-model-${role}-worker`);
 
+    // ADR: a full selected kernel that exceeds Hermes's hard cap must fail,
+    // preserving the prior deployment. The worker-only addon fits independently.
+    const fullHermesTarget = join(root, 'hermes-full');
+    expect(() => deploy('hermes', fullHermesTarget, home)).toThrow(/19000/);
+    await expect(access(join(fullHermesTarget, 'AGENTS.md'))).rejects.toThrow();
     const hermesTarget = join(root, 'hermes');
-    deploy('hermes', hermesTarget, home);
+    deploy('hermes', hermesTarget, home, false, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'));
+    const hermes = await readFile(join(hermesTarget, 'AGENTS.md'), 'utf8');
     for (const role of roles) {
-      await expect(access(join(hermesTarget, `.hermes/agents/aiwg-model-${role}-worker.md`)))
-        .rejects.toThrow();
+      const definition = `.hermes/agents/aiwg-model-${role}-worker.md`;
+      expect(hermes).toContain(definition);
+      const content = await readFile(join(hermesTarget, definition), 'utf8');
+      expect(content).toContain('exactly pinned, semantically hinted, or inherited');
     }
+    expect(hermes).not.toContain('<!-- AIWG:bound-rules:start -->');
   });
 });

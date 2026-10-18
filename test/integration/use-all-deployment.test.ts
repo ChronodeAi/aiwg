@@ -13,6 +13,7 @@ import fs from 'fs/promises';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
+import { sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { execFileSync, spawnSync } from 'child_process';
 // @ts-expect-error — .mjs provider module without type declarations
 import {
@@ -102,14 +103,7 @@ function canInitGit(): boolean {
 const GIT_AVAILABLE = canInitGit();
 
 const EXPECTED_ON_DEMAND_RULE_NAMES: string[] = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
-const ISSUE_1784_MISSING_EXAMPLES = [
-  'activity-log',
-  'context-budget',
-  'diagram-generation',
-  'voice-framework',
-  'prose-bridge',
-  'scoped-reasoning',
-];
+
 const TESTING_QUALITY_SKILLS = [
   'tdd-enforce',
   'mutation-test',
@@ -475,18 +469,14 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
     const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
 
-    // Every MEDIUM/LOW rule is listed. Claude additionally lists the HIGH rules
-    // the inline budget moved on demand (#2562), under their own heading, so the
-    // index is a superset there rather than an exact match.
-    expect(actual).toEqual(expect.arrayContaining(EXPECTED_ON_DEMAND_RULE_NAMES));
-    expect(actual).toEqual(expect.arrayContaining(ISSUE_1784_MISSING_EXAMPLES));
-    const budgetDemoted = actual.filter((name) => !EXPECTED_ON_DEMAND_RULE_NAMES.includes(name));
-    if (provider === 'claude') {
-      const [, demotedSection = ''] = body.split('## Binding rules moved on demand to fit the inline budget');
-      for (const name of budgetDemoted) expect(demotedSection, `${name} must be listed as budget-demoted`).toContain(`\`${name}\``);
-    } else {
-      expect(budgetDemoted).toEqual([]);
-    }
+    // ADR: only untagged medium/low fallback rules retain the legacy index.
+    // Tagged contracts keep their activation; budgets never demote them here.
+    expect(actual).toEqual(EXPECTED_ON_DEMAND_RULE_NAMES);
+    const migrated = ['addons', 'frameworks', 'extensions'].flatMap(kind =>
+      sourceRules(REPO_ROOT, kind as 'addons' | 'frameworks' | 'extensions'))
+      .filter(rule => !rule.structural && rule.data.activation !== undefined);
+    for (const rule of migrated) expect(actual).not.toContain(rule.name);
+    expect(body).not.toContain('Binding rules moved on demand to fit the inline budget');
   }, 210_000);
 });
 

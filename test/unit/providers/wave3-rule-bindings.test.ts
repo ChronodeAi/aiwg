@@ -81,7 +81,8 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
   it('shows every canonical binding through the actual CLI JSON envelope (U4)', async () => {
     const home = path.join(root, 'show-home');
     fs.mkdirSync(home);
-    const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, AIWG_ROOT: repo,
+    const env = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home, AIWG_ROOT: repo,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
@@ -121,7 +122,8 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
   it('ranks each moved rule in the top three for its natural need (U6)', () => {
     const home = path.join(root, 'discover-home');
     fs.mkdirSync(home);
-    const env = { PATH: process.env.PATH, HOME: home, AIWG_ROOT: repo,
+    const env = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, AIWG_ROOT: repo,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
@@ -157,7 +159,8 @@ describe('Wave 3 canonical orchestration rule delivery (#2943)', () => {
         deployRules: true, deploySkills: true, deployCommands: true, copyStandardSkills: true,
         force: true, quiet: true })});
       console.log('REPORT:' + JSON.stringify(report));
-    `], { cwd: repo, env: { PATH: process.env.PATH, HOME: home, HERMES_HOME: path.join(home, '.hermes'),
+    `], { cwd: repo, env: { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, HERMES_HOME: path.join(home, '.hermes'),
       AIWG_ROOT: source, XDG_DATA_HOME: path.join(home, '.local/share'), CI: '1' },
     encoding: 'utf8', timeout: 60_000, stdio: 'pipe' });
     const report = JSON.parse(deployed.split('REPORT:')[1].trim());

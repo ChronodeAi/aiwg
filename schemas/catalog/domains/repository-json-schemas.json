@@ -2448,6 +2448,26 @@
       "consumers": []
     },
     {
+      "logicalName": "test.uat.rule.binding.probes",
+      "id": "https://aiwg.io/schemas/testing/rule-binding-probes.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "aiwg-maintainers"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "test/uat/rule-binding/probes.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "agentic.code.addons.twelve.factor.schemas.audit.report",
       "id": "https://aiwg.io/schemas/twelve-factor-audit-report.schema.json",
       "version": "1.0.0",

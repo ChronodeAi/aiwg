@@ -101,7 +101,8 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
     fs.mkdirSync(config);
     fs.writeFileSync(path.join(config, 'channel.json'), JSON.stringify({ channel: 'edge', edgePath: repo,
       devMode: true, checkOnStartup: false }));
-    cliEnv = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, AIWG_ROOT: repo, AIWG_CONFIG: config,
+    cliEnv = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home, AIWG_ROOT: repo, AIWG_CONFIG: config,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local/state'),
       AIWG_NO_UPDATE_CHECK: '1', NO_UPDATE_NOTIFIER: '1', CI: '1' };
@@ -207,7 +208,8 @@ describe('Wave 5 SDLC lane a canonical rule delivery (#2945)', () => {
           deployRules: true, deploySkills: true, deployCommands: true, copyStandardSkills: true,
           force: true, quiet: true })});
         console.log('REPORT:' + JSON.stringify(report));
-      `], { cwd: repo, env: { PATH: process.env.PATH, HOME: home, HERMES_HOME: path.join(home, '.hermes'),
+      `], { cwd: repo, env: { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP,
+      PATH: process.env.PATH, HOME: home, HERMES_HOME: path.join(home, '.hermes'),
         AIWG_ROOT: workload.source, XDG_DATA_HOME: path.join(home, '.local/share'), CI: '1' },
       encoding: 'utf8', timeout: 90_000, stdio: 'pipe' });
       const report = JSON.parse(deployed.split('REPORT:')[1].trim());
