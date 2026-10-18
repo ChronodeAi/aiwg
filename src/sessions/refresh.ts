@@ -29,6 +29,7 @@ export async function refreshSessionCatalog(
   full: boolean,
   waitMs: number,
   signal?: AbortSignal,
+  workspaceAliases: string[] = [],
 ): Promise<string | BatchImportReceipt | undefined> {
   const canonicalWorkspace = realpathSync(workspace);
   const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
@@ -49,6 +50,7 @@ export async function refreshSessionCatalog(
     if (!providers.length) return 'no authorized provider roots';
     manifest = await discoverWorkspaceHistories({
       workspace: canonicalWorkspace,
+      workspaceAliases: [workspace, ...workspaceAliases],
       expectedProviders: providers,
       authorizedRoots,
     });

@@ -19,7 +19,7 @@ import {
 export interface RefreshOptions {
   cwd?: string;
   workspaces?: string[];
-  root?: string;
+  root?: string | string[];
   full?: boolean;
   only?: 'graphs' | 'sessions' | 'caches';
   dryRun?: boolean;
@@ -88,27 +88,47 @@ function loadWorkspaceGraphs(workspace: string): void {
   loadGlobalGraphConfigs();
 }
 
-function workspacePaths(options: RefreshOptions): string[] {
+function workspacePaths(options: RefreshOptions): Map<string, string[]> {
   const cwd = options.cwd ?? process.cwd();
-  const found = new Set<string>();
+  const found = new Map<string, string[]>();
   const add = (directory: string) => {
     const canonical = fs.realpathSync(directory);
     if (!fs.statSync(canonical).isDirectory()) throw new Error(`workspace is not a directory: ${directory}`);
-    found.add(canonical);
+    const aliases = found.get(canonical) ?? [canonical];
+    if (!aliases.includes(directory)) aliases.push(directory);
+    found.set(canonical, aliases);
   };
   for (const workspace of options.workspaces ?? []) add(path.resolve(cwd, workspace));
-  if (options.root) {
+  const roots = typeof options.root === 'string' ? [options.root] : options.root ?? [];
+  if (roots.length) {
     const excluded = new Set(['node_modules', '.git', '.aiwg', '.cache', '.worktrees', 'worktrees', 'aiwg-wt', '.aiwg-worktrees']);
+    // Track ancestors rather than all visits so other logical routes retain their aliases.
+    const ancestors = new Set<string>();
     const scan = (directory: string, depth: number): void => {
+      const canonical = fs.realpathSync(directory);
+      if (ancestors.has(canonical)) return;
+      ancestors.add(canonical);
       if (fs.existsSync(path.join(directory, '.aiwg')) && fs.statSync(path.join(directory, '.aiwg')).isDirectory()) add(directory);
-      if (depth === 4) return;
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (entry.isDirectory() && !excluded.has(entry.name)) scan(path.join(directory, entry.name), depth + 1);
+      if (depth < 4) {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          if (excluded.has(entry.name)) continue;
+          const child = path.join(directory, entry.name);
+          if (entry.isSymbolicLink()) {
+            try {
+              if (!fs.statSync(child).isDirectory()) continue;
+            } catch (error) {
+              if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+              throw error;
+            }
+          } else if (!entry.isDirectory()) continue;
+          scan(child, depth + 1);
+        }
       }
+      ancestors.delete(canonical);
     };
-    scan(fs.realpathSync(path.resolve(cwd, options.root)), 0);
+    for (const root of roots) scan(path.resolve(cwd, root), 0);
   }
-  if (!options.root && !options.workspaces?.length) {
+  if (!roots.length && !options.workspaces?.length) {
     let current = fs.realpathSync(cwd);
     while (!fs.existsSync(path.join(current, '.aiwg')) && !fs.existsSync(path.join(current, '.git'))) {
       const parent = path.dirname(current);
@@ -116,15 +136,25 @@ function workspacePaths(options: RefreshOptions): string[] {
       current = parent;
     }
     add(current);
+    // Keep the physical project boundary when cwd itself links into a subdirectory.
+    const canonical = fs.realpathSync(current);
+    for (let logical = path.resolve(cwd); ; logical = path.dirname(logical)) {
+      if (fs.realpathSync(logical) === canonical) { add(logical); break; }
+      if (path.dirname(logical) === logical) break;
+    }
   }
-  return [...found].sort();
+  return new Map([...found.keys()].sort().map(workspace => [workspace, found.get(workspace)!.sort()]));
 }
 
 export function planIndexRefresh(options: RefreshOptions): RefreshJob[] {
+  return planWorkspaceRefresh(options, workspacePaths(options));
+}
+
+function planWorkspaceRefresh(options: RefreshOptions, workspaces: Map<string, string[]>): RefreshJob[] {
   const saved = { ...GRAPH_CONFIGS };
   try {
     const jobs: RefreshJob[] = [];
-    for (const workspace of workspacePaths(options)) {
+    for (const workspace of workspaces.keys()) {
       loadWorkspaceGraphs(workspace);
       const graphs = collectIndexStatus(workspace).graphs
         .sort((a, b) => graphBuildOrder(a.name, GRAPH_CONFIGS[a.name]) - graphBuildOrder(b.name, GRAPH_CONFIGS[b.name]) || a.name.localeCompare(b.name));
@@ -190,7 +220,7 @@ async function graphFingerprint(workspace: string, graph: string): Promise<strin
   ])).digest('hex');
 }
 
-async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<void> {
+async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: string[]): Promise<void> {
   const workspace = job.workspace;
   if (job.kind === 'graph') {
     const graph = job.graph!;
@@ -228,7 +258,7 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
     syncFortemiCoreIndex(workspace, { graph: job.graph });
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
-    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal);
+    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases);
     if (typeof result === 'string') {
       job.status = 'skipped';
       job.reason = result;
@@ -244,8 +274,9 @@ async function executeJob(job: RefreshJob, options: RefreshOptions): Promise<voi
   job.status = 'ok';
 }
 
-function jobKey(job: RefreshJob): string {
-  return JSON.stringify([job.kind, job.workspace, job.graph ?? null]);
+function jobKey(job: RefreshJob, aliases: string[]): string {
+  return JSON.stringify([job.kind, job.workspace, job.graph ?? null,
+    ...(job.kind === 'sessions' && aliases.length > 1 ? [aliases] : [])]);
 }
 
 export async function refreshIndexes(
@@ -253,7 +284,8 @@ export async function refreshIndexes(
   dependencies: RefreshDependencies = {},
 ): Promise<RefreshReport> {
   const start = Date.now();
-  const jobs = planIndexRefresh(options);
+  const workspaces = workspacePaths(options);
+  const jobs = planWorkspaceRefresh(options, workspaces);
   const report: RefreshReport = {
     contractVersion: '1.0.0', command: 'index.refresh', status: 'ok',
     mode: options.full ? 'full' : 'incremental', jobs, messages: [],
@@ -287,7 +319,7 @@ export async function refreshIndexes(
   const saved = { ...GRAPH_CONFIGS };
   try {
     const checkpointPath = path.join(stateDir, 'index-refresh-checkpoint.json');
-    const keys = jobs.map(jobKey);
+    const keys = jobs.map(job => jobKey(job, workspaces.get(job.workspace)!));
     const previous = readJson<Checkpoint>(checkpointPath);
     const checkpoint: Checkpoint = previous?.mode === report.mode
       && Array.isArray(previous.completed) && JSON.stringify(previous.jobs) === JSON.stringify(keys)
@@ -296,7 +328,8 @@ export async function refreshIndexes(
     let sqliteAvailable: boolean | undefined;
     for (const job of jobs) {
       options.signal?.throwIfAborted();
-      const key = jobKey(job);
+      const aliases = workspaces.get(job.workspace)!;
+      const key = jobKey(job, aliases);
       if (checkpoint.completed.includes(key)) {
         job.status = 'skipped'; job.reason = 'checkpoint';
         continue;
@@ -322,8 +355,8 @@ export async function refreshIndexes(
             const message = 'Session refresh skipped: run `aiwg features install sqlite`.';
             if (!report.messages.includes(message)) report.messages.push(message);
             job.status = 'skipped'; job.reason = 'sqlite unavailable';
-          } else await executeJob(job, options);
-        } else await executeJob(job, options);
+          } else await executeJob(job, options, aliases);
+        } else await executeJob(job, options, aliases);
       } catch (error) {
         job.status = 'error'; job.error = error instanceof Error ? error.message : String(error);
       } finally {
@@ -351,7 +384,7 @@ export async function refreshIndexes(
 }
 
 export async function runIndexRefresh(args: string[], cwd = process.cwd(), signal?: AbortSignal): Promise<RefreshReport> {
-  const options: RefreshOptions = { cwd, signal, workspaces: [] };
+  const options: RefreshOptions = { cwd, signal, workspaces: [], root: [] };
   let json = args.includes('--json');
   try {
     for (let i = 0; i < args.length; i++) {
@@ -363,7 +396,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
-        else if (flag === '--root') options.root = value;
+        else if (flag === '--root') (options.root as string[]).push(value);
         else if (flag === '--only') {
           if (value !== 'graphs' && value !== 'sessions' && value !== 'caches') throw new Error('--only must be graphs, sessions, or caches');
           options.only = value;

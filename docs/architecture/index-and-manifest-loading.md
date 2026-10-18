@@ -220,12 +220,19 @@ Both `discover` and `show` return paths anchored to `$AIWG_ROOT` for framework a
 
 Run `aiwg index refresh --root ~/dev --json` to refresh workspaces containing
 `.aiwg/` within four directory levels. The scan skips `node_modules`, `.git`,
-worktree caches, and directory symlinks. Without `--root`, refresh uses the current
-project; repeat `--workspace <path>` to select projects explicitly.
+and worktree caches. Repeat `--root <dir>` to scan several trees, or repeat
+`--workspace <path>` to select projects explicitly; the two options can be combined.
+Directory symlinks are followed within the same depth limit, with cycle protection.
+Each canonical workspace runs once, retaining every logical path used to reach it
+for provider session matching (including Claude project keys). Without either
+option, refresh uses the current project.
 
 Refresh builds configured, existing, and default graphs incrementally, syncs
 existing Fortemi Core caches, then discovers and imports existing session catalogs.
 Session discovery uses only roots saved by an earlier authorized discovery;
+logical workspace aliases do not authorize additional provider roots. If a saved
+manifest covers only one Claude project key, run authorized session discovery
+again through the logical workspace path to include both logical and canonical keys.
 `--full` rebuilds graphs and reindexes every workspace in each selected session
 catalog, using the same unscoped rebuild as `aiwg sessions reindex --all-workspaces`.
 Use `--only graphs|sessions|caches`
