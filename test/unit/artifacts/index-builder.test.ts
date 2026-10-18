@@ -915,6 +915,48 @@ type: use-case
       },
     );
 
+    it('re-extracts citation edges on unchanged-source incremental builds', async () => {
+      const sourceDir = path.join(tmpDir, 'citations');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, '.aiwg'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+        index: {
+          graphs: {
+            'citation-noop': {
+              scanDirs: ['citations'],
+              extensions: ['.md'],
+              edgeExtraction: { parser: 'citation-sidecar', edges: [] },
+            },
+          },
+        },
+      }));
+      fs.writeFileSync(path.join(sourceDir, 'a.md'), [
+        '---', 'ref: REF-001', '---',
+        '## Outgoing: Papers This Work Cites', '',
+        '| Title | Inducted REF |', '|---|---|', '| Target | REF-002 |', '',
+      ].join('\n'));
+      fs.writeFileSync(path.join(sourceDir, 'b.md'), '---\nref: REF-002\n---\n# Target\n');
+      fs.writeFileSync(path.join(sourceDir, 'c.md'), '---\nref: REF-003\n---\n# Unrelated\n');
+
+      try {
+        const options = { graph: 'citation-noop', quiet: true };
+        await buildIndex(tmpDir, { ...options, force: true });
+        const depsFile = path.join(tmpDir, INDEX_DIR, 'citation-noop', 'dependencies.json');
+        const expected: DependencyGraph = JSON.parse(fs.readFileSync(depsFile, 'utf8'));
+        expect(expected['citations/a.md'].upstream).toEqual([{ path: 'citations/b.md', type: 'cites' }]);
+        const stale: DependencyGraph = JSON.parse(fs.readFileSync(depsFile, 'utf8'));
+        stale['citations/a.md'].upstream.push({ path: 'citations/c.md', type: 'cites' });
+        stale['citations/c.md'].downstream.push({ path: 'citations/a.md', type: 'cites' });
+        fs.writeFileSync(depsFile, JSON.stringify(stale));
+
+        await buildIndex(tmpDir, options);
+
+        expect(JSON.parse(fs.readFileSync(depsFile, 'utf8'))).toEqual(expected);
+      } finally {
+        delete GRAPH_CONFIGS['citation-noop'];
+      }
+    });
+
     it('refreshes only the manifest and stats when source timestamps drift', async () => {
       const sourceDir = path.join(tmpDir, '.aiwg', 'requirements');
       fs.mkdirSync(sourceDir, { recursive: true });
