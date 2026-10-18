@@ -2224,6 +2224,17 @@ Show runtime environment summary with tool discovery.
 aiwg runtime-info
 ```
 
+`aiwg runtime-info --discover` refreshes the tool catalog. On Unix it searches
+PATH first, then common user bin directories (`~/.cargo/bin`, `~/.local/bin`,
+`~/bin`, `~/.npm-global/bin`, `~/go/bin`, `~/.bun/bin`, and `~/.deno/bin`);
+`CARGO_HOME/bin` replaces the default Cargo directory when configured. Only the
+curated tool allowlist is probed. Refresh output reports added/removed counts
+and warns with the names of previously cataloged tools that disappeared. The
+JSON catalog includes `delta.added`, `delta.removed`, and an `inputFingerprint`.
+Unchanged tool paths, executable metadata, definitions, and lookup environment
+skip version probes and catalog writes, preserving the previous discovery time
+and delta. Use `--discover --force` to repeat all probes and resource sampling.
+
 **Capabilities:** cli, toolsmith, discovery
 **Platforms:** All
 **Tools:** Read, Bash
