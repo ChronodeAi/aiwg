@@ -78,6 +78,7 @@ export async function importDiscoveryManifest(
       'discovery manifest is already associated with a different batch run',
     );
   }
+  run.schemaVersion = BATCH_IMPORT_VERSION;
   run.preflight = coveragePreflight({
     expectedProviders: options.manifest.preflight?.expectedProviders,
     expectedProviderBasis: options.manifest.preflight?.expectedProviderBasis ?? 'legacy',
@@ -180,14 +181,14 @@ export async function importDiscoveryManifest(
   const pending = run.sources.some(
     (source) => source.status === 'pending' || source.status === 'running',
   );
-  const providerGap = coverageFromBatchRun(run, now()).acquisitionStatus !== 'complete';
+  const acquisitionIncomplete = coverageFromBatchRun(run, now()).acquisitionStatus !== 'complete';
   const publishable = run.sources
     .filter((source) => isAccepted(source.status))
     .map((source) => source.sourceId);
   injectFault(options, run, 'before-publication');
   options.repository.commitStagedBatch(run.runId, publishable);
   injectFault(options, run, 'after-publication');
-  run.status = pending ? 'interrupted' : rejected || providerGap ? 'partial' : 'complete';
+  run.status = pending ? 'interrupted' : rejected || acquisitionIncomplete ? 'partial' : 'complete';
   run.updatedAt = now().toISOString();
   run.completedAt = pending ? null : run.updatedAt;
   options.repository.saveBatchImportRun(run);

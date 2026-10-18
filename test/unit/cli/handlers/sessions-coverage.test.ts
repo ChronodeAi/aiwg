@@ -133,4 +133,27 @@ describe('sessions coverage CLI', () => {
     const listed = await cli(['list', '--workspace', root, '--db', db, '--json']);
     expect(listed.data.coverage.acquisitionStatus).toBe('partial');
   });
+
+  itWithSqlite('reports complete default-scope acquisition and no resume requirement despite provider gaps', async () => {
+    const history = join(root, '.claude', 'projects', root.replace(/[/:]+/g, '-'));
+    mkdirSync(history, { recursive: true });
+    writeFileSync(join(history, 'session.jsonl'), JSON.stringify({
+      type: 'user', uuid: 'request', sessionId: 'synthetic-session',
+      timestamp: '2026-10-01T00:00:00.000Z', message: { role: 'user', content: 'Test.' },
+    }) + '\n');
+    const manifest = join(root, 'manifest.json');
+    const db = join(root, 'catalog.sqlite');
+    await cli(['discover', '--workspace', root, '--provider-home', root, '--manifest', manifest, '--json']);
+    const imported = await cli(['import-discovered', '--workspace', root, '--manifest', manifest, '--db', db, '--yes', '--json']);
+    expect(imported.exitCode).toBe(0);
+    expect(imported.data.resumable).toBe(false);
+    expect(imported.data.receipt).toMatchObject({
+      schemaVersion: '2.0.0', run: { schemaVersion: '2.0.0', status: 'complete' },
+      totals: { discovered: 1, accepted: 1, rejected: 0, pending: 0 },
+      coverage: { schemaVersion: '2.0.0', status: 'partial', acquisitionStatus: 'complete', unresolvedProviders: expect.arrayContaining(['warp']) },
+    });
+    const listed = await cli(['list', '--workspace', root, '--db', db, '--json']);
+    expect(listed.data.coverage.acquisitionStatus).toBe('complete');
+    expect(listed.data.coverage.unresolvedProviders).toContain('warp');
+  });
 });
