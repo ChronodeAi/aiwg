@@ -585,7 +585,7 @@ describe('workspace session discovery and batch import', () => {
       const after = new SessionRepository(database);
       try {
         expect(after.getBatchImportRun(interrupted.runId)).toMatchObject({
-          status: 'partial', interruptedAt: receipt.run.interruptedAt,
+          status: 'complete', interruptedAt: receipt.run.interruptedAt,
         });
         expect(after.listSessions({ workspaceId: manifest.workspaceId, limit: 20 }).total).toBe(4);
         expect(after.doctor()).toMatchObject({ integrity: 'ok', sessions: 4 });

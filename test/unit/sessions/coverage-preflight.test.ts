@@ -10,6 +10,7 @@ import {
   writeDiscoveryManifest, coverageFromBatchRun, previewDiscoveryImport,
   type BatchSourceDisposition, type SessionRuntimeIdentity,
 } from '../../../src/sessions/index.js';
+import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 import { listProviderDefinitions } from '../../../src/providers/provider-definitions.js';
 import { itWithSqlite } from '../../helpers/sqlite.js';
 
@@ -190,10 +191,10 @@ describe('provider/runtime coverage preflight', () => {
 
   itWithSqlite('completes an explicit acquired scope and rechecks runtime identity on replay', async () => {
     const root = await workspace();
-    const key = root.replace(/[/:]+/g, '-');
-    const history = join(root, '.claude', 'projects', key);
+    const history = join(root, '.claude', 'projects', claudeProjectKey(root));
     await mkdir(history, { recursive: true });
-    await writeFile(join(history, 'session.jsonl'), await readFile(resolve('test/fixtures/sessions/claude/active-session.jsonl')));
+    const fixture = await readFile(resolve('test/fixtures/sessions/claude/active-session.jsonl'), 'utf8');
+    await writeFile(join(history, 'session.jsonl'), fixture.replaceAll('"cwd":"/private/work/project"', `"cwd":${JSON.stringify(root)}`));
     const manifest = await discoverWorkspaceHistories({
       workspace: root, providerHome: root, expectedProviders: ['claude'], runtime,
     });
