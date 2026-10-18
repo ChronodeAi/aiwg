@@ -505,11 +505,15 @@ describe('remaining bounded cleanup boundaries', () => {
     const bundleRoot = path.resolve('test/fixtures/gates-example-extension');
     const manifest = JSON.parse(await readFile(path.join(bundleRoot, 'manifest.json'), 'utf8'));
     const review = JSON.parse(await readFile(path.join(bundleRoot, 'gate-providers/example-review.json'), 'utf8'));
-    loader.configureIsolationSandboxForTests({ bwrapPath: process.execPath });
-    // Only the prerequisite sandbox capability observation is synthetic. The
+    // Pin both sandbox binaries so the test never depends on host bwrap/prlimit.
+    loader.configureIsolationSandboxForTests({ bwrapPath: process.execPath, prlimitPath: process.execPath });
+    // Only the prerequisite sandbox capability observation is synthetic,
+    // including the memory-cap evidence the self-test requires (#2846). The
     // real provider loader, digest/allowlist checks and rejection path run.
     mockSpawnSync.mockImplementation((_binary, _args, options) => ({ status: 0,
-      stdout: JSON.stringify({ env: {}, visible: [], ns: Object.fromEntries(JSON.parse(options.input).namespaces.map(name => [name, 'fixture-private-namespace'])) }),
+      stdout: JSON.stringify({ env: {}, visible: [], ns: Object.fromEntries(JSON.parse(options.input).namespaces.map(name => [name, 'fixture-private-namespace'])),
+        memory: { dataSoftBytes: loader.GATE_PROVIDER_MAX_DATA_BYTES, dataHardBytes: loader.GATE_PROVIDER_MAX_DATA_BYTES,
+          heapLimitBytes: 128 * 1024 * 1024, allocationBlocked: true } }),
     }));
     vi.useFakeTimers();
     const child = fixture();
