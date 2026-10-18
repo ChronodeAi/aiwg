@@ -33,7 +33,8 @@ describe('DAG host-side taxonomy beam gate', () => {
         node.id.startsWith('branch-') ? { score: 0.5 } : { result: node.id };
       return { outputs: output, attempts: 1, usage: { tokens: 1, costUsd: 0.000001, timeMs: 1 } };
     };
-    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, bounded),
+    // Beam routing uses a fixed clock; deadline enforcement has injected-clock coverage.
+    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, bounded, () => 0),
       () => ({ attempts: 1, tokens: 2, costMicros: 2 }), graphBeamFlowInvoker(graph, ordinary, bounded),
       undefined, record => records.push(structuredClone(record)));
     const report = await executeFlowGraph(manifest, { validation: { catalogIds: new Set([skill]) },

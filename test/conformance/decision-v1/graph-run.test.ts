@@ -3,7 +3,7 @@ import { finalizeDecisionGraphRun } from '../../../src/decision/graph-run.js';
 import { decisionGraphToFlow } from '../../../src/decision/graph-flow.js';
 import { planDecisionGraph, type DecisionGraph } from '../../../src/decision/graph.js';
 import { GraphBudgetLedger } from '../../../src/decision/graph-budget.js';
-import { admittedDecisionFlowAdapter } from '../../../src/decision/graph-flow-adapter.js';
+import { admittedDecisionFlowAdapter, type GraphFlowRequest, type GraphFlowResponse } from '../../../src/decision/graph-flow-adapter.js';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { executeFlowGraph } = require('../../../agentic/code/addons/composition-engine/lib/runtime.mjs');
@@ -33,6 +33,49 @@ async function run(branch: boolean) {
   return { report, records };
 }
 describe('DAG Flow run receipt', () => {
+  it.each(['before dispatch', 'between nodes', 'during response'] as const)(
+    'reports the ledger failure when scheduling crosses the deadline %s', async phase => {
+      let now = 0;
+      const ledger = new GraphBudgetLedger(graph, plan, [], () => now);
+      const records: Array<{ request: GraphFlowRequest; response: GraphFlowResponse }> = [];
+      const calls: string[] = [];
+      const invokeNode = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 2, costMicros: 2 }),
+        async request => {
+          calls.push(request.node.id);
+          // Simulate a response resuming after its reservation's deadline.
+          await Promise.resolve();
+          if (phase === 'during response') now = graph.budget.deadlineMs + 1;
+          return { outputs: request.node.id === 'root' ? { result: 'root', branch: true } : { result: request.node.id },
+            attempts: 1, usage: { tokens: 1, costUsd: 0.000001, timeMs: 1 } };
+        }, undefined, record => records.push(structuredClone(record)));
+      const report = await executeFlowGraph(flow, {
+        validation: { catalogIds: new Set([skill]) }, invokeNode, runId: 'deadline-run',
+        onEvent: async (event: { type: string; nodeId?: string }) => {
+          // Flow awaits this seam before invoking the adapter, just as a loaded
+          // host can deschedule it before the first or a subsequent reservation.
+          if (event.type === 'node-started' &&
+              ((phase === 'before dispatch' && event.nodeId === 'root') ||
+               (phase === 'between nodes' && event.nodeId === 'left'))) now = graph.budget.deadlineMs;
+        },
+      });
+      const successful = phase === 'between nodes' ? 1 : 0;
+      expect(calls).toEqual(phase === 'before dispatch' ? [] : ['root']);
+      expect(report.status).toBe('failed');
+      expect(report.checkpoint.completed).toHaveLength(successful);
+      expect(report.checkpoint.failed).toEqual([phase === 'between nodes' ? 'left' : 'root']);
+      expect(records).toHaveLength(successful);
+      // There is no resource/record race: every successful Flow result is present.
+      expect(report.realizedResources).toMatchObject({ nodeRuns: successful, tokens: successful,
+        costUsd: successful * 0.000001 });
+      const reason = phase === 'during response' ? 'graph usage exceeded reservation' : 'graph deadline exhausted';
+      expect(report.trace).toContainEqual(expect.objectContaining({ type: 'node-attempt-failed', message: reason }));
+      expect(() => finalizeDecisionGraphRun(graph, plan, report, records)).toThrow(
+        `Flow graph node '${phase === 'between nodes' ? 'left' : 'root'}' failed before observation: ${reason}`);
+    });
+  it('still rejects a missing observation for a successful Flow node', async () => {
+    const { report, records } = await run(true);
+    expect(() => finalizeDecisionGraphRun(graph, plan, report, records.slice(1))).toThrow('missing Flow graph observation');
+  });
   it('DAG-028 correlates immutable stage, result digest and Flow invocation for chosen branch', async () => {
     const { report, records } = await run(true);
     expect({ status: report.status, skipped: report.checkpoint.skipped, completed: report.checkpoint.completed,

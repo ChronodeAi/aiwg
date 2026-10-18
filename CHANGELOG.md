@@ -43,6 +43,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - The by-grade index view, stale-queue grade column and corpus snapshot fall back to a reference's frontmatter `grade` when it has no radar sidecar, instead of listing graded papers as Ungraded (#2571).
 - Codex MCP profile launches and logins keep the operator's AIWG configuration directory (`AIWG_CONFIG`) when they switch `HOME` to the profile runtime home, so development installs and channels stay visible inside the profile (#3289).
+- Decision graph runs that fail admission or settlement before a Flow observation (for example after a wall-clock deadline) now report that node failure instead of `missing Flow graph observation`; DAG-033/DAG-034 fixtures use fixed clocks so they no longer fail under CPU contention (#3293).
 - Credentials are redacted on import before anything is stored or indexed, across
   every catalog sink (events, sessions, sources, extensions, FTS, analytics, receipts,
   checkpoints, diagnostics, candidates, audit and export plans). Detection now also
