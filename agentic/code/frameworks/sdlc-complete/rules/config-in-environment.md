@@ -4,6 +4,16 @@ name: config-in-environment
 severity: MEDIUM
 category: configuration
 factor: 12-factor-III
+activation: "bound"
+summary: "Store environment-varying configuration outside source; centralize and validate startup reads, document variables, and load secrets from managers or referenced files."
+bound_to:
+  agents: ["cloud-architect", "deployment-manager", "devops-engineer", "security-auditor", "software-implementer"]
+  skills: ["build-poc", "flow-deploy-to-production", "flow-release"]
+  flows: ["flow-deploy-to-production", "flow-release"]
+triggers:
+  - "store deployment configuration in environment"
+  - "validate environment variables at startup"
+  - "document environment config and secret files"
 ---
 
 # Config in the Environment

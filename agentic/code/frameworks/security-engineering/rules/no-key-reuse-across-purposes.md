@@ -2,8 +2,29 @@
 enforcement: high
 id: no-key-reuse-across-purposes
 severity: HIGH
-applies_to: [all-agents, applied-cryptographer]
-tags: [cryptography, key-management, hkdf, domain-separation]
+applies_to:
+  - all-agents
+  - applied-cryptographer
+tags:
+  - cryptography
+  - key-management
+  - hkdf
+  - domain-separation
+activation: summary
+summary: Use independent cryptographic keys for distinct purposes, derived with HKDF-Expand and unique application- and version-specific domain labels.
+bound_to:
+  agents:
+    - applied-cryptographer
+    - code-reviewer
+    - security-auditor
+    - software-implementer
+  skills:
+    - crypto-primitive-selection
+    - auth-factor-design
+    - chain-of-trust-design
+    - secret-handling-runtime
+triggers:
+  - separate cryptographic keys by purpose
 ---
 
 # No Key Reuse Across Purposes

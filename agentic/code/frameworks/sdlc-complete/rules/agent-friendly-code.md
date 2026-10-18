@@ -1,5 +1,16 @@
 ---
 enforcement: high
+activation: "paths"
+summary: "Keep generated code small, focused and greppable; follow size and complexity thresholds, use explicit modules and purpose comments, and extract additions from oversized files."
+bound_to:
+  agents: ["ai-ml-engineer", "blockchain-developer", "build-engineer", "code-reviewer", "component-owner", "data-engineer", "database-optimizer", "debugger", "devops-engineer", "django-expert", "frontend-specialist", "integration-engineer", "kubernetes-expert", "legacy-modernizer", "mobile-developer", "performance-engineer", "react-expert", "reliability-engineer", "self-debug", "software-implementer", "spring-boot-expert", "test-architect", "test-engineer", "toolsmith", "toolsmith-dynamic", "toolsmith-provider"]
+  skills: ["address-issues", "agent-loop", "auto-test-execution", "build-poc", "code-chunker", "decompose-file", "flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution", "generate-tests", "ralph", "ralph-external"]
+  flows: ["flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution"]
+paths: ["**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,c,cc,cpp,h,hpp,cs,rb,php,swift,scala,sh,bash,ps1,sql,tf,yaml,yml}"]
+triggers:
+  - "keep generated code agent friendly"
+  - "code file size and complexity thresholds"
+  - "split oversized source modules"
 ---
 
 # Agent-Friendly Code Standards

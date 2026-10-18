@@ -1,13 +1,78 @@
 ---
 enforcement: medium
 paths:
-  - ".aiwg/**"
-  - "AIWG.md"
+  - .aiwg/**
+  - AIWG.md
   - "**/skills/sdlc-quickref/SKILL.md"
   - "**/skills/orchestrate-project/SKILL.md"
   - "**/commands/flow-*.md"
   - "**/commands/intake-*.md"
   - "**/commands/project-*.md"
+activation: paths
+summary: Discover and fetch canonical SDLC skills, right-size workflows, follow their gates, and coordinate independent work through provider-native mechanics.
+bound_to:
+  skills:
+    - sdlc-quickref
+    - orchestrate-project
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+  agents:
+    - executive-orchestrator
+    - project-manager
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+triggers:
+  - how to orchestrate canonical SDLC workflows
 ---
 
 # SDLC Orchestration Rules

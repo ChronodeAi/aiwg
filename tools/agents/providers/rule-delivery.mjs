@@ -213,9 +213,10 @@ function finishBindings(opts, provider) {
     const sidecarPath = path.join(skill ? path.dirname(file) : path.dirname(file), '.aiwg-manifest.json');
     const sidecar = fs.existsSync(sidecarPath) ? JSON.parse(read(sidecarPath)) : null;
     const source = sidecar?.skillSource ? path.join(sidecar.skillSource, 'SKILL.md') : sidecar?.managed?.[path.basename(file)]?.sourcePath;
-    const targets = opts.ruleDelivery.targets.filter(target => source ? path.resolve(source) === target.source :
+    const flowSource = opts.flowSkillSources?.get(file);
+    const targets = opts.ruleDelivery.targets.filter(target => target.source === flowSource || (source ? path.resolve(source) === target.source :
       (skill ? target.type !== 'agent' : file.includes('/agents/') ? target.type === 'agent' : target.type === 'flow') &&
-      [target.name, path.basename(target.source, '.md'), path.basename(path.dirname(target.source))].includes(name));
+      [target.name, path.basename(target.source, '.md'), path.basename(path.dirname(target.source))].includes(name)));
     const rules = targets.flatMap(target => opts.ruleDelivery.bindings.get(target.source) || []);
     if (!rules.length && !content.includes('<!-- AIWG:bound-rules:start -->')) continue;
     if (file.endsWith('.toml')) content = content.replace(/^developer_instructions = (".*")$/m, (_, value) => `developer_instructions = ${JSON.stringify(replaceBoundRulesBlock(JSON.parse(value), rules))}`);
@@ -226,6 +227,66 @@ function finishBindings(opts, provider) {
       sidecar.managed[path.basename(file)].hash = `sha256:${contentHash(content)}`;
       put(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
     }
+  }
+}
+
+/** Bindings annotate the selected deployment; they do not select standard skills
+ * (ADR lines 102–108). Flow projections follow the same opt-in and tier routing. */
+function projectBoundFlowSkills(opts, provider, selected) {
+  opts.flowSkillSources = new Map();
+  if (opts.rulesOnly || opts.commandsOnly || !(opts.deploySkills || opts.skillsOnly)) return;
+  const kernel = path.isAbsolute(provider.kernelSkillsPath || '') ? opts.kernelSkillsPath
+    : path.join(opts.target, provider.kernelSkillsPath || `.${provider.name}/skills`);
+  // Codex's opt-in standard tier shares the native skills directory.
+  const standard = provider.name === 'codex' ? kernel : path.isAbsolute(provider.paths.skills)
+    ? provider.paths.skills : path.join(opts.target, provider.paths.skills);
+  const flows = opts.ruleDelivery.targets.filter(entry => entry.type === 'flow' && selected(entry));
+  const sources = new Set(flows.map(entry => entry.source));
+  for (const root of new Set([kernel, standard])) {
+    if (!fs.existsSync(root)) continue;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(root, entry.name);
+      const file = path.join(dir, 'SKILL.md');
+      const content = read(file);
+      const receiptFile = path.join(dir, '.aiwg-manifest.json');
+      const receipt = fs.existsSync(receiptFile) ? JSON.parse(read(receiptFile)) : null;
+      // Recognize the old projector's exact generated wrapper as well as new
+      // receipts. Ordinary deployed skills and operator files are preserved.
+      const legacy = !receipt?.skillSource && !receipt?.flowSource && /aiwg:managed/.test(content)
+        && content.includes(`description: Invoke ${entry.name}.\n`)
+        && content.includes('```yaml\n') && content.includes('<!-- AIWG:bound-rules:start -->');
+      const stale = receipt?.flowSource && (opts.copyStandardSkills !== true
+        || !sources.has(receipt.flowSource) || root !== standard);
+      if (!legacy && !stale) continue;
+      fs.rmSync(file, { force: true });
+      if (receipt?.flowSource) {
+        fs.rmSync(receiptFile, { force: true });
+        fs.rmSync(path.join(dir, '.aiwg-managed'), { force: true });
+      }
+      if (!fs.readdirSync(dir).length) fs.rmdirSync(dir);
+    }
+  }
+  if (opts.copyStandardSkills !== true) return;
+  for (const entry of flows) {
+    const name = entry.name || path.basename(entry.source).replace(/\.(md|ya?ml)$/, '');
+    const dir = path.join(standard, name);
+    const file = path.join(dir, 'SKILL.md');
+    const receiptFile = path.join(dir, '.aiwg-manifest.json');
+    const receipt = fs.existsSync(receiptFile) ? JSON.parse(read(receiptFile)) : null;
+    // A selected authored skill may already represent this flow. Keep its body;
+    // finishBindings adds both artifact identities' contracts after projection.
+    if (!fs.existsSync(file) || receipt?.flowSource === entry.source) {
+      const body = read(entry.source);
+      const markdown = entry.source.endsWith('.md') ? body : `---\nname: ${name}\nnamespace: aiwg\ndescription: Invoke ${name}.\n---\n\n\`\`\`yaml\n${body}\n\`\`\`\n`;
+      const content = managed(replaceBoundRulesBlock(markdown, opts.ruleDelivery.bindings.get(entry.source)), opts);
+      put(file, content);
+      put(path.join(dir, '.aiwg-managed'), 'true\n');
+      put(receiptFile, `${JSON.stringify({ flowSource: entry.source,
+        managed: { 'SKILL.md': { sourcePath: entry.source, hash: `sha256:${contentHash(content)}` } } }, null, 2)}\n`);
+    }
+    opts.flowSkillSources.set(file, entry.source);
+    if (['warp', 'hermes'].includes(provider.name)) opts.definitionRoutes.push(`${name}: ${file}`);
   }
 }
 
@@ -321,17 +382,7 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         opts.definitionRoutes.push(`${target.name}: .hermes/agents/${path.basename(source)}`);
       }
     }
-    // Flow identity is kept even when a provider represents it as a native skill.
-    for (const entry of delivery.targets.filter(entry => entry.type === 'flow' && !opts.rulesOnly && (opts.deploySkills || opts.skillsOnly || opts.deployCommands || opts.commandsOnly))) {
-      // Only copy targets belonging to the selected bundle/framework.
-      if (!selected(entry)) continue;
-      const name = entry.name || path.basename(entry.source).replace(/\.(md|ya?ml)$/, '');
-      const dest = path.isAbsolute(provider.kernelSkillsPath || '') ? opts.kernelSkillsPath : path.join(stage, provider.kernelSkillsPath || `.${provider.name}/skills`);
-      const body = read(entry.source);
-      const markdown = entry.source.endsWith('.md') ? body : `---\nname: ${name}\ndescription: Invoke ${name}.\n---\n\n\`\`\`yaml\n${body}\n\`\`\`\n`;
-      put(path.join(dest, name, 'SKILL.md'), managed(replaceBoundRulesBlock(markdown, delivery.bindings.get(entry.source)), opts));
-      if (['warp', 'hermes'].includes(provider.name)) opts.definitionRoutes.push(`${name}: ${path.join(dest, name, 'SKILL.md')}`);
-    }
+    projectBoundFlowSkills(opts, provider, selected);
     if (provider.name === 'warp') {
       for (const entry of delivery.targets.filter(entry => entry.type === 'agent' && selected(entry))) {
         const dest = path.join(stage, '.warp', 'agents', path.basename(entry.source));
@@ -371,7 +422,16 @@ export async function deployWithRuleDelivery(original, provider, deploy) {
         continue;
       }
       const after = new Set(walk(to).map(file => path.relative(to, file)));
-      for (const rel of before.keys()) if (!after.has(rel)) fs.rmSync(path.join(from, rel), { force: true });
+      for (const rel of before.keys()) if (!after.has(rel)) {
+        fs.rmSync(path.join(from, rel), { force: true });
+        // A pruned managed skill must disappear as a directory too. Remove
+        // only empty parents absent from the staged result; preserve siblings.
+        let parent = path.dirname(rel);
+        while (parent !== '.' && !fs.existsSync(path.join(to, parent))) {
+          try { fs.rmdirSync(path.join(from, parent)); } catch { break; }
+          parent = path.dirname(parent);
+        }
+      }
       for (const rel of after) {
         const buffer = fs.readFileSync(path.join(to, rel));
         if (before.get(rel)?.equals(buffer)) continue;

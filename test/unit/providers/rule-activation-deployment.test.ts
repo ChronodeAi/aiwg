@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, cpSync, statSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { parse } from 'yaml';
+import { sourceRules } from './rule-source-expectations.js';
 
 const repo = resolve(__dirname, '../../..');
 const fixture = join(repo, 'test/fixtures/rule-delivery');
@@ -107,7 +108,7 @@ describe('activation-selected provider deployment (#2939)', () => {
     deploy(root, 'claude');
     expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).not.toContain('fixture-bound');
   }, 90_000);
-  it('preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions', () => {
+  it('preserves the untagged SDLC/Claude tier fallback and full bodies, including restored demotions', () => {
     const root = setup();
     // Freeze the legacy delivery input independently of later corpus migrations
     // and #3222's tagged behaviors; this fixture tests untagged tier fallback.
@@ -119,25 +120,90 @@ describe('activation-selected provider deployment (#2939)', () => {
       const content = readFileSync(file, 'utf8');
       const match = content.match(/^---\n([\s\S]*?)\n---/);
       if (!match || !/^activation:/m.test(match[1])) continue;
-      const header = match[1].replace(/^(?:activation|summary|paths):[^\n]*(?:\n|$)|^bound_to:\n(?:[ \t]+[^\n]*(?:\n|$))*/gm, '').trimEnd();
+      // ADR lines 265–272 and 344 preserve legacy native agent-deployment
+      // paths. Strip new activation fields as complete YAML fields, keeping
+      // that rule's pre-existing path route and its now-explicit HIGH tier.
+      const fields = file.endsWith('/agent-deployment.md') ? 'activation|summary|bound_to' : 'activation|summary|paths|bound_to';
+      const header = match[1].replace(new RegExp(`^(?:${fields}):[^\\n]*(?:\\n[ \\t]+[^\\n]*)*(?:\\n|$)`, 'gm'), '').trimEnd();
       writeFileSync(file, content.replace(match[0], `---\n${header}\n---`));
     }
     deploy(root, 'claude', { srcRoot: legacy, mode: 'sdlc', deploySkills: false, deployCommands: false,
       rulesOnly: true, bindingEntries: [], deployVersion: 'fixture', deploySource: 'bundled' });
     const dir = join(root, 'target/.claude/rules');
-    const files = Object.fromEntries(readdirSync(dir).filter(name => name.endsWith('.md')).sort().map(name => {
-      const buffer = readFileSync(join(dir, name));
-      return [name, { bytes: buffer.length, sha256: createHash('sha256').update(buffer).digest('hex') }];
-    }));
-    const snapshot = JSON.parse(readFileSync(join(fixture, 'untagged-sdlc-claude.json'), 'utf8'));
-    expect(files).toEqual(snapshot.files);
-    expect(Object.keys(files)).toEqual(expect.arrayContaining(['anti-laziness.md', 'auto-compact-continue.md', 'cli-secondary.md', 'debug-source-not-output.md', 'delivery-policy.md', 'subagent-scoping.md']));
+    // ADR 258–272 preserves tier selection and native transforms, not byte
+    // hashes of a changing authored corpus. Derive membership independently
+    // from the fixture frontmatter and verify every selected body in full.
+    const rules = [...sourceRules(legacy, 'frameworks').filter(rule => rule.file.includes('/sdlc-complete/')),
+      ...sourceRules(legacy, 'addons').filter(rule => !rule.consolidated)];
+    const bodies = new Map(rules.filter(rule => !rule.structural && rule.fileDelivered).map(rule => [rule.name, rule]));
+    const onDemand = [...new Set([...sourceRules(legacy, 'frameworks'), ...sourceRules(legacy, 'addons'),
+      ...sourceRules(legacy, 'extensions')].filter(rule => rule.legacyOnDemand).map(rule => rule.name))].sort();
+    const expected = [...bodies.keys()].map(name => `${name}.md`);
+    expected.push('RULES-INDEX.md');
+    if (onDemand.length) expected.push('RULES-ONDEMAND.md');
+    expect(readdirSync(dir).filter(name => name.endsWith('.md')).sort()).toEqual(expected.sort());
+    for (const [name, rule] of bodies) {
+      const deployed = readFileSync(join(dir, `${name}.md`), 'utf8');
+      const body = deployed.replace(/^<!-- aiwg:managed[^\n]*-->\n/, '')
+        .replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
+      expect(body, name).toBe(rule.body);
+      expect(deployed, name).not.toMatch(/^triggers:/m);
+    }
+    const index = readFileSync(join(dir, 'RULES-INDEX.md'), 'utf8');
+    expect(index).toContain('aiwg:managed');
+    if (onDemand.length) {
+      const index = readFileSync(join(dir, 'RULES-ONDEMAND.md'), 'utf8');
+      expect([...index.matchAll(/^- `([^`]+)`/gm)].map(match => match[1]).sort()).toEqual(onDemand);
+    }
+    // ADR 247–261 explicitly forbids losing these six to the budget guard.
+    for (const name of ['anti-laziness', 'auto-compact-continue', 'cli-secondary',
+      'debug-source-not-output', 'delivery-policy', 'subagent-scoping']) expect(bodies.has(name)).toBe(true);
+    const legacyPaths = parse(readFileSync(join(dir, 'agent-deployment.md'), 'utf8').match(/^---\n([\s\S]*?)\n---/)![1]);
+    expect(legacyPaths.paths).toEqual(['.claude/agents/**', '.factory/droids/**', '.codex/agents/**',
+      '.opencode/agent/**', 'agentic/**', 'AGENTS.md', 'tools/agents/providers/**']);
   }, 90_000);
 
   it('resolves concrete bindings through the shared source index on a fresh deployment', () => {
     const root = setup();
     deploy(root, 'claude', { bindingEntries: undefined });
     expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
+  }, 90_000);
+
+  it('preserves authored flow skill bodies and prunes opt-in projections without deleting operator resources', () => {
+    const root = setup();
+    const source = join(root, 'source/skills/fixture-flow');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, 'SKILL.md'), '---\nname: fixture-flow\nnamespace: aiwg\ndescription: Authored flow skill.\n---\nAUTHORED_FLOW_SKILL_BODY\n');
+    deploy(root, 'claude');
+    const output = join(root, 'target/.claude/.aiwg/skills/fixture-flow');
+    const authored = readFileSync(join(output, 'SKILL.md'), 'utf8');
+    expect(authored).toContain('AUTHORED_FLOW_SKILL_BODY');
+    expect(authored).toContain('aiwg show rule fixture-bound');
+    expect(authored).not.toContain('```yaml');
+    // Remove the authored representation; --copy-all can now project the flow.
+    rmSync(source, { recursive: true });
+    deploy(root, 'claude');
+    expect(readFileSync(join(output, 'SKILL.md'), 'utf8')).toContain('```yaml');
+    writeFileSync(join(output, 'operator-note.txt'), 'Keep this operator resource.');
+    deploy(root, 'claude', { copyStandardSkills: false });
+    expect(existsSync(join(output, 'SKILL.md'))).toBe(false);
+    expect(readFileSync(join(output, 'operator-note.txt'), 'utf8')).toBe('Keep this operator resource.');
+    expect(existsSync(join(root, 'target/.claude/skills/fixture-flow'))).toBe(false);
+  }, 90_000);
+
+  it('validates external binding targets without copying them into the selected deployment', () => {
+    const root = setup();
+    const external = join(root, 'external/fixture-flow.yaml');
+    mkdirSync(join(root, 'external'));
+    cpSync(join(root, 'source/flows/fixture-flow.yaml'), external);
+    rmSync(join(root, 'source/flows'), { recursive: true });
+    deploy(root, 'claude', { bindingEntries: [
+      { type: 'skill', name: 'fixture-skill', path: join(root, 'source/skills/fixture-skill/SKILL.md') },
+      { type: 'agent', name: 'fixture-agent', path: join(root, 'source/agents/fixture-agent.md') },
+      { type: 'flow', name: 'fixture-flow', path: external },
+    ] });
+    expect(readFileSync(join(root, 'target/.claude/skills/fixture-skill/SKILL.md'), 'utf8')).toContain('aiwg show rule fixture-bound');
+    expect(walk(join(root, 'target')).filter(file => file.endsWith('/fixture-flow/SKILL.md'))).toEqual([]);
   }, 90_000);
 
   it('rebuilds a stale non-empty source index when a bound agent is missing', () => {

@@ -1,5 +1,23 @@
 ---
 enforcement: medium
+activation: paths
+summary: Include a numbered Reasoning section in artifact templates, documenting constraints, alternatives, decision rationale, and risks before finalizing content.
+bound_to:
+  skills:
+    - artifact-orchestration
+  agents:
+    - requirements-analyst
+    - architecture-designer
+    - test-documenter
+    - technical-writer
+  flows: []
+paths:
+  - agentic/code/frameworks/sdlc-complete/templates/**
+  - .aiwg/requirements/**
+  - .aiwg/architecture/**
+  - .aiwg/testing/**
+triggers:
+  - what reasoning sections do SDLC templates need
 ---
 
 # Reasoning Sections Rules

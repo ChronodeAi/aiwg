@@ -4,6 +4,19 @@ name: stateless-processes
 severity: HIGH
 category: architecture
 factor: 12-factor-VI
+activation: bound
+summary: Externalize durable process state to backing services; document the process state model and justify local storage or sticky-session deviations in an ADR.
+bound_to:
+  skills: []
+  agents:
+    - architecture-designer
+    - software-implementer
+    - cloud-architect
+    - reliability-engineer
+    - devops-engineer
+  flows: []
+triggers:
+  - where should application process state live
 ---
 
 # Stateless Processes

@@ -2,8 +2,31 @@
 enforcement: high
 id: no-confusable-unicode
 severity: HIGH
-applies_to: [all-agents, security-auditor, code-reviewer]
-tags: [unicode, trojan-source, homoglyph, reviewability]
+applies_to:
+  - all-agents
+  - security-auditor
+  - code-reviewer
+tags:
+  - unicode
+  - trojan-source
+  - homoglyph
+  - reviewability
+activation: summary
+summary: Reject unallowlisted bidi controls, zero-width characters, mixed-script identifiers, and confusable dependency names in source and release or review text.
+bound_to:
+  agents:
+    - code-reviewer
+    - security-auditor
+    - deployment-manager
+    - software-implementer
+  skills:
+    - confusable-unicode-audit
+    - security-report
+    - flow-release
+  flows:
+    - flow-release
+triggers:
+  - reject confusable unicode identifiers
 ---
 
 # No Confusable Unicode

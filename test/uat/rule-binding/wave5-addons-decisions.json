@@ -1,0 +1,122 @@
+[
+  {
+    "rule": "agentic/code/addons/agentic-installer/rules/installer-authoring.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Installer authoring requirements are delivered before manifest generation or validation."
+  },
+  {
+    "rule": "agentic/code/addons/agentic-installer/rules/installer-safety.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Installer safety applies to setup authoring and execution entry points."
+  },
+  {
+    "rule": "agentic/code/addons/browser-control/rules/browser-control-safety.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Browser-specific safety is available before browser driver and lifecycle operations."
+  },
+  {
+    "rule": "agentic/code/addons/civic-action/rules/civic-safety.md",
+    "enforcement": "block",
+    "activation": "bound",
+    "reason": "BLOCK civic restrictions govern every indexed civic workflow and role before acquisition or action."
+  },
+  {
+    "rule": "agentic/code/addons/civic-action/rules/publication-human-review.md",
+    "enforcement": "block",
+    "activation": "bound",
+    "reason": "BLOCK publication gates are delivered to all civic workflows and roles before external actions."
+  },
+  {
+    "rule": "agentic/code/addons/civic-action/rules/source-and-claim-integrity.md",
+    "enforcement": "block",
+    "activation": "bound",
+    "reason": "BLOCK claim integrity applies to civic evidence processing and publication across all civic artifacts."
+  },
+  {
+    "rule": "agentic/code/addons/color-palette/rules/color-output-format.md",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Color presentation details belong to palette generation, trends, and accessibility work."
+  },
+  {
+    "rule": "agentic/code/addons/context-curator/rules/distractor-filter.md",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup relevance reminder precedes context selection; detailed classification binds to the curator."
+  },
+  {
+    "rule": "agentic/code/addons/context-curator/rules/scoped-reasoning.md",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup scope reminder constrains initial reasoning; detailed recovery binds to the curator."
+  },
+  {
+    "rule": "agentic/code/addons/daemon/rules/daemon-interaction.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Daemon interaction policy is role-specific and explicitly excludes ordinary interactive sessions."
+  },
+  {
+    "rule": "agentic/code/addons/dataset-intelligence/rules/dataset-safety.md",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Preserve existing dataset path coverage and bind every dataset workflow and review role."
+  },
+  {
+    "rule": "agentic/code/addons/network-analysis/rules/network-analysis-safety.md",
+    "enforcement": "block",
+    "activation": "bound",
+    "reason": "BLOCK capture and disclosure safety is scoped to the indexed network-capture analysis skill."
+  },
+  {
+    "rule": "agentic/code/addons/prose-integration/rules/prose-bridge.md",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Prose integration and contract mapping are needed only when choosing or running Prose."
+  },
+  {
+    "rule": "agentic/code/addons/prose-integration/rules/prose-resolution.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Every Prose entry point can load the resolution protocol before operating."
+  },
+  {
+    "rule": "agentic/code/addons/rlm/rules/rlm-context-management.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "The ADR scopes RLM details to recursive-context skills and the RLM agent."
+  },
+  {
+    "rule": "agentic/code/addons/schema-governance/rules/schema-first.md",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "The ADR selects paths; retain existing data-contract globs and bind schema authoring and review."
+  },
+  {
+    "rule": "agentic/code/addons/testing-quality/rules/test-conformance-evidence.md",
+    "enforcement": "unclassified",
+    "activation": "bound",
+    "reason": "The ADR binds detailed evidence requirements to conformance audits, normalization, and platform research."
+  },
+  {
+    "rule": "agentic/code/addons/twelve-factor/rules/twelve-factor-evidence.md",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "The ADR scopes factor evidence to Twelve-Factor design, audits, and their reviewer."
+  },
+  {
+    "rule": "agentic/code/addons/verbalized-sampling/rules/diversity-awareness.md",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup reminder detects variety needs before skill selection; detailed tuning binds to the unambiguous diversity-tuning skill."
+  },
+  {
+    "rule": "agentic/code/addons/voice-framework/rules/voice-framework.md",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Preserve existing writing-path triggers and bind voice selection, analysis, and application."
+  }
+]

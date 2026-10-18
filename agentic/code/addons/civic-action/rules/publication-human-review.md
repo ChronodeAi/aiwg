@@ -1,3 +1,24 @@
+---
+enforcement: block
+activation: bound
+summary: "Require an independent named human to approve the exact artifact hash before civic publication or external action; retain the review record and blocking findings."
+bound_to:
+  skills:
+    - civic-newsroom-plan
+    - civic-publish-gate
+    - editorial-correction-review
+    - local-resource-index
+    - public-meeting-reconcile
+    - public-records-plan
+    - public-technology-review
+    - source-compliance-gate
+  agents:
+    - citation-editor
+    - civic-newsroom-operator
+    - correction-editor
+    - news-caster
+---
+
 # Publication and external-action human review
 
 **Enforcement: BLOCK**

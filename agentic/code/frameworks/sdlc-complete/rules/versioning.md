@@ -1,5 +1,30 @@
 ---
 enforcement: critical
+activation: paths
+summary: Use YYYY.M.PATCH without leading zeros; keep package versions, v-prefixed release tags, and changelog entries consistent before release.
+bound_to:
+  skills:
+    - flow-release
+    - release-publication-verify
+    - dev-release-coordinate
+  agents:
+    - deployment-manager
+    - configuration-manager
+    - build-engineer
+  flows:
+    - flow-release
+paths:
+  - package.json
+  - "**/package.json"
+  - package-lock.json
+  - "**/package-lock.json"
+  - CHANGELOG.md
+  - "**/CHANGELOG.md"
+  - .aiwg/deployment/**
+  - .github/workflows/*release*
+  - .gitea/workflows/*release*
+triggers:
+  - how to format release versions and tags
 ---
 
 # Versioning Rules

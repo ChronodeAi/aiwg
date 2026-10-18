@@ -1,4 +1,23 @@
 ---
+activation: paths
+summary: "Delegate dataset execution to the shared service; require digest-scoped approval, protect credentials, distinguish canonical and derived data, and preserve checkpoints."
+bound_to:
+  skills:
+    - dataset-capability-recommend
+    - dataset-export
+    - dataset-ingest
+    - dataset-intake
+    - dataset-intelligence
+    - dataset-plan-review
+    - dataset-retire
+    - dataset-source-assess
+    - dataset-trace
+    - dataset-verify
+  agents:
+    - dataset-policy-reviewer
+    - dataset-provenance-reviewer
+    - dataset-source-architect
+    - dataset-steward
 enforcement: high
 paths: ["agentic/code/addons/dataset-intelligence/**", "schemas/dataset/**", "src/dataset/**", ".aiwg/**"]
 ---

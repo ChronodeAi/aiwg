@@ -1,5 +1,44 @@
 ---
 enforcement: critical
+activation: bound
+summary: Hash evidence at collection, verify before analysis and reporting, preserve originals, and record timestamped custody transfers.
+bound_to:
+  agents:
+    - cloud-analyst
+    - container-analyst
+    - forensic-acquisition-agent
+    - forensics-orchestrator
+    - ioc-analyst
+    - log-analyst
+    - memory-analyst
+    - network-analyst
+    - persistence-hunter
+    - recon-agent
+    - reporting-agent
+    - timeline-builder
+    - triage-agent
+  skills:
+    - cloud-forensics
+    - container-forensics
+    - evidence-preservation
+    - forensics-acquire
+    - forensics-hunt
+    - forensics-investigate
+    - forensics-ioc
+    - forensics-profile
+    - forensics-report
+    - forensics-status
+    - forensics-timeline
+    - forensics-triage
+    - ioc-extraction
+    - linux-forensics
+    - log-analysis
+    - memory-forensics
+    - sigma-hunting
+    - supply-chain-forensics
+    - target-profiling
+triggers:
+  - verify forensic evidence hashes and custody
 ---
 
 # Evidence Integrity

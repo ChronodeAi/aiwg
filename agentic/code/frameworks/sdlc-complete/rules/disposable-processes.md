@@ -4,6 +4,16 @@ name: disposable-processes
 severity: HIGH
 category: reliability
 factor: 12-factor-IX
+activation: "bound"
+summary: "Start processes quickly and shut down gracefully on SIGTERM; drain or requeue work within the grace window, checkpoint before acknowledgment, and make retries safe."
+bound_to:
+  agents: ["deployment-manager", "devops-engineer", "reliability-engineer", "software-implementer"]
+  skills: ["build-poc", "flow-deploy-to-production", "flow-release"]
+  flows: ["flow-deploy-to-production", "flow-release"]
+triggers:
+  - "graceful SIGTERM process shutdown"
+  - "disposable process crash safety"
+  - "fast startup and queue drain"
 ---
 
 # Disposable Processes

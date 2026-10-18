@@ -1,5 +1,34 @@
 ---
 enforcement: high
+activation: bound
+summary: Record complete intent/action/observation iterations, ground actions in observed results, vary strategy after flat cycles, and declare exploration quotas for long loops.
+bound_to:
+  skills:
+    - flow-guided-implementation
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - mission-control
+    - ralph
+    - ralph-external
+    - ralph-resume
+  agents:
+    - ralph-loop
+    - ralph-verifier
+    - software-implementer
+    - debugger
+    - self-debug
+    - test-engineer
+    - code-reviewer
+    - architecture-designer
+    - requirements-analyst
+    - security-auditor
+    - technical-researcher
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-guided-implementation
+triggers:
+  - how to structure iterative agent execution
 ---
 
 # TAO Loop Standardization Rules

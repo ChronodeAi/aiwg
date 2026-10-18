@@ -1,5 +1,18 @@
 ---
 enforcement: medium
+activation: summary
+summary: Append one activity entry after each successful artifact mutation or deployment; preserve history and continue if logging fails.
+bound_to:
+  skills:
+    - activity-log
+    - use
+    - aiwg-refresh
+    - aiwg-regenerate
+    - workspace-prune-working
+    - promote
+    - artifact-metadata
+  agents:
+    - context-librarian
 ---
 
 # Activity Log Rule

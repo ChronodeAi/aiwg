@@ -1,0 +1,98 @@
+[
+  {
+    "rule": "addon-boundaries",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "AIWG source and project-output boundaries activate before touching their trees or authoring components."
+  },
+  {
+    "rule": "aiwg-ci-safety",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "CI authorization and template safety are scoped to workflow paths and CI authoring roles."
+  },
+  {
+    "rule": "aiwg-dir-reference-contract",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Reference normalization is required while reading or changing distributable component source."
+  },
+  {
+    "rule": "component-completeness",
+    "enforcement": "medium",
+    "activation": "paths",
+    "reason": "Component completeness applies to artifact authoring, registration, and validation rather than unrelated tasks."
+  },
+  {
+    "rule": "no-circular-skill-calls",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Recursion can be checked before skill and command-routing source is read or changed."
+  },
+  {
+    "rule": "skill-placement",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Source placement has concrete source and provider-output paths plus component-authoring entry points."
+  },
+  {
+    "rule": "activity-log",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup reminder catches arbitrary artifact mutations; detailed logging policy follows maintenance entry points."
+  },
+  {
+    "rule": "agent-deployment",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Preserve the ADR agent/provider path contract and bind deployment and agent-authoring entry points."
+  },
+  {
+    "rule": "context-bloat",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Excess context is a dispatch concern delivered with orchestration artifacts."
+  },
+  {
+    "rule": "context-budget",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "The opt-in budget governs subagent fan-out and scheduling, not every task."
+  },
+  {
+    "rule": "diagram-generation",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Diagram requirements belong to documentation generation and auditing roles."
+  },
+  {
+    "rule": "implicit-dependencies",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Explicit context handoffs are scoped to orchestration and agent chaining."
+  },
+  {
+    "rule": "no-time-estimates",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "Keep a planning reminder for arbitrary scope questions and bind detailed estimation guidance to planners."
+  },
+  {
+    "rule": "parallel-then-synthesize",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "The independence test applies before orchestrators fan out analytical work."
+  },
+  {
+    "rule": "post-commit-index-refresh",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup reminder covers direct commits while delivery bindings carry detailed post-commit housekeeping."
+  },
+  {
+    "rule": "soul-enforcement",
+    "enforcement": "medium",
+    "activation": "summary",
+    "reason": "A startup reminder covers identity before arbitrary output; selected-SOUL workflows deliver detailed policy."
+  }
+]

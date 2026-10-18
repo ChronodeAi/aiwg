@@ -1,5 +1,20 @@
 ---
 enforcement: medium
+activation: bound
+summary: Use paired AIWG maintenance skills before raw action commands; preserve registry state and perform health checks before long orchestration sessions.
+bound_to:
+  skills:
+    - use
+    - aiwg-doctor
+    - aiwg-refresh
+    - aiwg-regenerate
+    - mission-control
+    - aiwg-mission
+  agents:
+    - aiwg-steward
+  flows: []
+triggers:
+  - how should agents maintain AIWG
 ---
 
 # Self-Maintenance Rule

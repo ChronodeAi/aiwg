@@ -1,4 +1,12 @@
 ---
+activation: bound
+summary: "Author deterministic setup manifests with script-first steps, shared libraries, clear verification, logical units, and recovery procedures."
+bound_to:
+  skills:
+    - setup-generate
+    - setup-validate
+  agents:
+    - installer-agent
 enforcement: high
 name: installer-authoring
 description: Authoring rules for setup.aiwg.io/v1 SetupManifest files and script templates. Enforces script-first design, template reuse, and consistent manifest structure.

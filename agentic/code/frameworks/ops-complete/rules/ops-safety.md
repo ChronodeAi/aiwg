@@ -1,11 +1,14 @@
 ---
 enforcement: critical
 triggers:
-  - "is this command destructive"
-  - "can I run this safely"
-  - "blast radius"
-  - "this needs sudo"
-  - "interactive command"
+  - is this command destructive
+  - can I run this safely
+  - blast radius
+  - this needs sudo
+  - interactive command
+  - gate destructive operational commands
+activation: kernel
+summary: Assess blast radius before commands; require human approval for destructive or cross-host changes, dry-run high-risk operations, and sanitize collected output.
 ---
 
 # Ops Safety Rules
@@ -13,225 +16,55 @@ triggers:
 **Enforcement Level**: CRITICAL
 **Scope**: All operational commands, agent-executed procedures, and infrastructure changes
 
-## Principle
+## Interactive Commands
 
-Operational safety is non-negotiable. Agents must detect interactive commands they cannot handle, gate destructive operations behind human confirmation, assess blast radius before execution, and never cross host boundaries without explicit authorization. A single unguarded `rm -rf` or silent `fdisk` can destroy production data in seconds.
+Flag commands requiring passwords, confirmation prompts, editors, or TUIs for human execution. Do not enter passwords or answer interactive prompts. Examples include `sudo`, `cryptsetup luksOpen`, `passwd`, `ssh-keygen`, `mysql -p`, `fdisk`, `cfdisk`, `parted`, `visudo`, `systemctl edit`, and `nmtui`.
 
-## Mandatory Rules
+Present the command, explain the interactive requirement, and ask the operator to run it and confirm completion. A pre-authorized non-interactive alternative is permitted: for example, `sudo -n` fails instead of prompting, and `sfdisk` accepts a reviewed partition-layout file. These alternatives do not waive destructive-operation approval.
 
-### Rule 1: Detect Interactive Commands
+## Destructive Operations
 
-Commands that require interactive input (password prompts, confirmation dialogs, TUI interfaces) MUST be flagged for human execution. Agents cannot type passwords or respond to interactive prompts safely.
+Require explicit human confirmation before execution. Present the exact command, effect, blast radius, reversibility, and verified backup status; wait for an explicit yes.
 
-**Commands requiring human execution**:
-```bash
-# Password/authentication prompts
-sudo <anything>          # May prompt for password
-cryptsetup luksOpen      # Requires passphrase
-passwd                   # Interactive password entry
-ssh-keygen               # Prompts for passphrase
-mysql -p                 # Password prompt
+Always gate:
 
-# Interactive editors/TUIs
-fdisk /dev/sdX           # Interactive partitioning
-cfdisk, parted           # Interactive disk tools
-visudo                   # Opens editor
-systemctl edit            # Opens editor
-nmtui                    # TUI network config
-```
+- Filesystem destruction: `rm -rf`, `shred`, `mkfs.*`, raw disk writes such as `dd ... of=/dev/*`.
+- Disk/partition/volume changes: `fdisk`, `parted`, `gdisk`, `lvremove`, `vgremove`, `mdadm --stop` or `--remove`.
+- Network/firewall destruction: `iptables -F`, `ufw reset`, `ip link delete`, `nmcli con delete`.
+- Service/system changes: `systemctl disable`, `systemctl mask`, stopping host-defined critical services, `reboot`, `shutdown`, `poweroff`, `update-grub`, `grub-install`.
+- Destructive package operations: `apt purge`, `apt autoremove`, `dnf remove`, `rpm -e`.
+- Database destruction: `DROP DATABASE`, `DROP TABLE`, `TRUNCATE TABLE`.
 
-**Required agent behavior**:
-```markdown
-INTERACTIVE COMMAND DETECTED
+## Blast Radius and Dry Runs
 
-The following command requires human execution:
-  sudo cryptsetup luksOpen /dev/sda2 vault
+Classify every operation before execution.
+Record every operation's blast-radius classification in the operation plan before execution.
 
-Reason: Requires LUKS passphrase entry
-Action: Please run this command manually, then confirm completion.
-```
+| Level | Scope | Required gate |
+|---|---|---|
+| CRITICAL | Multiple hosts, data loss, unrecoverable operations | Human approval, dry-run, backup verification |
+| HIGH | Single-host service outage or recoverable change | Human approval and dry-run |
+| MEDIUM | Single service, brief disruption | Human notification |
+| LOW | Read-only checks, monitoring, no disruption | No gate |
 
-**Non-interactive alternatives when available**:
-```bash
-# Instead of interactive sudo, use pre-authorized patterns:
-# If already root or passwordless sudo configured:
-sudo -n systemctl restart nginx  # -n = non-interactive, fails instead of prompting
+Multiple affected hosts or data destruction without backup is CRITICAL. Service outages and boot/network/authentication changes are at least HIGH. Read-only/informational operations are LOW.
 
-# Instead of interactive fdisk, use scriptable sfdisk:
-sfdisk /dev/sdX < partition-layout.dump
-```
+A firewall flush on a gateway and DNS record deletion are CRITICAL operations and require human approval, a supported dry-run, and backup verification.
+Routine log rotation, cache clearing, and temporary-file cleanup are MEDIUM operations requiring human notification, subject to the destructive-operation gates and any higher blast-radius classification.
 
-### Rule 2: Gate Destructive Operations
+For HIGH/CRITICAL operations, attempt a dry-run when supported before actual execution. Use `rsync --dry-run`, package-manager dry runs, Ansible `--check`, or `terraform plan`; for deletion, list candidates first; for firewall/service changes, inspect current rules/dependencies first.
 
-Destructive operations MUST NOT be executed without explicit human confirmation. Present the command, its effects, and blast radius assessment before proceeding.
+## Host Boundaries
 
-**Always-gated commands**:
-```bash
-# Filesystem destruction
-rm -rf <path>            # Recursive forced delete
-shred                    # Secure file destruction
-mkfs.*                   # Filesystem creation (destroys existing data)
-dd if=* of=/dev/*        # Raw disk write
+Never cross host boundaries without explicit human authorization.
+Never apply one host's configuration to another, or silently target a whole fleet, without explicit human confirmation. Identify source and target hosts, the configuration, differing hardware/interfaces/IP assignments/roles, and likely impact before requesting confirmation.
 
-# Partition/disk operations
-fdisk, parted, gdisk     # Partition table changes
-lvremove, vgremove       # LVM destruction
-mdadm --stop, --remove   # RAID destruction
+## Secrets and Runtime Output
 
-# Network/firewall
-iptables -F              # Flush all firewall rules
-ufw reset                # Reset firewall to defaults
-ip link delete           # Remove network interface
-nmcli con delete         # Remove network connection
+Follow core token-security. Keep token variables scoped to a heredoc/subshell lifetime; never place literal tokens in command history or persistent exports. Never put tokens, SSH keys, or certificates in runbooks, issues, or commit messages. Never store tokens in operational documents or runbooks, including procedure documents and response text. SSH keys and certificates follow the same rules as API tokens. Systemd secrets must use `LoadCredential=` or `EnvironmentFile=`.
 
-# Service/system
-systemctl disable <svc>  # Disable service at boot
-systemctl mask <svc>     # Prevent service from starting
-systemctl stop <critical># Stop critical services (defined per host)
-reboot, shutdown, poweroff
-update-grub, grub-install# Bootloader changes
-
-# Package management (destructive)
-apt purge, apt autoremove
-dnf remove, rpm -e
-
-# Database
-DROP DATABASE, DROP TABLE
-TRUNCATE TABLE
-```
-
-**Required gate format**:
-```markdown
-DESTRUCTIVE OPERATION — HUMAN CONFIRMATION REQUIRED
-
-Command:    rm -rf /var/lib/postgresql/14/
-Effect:     Permanently deletes all PostgreSQL 14 data
-Blast radius: CRITICAL — all databases on this host
-Reversible: NO (unless backup exists)
-Backup status: [Check: ls -la /backup/pg/latest/]
-
-Proceed? (requires explicit "yes" from human)
-```
-
-### Rule 3: Assess Blast Radius
-
-Every operation must be classified by blast radius BEFORE execution:
-
-| Level | Scope | Examples | Gate |
-|-------|-------|----------|------|
-| **CRITICAL** | Multi-host, data loss, unrecoverable | `rm -rf /`, firewall flush on gateway, DNS record deletion | Human approval + dry-run + backup verification |
-| **HIGH** | Single host, service outage, recoverable | Service restart, package upgrade, config change | Human approval + dry-run |
-| **MEDIUM** | Single service, brief disruption | Log rotation, cache clear, temp file cleanup | Human notification |
-| **LOW** | No disruption, read-only, monitoring | Status checks, log reads, disk usage | No gate |
-
-**Classification rules**:
-- Affects more than one host → minimum CRITICAL
-- Destroys data without backup → CRITICAL
-- Causes service outage → minimum HIGH
-- Modifies boot/network/auth config → minimum HIGH
-- Read-only or informational → LOW
-
-### Rule 4: Dry-Run First for High/Critical Operations
-
-Operations classified HIGH or CRITICAL MUST attempt a dry-run before actual execution when the tool supports it.
-
-**Dry-run patterns**:
-```bash
-# rsync
-rsync -avz --dry-run source/ dest/
-
-# apt
-apt install --dry-run package-name
-
-# rm (list instead of delete)
-find /path -name "*.tmp" -print   # Review before -delete
-
-# iptables
-iptables -L -n                     # List before -F
-
-# systemctl
-systemctl list-dependencies svc    # Check deps before stop
-
-# Ansible
-ansible-playbook --check playbook.yml
-
-# Terraform
-terraform plan                     # Before apply
-```
-
-### Rule 5: Never Cross Host Boundaries Without Confirmation
-
-Configuration from one host MUST NOT be applied to another host without explicit human confirmation. Hosts have unique hardware, network configurations, disk layouts, and service assignments.
-
-**FORBIDDEN**:
-```bash
-# NEVER copy one host's config to another without review
-scp gateway-01:/etc/network/interfaces compute-03:/etc/network/interfaces
-ansible-playbook site.yml -l "all"  # Applying broad changes silently
-```
-
-**REQUIRED**:
-```markdown
-CROSS-HOST OPERATION DETECTED
-
-Source host: gateway-01
-Target host: compute-03
-File: /etc/network/interfaces
-
-These hosts have different:
-- Network interfaces (gateway-01: eno1,eno2; compute-03: enp0s31f6)
-- IP assignments (gateway-01: 10.0.0.1; compute-03: 10.0.0.42)
-- Roles (gateway vs compute)
-
-Applying gateway-01's network config to compute-03 will likely
-cause network loss on compute-03.
-
-Proceed only with explicit human confirmation.
-```
-
-### Rule 6: Token Security in Ops Contexts
-
-Follows the core token-security rule with ops-specific additions:
-
-```bash
-# REQUIRED: Heredoc pattern for scoped token lifetime
-bash <<'EOF'
-TOKEN=$(cat ~/.config/gitea/token)
-curl -s -H "Authorization: token ${TOKEN}" \
-  "https://git.integrolabs.net/api/v1/repos/roctinam/sysops/issues"
-EOF
-# Token variable does not persist after heredoc
-
-# FORBIDDEN: Tokens in command history
-export GITEA_TOKEN="abc123..."  # Persists in shell history
-curl -H "Authorization: token abc123" ...  # Visible in history
-```
-
-**Ops-specific additions**:
-- Never store tokens in operational documents or runbooks
-- Never include tokens in issue bodies or commit messages
-- SSH keys and certificates follow the same rules as API tokens
-- Secrets in systemd unit files must use `LoadCredential=` or `EnvironmentFile=`
-
-### Rule 7: Sanitize Runtime Output Before Any Sink
-
-Secret references can be safe at authoring time while command output, API responses, URLs, stack traces, or generated evidence still contain the resolved value. Before placing collected output in an agent response, `.aiwg/ops/audit/`, a generated artifact, repository, commit helper, issue, PR, comment, export, or bundle, invoke the mandatory boundary from `ops-information-governance`.
-
-The boundary must complete redaction before emitting any stream bytes. It preserves typed markers and optional correlation fingerprints, not secret values. External and persistent sinks fail closed if sanitization cannot complete. A provider's masking is defense in depth, not a replacement for this boundary.
-
-## Detection
-
-- Agent executing a command from the interactive list without flagging
-- Destructive command executed without human confirmation gate
-- Missing blast radius classification in operation plan
-- High/critical operations without preceding dry-run
-- Cross-host config application without human confirmation
-- Tokens appearing in procedure documents, issue bodies, or commit messages
-- Raw or collected output reaching a response/persistent/external sink without a successful governance-boundary decision
+Before collected command/API output, URLs, stack traces, or generated evidence reaches any response, audit file, artifact, repository, commit helper, tracker body, export, or bundle, invoke the mandatory `ops-information-governance` boundary. Safe secret references at authoring time do not make resolved output safe. Complete sanitization before emitting stream bytes; retain typed markers and optional fingerprints rather than secret values. Persistent/external sinks fail closed on sanitization failure. Provider masking does not replace the boundary.
 
 ## Enforcement
 
-- **On violation**: IMMEDIATE HALT — stop execution, report the violation, await human instruction
-- **Severity**: CRITICAL — violations can cause data loss, outages, or security breaches
-- **Recovery**: Review what was executed, assess damage, restore from backup if needed, add missing gates to the procedure
-- **Escalation**: Any CRITICAL blast radius operation that was executed without approval must be reported as an incident
+On any violation, halt immediately, report it, and await human instruction. Review executed actions, assess damage, restore backups if needed, and repair procedure gates. Report any CRITICAL operation executed without approval as an incident.

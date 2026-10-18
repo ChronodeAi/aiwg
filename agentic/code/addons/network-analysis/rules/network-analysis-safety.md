@@ -1,4 +1,9 @@
 ---
+activation: bound
+summary: "Require bounded capture authority and separate disclosure approval; analyze immutable captures with trusted isolated tools and exclude secrets and payloads by default."
+bound_to:
+  skills:
+    - analyze-network-capture
 enforcement: block
 ---
 

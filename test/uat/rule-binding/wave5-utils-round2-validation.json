@@ -1,0 +1,259 @@
+{
+  "issue": "roctinam/aiwg#2945",
+  "lane": "utils",
+  "round": 2,
+  "adr": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+  "classifications": [
+    {
+      "file": "test/unit/providers/rule-activation-deployment.test.ts",
+      "test": "activation-selected provider deployment (#2939) preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions",
+      "classification": "a",
+      "adr_lines": [
+        265,
+        272,
+        344
+      ],
+      "evidence": "Only agent-deployment changed in the 47-file fallback snapshot. Migrated paths were stripped as a scalar, leaving invalid YAML; the valid legacy native path route and its now-explicit HIGH tier are retained. The exact snapshot and all six restored demotions remain asserted.",
+      "changed": "test/unit/providers/rule-activation-deployment.test.ts:126",
+      "snapshot": "test/fixtures/rule-delivery/untagged-sdlc-claude.json:20"
+    },
+    {
+      "file": "test/unit/providers/rule-tier-deployment.test.ts",
+      "test": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles surfaces the medium/low tier and nothing always-on",
+      "classification": "a",
+      "adr_lines": [
+        50,
+        61,
+        265,
+        272
+      ],
+      "evidence": "activity-log is summary; context-budget and diagram-generation are bound. Assert the complete independently enumerated remaining untagged MEDIUM/LOW set, retain six pinned eligible rules, and explicitly exclude the three migrated rules.",
+      "changed": "test/unit/providers/rule-tier-deployment.test.ts:148"
+    },
+    {
+      "file": "test/unit/providers/rule-tier-deployment.test.ts",
+      "test": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)",
+      "classification": "a",
+      "adr_lines": [
+        50,
+        61,
+        265,
+        272
+      ],
+      "evidence": "activity-log is summary; context-budget and diagram-generation are bound. Assert the complete independently enumerated remaining untagged MEDIUM/LOW set, retain six pinned eligible rules, and explicitly exclude the three migrated rules.",
+      "changed": "test/unit/providers/rule-tier-deployment.test.ts:171"
+    },
+    {
+      "file": "test/unit/providers/rule-tier-deployment.test.ts",
+      "test": "on-demand index propagation (#1675) end-to-end RULES-ONDEMAND.md emission keeps the complete index after an aiwg-use-all-style addon pass (#1784)",
+      "classification": "a",
+      "adr_lines": [
+        50,
+        61,
+        265,
+        272
+      ],
+      "evidence": "activity-log is summary; context-budget and diagram-generation are bound. Assert the complete independently enumerated remaining untagged MEDIUM/LOW set, retain six pinned eligible rules, and explicitly exclude the three migrated rules.",
+      "changed": "test/unit/providers/rule-tier-deployment.test.ts:316"
+    },
+    {
+      "file": "test/unit/providers/rule-tier-deployment.test.ts",
+      "test": "on-demand index propagation (#1675) aggregated provider bridge sections openhuman AGENTS.md substitutes the {{ON_DEMAND_RULES}} token (#1785)",
+      "classification": "a",
+      "adr_lines": [
+        50,
+        61,
+        265,
+        272
+      ],
+      "evidence": "activity-log is summary; context-budget and diagram-generation are bound. Assert the complete independently enumerated remaining untagged MEDIUM/LOW set, retain six pinned eligible rules, and explicitly exclude the three migrated rules.",
+      "changed": "test/unit/providers/rule-tier-deployment.test.ts:341"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance keeps the full Codex kernel catalog useful and below its startup listing cap",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance claude deploys every canonical kernel skill and no standard skills",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance codex deploys every canonical kernel skill and no standard skills",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance cursor deploys every canonical kernel skill and no standard skills",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance warp deploys every canonical kernel skill and no standard skills",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance hermes deploys every canonical kernel skill and no standard skills",
+      "classification": "b",
+      "adr_lines": [
+        50,
+        53,
+        102,
+        108,
+        125,
+        131
+      ],
+      "evidence": "Reverse bindings unconditionally projected 27 standard flows into native kernel roots after normal selection. Project flows only for an opted-in standard skill deployment, route to its standard destination, preserve authored representations, and validate excluded targets without copying them.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:235"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance repeat deploy prunes stale managed skills while preserving operator-owned skills",
+      "classification": "b",
+      "adr_lines": [
+        102,
+        108,
+        244,
+        245
+      ],
+      "evidence": "Staged pruning removed files but promotion left empty skill directories. Propagate removal only for empty parents absent from the staged result; preserve operator-owned files. Flow receipts also reconcile opt-in projections.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:425"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance claude repairs a full-copy deployment while preserving operator-owned skills",
+      "classification": "b",
+      "adr_lines": [
+        102,
+        108,
+        244,
+        245
+      ],
+      "evidence": "Staged pruning removed files but promotion left empty skill directories. Propagate removal only for empty parents absent from the staged result; preserve operator-owned files. Flow receipts also reconcile opt-in projections.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:425"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance codex repairs a full-copy deployment while preserving operator-owned skills",
+      "classification": "b",
+      "adr_lines": [
+        102,
+        108,
+        244,
+        245
+      ],
+      "evidence": "Staged pruning removed files but promotion left empty skill directories. Propagate removal only for empty parents absent from the staged result; preserve operator-owned files. Flow receipts also reconcile opt-in projections.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:425"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance cursor repairs a full-copy deployment while preserving operator-owned skills",
+      "classification": "b",
+      "adr_lines": [
+        102,
+        108,
+        244,
+        245
+      ],
+      "evidence": "Staged pruning removed files but promotion left empty skill directories. Propagate removal only for empty parents absent from the staged result; preserve operator-owned files. Flow receipts also reconcile opt-in projections.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:425"
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance warp repairs a full-copy deployment while preserving operator-owned skills",
+      "classification": "b",
+      "adr_lines": [
+        102,
+        108,
+        244,
+        245
+      ],
+      "evidence": "Staged pruning removed files but promotion left empty skill directories. Propagate removal only for empty parents absent from the staged result; preserve operator-owned files. Flow receipts also reconcile opt-in projections.",
+      "changed": "tools/agents/providers/rule-delivery.mjs:425"
+    }
+  ],
+  "validation": {
+    "neighbors": {
+      "files": 14,
+      "passed": 292,
+      "failed": 0,
+      "report": "/tmp/w5-round2-neighbors.json"
+    },
+    "lane": {
+      "files": 1,
+      "passed": 10,
+      "failed": 0,
+      "log": "/tmp/w5-round2-unit.log"
+    },
+    "kernel": {
+      "files": 1,
+      "passed": 55,
+      "failed": 0,
+      "report": "/tmp/w5-round2-kernel.json",
+      "config": "config/vitest.integration.config.js, loaded by startVitest with include restricted to test/integration/kernel-deployment-conformance.test.ts; original config only includes serve tests"
+    },
+    "unique_passed_tests": 357,
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "codex_catalog": {
+      "kernel_skills": 26,
+      "listing_characters": 5828,
+      "cap_characters": 8000
+    },
+    "constraints": "Worktree and system temp only; no git, network, installs, tracker writes, or model calls; one Vitest at a time; nice -n 19; maxWorkers=4.",
+    "unrun_gates": "Model compliance probes remain conductor-owned and were not run."
+  }
+}

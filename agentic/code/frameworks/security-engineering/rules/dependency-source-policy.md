@@ -1,9 +1,27 @@
 ---
 enforcement: high
 triggers:
-  - "can I add this dependency"
-  - "is this package source safe"
-  - "git dependency"
+  - can I add this dependency
+  - is this package source safe
+  - git dependency
+activation: paths
+summary: Use registry dependency sources in manifests and transitive lock entries; require current documented exceptions and block exotic pnpm subdependencies.
+bound_to:
+  agents:
+    - security-auditor
+    - secure-bootstrap-reviewer
+    - build-engineer
+    - devops-engineer
+    - code-reviewer
+  skills:
+    - npm-supply-chain-audit
+    - supply-chain-trust
+    - supply-chain-hardening-quickstart
+    - npm-release-age-gate
+    - pnpm-release-age-gate
+    - yarn-release-age-gate
+    - bun-release-age-gate
+paths: [ "**/package.json", "**/package-lock.json", "**/npm-shrinkwrap.json", "**/pnpm-lock.yaml", "**/pnpm-workspace.yaml", "**/yarn.lock", "**/bun.lock", "**/bun.lockb", "**/.npmrc", .aiwg/security/dep-source-allowlist.yaml ]
 ---
 
 # Dependency Source Policy

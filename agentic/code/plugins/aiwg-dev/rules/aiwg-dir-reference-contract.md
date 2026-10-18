@@ -1,5 +1,33 @@
 ---
 enforcement: medium
+activation: paths
+summary: Use manifest-derived normalized project paths and AIWG_ROOT references in distributable artifacts; declare new memory paths in memory.creates.
+bound_to:
+  skills:
+    - devkit-create-addon
+    - devkit-create-extension
+    - devkit-create-framework
+    - devkit-create-agent
+    - devkit-create-command
+    - devkit-create-skill
+    - scaffold-addon
+    - scaffold-extension
+    - scaffold-framework
+    - new-bundle
+    - add-agent
+    - add-skill
+    - add-command
+    - add-behavior
+    - add-template
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+    - link-check
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**
 ---
 
 # AIWG Directory Reference Contract

@@ -1,3 +1,24 @@
+---
+enforcement: block
+activation: bound
+summary: "Link each material civic claim to a source and selector, separate evidence dimensions, preserve uncertainty, and append corrections without rewriting history."
+bound_to:
+  skills:
+    - civic-newsroom-plan
+    - civic-publish-gate
+    - editorial-correction-review
+    - local-resource-index
+    - public-meeting-reconcile
+    - public-records-plan
+    - public-technology-review
+    - source-compliance-gate
+  agents:
+    - citation-editor
+    - civic-newsroom-operator
+    - correction-editor
+    - news-caster
+---
+
 # Source and claim integrity
 
 **Enforcement: BLOCK before publication or consequential action**

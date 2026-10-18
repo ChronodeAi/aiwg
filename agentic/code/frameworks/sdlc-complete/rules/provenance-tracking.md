@@ -1,5 +1,31 @@
 ---
 enforcement: high
+activation: summary
+summary: Record PROV entity, activity, agent, timestamps, and all derivations for generated artifacts; keep source mentions and bidirectional links consistent.
+bound_to:
+  skills:
+    - artifact-orchestration
+    - auto-provenance
+    - provenance-create
+    - provenance-validate
+    - provenance-report
+  agents:
+    - requirements-analyst
+    - requirements-documenter
+    - architecture-designer
+    - architecture-documenter
+    - software-implementer
+    - test-engineer
+    - test-documenter
+    - technical-writer
+    - agentsmith
+    - commandsmith
+    - skillsmith
+    - provenance-manager
+    - traceability-manager
+  flows: []
+triggers:
+  - what provenance must generated artifacts record
 ---
 
 # Provenance Tracking Rules

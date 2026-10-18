@@ -2,8 +2,28 @@
 enforcement: high
 id: no-unauthenticated-encryption
 severity: HIGH
-applies_to: [all-agents, applied-cryptographer]
-tags: [cryptography, aead, integrity]
+applies_to:
+  - all-agents
+  - applied-cryptographer
+tags:
+  - cryptography
+  - aead
+  - integrity
+activation: summary
+summary: Use authenticated encryption; legacy unauthenticated modes require a separate MAC with an independent key, verified before decryption or padding processing.
+bound_to:
+  agents:
+    - applied-cryptographer
+    - code-reviewer
+    - security-auditor
+    - software-implementer
+  skills:
+    - crypto-primitive-selection
+    - auth-factor-design
+    - chain-of-trust-design
+    - secret-handling-runtime
+triggers:
+  - require authenticated encryption instead of bare CBC
 ---
 
 # No Unauthenticated Encryption

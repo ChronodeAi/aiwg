@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
+import { sourceRules } from './rule-source-expectations.js';
 import { execFileSync } from 'child_process';
 
 // @ts-expect-error — .mjs provider module without type declarations
@@ -32,6 +33,10 @@ import { createAgentsMd as openhumanAgentsMd } from '../../../tools/agents/provi
 
 const REPO_ROOT = resolve(__dirname, '../../..');
 const levelOf = (f: string): string | null => ruleEnforcementLevel(readFileSync(f, 'utf8'));
+const corpusRules = ['addons', 'frameworks', 'extensions'].flatMap(kind =>
+  sourceRules(REPO_ROOT, kind as 'addons' | 'frameworks' | 'extensions'));
+const legacyOnDemandNames = [...new Set(corpusRules.filter(rule => rule.legacyOnDemand).map(rule => rule.name))].sort();
+const migratedTierNames = corpusRules.filter(rule => !rule.structural && rule.data.activation !== undefined).map(rule => rule.name);
 
 // `tmpFile()`'s directories were never removed (#3018), leaking one per call; module-level so
 // it covers every describe block in this file, not just the ones that already track their own.
@@ -107,29 +112,27 @@ describe('rule tier deployment (#1673)', () => {
     });
   });
 
-  // Contract guard against the real repo source: the deploy enumerators must
-  // never feed MEDIUM/LOW rules into the always-on set, and the on-demand
-  // enumerator must surface them. Locks the tiering behavior in CI.
+  // ADR 50–61, 265–272: preserve the exact file-delivery set, including
+  // native paths at any severity; summaries/bindings never become full bodies.
   describe('deploy enumerators on real source', () => {
-    it('getAddonRuleFiles yields only always-on (no medium/low) rules', () => {
-      const files: string[] = getAddonRuleFiles(REPO_ROOT);
-      const leaked = files.filter((f) => ['medium', 'low'].includes(levelOf(f) as string));
-      expect(leaked).toEqual([]);
+    it('getAddonRuleFiles yields activation-selected bodies and structural indexes', () => {
+      const expected = sourceRules(REPO_ROOT, 'addons')
+        .filter(rule => !rule.consolidated && rule.fileDelivered).map(rule => rule.file).sort();
+      expect(getAddonRuleFiles(REPO_ROOT).sort()).toEqual(expected);
     });
 
-    it('collectFrameworkArtifacts rules yield only always-on rules', () => {
+    it('collectFrameworkArtifacts rules yield activation-selected bodies and structural indexes', () => {
+      const expected = sourceRules(REPO_ROOT, 'frameworks').filter(rule => rule.fileDelivered).map(rule => rule.file).sort();
       const arts = collectFrameworkArtifacts(REPO_ROOT, 'all', { includeRules: true });
-      const leaked = (arts.rules as string[]).filter((f) => ['medium', 'low'].includes(levelOf(f) as string));
-      expect(leaked).toEqual([]);
+      expect(arts.rules.sort()).toEqual(expected);
     });
 
-    it('listOnDemandRuleFiles surfaces the medium/low tier and nothing always-on', () => {
+    it('listOnDemandRuleFiles surfaces exactly the untagged medium/low fallback', () => {
       const od: string[] = listOnDemandRuleFiles(REPO_ROOT);
-      expect(od.length).toBeGreaterThan(0);
       // every entry is genuinely medium/low
       expect(od.every((f) => ['medium', 'low'].includes(levelOf(f) as string))).toBe(true);
-      // a known MEDIUM rule is present
-      expect(od.some((f) => f.endsWith('diagram-generation.md'))).toBe(true);
+      expect(onDemandRuleNames(od)).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(onDemandRuleNames(od)).not.toContain(name);
     });
 
     it('listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)', () => {
@@ -143,14 +146,9 @@ describe('rule tier deployment (#1673)', () => {
 
       expect(addonNames).toEqual(rootNames);
       expect(extensionNames).toEqual(rootNames);
-      expect(addonNames).toEqual(expect.arrayContaining([
-        'activity-log',
-        'context-budget',
-        'diagram-generation',
-        'voice-framework',
-        'prose-bridge',
-        'scoped-reasoning',
-      ]));
+
+      expect(rootNames).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(addonNames).not.toContain(name);
     });
   });
 });
@@ -236,6 +234,7 @@ describe('on-demand index propagation (#1675)', () => {
     for (const [provider, ruleDir] of CASES) {
       it(`${provider} writes RULES-ONDEMAND.md with ${expectedCount} entries`, async () => {
         const target = await mkdtemp(join(tmpdir(), `aiwg-od-${provider}-`));
+        fileRoots.push(target);
         execFileSync(
           'node',
           [
@@ -248,6 +247,10 @@ describe('on-demand index propagation (#1675)', () => {
           { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
         );
         const indexPath = join(target, ruleDir, 'RULES-ONDEMAND.md');
+        if (expectedCount === 0) {
+          expect(existsSync(indexPath)).toBe(false);
+          return;
+        }
         expect(existsSync(indexPath)).toBe(true);
         const body = await readFile(indexPath, 'utf8');
         expect((body.match(/^- /gm) || []).length).toBe(expectedCount);
@@ -258,6 +261,7 @@ describe('on-demand index propagation (#1675)', () => {
 
     it('keeps the complete index after an aiwg-use-all-style addon pass (#1784)', async () => {
       const target = await mkdtemp(join(tmpdir(), 'aiwg-od-multipass-'));
+      fileRoots.push(target);
       const expected = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
 
       execFileSync(
@@ -283,17 +287,19 @@ describe('on-demand index propagation (#1675)', () => {
         { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
 
-      const body = await readFile(join(target, '.codex/rules/RULES-ONDEMAND.md'), 'utf8');
+      // ADR 61, 265–272: once no legacy tier remains, remove its startup
+      // listing rather than retaining stale entries from earlier passes.
+      const indexPath = join(target, '.codex/rules/RULES-ONDEMAND.md');
+      if (legacyOnDemandNames.length === 0) {
+        expect(existsSync(indexPath)).toBe(false);
+        return;
+      }
+      const body = await readFile(indexPath, 'utf8');
       const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
       expect(actual).toEqual(expected);
-      expect(actual).toEqual(expect.arrayContaining([
-        'activity-log',
-        'context-budget',
-        'diagram-generation',
-        'voice-framework',
-        'prose-bridge',
-        'scoped-reasoning',
-      ]));
+
+      expect(actual).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(actual).not.toContain(name);
 
       await rm(target, { recursive: true, force: true });
     }, 60_000);
@@ -317,13 +323,15 @@ describe('on-demand index propagation (#1675)', () => {
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(body).toContain('On-Demand Rules');
       expect(body).toContain('aiwg show rule ');
-      expect(body).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect([...body.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(body).not.toContain(`aiwg show rule ${name}\``);
       expect(body).not.toContain('{{ON_DEMAND_RULES}}');
 
       openhumanAgentsMd(target, join(REPO_ROOT, 'agentic/code/addons/aiwg-utils'), false);
       const addonPassBody = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(addonPassBody).toContain('On-Demand Rules');
-      expect(addonPassBody).toContain('- `activity-log` — `aiwg show rule activity-log`');
+      expect([...addonPassBody.matchAll(/^- `([^`]+)` — `aiwg show rule /gm)].map(match => match[1])).toEqual(legacyOnDemandNames);
+      for (const name of migratedTierNames) expect(addonPassBody).not.toContain(`aiwg show rule ${name}\``);
       expect(addonPassBody).not.toContain('{{ON_DEMAND_RULES}}');
 
       await rm(target, { recursive: true, force: true });

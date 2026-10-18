@@ -1,4 +1,13 @@
 ---
+activation: bound
+summary: "Authorize browser origins and sensitive actions, protect tokens and storage, log sanitized activity, and clean up browser subprocesses."
+bound_to:
+  skills:
+    - browser-setup
+    - browser-doctor
+    - browser-reset
+  agents:
+    - browser-driver
 enforcement: high
 ---
 
