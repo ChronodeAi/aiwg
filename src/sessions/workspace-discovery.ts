@@ -24,6 +24,7 @@ import { redactSourceLocator, type SessionSourceAdapterRegistry } from './discov
 import { createSessionAdapterRegistry } from './adapter-registry.js';
 import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
 import { fingerprintSourceFile } from './readers.js';
+import { matchSessionWorkspace, type WorkspaceMatchKind } from './workspace-matching.js';
 
 export const DISCOVERY_MANIFEST_VERSION = '1.0.0' as const;
 
@@ -50,6 +51,8 @@ export interface DiscoveryProviderReport {
   status: DiscoveryProviderStatus;
   disposition: 'discoverable' | 'manual-export' | 'unsupported';
   sourceCount: number;
+  matchedBySubfolder?: number;
+  matchedByWorktree?: number;
   dateRange: { earliest: string | null; latest: string | null };
   dateRangeBasis: 'source-mtime';
   reasonCode: string | null;
@@ -219,8 +222,11 @@ export async function discoverWorkspaceHistories(
       allowedRoots: availableRoots,
     };
     const providerSources: DiscoveryManifestSource[] = [];
+    let matchedBySubfolder = 0;
+    let matchedByWorktree = 0;
     const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
     for await (const descriptor of adapter.discover(scope)) {
+      let workspaceMatch: WorkspaceMatchKind | null = null;
       if (entry.provider === 'muse') {
         const inspection = await inspectMuseNativeWorkspace({
           ...descriptor,
@@ -233,12 +239,18 @@ export async function discoverWorkspaceHistories(
           ...inspection,
         });
         if (inspection.outcome !== 'matched') continue;
+        workspaceMatch = inspection.matchKind ?? null;
       }
       const locator = await canonicalPath(descriptor.locator);
-      if (entry.provider === 'codex'
-        && !await codexSourceMatchesWorkspace(locator, workspacePath)) continue;
+      if (entry.provider === 'codex') {
+        workspaceMatch = await codexSourceWorkspaceMatch(locator, workspacePath);
+        if (!workspaceMatch) continue;
+      }
       const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
-      if (ompHeader && resolve(ompHeader.cwd) !== workspacePath) continue;
+      if (ompHeader) {
+        workspaceMatch = await matchSessionWorkspace(ompHeader.cwd, workspacePath);
+        if (!workspaceMatch) continue;
+      }
       const details = await stat(locator);
       const authorizedRoot = scope.allowedRoots.find(
         (root) => locator === root || locator.startsWith(`${root}/`),
@@ -251,6 +263,8 @@ export async function discoverWorkspaceHistories(
       const dedupeKey = `${entry.provider}\0${fingerprint.digest}\0${fingerprint.size}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
+      if (workspaceMatch === 'subfolder') matchedBySubfolder += 1;
+      if (workspaceMatch === 'worktree') matchedByWorktree += 1;
       const source = sourceFromDescriptor(
         descriptor,
         locator,
@@ -294,6 +308,8 @@ export async function discoverWorkspaceHistories(
         (a, b) => a.sourceKey.localeCompare(b.sourceKey),
       );
     }
+    report.matchedBySubfolder = matchedBySubfolder;
+    report.matchedByWorktree = matchedByWorktree;
     reports.set(entry.provider, report);
   }
 
@@ -345,6 +361,8 @@ export async function discoverWorkspaceHistories(
       provider: provider.provider,
       status: provider.status,
       reasonCode: provider.reasonCode,
+      ...(provider.matchedBySubfolder !== undefined ? { matchedBySubfolder: provider.matchedBySubfolder } : {}),
+      ...(provider.matchedByWorktree !== undefined ? { matchedByWorktree: provider.matchedByWorktree } : {}),
       ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
@@ -408,6 +426,8 @@ export function publicDiscoveryManifest(manifest: SessionDiscoveryManifest): Rec
     totals: {
       providers: manifest.providers.length,
       sources: manifest.sources.length,
+      matchedBySubfolder: manifest.providers.reduce((sum, provider) => sum + (provider.matchedBySubfolder ?? 0), 0),
+      matchedByWorktree: manifest.providers.reduce((sum, provider) => sum + (provider.matchedByWorktree ?? 0), 0),
     },
   };
 }
@@ -448,6 +468,8 @@ function providerReport(
     status,
     disposition,
     sourceCount: sources.length,
+    matchedBySubfolder: 0,
+    matchedByWorktree: 0,
     dateRange: {
       earliest: timestamps.at(0) ?? null,
       latest: timestamps.at(-1) ?? null,
@@ -477,16 +499,18 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
       provider: provider.provider,
       status: provider.status,
       reasonCode: provider.reasonCode,
+      ...(provider.matchedBySubfolder !== undefined ? { matchedBySubfolder: provider.matchedBySubfolder } : {}),
+      ...(provider.matchedByWorktree !== undefined ? { matchedByWorktree: provider.matchedByWorktree } : {}),
       ...(provider.museSourceInspections ? { museSourceInspections: provider.museSourceInspections } : {}),
     })),
   };
   return sha256(JSON.stringify(identity));
 }
 
-async function codexSourceMatchesWorkspace(
+async function codexSourceWorkspaceMatch(
   locator: string,
   workspacePath: string,
-): Promise<boolean> {
+): Promise<WorkspaceMatchKind | null> {
   const input = createReadStream(locator, { encoding: 'utf8' });
   const lines = createInterface({ input, crlfDelay: Infinity });
   let count = 0;
@@ -501,13 +525,9 @@ async function codexSourceMatchesWorkspace(
       }
       const cwd = codexWorkspaceField(value);
       if (!cwd) continue;
-      try {
-        return await canonicalPath(cwd) === workspacePath;
-      } catch {
-        return resolve(cwd) === workspacePath;
-      }
+      return await matchSessionWorkspace(cwd, workspacePath);
     }
-    return false;
+    return null;
   } finally {
     lines.close();
     input.destroy();
