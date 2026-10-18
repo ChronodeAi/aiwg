@@ -109,7 +109,8 @@ aiwg sessions promote <candidate-id> <version> --consumer <id>
                       --reviewer <id> [--confirm] [--dry-run] [--json]
 aiwg sessions tag <session-id> <tag> [--dry-run] [--json]
 aiwg sessions relocate <source-id> <file> [--dry-run] [--json]
-aiwg sessions reindex [--dry-run] [--json]
+aiwg sessions reindex (--workspace <path-or-id> | --all-workspaces)
+                      [--db <catalog.sqlite>] [--dry-run] [--json]
 aiwg sessions delete <session-id> [--confirm] [--dry-run] [--json]
 aiwg sessions restore <session-id> [--dry-run] [--json]
 aiwg sessions purge <session-id> [--confirm] --actor-class <class>
@@ -131,6 +132,15 @@ aiwg sessions forensics evidence <event-id|fact-id|candidate-id>
                         --workspace <id> --authorize-forensics [--json]
 aiwg sessions doctor [--json]
 ```
+
+Reindex requires an explicit `--workspace` or `--all-workspaces`. The latter
+rebuilds search indexes and analytics for every workspace in the selected catalog;
+it does not scan for other catalogs or discover provider histories. Use `--db`
+to select a catalog outside the current project. These scope options cannot be
+combined. JSON receipts include `operation`, `allWorkspaces`, and sorted
+`workspaceIds`; dry runs list the same planned scopes with status `preview` and
+do not rebuild indexes. An empty catalog reports `workspaceIds: []` when all
+workspaces are selected.
 
 ## Discover and import a workspace history
 

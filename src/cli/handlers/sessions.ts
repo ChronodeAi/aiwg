@@ -169,7 +169,7 @@ Commands:
   promote <id> <version>          Preview promotion; use --confirm to write
   tag <session-id> <tag>          Add a catalog tag
   relocate <source-id> <file>     Update AIWG source-location metadata
-  reindex                         Rebuild catalog indexes
+  reindex --workspace <path-or-id> | --all-workspaces  Rebuild catalog indexes
   delete <session-id>             Preview deletion; use --confirm to tombstone
   restore <session-id>            Restore a reversible catalog tombstone
   purge <session-id>              Preview terminal AIWG-copy purge
@@ -181,6 +181,7 @@ Commands:
 Options:
   --json          Emit the versioned JSON contract
   --dry-run       Preview a mutation without changing state
+  --all-workspaces  Reindex every workspace in the selected catalog (reindex only)
   --db <path>     Select a catalog; relative paths resolve from cwd
   --workspace <path-or-id>  Select the workspace within that catalog for reads
                    (default: current project, matching cwd, or sole catalog workspace)
@@ -766,10 +767,25 @@ async function executeCommand(
         return ok(command, { sourceId, redactedLocator });
       }
       case 'reindex': {
-        const { workspaceId } = authorizationContext(ctx, args, command);
-        if (isDryRun(ctx, args)) return preview(command, { operation: 'reindex' });
+        const allWorkspaces = args.flags.has('--all-workspaces');
+        if (allWorkspaces && args.values.has('--workspace')) {
+          throw new CliError(
+            'INVALID_ARGUMENT',
+            '--all-workspaces cannot be combined with --workspace',
+            EXIT.usage,
+          );
+        }
+        const workspaceId = allWorkspaces
+          ? undefined
+          : authorizationContext(ctx, args, command).workspaceId;
+        const data = {
+          operation: 'reindex',
+          allWorkspaces,
+          workspaceIds: allWorkspaces ? repository.listWorkspaceIds() : [workspaceId!],
+        };
+        if (isDryRun(ctx, args)) return preview(command, data);
         repository.reindex(workspaceId);
-        return ok(command, { operation: 'reindex' });
+        return ok(command, data);
       }
       case 'audit': {
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);

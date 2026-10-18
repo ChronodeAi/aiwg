@@ -115,6 +115,57 @@ describeWithSqlite('transactional session repository and importer', () => {
     } finally { repository.close(); }
   });
 
+  it.each(['workspace-a', undefined])('rebuilds search and analytics indexes for reindex scope %s', async (scope) => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-reindex-scopes-'));
+    const databasePath = join(root, 'catalog.sqlite');
+    const repository = new SessionRepository(databasePath);
+    const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+    const raw = new Database(databasePath);
+    try {
+      const importer = new IncrementalSessionImporter(repository);
+      const workspaces = ['workspace-a', 'workspace-b'];
+      for (const workspaceId of workspaces) {
+        const scopedSource = { ...source, sourceId: `source-${workspaceId}` };
+        await importer.import({
+          source: scopedSource,
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: scopedSource.sourceId,
+            authorizedScope: { workspaceId, allowedRoots: ['/fixture'] },
+          },
+          workspaceId,
+          policyVersion: '1.0.0',
+          adapter: adapter([{
+            nativeSessionId: 'reindex-session', nativeEventId: 'reindex-event', sequence: 0,
+            kind: 'tool-call', role: 'assistant', toolName: 'exec', toolCallId: 'reindex-call',
+            text: 'reindexmarker', rawReference: { locatorClass: 'fixture', sequence: 0 },
+          }]),
+        });
+        expect(repository.search({
+          query: 'reindexmarker', workspaceId, controlEvents: 'include', limit: 10,
+        }).items).toHaveLength(1);
+        expect(repository.analyticsSummary({ workspaceId }).totals.toolCalls).toBe(1);
+      }
+      raw.exec('DELETE FROM session_event_fts; DELETE FROM session_analytics_facts');
+      repository.reindex(scope);
+      for (const workspaceId of workspaces) {
+        const expected = scope === undefined || scope === workspaceId ? 1 : 0;
+        expect(repository.search({
+          query: 'reindexmarker', workspaceId, controlEvents: 'include', limit: 10,
+        }).items).toHaveLength(expected);
+        expect(repository.analyticsSummary({ workspaceId }).totals.toolCalls).toBe(expected);
+      }
+      expect(repository.listMutationEvents({ workspaceId: scope ?? 'global', limit: 10 }).items)
+        .toEqual(expect.arrayContaining([expect.objectContaining({
+          eventName: 'session.reindex', workspaceId: scope ?? 'global',
+          counts: { events: scope === undefined ? 2 : 1 },
+        })]));
+    } finally {
+      raw.close();
+      repository.close();
+    }
+  });
+
   it.each(['source', 'batch'] as const)(
     'rebuilds only affected session analytics when committing staged %s imports',
     async (commitScope) => {
