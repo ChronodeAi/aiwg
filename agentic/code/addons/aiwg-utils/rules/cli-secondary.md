@@ -1,4 +1,49 @@
 ---
+activation: summary
+summary: "Use local or discovered skills and agents before raw action CLI commands; call discovery commands directly and use CLI steps within their owning workflows."
+bound_to:
+  agents:
+    - aiwg-steward
+    - aiwg-finder
+  skills:
+    - aiwg-doctor
+    - aiwg-init
+    - aiwg-refresh
+    - aiwg-regenerate
+    - aiwg-regenerate-agents
+    - aiwg-regenerate-claude
+    - aiwg-regenerate-codex
+    - aiwg-regenerate-copilot
+    - aiwg-regenerate-cursorrules
+    - aiwg-regenerate-existing-project
+    - aiwg-regenerate-factory
+    - aiwg-regenerate-legacy
+    - aiwg-regenerate-opencode
+    - aiwg-regenerate-warp
+    - aiwg-regenerate-windsurfrules
+    - aiwg-regenerate-workspace
+    - aiwg-status
+    - aiwg-sync
+    - customize-rebuild
+    - customize-upstream-sync
+    - hook-disable
+    - hook-enable
+    - hook-regenerate
+    - install
+    - migrate-workspace
+    - remove
+    - rollback-workspace
+    - steward
+    - update
+    - use
+    - workspace-health
+    - workspace-prune-working
+    - workspace-realign
+    - workspace-reset
+triggers:
+  - "use a skill or raw CLI"
+  - "should I call AIWG CLI directly"
+  - "find the skill before running a command"
 enforcement: high
 ---
 

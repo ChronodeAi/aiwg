@@ -1,4 +1,78 @@
 ---
+activation: summary
+summary: "Checkpoint durable state, compact context, and continue authorized work without asking whether to keep going; stop only for real blockers or completion."
+bound_to:
+  skills:
+    - address-issues
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - artifact-orchestration
+    - checkpoint
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+    - mission-control
+    - orchestrate-project
+    - ralph
+    - ralph-external
+    - ralph-resume
+  agents:
+    - ralph-loop
+    - ralph-verifier
+    - executive-orchestrator
+    - recovery-orchestrator
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
 enforcement: high
 triggers:
   - "should I keep working"

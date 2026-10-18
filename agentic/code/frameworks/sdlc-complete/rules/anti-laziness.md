@@ -1,4 +1,76 @@
 ---
+activation: summary
+summary: "Complete authorized implementation and verification; fix root causes without deleting tests, weakening assertions, hiding failures, or removing features to pass."
+bound_to:
+  agents:
+    - ai-ml-engineer
+    - aiwg-model-coding-worker
+    - blockchain-developer
+    - build-engineer
+    - code-reviewer
+    - component-owner
+    - data-engineer
+    - database-optimizer
+    - dead-code-analyzer
+    - debugger
+    - devops-engineer
+    - django-expert
+    - frontend-specialist
+    - integration-engineer
+    - kubernetes-expert
+    - laziness-detector
+    - legacy-modernizer
+    - mobile-developer
+    - mutation-analyst
+    - performance-engineer
+    - quality-assessor
+    - ralph-loop
+    - ralph-verifier
+    - react-expert
+    - regression-analyst
+    - reliability-engineer
+    - security-auditor
+    - self-debug
+    - software-implementer
+    - spring-boot-expert
+    - test-architect
+    - test-engineer
+    - toolsmith
+    - toolsmith-dynamic
+    - toolsmith-provider
+  skills:
+    - address-issues
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - auto-test-execution
+    - build-poc
+    - execute-feedback
+    - flow-construction-to-transition
+    - flow-delivery-track
+    - flow-elaboration-to-construction
+    - flow-guided-implementation
+    - flow-iteration-dual-track
+    - flow-performance-optimization
+    - flow-security-review-cycle
+    - flow-test-strategy-execution
+    - generate-tests
+    - mission-control
+    - pr-review
+    - ralph
+    - ralph-external
+    - ralph-resume
+    - test-coverage
+  flows:
+    - flow-guided-implementation
+    - flow-delivery-track
+    - flow-iteration-dual-track
+    - flow-elaboration-to-construction
+    - flow-construction-to-transition
+    - flow-test-strategy-execution
+    - flow-performance-optimization
+    - flow-security-review-cycle
+    - flow-agentloop-lfd-controls
 enforcement: high
 triggers:
   - "this test keeps failing"
