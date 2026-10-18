@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { mkdtemp } from '../../helpers/temp-dir.js';
+import { boundedExecFileSync } from '../../../src/process/bounded-child-process.mjs';
+
+vi.mock('../../../src/process/bounded-child-process.mjs', () => ({
+  boundedExecFileSync: vi.fn(() => ''),
+}));
 
 describe('project memory registry (#1750)', () => {
   let tmp: string;
@@ -18,7 +23,7 @@ describe('project memory registry (#1750)', () => {
     for (const key of ['AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR']) {
       vi.stubEnv(key, undefined);
     }
-    tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-project-memory-'));
+    tmp = await mkdtemp(path.join(os.tmpdir(), 'aiwg-project-memory-'));
     ownsTmp = true;
     workspace = path.join(tmp, 'workspace');
     await fs.mkdir(workspace, { recursive: true });
@@ -47,9 +52,13 @@ describe('project memory registry (#1750)', () => {
   });
 
   it.each([
+    ['git@EXAMPLE.test:Org/Repo.git', 'example.test/org/repo'],
     ['git@EXAMPLE.test:Org/Repo', 'example.test/org/repo'],
+    ['https://EXAMPLE.test/Org/Repo.git', 'example.test/org/repo'],
+    ['https://EXAMPLE.test/Org/Repo', 'example.test/org/repo'],
     ['https://EXAMPLE.test/Org/Repo/', 'example.test/org/repo'],
     ['ssh://git@EXAMPLE.test/Org/Repo.git', 'example.test/org/repo'],
+    ['ssh://git@EXAMPLE.test/Org/Repo', 'example.test/org/repo'],
     ['  LOCAL/Repo.git  ', 'local/repo'], ['LOCAL/Repo', 'local/repo'], ['single', 'single'],
   ])('normalizes remote %s to %s', async (input, expected) => {
     const { normalizeGitRemote } = await import('../../../src/memory/project-registry.js');
@@ -83,22 +92,43 @@ describe('project memory registry (#1750)', () => {
     await expect(fs.readFile(manifestPath, 'utf8')).resolves.toBe(bytes);
   });
 
-  it('uses scoped current workspace and empty-ID fallback with short remote metadata', async () => {
+  it('uses the scoped current workspace when workspaceRoot is omitted', async () => {
     const { registerProjectMemory } = await import('../../../src/memory/project-registry.js');
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(workspace);
     try {
-      const entry = await registerProjectMemory({ id: ' !!! ', gitRemotes: ['single'] });
-      expect(entry).toMatchObject({ id: 'project', name: 'workspace', workspaceRoots: [workspace],
-        gitRemotes: ['single'], metadata: {}, memoryRoot: path.join(tmp, 'home/.aiwg/projects/project/.aiwg') });
+      const entry = await registerProjectMemory({ id: 'cwd', gitRemotes: [] });
+      expect(entry).toMatchObject({ id: 'cwd', name: 'workspace', workspaceRoots: [workspace],
+        memoryRoot: path.join(tmp, 'home/.aiwg/projects/cwd/.aiwg') });
     } finally { cwd.mockRestore(); }
+  });
+
+  it.each(['', ' !!! '])('falls back to project when the sanitized ID is empty: %s', async id => {
+    const { registerProjectMemory } = await import('../../../src/memory/project-registry.js');
+    const entry = await registerProjectMemory({ id, workspaceRoot: workspace, gitRemotes: [] });
+    expect(entry.id).toBe('project');
+    expect(entry.memoryRoot).toBe(path.join(tmp, 'home/.aiwg/projects/project/.aiwg'));
+  });
+
+  it('leaves inferred metadata empty for short remotes', async () => {
+    const { registerProjectMemory } = await import('../../../src/memory/project-registry.js');
+    const entry = await registerProjectMemory({ id: 'short', workspaceRoot: workspace,
+      gitRemotes: ['single', 'EXAMPLE.test/Repo'] });
+    expect(entry.gitRemotes).toEqual(['EXAMPLE.test/Repo', 'single']);
+    expect(entry.metadata).toEqual({});
   });
 
   it('selects a matching member of a project with unrelated workspace roots', async () => {
     const { registerProjectMemory, lookupProjectMemory } = await import('../../../src/memory/project-registry.js');
-    await registerProjectMemory({ id: 'multi', workspaceRoot: path.join(tmp, 'unrelated'), gitRemotes: [] });
+    const unrelated = path.join(tmp, 'unrelated', 'much-longer-root');
+    await registerProjectMemory({ id: 'multi', workspaceRoot: unrelated, gitRemotes: [] });
     const entry = await registerProjectMemory({ id: 'multi', workspaceRoot: workspace, gitRemotes: [] });
+    const childRoot = path.join(workspace, 'child');
+    const child = await registerProjectMemory({ id: 'child', workspaceRoot: childRoot, gitRemotes: [] });
+    expect(entry.workspaceRoots).toEqual([unrelated, workspace].sort());
     expect(await lookupProjectMemory({ workspaceRoot: path.join(workspace, 'nested') })).toEqual({
       status: 'found', entry, matchedBy: 'workspaceRoot' });
+    expect(await lookupProjectMemory({ workspaceRoot: path.join(childRoot, 'nested') })).toEqual({
+      status: 'found', entry: child, matchedBy: 'workspaceRoot' });
   });
 
   it.each([
@@ -365,15 +395,17 @@ describe('project memory registry (#1750)', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2026-09-10T11:00:00.000Z'));
-      const entry = await registerProjectMemory({ id: 'demo', workspaceRoot: workspace, gitRemotes: [] });
-      await fs.writeFile(path.join(entry.memoryRoot, 'memory', 'note.md'), 'private', 'utf-8');
+      const entry = await registerProjectMemory({ id: 'demo', name: 'Move fixture', workspaceRoot: workspace,
+        gitRemotes: ['git@example.test:org/demo.git'], metadata: { label: 'preserved' } });
+      const note = Buffer.from([0, 10, 127, 128, 255]);
+      await fs.writeFile(path.join(entry.memoryRoot, 'memory', 'note.md'), note);
       const config = await fs.readFile(path.join(entry.memoryRoot, 'aiwg.config'));
       vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
       const newRoot = path.join(tmp, 'elsewhere', '.aiwg');
       const expected = { ...entry, memoryRoot: newRoot, updatedAt: '2026-09-10T12:00:00.000Z' };
       expect(await relocateProjectMemory('demo', newRoot)).toEqual(expected);
       await expect(fs.stat(entry.memoryRoot)).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(fs.readFile(path.join(newRoot, 'memory', 'note.md'), 'utf-8')).resolves.toBe('private');
+      await expect(fs.readFile(path.join(newRoot, 'memory', 'note.md'))).resolves.toEqual(note);
       expect(await fs.readFile(path.join(newRoot, 'aiwg.config'))).toEqual(config);
       expect(JSON.parse(await fs.readFile(projectMemoryManifestPath(), 'utf8'))).toEqual({ version: 1, projects: [expected] });
       expect(await lookupProjectMemory({ workspaceRoot: workspace })).toEqual({ status: 'found', entry: expected, matchedBy: 'workspaceRoot' });
@@ -382,18 +414,25 @@ describe('project memory registry (#1750)', () => {
 
   it('repairs missing layout at the same location without replacing owned contents', async () => {
     const { registerProjectMemory, relocateProjectMemory, projectMemoryManifestPath } = await import('../../../src/memory/project-registry.js');
-    const entry = await registerProjectMemory({ id: 'demo', workspaceRoot: workspace, gitRemotes: [] });
-    const artifactDir = path.join(entry.memoryRoot, 'artifacts');
-    // Delete only the known empty directory allocated by this test's registration.
-    await fs.rmdir(artifactDir);
-    await fs.writeFile(path.join(entry.memoryRoot, 'aiwg.config'), '{"owned":"unchanged"}\n');
-    await fs.writeFile(path.join(entry.memoryRoot, 'memory/note.md'), 'same root note');
-    const relocated = await relocateProjectMemory('demo', entry.memoryRoot);
-    expect(relocated).toEqual({ ...entry, updatedAt: expect.any(String) });
-    expect((await fs.stat(artifactDir)).isDirectory()).toBe(true);
-    await expect(fs.readFile(path.join(entry.memoryRoot, 'aiwg.config'), 'utf8')).resolves.toBe('{"owned":"unchanged"}\n');
-    await expect(fs.readFile(path.join(entry.memoryRoot, 'memory/note.md'), 'utf8')).resolves.toBe('same root note');
-    expect(JSON.parse(await fs.readFile(projectMemoryManifestPath(), 'utf8'))).toEqual({ version: 1, projects: [relocated] });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-10T11:00:00.000Z'));
+      const entry = await registerProjectMemory({ id: 'demo', workspaceRoot: workspace, gitRemotes: [] });
+      // Delete only known empty directories allocated by this test's registration.
+      await fs.rmdir(path.join(entry.memoryRoot, 'artifacts'));
+      await fs.rmdir(path.join(entry.memoryRoot, 'index'));
+      await fs.writeFile(path.join(entry.memoryRoot, 'aiwg.config'), '{"owned":"unchanged"}\n');
+      await fs.writeFile(path.join(entry.memoryRoot, 'memory/note.md'), 'same root note');
+      vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
+      const relocated = await relocateProjectMemory('demo', entry.memoryRoot);
+      expect(relocated).toEqual({ ...entry, updatedAt: '2026-09-10T12:00:00.000Z' });
+      for (const directory of ['memory', 'index', 'artifacts']) {
+        expect((await fs.stat(path.join(entry.memoryRoot, directory))).isDirectory()).toBe(true);
+      }
+      await expect(fs.readFile(path.join(entry.memoryRoot, 'aiwg.config'), 'utf8')).resolves.toBe('{"owned":"unchanged"}\n');
+      await expect(fs.readFile(path.join(entry.memoryRoot, 'memory/note.md'), 'utf8')).resolves.toBe('same root note');
+      expect(JSON.parse(await fs.readFile(projectMemoryManifestPath(), 'utf8'))).toEqual({ version: 1, projects: [relocated] });
+    } finally { vi.useRealTimers(); }
   });
 
   it('rejects unknown relocation without creating the destination or registry', async () => {
@@ -402,8 +441,32 @@ describe('project memory registry (#1750)', () => {
     expect(await fs.readdir(tmp)).toEqual(['workspace']);
   });
 
+  it('rejects unknown relocation without changing an existing registry or owned files', async () => {
+    const { registerProjectMemory, relocateProjectMemory, projectMemoryManifestPath,
+      projectMemoryIndexPath } = await import('../../../src/memory/project-registry.js');
+    const entry = await registerProjectMemory({ id: 'retained', workspaceRoot: workspace, gitRemotes: [] });
+    const manifest = await fs.readFile(projectMemoryManifestPath());
+    const index = await fs.readFile(projectMemoryIndexPath());
+    const config = await fs.readFile(path.join(entry.memoryRoot, 'aiwg.config'));
+    const destination = path.join(tmp, 'absent-parent', 'destination');
+    await expect(relocateProjectMemory('unknown', destination)).rejects.toThrow("No project memory entry with id 'unknown'");
+    await expect(fs.stat(path.dirname(destination))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(projectMemoryManifestPath())).toEqual(manifest);
+    expect(await fs.readFile(projectMemoryIndexPath())).toEqual(index);
+    expect(await fs.readFile(path.join(entry.memoryRoot, 'aiwg.config'))).toEqual(config);
+  });
+
   it('returns the default path without creating files for an unregistered workspace', async () => {
     const { resolveProjectMemoryRoot } = await import('../../../src/memory/project-registry.js');
+    expect(await resolveProjectMemoryRoot(workspace)).toEqual({ source: 'default',
+      root: path.join(workspace, '.aiwg/memory'), reason: 'no registered user-level project memory entry' });
+    expect(await fs.readdir(workspace)).toEqual([]);
+    expect(await fs.readdir(tmp)).toEqual(['workspace']);
+  });
+
+  it('returns the default path when Git remote discovery fails without creating files', async () => {
+    const { resolveProjectMemoryRoot } = await import('../../../src/memory/project-registry.js');
+    vi.mocked(boundedExecFileSync).mockImplementation(() => { throw new Error('fixture: Git unavailable'); });
     expect(await resolveProjectMemoryRoot(workspace)).toEqual({ source: 'default',
       root: path.join(workspace, '.aiwg/memory'), reason: 'no registered user-level project memory entry' });
     expect(await fs.readdir(workspace)).toEqual([]);
@@ -421,10 +484,11 @@ describe('project memory registry (#1750)', () => {
 
   it.each(['unique', 'ambiguous', 'unmatched'])('resolves a local Git remote with %s mapping', async mode => {
     const { resolveProjectMemoryRoot, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
-    // Local metadata only: no fetch, push, or contact with the synthetic remote.
-    execFileSync('git', ['init', '--quiet', '--template=', workspace], { timeout: 60_000 });
     const remote = 'https://example.test/org/fixture.git';
-    execFileSync('git', ['-C', workspace, 'remote', 'add', 'origin', remote], { timeout: 60_000 });
+    // Exercise discovery/parsing without invoking Git or contacting the remote.
+    vi.mocked(boundedExecFileSync).mockReturnValue(
+      `origin\t${remote} (fetch)\norigin\t${remote} (push)\n\n`,
+    );
     const entry = await registerProjectMemory({ id: 'one', workspaceRoot: path.join(tmp, 'registered-elsewhere'),
       gitRemotes: [mode === 'unmatched' ? 'git@example.test:org/other.git' : 'git@example.test:org/fixture.git'] });
     if (mode === 'ambiguous') await registerProjectMemory({ id: 'two', workspaceRoot: path.join(tmp, 'second-elsewhere'),
@@ -434,8 +498,10 @@ describe('project memory registry (#1750)', () => {
       : { source: 'default', root: path.join(workspace, '.aiwg/memory'), reason: mode === 'ambiguous'
         ? `Multiple project memory entries match remote '${remote}'` : 'no registered user-level project memory entry' };
     expect(await resolveProjectMemoryRoot(workspace)).toEqual(expected);
-    expect(await fs.readdir(workspace)).toEqual(['.git']);
-    expect(execFileSync('git', ['-C', workspace, 'remote', 'get-url', 'origin'], { timeout: 60_000, encoding: 'utf8' }).trim()).toBe(remote);
+    expect(await fs.readdir(workspace)).toEqual([]);
+    expect(boundedExecFileSync).toHaveBeenCalledWith('git', ['remote', '-v'], 'quick', {
+      cwd: workspace, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
   });
 
   it('uses user-level memory for storage only when project-local .aiwg is absent', async () => {
