@@ -57,17 +57,35 @@ describe('version launcher entrypoint', () => {
   });
 
   it('passes launcher identity to the runtime and leaves JSON to the handler', async () => {
-    const env: Record<string, string> = {};
-    const begin = source.indexOf('const cliArgs = process.argv.slice(2);');
-    const end = source.indexOf('const indexRefresh', begin);
+    const env: Record<string, string> = { AIWG_LAUNCHER_ROOT: '/synthetic/previous-launcher' };
+    const begin = source.indexOf('const packageRoot =');
+    const end = source.indexOf('function readPackageVersion(', begin);
     runInNewContext(source.slice(begin, end), {
-      process: { argv: ['node', 'aiwg', '--version', '--json'], env }, packageRoot: launcher,
+      process: { env }, path, __dirname: path.join(launcher, 'bin'),
     }, { timeout: 1000 });
     expect(env.AIWG_LAUNCHER_ROOT).toBe(launcher);
     expect(fastVersion(['--version', '--json']).handled).toBe(false);
     expect(await getVersionInfo()).toMatchObject({
       launcherVersion: '2026.9.20', runtimeVersion: '2026.10.3', runtimePath: runtime,
     });
+  });
+
+  it.each([
+    { args: ['index', 'refresh'], credential: false, calls: 0, phase: 'notifier:skip (index refresh)' },
+    { args: ['mcp', 'profile', 'login'], credential: true, calls: 0, phase: 'notifier:skip (credential-handling command)' },
+    { args: ['version'], credential: false, calls: 1, phase: 'notifier:bootstrap-complete' },
+  ])('dispatches notifier for $args without launcher identity bindings', async ({ args, credential, calls, phase }) => {
+    const notifier = vi.fn();
+    const trace = vi.fn();
+    const begin = source.indexOf('const cliArgs = process.argv.slice(2);');
+    const end = source.indexOf('if (maybeHandleFastVersion(cliArgs))', begin);
+    await runInNewContext(`(async () => { ${source.slice(begin, end)} })()`, {
+      process: { argv: ['node', 'aiwg', ...args] }, trace,
+      isCredentialHandlingCommand: () => credential,
+      runUpdateNotifierBootstrap: notifier,
+    }, { timeout: 1000 });
+    expect(notifier).toHaveBeenCalledTimes(calls);
+    expect(trace).toHaveBeenCalledExactlyOnceWith(phase);
   });
 
   it('keeps stable output compact when a stale edge path is configured', () => {

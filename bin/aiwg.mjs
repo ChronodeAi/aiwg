@@ -30,6 +30,7 @@ import { randomUUID } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
+process.env['AIWG_LAUNCHER_ROOT'] = packageRoot;
 
 function readPackageVersion(root = packageRoot) {
   try {
@@ -349,7 +350,6 @@ async function runUpdateNotifierBootstrap() {
 }
 
 const cliArgs = process.argv.slice(2);
-process.env['AIWG_LAUNCHER_ROOT'] = packageRoot;
 const indexRefresh = cliArgs[0] === 'index' && cliArgs[1] === 'refresh';
 if (indexRefresh) {
   trace('notifier:skip (index refresh)');
