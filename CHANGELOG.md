@@ -9,12 +9,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add `aiwg sessions reindex --all-workspaces` to rebuild search and analytics
+  indexes for every workspace in the selected catalog; `index refresh --full` now
+  reindexes every scope in each selected catalog (#318, Gitea #3234).
 - Add `aiwg index refresh` for incremental graph, existing Fortemi cache, and
   authorized session catalog maintenance, with host locking, resumable checkpoints,
   resource deferral, dry-run planning, and a versioned JSON report (#310, Gitea #3227).
 
 ### Fixed
 
+- Record which limit (configured and observed) or which schema path and validator
+  code caused a source rejection in batch receipts and diagnostics, without
+  transcript content (#317, Gitea #3233).
+- List sessions newest first by `updatedAt`, with session IDs descending to break
+  ties and undated sessions last; cursors continue to older sessions (#319, Gitea #3235).
+- Make the storage-containment missing-root trust test independent of filesystem
+  inode reuse (#323, Gitea #3239).
 - Attribute Codex, Muse and OMP sessions started in a workspace subfolder or a
   linked git worktree to the nearest enclosing workspace, without sibling-prefix
   matches; discovery reports subfolder and worktree match counts (#324, Gitea #3240).

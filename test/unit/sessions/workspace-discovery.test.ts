@@ -1,11 +1,12 @@
 import {
-  copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile,
+  copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SessionRepository,
+  CodexSessionAdapter,
   discoverWorkspaceHistories,
   importDiscoveryManifest,
   publicDiscoveryManifest,
@@ -264,6 +265,55 @@ describe('workspace session discovery and batch import', () => {
     expect((await discoverWorkspaceHistories({
       workspace: fixture.workspace, expectedProviders: ['codex'], authorizedRoots: {},
     })).sources).toEqual([]);
+  });
+
+  itWithSqlite.each(['inspect', 'stream'] as const)(
+    'persists content-free resource details rejected during %s', async (stage) => {
+      const fixture = await providerFixture();
+      const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace, providerHome: fixture.providerHome });
+      manifest.sources = manifest.sources.filter((source) => source.provider === 'codex');
+      const repository = new SessionRepository(':memory:');
+      const inspect = CodexSessionAdapter.prototype.inspect;
+      const stream = CodexSessionAdapter.prototype.stream;
+      const bounded = new CodexSessionAdapter({ maxTotalBytes: 1 });
+      const spy = stage === 'inspect'
+        ? vi.spyOn(CodexSessionAdapter.prototype, 'inspect').mockImplementation((source) => inspect.call(bounded, source))
+        : vi.spyOn(CodexSessionAdapter.prototype, 'stream').mockImplementation((source, cursor) => stream.call(bounded, source, cursor));
+      try {
+        const receipt = await importDiscoveryManifest({ manifest, repository });
+        expect(receipt.run.status).toBe('partial');
+        const rejection = receipt.run.sources[0];
+        expect(rejection).toMatchObject({ status: 'rejected', errorCode: 'RESOURCE_LIMIT_EXCEEDED',
+          detail: { limit: 'maxTotalBytes', configured: 1, observed: expect.any(Number) } });
+        expect(rejection.diagnostic).toContain('"limit":"maxTotalBytes"');
+        expect(rejection.diagnostic).not.toContain('Synthetic Codex request.');
+        expect(repository.getBatchImportRun(receipt.run.runId)?.sources[0]).toEqual(rejection);
+      } finally { spy.mockRestore(); repository.close(); }
+    },
+  );
+
+  itWithSqlite('persists validator paths and codes without transcript values in batch diagnostics', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace, providerHome: fixture.providerHome });
+    manifest.sources = manifest.sources.filter((source) => source.provider === 'codex');
+    const source = manifest.sources[0];
+    const content = JSON.stringify({ type: 42, text: 'synthetic-transcript-marker' }) + '\n';
+    await writeFile(source.locator, content);
+    source.sizeBytes = Buffer.byteLength(content);
+    source.modifiedAt = (await stat(source.locator)).mtime.toISOString();
+    source.digest = sha256(content);
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      const rejection = receipt.run.sources[0];
+      expect(rejection).toMatchObject({ status: 'rejected', errorCode: 'MALFORMED_SOURCE',
+        detail: { issues: [{ path: 'type', code: 'invalid_type' }] } });
+      expect(rejection.diagnostic).toContain('"path":"type"');
+      expect(JSON.stringify(rejection)).not.toContain('synthetic-transcript-marker');
+      expect(repository.getBatchImportRun(receipt.run.runId)?.sources[0]).toEqual(rejection);
+      expect((await importDiscoveryManifest({ manifest, repository })).run.sources[0].detail)
+        .toEqual(rejection.detail);
+    } finally { repository.close(); }
   });
 
   it('inventories only matching known roots, persists the exact manifest, and exposes export gaps', async () => {

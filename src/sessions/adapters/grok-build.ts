@@ -1,6 +1,7 @@
 import { basename, extname } from 'node:path';
 import {
   SessionContractError,
+  schemaIssueDetail,
   type AuthorizedScope,
   type ImportCursor,
   type ProviderRecord,
@@ -103,6 +104,7 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'Grok Build export filename must be <session-id>.md so the documented CLI session ID is preserved.',
+        schemaIssueDetail('filename'),
       );
     }
     const { value } = await readBoundedText({
@@ -125,6 +127,7 @@ export function validateGrokBuildMarkdown(value: string): ExportBlock[] {
     throw new SessionContractError(
       'MALFORMED_SOURCE',
       'Unrecognized Grok Build CLI export; expected exact `## User`, `## Assistant`, or `## Tools` headings.',
+      schemaIssueDetail('headings'),
     );
   }
   return blocks;
@@ -137,7 +140,7 @@ function parseBlocks(value: string): ExportBlock[] {
     if (!current) return;
     const text = current.lines.join('\n').trim();
     if (!text && current.heading === 'Tools') {
-      throw new SessionContractError('SCHEMA_DRIFT', 'Grok Build tools block is empty');
+      throw new SessionContractError('SCHEMA_DRIFT', 'Grok Build tools block is empty', schemaIssueDetail('tools'));
     }
     if (text) blocks.push({ heading: current.heading, text });
   };
@@ -150,6 +153,7 @@ function parseBlocks(value: string): ExportBlock[] {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         `unknown Grok Build CLI export heading: ${line}`,
+        schemaIssueDetail('headings'),
       );
     } else if (current) {
       current.lines.push(line);
@@ -157,6 +161,7 @@ function parseBlocks(value: string): ExportBlock[] {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'unexpected content before the first Grok Build CLI export heading',
+        schemaIssueDetail('headings'),
       );
     }
   }
@@ -171,7 +176,11 @@ function parseTools(text: string, blockSequence: number): Array<{
 }> {
   const lines = text.split('\n').filter((line) => line.trim());
   if (lines.length === 0 || lines.length > 1_000) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'Grok Build tools block has no summaries or exceeds 1,000 summaries');
+    throw new SessionContractError(
+      'SCHEMA_DRIFT',
+      'Grok Build tools block has no summaries or exceeds 1,000 summaries',
+      schemaIssueDetail('tools'),
+    );
   }
   return lines.map((line, index) => {
     const match = /^- (.+)$/.exec(line);
@@ -179,12 +188,13 @@ function parseTools(text: string, blockSequence: number): Array<{
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         `unrecognized Grok Build tool summary: ${line}`,
+        schemaIssueDetail('tools'),
       );
     }
     const summary = match[1];
     const name = summary.split(/:| \(/, 1)[0]?.trim();
     if (!name) {
-      throw new SessionContractError('SCHEMA_DRIFT', 'empty Grok Build tool summary');
+      throw new SessionContractError('SCHEMA_DRIFT', 'empty Grok Build tool summary', schemaIssueDetail('tools'));
     }
     return { sequence: blockSequence * 1_000 + index, name, text: summary };
   });
@@ -223,11 +233,11 @@ function provenance(
 function parseCursor(value?: string): number {
   if (!value) return 0;
   if (!/^\d+$/.test(value)) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Build export cursor');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Build export cursor', schemaIssueDetail('cursor'));
   }
   const cursor = Number(value);
   if (!Number.isSafeInteger(cursor)) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Build export cursor');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Build export cursor', schemaIssueDetail('cursor'));
   }
   return cursor;
 }

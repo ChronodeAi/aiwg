@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease, GrokbotSessionAdapter } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter, SessionRepository } from '../../../../src/sessions/index.js';
 import {
   encodeGrokbotKey, grokbotTranscriptReplicaFilename,
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
@@ -65,6 +65,8 @@ describe('sessions CLI contracts', () => {
     expect(usage).toContain('relative paths resolve from cwd');
     expect(usage).toContain('provider-native IDs');
     expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
+    expect(usage).toContain('reindex --workspace <path-or-id> | --all-workspaces');
+    expect(usage).toContain('Reindex every workspace in the selected catalog');
   });
 
   it('returns one explicit deterministic disposition for every canonical provider', async () => {
@@ -664,6 +666,64 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     });
     return { project, other, database, nativeId };
   }
+
+  it.each([false, true])('reindexes the selected catalog with allWorkspaces=%s and reports its scopes', async (allWorkspaces) => {
+    const { project, other, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    const scope = allWorkspaces ? ['--all-workspaces'] : ['--workspace', project];
+    // A host maintenance invocation can select a catalog from an unrelated cwd.
+    expect((await sessionsHandler.execute(context([
+      'reindex', ...scope, '--db', database, '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).toHaveBeenCalledExactlyOnceWith(allWorkspaces ? undefined : project);
+    expect(jsonOutput(log)).toMatchObject({
+      command: 'sessions.reindex', status: 'ok', error: null,
+      data: {
+        operation: 'reindex', allWorkspaces,
+        workspaceIds: allWorkspaces ? [other, project].sort() : [project],
+      },
+    });
+  });
+
+  it.each([false, true])('previews reindex scopes without rebuilding with allWorkspaces=%s', async (allWorkspaces) => {
+    const { project, other, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    const scope = allWorkspaces ? ['--all-workspaces'] : ['--workspace', project];
+    expect((await sessionsHandler.execute(context([
+      'reindex', ...scope, '--db', database, '--dry-run', '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).not.toHaveBeenCalled();
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        operation: 'reindex', allWorkspaces,
+        workspaceIds: allWorkspaces ? [other, project].sort() : [project],
+      },
+    });
+  });
+
+  it('rejects conflicting reindex scopes without rebuilding', async () => {
+    const { project, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    expect((await sessionsHandler.execute(context([
+      'reindex', '--all-workspaces', '--workspace', project, '--db', database, '--json',
+    ], root))).exitCode).toBe(2);
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'INVALID_ARGUMENT', message: '--all-workspaces cannot be combined with --workspace',
+    });
+    expect(reindex).not.toHaveBeenCalled();
+  });
+
+  it('reports no workspace scopes when reindexing an empty catalog', async () => {
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    expect((await sessionsHandler.execute(context([
+      'reindex', '--all-workspaces', '--db', resolve(root, 'empty.sqlite'), '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'ok', data: { operation: 'reindex', allWorkspaces: true, workspaceIds: [] },
+    });
+  });
 
   it('finds outside-workspace discovered imports from both cwds and reports scoped-out counts', async () => {
     const { project, other, database, nativeId } = await importOtherWorkspace();

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import {
   SessionContractError,
+  schemaIssueDetail,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
   type ImportCursor,
@@ -79,6 +80,7 @@ export class WarpSessionAdapter implements SessionSourceAdapter {
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'Warp Markdown export contains no recognized user or assistant conversation blocks',
+        schemaIssueDetail('headings'),
       );
     }
     const stableSessionId = `manual:${createHash('sha256').update(value).digest('hex').slice(0, 32)}`;
@@ -181,6 +183,6 @@ function headingRole(heading: string): string | undefined {
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Warp cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Warp cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }

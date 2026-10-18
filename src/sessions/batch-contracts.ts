@@ -1,4 +1,4 @@
-import type { SessionCoveragePreflight, SessionRuntimeIdentity } from './contracts.js';
+import type { SessionCoveragePreflight, SessionRejectionDetail, SessionRuntimeIdentity } from './contracts.js';
 import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
 
@@ -23,6 +23,7 @@ export interface BatchSourceDisposition {
   eventsAccepted: number;
   errorCode: string | null;
   diagnostic: string | null;
+  detail?: SessionRejectionDetail | null;
   updatedAt: string;
 }
 
