@@ -9,6 +9,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add configurable multi-pass Jev decision validation with escalation, bounded
+  concurrency and a shared timeout; CLI/MCP sampling overrides, aggregate JSON,
+  ledger agreement telemetry and hit rates grouped by pass policy/escalation.
+  Defaults to 5 passes, escalating to twice the pass count (10) (#3274).
+- `decision.enabled` in project or user config enables the decision runtime
+  persistently; `AIWG_DECISION_ENABLED` still overrides, and status reports
+  `enabledSource` (#3275).
+
 - Session import size limits are configurable: `sessions.import.max_record_bytes`
   (default 64 MiB) and `sessions.import.max_source_bytes` (default 1 GiB, `0` means
   unlimited), via config, `AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES` /

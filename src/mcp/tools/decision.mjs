@@ -202,10 +202,12 @@ export function registerDecisionToolset(server) {
       context: z.string().optional(),
       threshold: z.number().min(0).max(1).default(0.8),
       timeout_ms: z.number().int().positive().default(15000),
+      passes: z.number().int().positive().optional(),
+      escalation_passes: z.number().int().positive().optional(),
       caller: z.string().optional().describe('Optional decision-point attribution tag, recorded in the decision ledger (#2946)'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  }, async ({ question, yes_no, choices, scale, context, threshold, timeout_ms, caller }) => {
+  }, async ({ question, yes_no, choices, scale, context, threshold, timeout_ms, passes, escalation_passes, caller }) => {
     const modeCount = (yes_no ? 1 : 0) + (choices ? 1 : 0) + (scale ? 1 : 0);
     if (modeCount !== 1) throw new Error('Select exactly one of yes_no, choices, or scale');
     const driverModule = await driver();
@@ -216,6 +218,8 @@ export function registerDecisionToolset(server) {
       ...(context === undefined ? {} : { context }),
       threshold,
       timeoutMs: timeout_ms,
+      ...(passes === undefined ? {} : { passes }),
+      ...(escalation_passes === undefined ? {} : { escalationPasses: escalation_passes }),
     };
     const result = await driverModule.askDecision(input, opts);
     // Every decision-ask call records through the same ledger function the CLI
