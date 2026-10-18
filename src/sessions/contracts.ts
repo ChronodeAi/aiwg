@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { redactSessionText, redactSessionValue } from './policy.js';
 export const SESSION_CONTRACT_VERSION = '1.0.0' as const;
 export const SESSION_PROVIDER_IDS = [
   'claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
@@ -529,7 +530,7 @@ export function schemaRejectionDetail(error: z.ZodError): SessionRejectionDetail
     }
   };
   visit(error.issues);
-  return { issues };
+  return redactSessionValue({ issues }).value;
 }
 
 export class SessionContractError extends Error {
@@ -538,7 +539,8 @@ export class SessionContractError extends Error {
     message: string,
     public readonly detail?: SessionRejectionDetail,
   ) {
-    super(message);
+    super(redactSessionText(message).text);
+    this.detail = redactSessionValue(detail).value;
     this.name = 'SessionContractError';
   }
 }

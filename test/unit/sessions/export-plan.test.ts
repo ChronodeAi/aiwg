@@ -93,6 +93,20 @@ async function registerOutput(sessionId: string, overrides: Partial<OutputRegist
 }
 
 describeWithSqlite('session export plan (#2564)', () => {
+  it('ignores redacted attachment URLs instead of parsing or reopening them', async () => {
+    const { repository, sessionIds } = await seedRepository();
+    try {
+      const listEvents = repository.listEvents.bind(repository);
+      repository.listEvents = (id, workspaceId) => listEvents(id, workspaceId).map((event) => ({
+        ...event, extensions: { ...event.extensions,
+          attachment: { dataBytes: '[REDACTED:content]', dataUrl: '[REDACTED:content]', fileUrl: '[REDACTED:path]' } },
+      }));
+      const { plan } = buildSessionExportPlan(repository, { workspaceId: 'workspace-fixture', sessionIds });
+      expect(plan.attachments).toEqual([]);
+      expect(reverifySessionExportPlan(repository, plan).attachmentBytesByEventId.size).toBe(0);
+    } finally { repository.close(); }
+  });
+
   it('selects requested sessions and records source/event digests for later staleness checks', async () => {
     const { repository, sessionIds } = await seedRepository();
     try {

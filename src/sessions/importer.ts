@@ -8,7 +8,7 @@ import {
   type SelectedSource, type Session, type SessionEvent, type SessionSource,
   type SessionSourceAdapter,
 } from './contracts.js';
-import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
+import { redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
 import type { SessionRepositoryPort } from './ports.js';
 import { fingerprintSourcePrefix } from './readers.js';
@@ -70,6 +70,7 @@ export class SessionImportFailure extends SessionContractError {
       cause instanceof Error ? cause.message : 'session import failed',
       cause instanceof SessionContractError ? cause.detail : undefined,
     );
+    this.failureReceipt = redactSessionValue(failureReceipt).value;
     this.name = 'SessionImportFailure';
   }
 }
@@ -315,16 +316,14 @@ function normalizeBatch(
   const sessions = new Map<string, Session>();
   const events = records.map((record): SessionEvent => {
     const sessionId = stableSessionId(request.source.provider, request.source.sourceId, record.nativeSessionId);
-    const redacted = redactSessionText(record.text);
-    const native = sanitizeNativeExtensions(record.extensions ?? {});
     const digest = sha256(JSON.stringify(record));
     const origin = classifySessionEventOrigin(request.source.provider, record);
     const lifecycle = sessionLifecycle(request, record, sourceObservedAt);
     const lifecycleEvidence = sessionLifecycleEvidence(request, record, sourceObservedAt);
     const extensions = {
-      [`native.${request.source.provider}`]: native.value,
+      [`native.${request.source.provider}`]: record.extensions ?? {},
     };
-    const event = SessionEventSchema.parse({
+    const event = sanitizeSessionEvent(SessionEventSchema.parse({
       contractVersion: SESSION_CONTRACT_VERSION,
       eventId: stableEventId(request.source.provider, request.source.sourceId, record, digest),
       sessionId, sourceId: request.source.sourceId, importRunId,
@@ -342,18 +341,13 @@ function normalizeBatch(
       model: record.model ?? null,
       entities: record.entities ?? [],
       extractionState: record.extractionState ?? null,
-      searchableText: redacted.text, digest, rawReference: record.rawReference,
+      searchableText: record.text, digest, rawReference: record.rawReference,
       adapterVersion: request.adapter.adapterVersion,
       consistency: request.source.consistency,
-      sensitivity: {
-        classification:
-          redacted.sensitivity === 'sensitive' || native.sensitivity === 'sensitive'
-            ? 'sensitive' : 'none',
-        classes: [...new Set([...redacted.classes, ...native.classes])].sort(),
-      },
+      sensitivity: { classification: 'none', classes: [] },
       opaque: !isKnownEventKind(record.kind),
       extensions,
-    });
+    }));
     if (!sessions.has(sessionId)) {
       sessions.set(sessionId, SessionSchema.parse({
         contractVersion: SESSION_CONTRACT_VERSION,
@@ -398,7 +392,7 @@ function normalizeBatch(
       events.filter((event) => event.sessionId === session.sessionId),
     );
   }
-  return { sessions: [...sessions.values()], events };
+  return { sessions: redactSessionValue([...sessions.values()]).value, events };
 }
 
 const KNOWN_EVENT_KINDS = new Set(['message', 'tool-call', 'tool-result', 'artifact', 'attachment', 'summary']);

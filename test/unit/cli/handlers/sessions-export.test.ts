@@ -431,8 +431,8 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect(jsonOutput(log).data).toMatchObject({ valid: true, receiptMatches: true });
   });
 
-  it('embeds and exactly recovers locally present session-event attachment bytes (#2569)', async () => {
-    armExportStepTiming('embeds and exactly recovers locally present session-event attachment bytes (#2569)');
+  it('omits provider-native attachment payloads removed by import policy', async () => {
+    armExportStepTiming('omits provider-native attachment payloads removed by import policy');
     const attachmentDb = resolve(root, 'opencode-attachment.sqlite');
     const fixture = resolve('test/fixtures/sessions/opencode/complete.json');
     expect((await exportStep('import (opencode)', () => sessionsHandler.execute(context([
@@ -450,8 +450,7 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     ], root)));
     expect(plannedAttachment.exitCode, JSON.stringify(jsonOutput(log))).toBe(0);
     const plan = JSON.parse(readFileSync(planPath, 'utf8'));
-    expect(plan.attachments).toHaveLength(1);
-    expect(plan.attachments[0]).toMatchObject({ filename: 'synthetic.txt', byteLength: 9 });
+    expect(plan.attachments).toHaveLength(0);
     log.mockClear();
     const buildDir = resolve(root, 'opencode-attachment-export');
     expect((await exportStep('export build (opencode)', () => sessionsHandler.execute(context([
@@ -462,8 +461,6 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect((await exportStep('export unpack (opencode)', () => sessionsHandler.execute(context([
       'export', 'unpack', '--input', resolve(buildDir, 'evidence.shard'), '--out', unpackDir, '--json',
     ], root)))).exitCode).toBe(0);
-    const attachmentRoot = resolve(unpackDir, 'attachments');
-    const recordDirectory = (await import('node:fs')).readdirSync(attachmentRoot)[0];
-    expect(readFileSync(resolve(attachmentRoot, recordDirectory, 'synthetic.txt'), 'utf8')).toBe('Synthetic');
+    expect(existsSync(resolve(unpackDir, 'attachments'))).toBe(false);
   });
 });
