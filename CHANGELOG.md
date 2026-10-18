@@ -9,6 +9,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add design documents for account-scoped Grok Bot sessions (#316, Gitea #3232),
+  live session tail and attach (#311, Gitea #3228), and native Grok Build and Hermes
+  session discovery (#312, Gitea #3229). Documentation only.
 - Add `aiwg sessions reindex --all-workspaces` to rebuild search and analytics
   indexes for every workspace in the selected catalog; `index refresh --full` now
   reindexes every scope in each selected catalog (#318, Gitea #3234).
@@ -18,6 +21,28 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Evaluate inferred session lifecycle against the current time on catalog reads, so
+  provisional `active` sessions age out after the inactivity threshold without
+  re-import (#308, Gitea #3225).
+- Reclaim the import lease immediately from a dead same-host owner, mark orphaned
+  `running` batch imports `interrupted` after SIGKILL, and report recovered runs
+  (#309, Gitea #3226).
+- Report a batch import `complete` when every in-scope source is accounted for, and
+  list providers outside that scope under `coverage.unresolvedProviders`; batch and
+  coverage contracts move to 2.0.0 with legacy runs still readable (#313, Gitea #3230).
+- Skip dependency reconstruction and output rewrites on no-op incremental index
+  builds (#314, Gitea #3231).
+- Classify read-only or permission-denied filesystem failures during model discovery
+  as `environment`, and strip terminal escapes from diagnostics (#320, Gitea #3236).
+- Find runtime tools in common user bin directories when PATH is narrower, report
+  added and removed tools, and skip unchanged toolsmith refreshes (#321, Gitea #3237).
+- Report launcher and runtime versions separately and warn in `doctor` when they
+  differ (#322, Gitea #3238).
+- Attribute oversized Muse sessions using a bounded tail fallback instead of leaving
+  them inconclusive (#326, Gitea #3242).
+- Match Claude Code project-folder encoding for workspace paths containing dots,
+  spaces or underscores, using the transcript `cwd` to resolve collisions
+  (#327, Gitea #3243).
 - Record which limit (configured and observed) or which schema path and validator
   code caused a source rejection in batch receipts and diagnostics, without
   transcript content (#317, Gitea #3233).
