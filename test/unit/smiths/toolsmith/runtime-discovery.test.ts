@@ -8,10 +8,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, rm, readFile } from 'fs/promises';
+import { mkdir, rm, readFile, writeFile, chmod, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
-import { tmpdir, platform } from 'os';
+import { tmpdir, platform, homedir } from 'os';
+import * as boundedProcess from '../../../../src/process/bounded-child-process.mjs';
+
+vi.mock('os', async importOriginal => {
+  const original = await importOriginal<typeof import('os')>();
+  return { ...original, homedir: vi.fn(original.homedir) };
+});
 
 // Helper for robust cleanup with retries
 async function cleanupWithRetry(dir: string, maxRetries = 3): Promise<void> {
@@ -301,6 +307,164 @@ describe.sequential('RuntimeDiscovery', () => {
 
       expect(existsSync(catalogPath)).toBe(true);
       expect(existsSync(infoPath)).toBe(true);
+    });
+  });
+
+  describe('scheduled refresh', () => {
+    let discovery: any;
+    let probes: string[];
+    let pathTools: Map<string, string>;
+
+    async function installTool(directory: string, name: string): Promise<string> {
+      const toolPath = join(testDir, directory, name);
+      await mkdir(join(testDir, directory), { recursive: true });
+      await writeFile(toolPath, '#!/bin/sh\necho tool 1.2.3\n');
+      await chmod(toolPath, 0o755);
+      return toolPath;
+    }
+
+    beforeEach(() => {
+      vi.mocked(homedir).mockReturnValue(testDir);
+      vi.stubEnv('HOME', testDir);
+      vi.stubEnv('CARGO_HOME', '');
+      vi.stubEnv('PATH', '/usr/bin:/bin');
+      probes = [];
+      pathTools = new Map();
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(boundedProcess, 'boundedExecFileSync').mockImplementation((file: any, args: any) => {
+        if (file === 'which' && pathTools.has(args[0])) return pathTools.get(args[0])!;
+        if (file.startsWith(testDir) && args[0] === '--version') {
+          probes.push(file);
+          return 'tool 1.2.3';
+        }
+        throw new Error('not found');
+      });
+      discovery = new RuntimeDiscovery(join(testDir, 'catalog'));
+      vi.spyOn(discovery, 'getEnvironment').mockResolvedValue(createMockCatalog(testDir).environment);
+      vi.spyOn(discovery, 'getResources').mockResolvedValue(createMockCatalog(testDir).resources);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.mocked(homedir).mockReset();
+      vi.unstubAllEnvs();
+    });
+
+    it('finds allowlisted Cargo and local tools under a narrow PATH without probing arbitrary executables', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      const fd = await installTool('.local/bin', 'fd');
+      await installTool('.cargo/bin', 'unlisted-command');
+      const catalog = await discovery.discover();
+      expect(catalog.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'rg', path: rg, version: '1.2.3' }),
+        expect.objectContaining({ id: 'fd', path: fd }),
+      ]));
+      expect(probes.sort()).toEqual([rg, fd].sort());
+      expect(catalog.delta).toEqual({ added: ['rg', 'fd'], removed: [] });
+      expect(console.log).toHaveBeenCalledWith('Tool delta: +2 added, -0 removed');
+    });
+
+    it('keeps PATH precedence and honors a custom Cargo home', async () => {
+      const preferred = await installTool('preferred', 'rg');
+      await installTool('.cargo/bin', 'rg');
+      const cargoFd = await installTool('cargo-home/bin', 'fd');
+      vi.stubEnv('CARGO_HOME', join(testDir, 'cargo-home'));
+      pathTools.set('rg', preferred);
+      expect((await discovery.discover()).tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'rg', path: preferred }),
+        expect.objectContaining({ id: 'fd', path: cargoFd }),
+      ]));
+      expect(await discovery.checkTool('fd')).toMatchObject({ available: true, path: cargoFd });
+    });
+
+    it('preserves a Cargo tool when a later refresh loses its PATH entry', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      vi.stubEnv('PATH', `${join(testDir, '.cargo/bin')}:/usr/bin:/bin`);
+      pathTools.set('rg', rg);
+      await discovery.discover();
+      vi.stubEnv('PATH', '/usr/bin:/bin');
+      pathTools.clear();
+      const refreshed = await discovery.discover();
+      expect(refreshed.tools).toEqual([expect.objectContaining({ id: 'rg', path: rg })]);
+      expect(refreshed.delta).toEqual({ added: [], removed: [] });
+      expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it.each(['bin', '.npm-global/bin', 'go/bin', '.bun/bin', '.deno/bin'])(
+      'finds tools installed in ~/%s', async directory => {
+        const fd = await installTool(directory, 'fd');
+        expect(await discovery.checkTool('fd')).toMatchObject({ available: true, path: fd });
+      }
+    );
+
+    it('ignores non-executable files and directories in user bin paths', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      await chmod(rg, 0o644);
+      await mkdir(join(testDir, '.cargo/bin/fd'));
+      expect((await discovery.discover()).tools).toEqual([]);
+      expect(probes).toEqual([]);
+    });
+
+    it('skips unchanged inputs across instances without probes, resource sampling, or output writes', async () => {
+      await installTool('.cargo/bin', 'rg');
+      const first = await discovery.discover();
+      const catalogPath = join(discovery.basePath, 'runtime.json');
+      const infoPath = join(discovery.basePath, 'runtime-info.md');
+      const before = await Promise.all([stat(catalogPath), stat(infoPath)]);
+      probes.length = 0;
+      const next = new RuntimeDiscovery(discovery.basePath);
+      const resources = vi.spyOn(next, 'getResources');
+      expect(await next.discover()).toEqual(first);
+      expect(probes).toEqual([]);
+      expect(resources).not.toHaveBeenCalled();
+      expect((await Promise.all([stat(catalogPath), stat(infoPath)])).map(s => s.mtimeMs))
+        .toEqual(before.map(s => s.mtimeMs));
+      expect(console.log).toHaveBeenCalledWith('Discovery skipped: unchanged (1 tools)');
+    });
+
+    it('refreshes after executable edits, additions, and removals and reports shrinkage', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      await discovery.discover();
+      probes.length = 0;
+      await writeFile(rg, '#!/bin/sh\necho tool 2.0.0 updated\n');
+      await discovery.discover();
+      expect(probes).toEqual([rg]);
+      await installTool('.local/bin', 'fd');
+      expect((await discovery.discover()).delta).toEqual({ added: ['fd'], removed: [] });
+      await rm(rg);
+      const shrunk = await discovery.discover();
+      expect(shrunk.delta).toEqual({ added: [], removed: ['rg'] });
+      expect(console.warn).toHaveBeenCalledWith('Previously cataloged tools no longer available: rg');
+      expect(console.log).toHaveBeenCalledWith('Tool delta: +0 added, -1 removed');
+    });
+
+    it('repeats probes when forced or the lookup environment or tool definitions change', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      await discovery.discover();
+      probes.length = 0;
+      await discovery.discover({ force: true });
+      vi.stubEnv('PATH', '/bin:/usr/bin');
+      await discovery.discover();
+      discovery.knownTools.ripgrep.capabilities.push('new-capability');
+      await discovery.discover();
+      expect(probes).toEqual([rg, rg, rg]);
+    });
+
+    it('rebuilds legacy or malformed catalogs and missing human-readable output', async () => {
+      const rg = await installTool('.cargo/bin', 'rg');
+      const first = await discovery.discover();
+      delete first.inputFingerprint;
+      await writeFile(join(discovery.basePath, 'runtime.json'), JSON.stringify(first));
+      probes.length = 0;
+      await discovery.discover();
+      await rm(join(discovery.basePath, 'runtime-info.md'));
+      await discovery.discover();
+      await writeFile(join(discovery.basePath, 'runtime.json'), '{');
+      await discovery.discover();
+      await writeFile(join(discovery.basePath, 'runtime.json'), JSON.stringify({ tools: {} }));
+      await discovery.discover();
+      expect(probes).toEqual([rg, rg, rg, rg]);
     });
   });
 

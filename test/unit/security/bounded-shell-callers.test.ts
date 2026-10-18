@@ -14,6 +14,7 @@ vi.mock('../../../src/process/bounded-child-process.mjs', async importOriginal =
 }));
 vi.mock('os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(), platform: () => mocks.platform,
+  homedir: () => process.env.HOME!,
 }));
 vi.mock('../../../src/channel/manager.mjs', () => ({
   loadConfig: mocks.config, saveConfig: vi.fn(), getChannel: vi.fn(), getPackageRoot: () => process.cwd(),
@@ -53,6 +54,7 @@ describe('bounded argv callers', () => {
     mocks.platform = 'linux';
     dir = await mkdtemp(join(tmpdir(), 'aiwg-bounded-callers-'));
     vi.stubEnv('HOME', dir);
+    vi.stubEnv('CARGO_HOME', join(dir, '.cargo'));
     vi.stubEnv('AIWG_CONFIG', join(dir, 'config'));
     vi.stubEnv('AIWG_ARTIFACTS_PATH', join(dir, 'artifacts'));
     vi.spyOn(console, 'log').mockImplementation(() => {});

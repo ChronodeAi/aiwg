@@ -2,6 +2,8 @@ import { opendir } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -83,6 +85,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Codex source discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.discoveryLimits.maxFiles, observed: emitted },
           );
         }
         yield {
@@ -124,7 +127,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       mode ??= isAppServerRecord(line.value) ? 'app-server' : 'rollout';
       const currentSchema = declaredSchemaVersion([line]);
       if (schemaVersion && schemaVersion !== currentSchema) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'Codex source declares mixed schema versions');
+        throw new SessionContractError('SCHEMA_DRIFT', 'Codex source declares mixed schema versions', schemaIssueDetail('schemaVersion'));
       }
       schemaVersion = currentSchema;
       assertSupportedSchemaMajor(schemaVersion);
@@ -132,7 +135,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       if (mode === 'app-server') {
         const parsed = AppServerEnvelopeSchema.safeParse(line.value);
         if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server record is malformed');
+          throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server record is malformed', schemaRejectionDetail(parsed.error));
         }
         for (const thread of extractThreads(parsed.data)) {
           validateThreadIdentity(thread, identities);
@@ -141,13 +144,13 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       } else {
         const parsed = RolloutEnvelopeSchema.safeParse(line.value);
         if (!parsed.success) {
-          throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed');
+          throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed', schemaRejectionDetail(parsed.error));
         }
         const payload = asObject(parsed.data.payload);
         if (parsed.data.type === 'session_meta') {
           const declaredId = stringValue(payload.id);
           if (!declaredId) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id');
+            throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id', schemaIssueDetail('payload.id'));
           }
           nativeSessionId = declaredId;
         }
@@ -155,6 +158,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'MALFORMED_SOURCE',
             'Codex rollout has no session identity before content records',
+            schemaIssueDetail('payload.id'),
           );
         }
         normalized = [rolloutRecord(
@@ -170,7 +174,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       }
     }
     if (!sawRecord && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty', schemaIssueDetail('<root>'));
     }
   }
 
@@ -184,7 +188,7 @@ export class CodexSessionAdapter implements SessionSourceAdapter {
       { consistency: 'provisional', limits: this.limits },
     );
     if (input.records.length === 0 && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex JSONL source is empty', schemaIssueDetail('<root>'));
     }
     const appServer = isAppServerLocator(source.locator)
       || input.records.some((record) => isAppServerRecord(record.value));
@@ -211,7 +215,7 @@ function normalizeAppServer(
   for (const line of input) {
     const parsed = AppServerEnvelopeSchema.safeParse(line.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server record is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server record is malformed', schemaRejectionDetail(parsed.error));
     }
     const envelope = parsed.data;
     const threads = extractThreads(envelope);
@@ -267,14 +271,14 @@ function normalizeRollout(
   for (const line of input) {
     const parsed = RolloutEnvelopeSchema.safeParse(line.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex rollout record is malformed', schemaRejectionDetail(parsed.error));
     }
     const envelope = parsed.data;
     const payload = asObject(envelope.payload);
     if (envelope.type === 'session_meta') {
       const declaredId = stringValue(payload.id);
       if (!declaredId) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Codex session metadata is missing its id', schemaIssueDetail('payload.id'));
       }
       nativeSessionId = declaredId;
     }
@@ -282,6 +286,7 @@ function normalizeRollout(
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'Codex rollout has no session identity before content records',
+        schemaIssueDetail('payload.id'),
       );
     }
     records.push(rolloutRecord(
@@ -435,7 +440,7 @@ function extractThreads(
   return candidates.map((candidate) => {
     const parsed = ThreadSchema.safeParse(candidate);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server thread is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Codex App Server thread is malformed', schemaRejectionDetail(parsed.error));
     }
     return parsed.data;
   });
@@ -445,7 +450,7 @@ function validateThreadIdentity(thread: Thread, identities: Map<string, string>)
   const sessionTree = thread.sessionId ?? thread.id;
   const previous = identities.get(thread.id);
   if (previous && previous !== sessionTree) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'Codex thread session-tree identity changed');
+    throw new SessionContractError('SCHEMA_DRIFT', 'Codex thread session-tree identity changed', schemaIssueDetail('sessionId'));
   }
   identities.set(thread.id, sessionTree);
 }
@@ -590,7 +595,7 @@ function rolloutIdFromFilename(locator: string): string | undefined {
 
 function parseCursor(value?: string): number {
   if (value === undefined || value === '') return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'Codex record cursor is invalid');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'Codex record cursor is invalid', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

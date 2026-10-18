@@ -10,6 +10,7 @@ import {
   IncrementalSessionImporter,
   GenericSessionInterchangeAdapter,
   SessionImportFailure,
+  SessionContractError,
   MemoryPromotionGateway,
   SESSION_CONTRACT_VERSION,
   SESSION_PROVIDER_IDS,
@@ -18,6 +19,7 @@ import {
   sha256,
   stableEventId,
   stableSessionId,
+  type BatchImportRun,
   type ProviderRecord,
   type MemoryDestinationPlan,
   type SessionSource,
@@ -76,6 +78,135 @@ const records: ProviderRecord[] = [
 ];
 
 describeWithSqlite('transactional session repository and importer', () => {
+  it.each(['maxRecordBytes', 'maxTotalBytes', 'maxRecords'] as const)(
+    'preserves configured and observed %s in import failure details', async (limit) => {
+      const repository = new SessionRepository();
+      const record = { nativeSessionId: 'session', sequence: 0, kind: 'message',
+        text: 'synthetic-transcript-marker', rawReference: { locatorClass: 'fixture' } };
+      try {
+        await expect(new IncrementalSessionImporter(repository).import({
+          source, adapter: adapter([record]), workspaceId: 'workspace-1', policyVersion: '1.0.0',
+          selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+          limits: { [limit]: 0 },
+        })).rejects.toMatchObject({
+          name: 'SessionImportFailure', code: 'RESOURCE_LIMIT_EXCEEDED',
+          detail: { limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)) },
+          failureReceipt: { detail: {
+            limit, configured: 0, observed: limit === 'maxRecords' ? 1 : Buffer.byteLength(JSON.stringify(record)),
+          } },
+        });
+      } finally { repository.close(); }
+    },
+  );
+
+  it('preserves adapter validator detail through an import failure', async () => {
+    const repository = new SessionRepository();
+    const detail = { issues: [{ path: 'message.role', code: 'invalid_type' }] };
+    const failing = adapter([]);
+    failing.stream = async function* () {
+      throw new SessionContractError('MALFORMED_SOURCE', 'invalid synthetic record', detail);
+    };
+    try {
+      await expect(new IncrementalSessionImporter(repository).import({
+        source, adapter: failing, workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        selectedSource: { provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId, authorizedScope: { workspaceId: 'workspace-1', allowedRoots: [] } },
+      })).rejects.toMatchObject({ name: 'SessionImportFailure', detail, failureReceipt: { detail } });
+    } finally { repository.close(); }
+  });
+
+  it.each(['workspace-a', undefined])('rebuilds search and analytics indexes for reindex scope %s', async (scope) => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-reindex-scopes-'));
+    const databasePath = join(root, 'catalog.sqlite');
+    const repository = new SessionRepository(databasePath);
+    const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+    const raw = new Database(databasePath);
+    try {
+      const importer = new IncrementalSessionImporter(repository);
+      const workspaces = ['workspace-a', 'workspace-b'];
+      for (const workspaceId of workspaces) {
+        const scopedSource = { ...source, sourceId: `source-${workspaceId}` };
+        await importer.import({
+          source: scopedSource,
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: scopedSource.sourceId,
+            authorizedScope: { workspaceId, allowedRoots: ['/fixture'] },
+          },
+          workspaceId,
+          policyVersion: '1.0.0',
+          adapter: adapter([{
+            nativeSessionId: 'reindex-session', nativeEventId: 'reindex-event', sequence: 0,
+            kind: 'tool-call', role: 'assistant', toolName: 'exec', toolCallId: 'reindex-call',
+            text: 'reindexmarker', rawReference: { locatorClass: 'fixture', sequence: 0 },
+          }]),
+        });
+        expect(repository.search({
+          query: 'reindexmarker', workspaceId, controlEvents: 'include', limit: 10,
+        }).items).toHaveLength(1);
+        expect(repository.analyticsSummary({ workspaceId }).totals.toolCalls).toBe(1);
+      }
+      raw.exec('DELETE FROM session_event_fts; DELETE FROM session_analytics_facts');
+      repository.reindex(scope);
+      for (const workspaceId of workspaces) {
+        const expected = scope === undefined || scope === workspaceId ? 1 : 0;
+        expect(repository.search({
+          query: 'reindexmarker', workspaceId, controlEvents: 'include', limit: 10,
+        }).items).toHaveLength(expected);
+        expect(repository.analyticsSummary({ workspaceId }).totals.toolCalls).toBe(expected);
+      }
+      expect(repository.listMutationEvents({ workspaceId: scope ?? 'global', limit: 10 }).items)
+        .toEqual(expect.arrayContaining([expect.objectContaining({
+          eventName: 'session.reindex', workspaceId: scope ?? 'global',
+          counts: { events: scope === undefined ? 2 : 1 },
+        })]));
+    } finally {
+      raw.close();
+      repository.close();
+    }
+  });
+
+  it('marks only running batch imports interrupted across workspaces and preserves source progress', () => {
+    const repository = new SessionRepository(':memory:');
+    const timestamp = '2026-10-01T00:00:00.000Z';
+    const recoveryTime = new Date('2026-10-01T00:00:01.000Z');
+    const base: BatchImportRun = {
+      schemaVersion: '1.0.0', runId: 'orphan', manifestId: 'manifest',
+      manifestCreatedAt: timestamp, workspaceId: 'workspace', status: 'running',
+      startedAt: timestamp, updatedAt: timestamp, completedAt: null,
+      providers: [], sources: [{
+        sourceId: 'source', provider: 'generic', status: 'committed', attempts: 1,
+        sessionsAccepted: 1, eventsAccepted: 2, errorCode: null, diagnostic: null,
+        updatedAt: timestamp,
+      }],
+    };
+    try {
+      repository.saveBatchImportRun(base);
+      repository.saveBatchImportRun({ ...base, runId: 'other-orphan', workspaceId: 'other-workspace' });
+      for (const status of ['complete', 'partial', 'interrupted'] as const) {
+        repository.saveBatchImportRun({ ...base, runId: status, manifestId: status, status });
+      }
+      expect(repository.interruptRunningBatchImports(recoveryTime)).toEqual([
+        { runId: 'orphan', interruptedAt: recoveryTime.toISOString() },
+        { runId: 'other-orphan', interruptedAt: recoveryTime.toISOString() },
+      ]);
+      for (const runId of ['orphan', 'other-orphan']) {
+        expect(repository.getBatchImportRun(runId)).toMatchObject({
+          status: 'interrupted', interruptedAt: recoveryTime.toISOString(),
+          updatedAt: recoveryTime.toISOString(), completedAt: null, sources: base.sources,
+        });
+      }
+      for (const status of ['complete', 'partial', 'interrupted']) {
+        expect(repository.getBatchImportRun(status)).toMatchObject({ status, updatedAt: timestamp });
+        expect(repository.getBatchImportRun(status)?.interruptedAt).toBeUndefined();
+      }
+      expect(repository.interruptRunningBatchImports(new Date())).toEqual([]);
+    } finally {
+      repository.close();
+    }
+  });
+
   it.each(['source', 'batch'] as const)(
     'rebuilds only affected session analytics when committing staged %s imports',
     async (commitScope) => {
@@ -1226,6 +1357,67 @@ describeWithSqlite('transactional session repository and importer', () => {
     repository.close();
   });
 
+  it.each([1, 2, 5])(
+    'lists newest sessions first with stable ties, undated sessions last, and page size %i',
+    async (limit) => {
+      const repository = new SessionRepository();
+      try {
+        const importer = new IncrementalSessionImporter(repository);
+        const workspaceId = 'workspace-list-order';
+        const entries = [
+          ['oldest', '2026-07-24T00:00:00.000Z'],
+          ['tied-a', '2026-07-26T00:00:00.000Z'],
+          ['undated-a', undefined],
+          ['newest', '2026-07-28T00:00:00.000Z'],
+          ['middle', '2026-07-25T00:00:00.000Z'],
+          ['tied-b', '2026-07-26T00:00:00.000Z'],
+          ['undated-b', undefined],
+        ] as const;
+        await importer.import({
+          source,
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId,
+            authorizedScope: { workspaceId, allowedRoots: ['/fixture'] },
+          },
+          adapter: adapter(entries.map(([name, occurredAt], index): ProviderRecord => ({
+            nativeSessionId: name, nativeEventId: `event-${name}`, sequence: 0,
+            kind: 'message', occurredAt, text: 'session ordering',
+            rawReference: { locatorClass: 'fixture', sequence: index },
+          }))),
+          workspaceId, policyVersion: '1.0.0',
+        });
+        const id = (name: string) => stableSessionId('generic', source.sourceId, name);
+        const expected = [
+          id('newest'),
+          ...[id('tied-a'), id('tied-b')].sort().reverse(),
+          id('middle'), id('oldest'),
+          ...[id('undated-a'), id('undated-b')].sort().reverse(),
+        ];
+        let page = repository.listSessions({ workspaceId, limit });
+        const snapshotRowid = page.snapshotRowid;
+        const seen: string[] = [];
+        for (let offset = 0; offset < expected.length; offset += limit) {
+          expect(page.items.map((item) => item.sessionId)).toEqual(expected.slice(offset, offset + limit));
+          expect(page.total).toBe(expected.length);
+          expect(page.snapshotRowid).toBe(snapshotRowid);
+          seen.push(...page.items.map((item) => item.sessionId));
+          if (offset + limit < expected.length) {
+            expect(page.nextCursor).not.toBeNull();
+            page = repository.listSessions({ workspaceId, limit, cursor: page.nextCursor! });
+          } else {
+            expect(page.nextCursor).toBeNull();
+          }
+        }
+        expect(seen).toEqual(expected);
+        expect(repository.listSessions({ workspaceId, limit, offset: 1 }).items
+          .map((item) => item.sessionId)).toEqual(expected.slice(1, 1 + limit));
+      } finally {
+        repository.close();
+      }
+    },
+  );
+
   it('lists sessions with a scope-bound snapshot cursor across concurrent imports', async () => {
     const repository = new SessionRepository();
     const importer = new IncrementalSessionImporter(repository);
@@ -1246,6 +1438,8 @@ describeWithSqlite('transactional session repository and importer', () => {
       workspaceId: 'workspace-list', policyVersion: '1.0.0',
     });
     const first = repository.listSessions({ workspaceId: 'workspace-list', limit: 1 });
+    expect(first.items.map((item) => item.nativeSessionId)).toEqual(['session-2']);
+    expect(first.total).toBe(3);
     expect(first.nextCursor).not.toBeNull();
 
     const concurrentSource = { ...source, sourceId: 'list-concurrent-source' };
@@ -1264,6 +1458,10 @@ describeWithSqlite('transactional session repository and importer', () => {
     });
     expect(new Set([...first.items, ...second.items].map((item) => item.sessionId)).size).toBe(3);
     expect(second.items).toHaveLength(2);
+    expect(second.items.map((item) => item.nativeSessionId)).toEqual(['session-1', 'session-0']);
+    expect(second.total).toBe(3);
+    expect(second.snapshotRowid).toBe(first.snapshotRowid);
+    expect(second.nextCursor).toBeNull();
     expect(() => repository.listSessions({
       workspaceId: 'other-workspace', limit: 10, cursor: first.nextCursor!,
     })).toThrow(/cursor does not match the requested scope/);
@@ -1458,13 +1656,14 @@ describeWithSqlite('transactional session repository and importer', () => {
 
     const scoped = repository.listSessions({
       workspaceId: 'workspace-bulk', limit: 10, offset: 0,
-    }).items[2];
+    }).items.find((item) => item.nativeSessionId === 'bulk-session-0')!;
     const first = repository.authorizedSearchDocumentPage({
       workspaceId: 'workspace-bulk',
       sessionIds: [scoped.sessionId],
       limit: 100,
     });
     expect(first.items.every((item) => item.sessionId === scoped.sessionId)).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
     expect(() => repository.authorizedSearchDocumentPage({
       workspaceId: 'workspace-other',
       sessionIds: [scoped.sessionId],
@@ -1893,6 +2092,171 @@ describeWithSqlite('transactional session repository and importer', () => {
     });
     expect(repository.listEvents(sessionId)).toHaveLength(1);
     repository.close();
+  });
+
+  it.each([
+    { label: 'default', thresholdMs: undefined, timestamped: true },
+    { label: 'custom', thresholdMs: 1_000, timestamped: true },
+    { label: 'zero', thresholdMs: 0, timestamped: true },
+    { label: 'timestamp-less', thresholdMs: 1_000, timestamped: false },
+  ])('ages an imported active session on reads without re-import ($label)', async ({ thresholdMs, timestamped }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    const repository = new SessionRepository();
+    try {
+      const activeSource = {
+        ...source, consistency: 'provisional' as const, authorizedAt: now.toISOString(),
+      };
+      const activeAdapter = adapter([{
+        ...records[0], text: 'synthetic request',
+        occurredAt: timestamped ? now.toISOString() : undefined,
+      }]);
+      const stream = vi.spyOn(activeAdapter, 'stream');
+      await new IncrementalSessionImporter(repository).import({
+        source: activeSource,
+        selectedSource: {
+          provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId,
+          authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+        },
+        adapter: activeAdapter, workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        inactivityThresholdMs: thresholdMs,
+      });
+      const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+      const threshold = thresholdMs ?? 24 * 60 * 60 * 1_000;
+      const readSessions = () => [
+        repository.getSession(sessionId),
+        ...repository.listSessions({ limit: 10 }).items,
+        ...repository.findSessionsByReference(sessionId),
+        ...repository.findSessionsByReference('native-1'),
+        ...repository.findSessionsByReference('native-'),
+        ...repository.listTimelineInputs('workspace-1').map((input) => input.session),
+      ];
+      for (const session of readSessions()) {
+        expect(session).toMatchObject({
+          lifecycle: 'active',
+          extensions: {
+            'native.generic': { lifecycleEvidence: { state: 'active', thresholdMs: threshold } },
+          },
+        });
+      }
+      vi.setSystemTime(now.getTime() + threshold);
+      expect(repository.getSession(sessionId)?.lifecycle).toBe('active');
+      vi.setSystemTime(now.getTime() + threshold + 1);
+      for (const session of readSessions()) {
+        expect(session).toMatchObject({
+          lifecycle: 'inactive',
+          extensions: {
+            'native.generic': {
+              lifecycleEvidence: {
+                basis: 'inactivity-threshold', state: 'inactive', confidence: 'medium',
+                observedAt: now.toISOString(), thresholdMs: threshold,
+              },
+            },
+          },
+        });
+      }
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(repository.listEvents(sessionId)).toHaveLength(1);
+    } finally {
+      repository.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['open-provisional-source', 'inactivity-threshold'])(
+    'evaluates legacy %s evidence from the last event without changing stored rows', async (basis) => {
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-legacy-lifecycle-'));
+      const databasePath = join(root, 'catalog.sqlite');
+      const repository = new SessionRepository(databasePath);
+      const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+      const raw = new Database(databasePath);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const now = new Date('2026-10-18T12:00:00.000Z');
+      vi.setSystemTime(now);
+      try {
+        await new IncrementalSessionImporter(repository).import({
+          source: { ...source, consistency: 'provisional' },
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId,
+            authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+          },
+          adapter: adapter([{
+            ...records[0], text: 'synthetic request', occurredAt: now.toISOString(),
+          }]),
+          workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        });
+        const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+        const stored = repository.getSession(sessionId)!;
+        stored.lifecycle = basis === 'inactivity-threshold' ? 'inactive' : 'active';
+        stored.extensions['native.generic'] = {
+          lifecycleEvidence: {
+            basis, state: stored.lifecycle,
+            observedAt: '2026-10-16T12:00:00.000Z',
+            confidence: basis === 'inactivity-threshold' ? 'medium' : 'provisional',
+          },
+        };
+        raw.prepare('UPDATE sessions SET lifecycle=?, data=? WHERE session_id=?')
+          .run(stored.lifecycle, JSON.stringify(stored), sessionId);
+        const readStored = () => raw.prepare('SELECT lifecycle, data FROM sessions WHERE session_id=?')
+          .get(sessionId);
+        const before = readStored();
+        expect(repository.getSession(sessionId)?.lifecycle).toBe('active');
+        vi.setSystemTime(now.getTime() + 24 * 60 * 60 * 1_000 + 1);
+        expect(repository.listSessions({ limit: 10 }).items[0]).toMatchObject({
+          lifecycle: 'inactive',
+          extensions: {
+            'native.generic': {
+              lifecycleEvidence: {
+                basis: 'inactivity-threshold', state: 'inactive',
+                observedAt: now.toISOString(), thresholdMs: 24 * 60 * 60 * 1_000,
+              },
+            },
+          },
+        });
+        expect(readStored()).toEqual(before);
+      } finally {
+        raw.close();
+        repository.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    'active', 'inactive', 'paused', 'complete', 'interrupted', 'archived', 'unknown',
+    undefined,
+  ])('preserves authoritative lifecycle evidence as time passes (%s)', async (lifecycle) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    const repository = new SessionRepository();
+    try {
+      await new IncrementalSessionImporter(repository).import({
+        source: { ...source, consistency: lifecycle ? 'provisional' : 'complete' },
+        selectedSource: {
+          provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId,
+          authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+        },
+        adapter: adapter([{
+          ...records[0], text: 'synthetic request', occurredAt: now.toISOString(),
+          extensions: lifecycle ? { lifecycle } : {},
+        }]),
+        workspaceId: 'workspace-1', policyVersion: '1.0.0',
+      });
+      const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+      const initial = repository.getSession(sessionId);
+      expect(initial?.lifecycle).toBe(lifecycle ?? 'complete');
+      vi.setSystemTime(now.getTime() + 10 * 24 * 60 * 60 * 1_000);
+      expect(repository.getSession(sessionId)).toEqual(initial);
+      expect(repository.listSessions({ limit: 10 }).items).toEqual([initial]);
+    } finally {
+      repository.close();
+      vi.useRealTimers();
+    }
   });
 
   it('uses a configurable inactivity threshold and revises inference on continuation', async () => {

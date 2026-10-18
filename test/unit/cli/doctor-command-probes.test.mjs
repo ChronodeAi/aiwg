@@ -79,4 +79,21 @@ describe('doctor command probe behavior', () => {
       cwd: root, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
     });
   });
+
+  it.each([
+    ['2026.10.3', 'Version skew:', 'warn'],
+    ['2026.9.20', 'launcher 2026.9.20;', 'ok'],
+    ['(unknown)', 'Could not determine both versions:', 'warn'],
+  ])('reports launcher/runtime comparison for runtime %s', async (runtimeVersion, message, status) => {
+    mocks.version.mockResolvedValue({
+      version: '2026.10.3', channel: 'edge', devMode: false,
+      launcherVersion: '2026.9.20', runtimeVersion, runtimePath: join(root, 'edge'),
+    });
+    await runDoctor();
+    const output = console.log.mock.calls.map(([line]) => String(line)).join('\n');
+    const symbol = status === 'warn' ? '⚠' : '✓';
+    const comparison = output.split('\n').filter(line => line.includes('Launcher/Runtime Versions:')).at(-1);
+    expect(comparison).toContain(`${symbol} Launcher/Runtime Versions: ${message}`);
+    expect(output).toContain(join(root, 'edge'));
+  });
 });

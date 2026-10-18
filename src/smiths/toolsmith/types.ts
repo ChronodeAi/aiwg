@@ -76,6 +76,8 @@ export interface RuntimeCatalog {
   $schema: string;
   version: '1.0';
   generated: string; // ISO 8601
+  inputFingerprint?: string;
+  delta?: { added: string[]; removed: string[] };
   environment: EnvironmentInfo;
   resources: ResourceInfo;
   tools: CatalogedTool[];

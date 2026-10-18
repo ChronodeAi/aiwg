@@ -4,6 +4,8 @@ import {
 } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -111,6 +113,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Cursor source discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.discoveryLimits.maxFiles, observed: emitted },
           );
         }
         yield {
@@ -151,7 +154,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
         const currentSchema = typeof raw.schemaVersion === 'string'
           ? raw.schemaVersion : CURSOR_SOURCE_SCHEMA_VERSION;
         if (schemaVersion && schemaVersion !== currentSchema) {
-          throw new SessionContractError('SCHEMA_DRIFT', 'Cursor source declares mixed schema versions');
+          throw new SessionContractError('SCHEMA_DRIFT', 'Cursor source declares mixed schema versions', schemaIssueDetail('schemaVersion'));
         }
         schemaVersion = currentSchema;
         assertSupportedSchemaMajor(schemaVersion);
@@ -159,7 +162,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
         if (source.locatorClass === 'cursor-cli-stream-json') {
           const parsed = CliEventSchema.safeParse(line.value);
           if (!parsed.success) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Cursor CLI event is malformed');
+            throw new SessionContractError('MALFORMED_SOURCE', 'Cursor CLI event is malformed', schemaRejectionDetail(parsed.error));
           }
           const event = parsed.data;
           if (cliSessionId && cliSessionId !== event.session_id) {
@@ -170,7 +173,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
         } else {
           const parsed = CloudEventSchema.safeParse(line.value);
           if (!parsed.success) {
-            throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Cloud Agent event is malformed');
+            throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Cloud Agent event is malformed', schemaRejectionDetail(parsed.error));
           }
           const event = parsed.data;
           const nextAgentId = event.agent?.id ?? agentId;
@@ -195,7 +198,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
         if (outputIndex++ >= start) yield record;
       }
       if (!sawRecord && !input.incompleteTail) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty', schemaIssueDetail('<root>'));
       }
       return;
     }
@@ -232,7 +235,7 @@ export class CursorSessionAdapter implements SessionSourceAdapter {
       { consistency: 'provisional', limits: this.limits },
     );
     if (input.records.length === 0 && !input.incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor structured source is empty', schemaIssueDetail('<root>'));
     }
     const schemaVersion = declaredVersion(input.records);
     assertSupportedSchemaMajor(schemaVersion);
@@ -296,7 +299,7 @@ function normalizeCli(input: BoundedJsonRecord[]): {
   for (const line of input) {
     const parsed = CliEventSchema.safeParse(line.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor CLI event is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor CLI event is malformed', schemaRejectionDetail(parsed.error));
     }
     const event = parsed.data;
     if (sessionId && sessionId !== event.session_id) {
@@ -350,7 +353,7 @@ function normalizeCloud(input: BoundedJsonRecord[]): {
   for (const line of input) {
     const parsed = CloudEventSchema.safeParse(line.value);
     if (!parsed.success) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Cloud Agent event is malformed');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Cloud Agent event is malformed', schemaRejectionDetail(parsed.error));
     }
     const event = parsed.data;
     const nextAgentId = event.agent?.id ?? agentId;
@@ -421,6 +424,7 @@ function normalizeAgentTranscript(
       throw new SessionContractError(
         'MALFORMED_SOURCE',
         'Cursor agent transcript event is malformed',
+        schemaRejectionDetail(parsed.error),
       );
     }
     const event = parsed.data;
@@ -462,7 +466,7 @@ function normalizeMarkdown(value: string, locator: string): ProviderRecord[] {
   const heading = /^#{1,3}\s+(User|Assistant|Cursor)\s*$/gim;
   const matches = [...value.matchAll(heading)];
   if (matches.length === 0) {
-    throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Markdown export has no role headings');
+    throw new SessionContractError('MALFORMED_SOURCE', 'Cursor Markdown export has no role headings', schemaIssueDetail('headings'));
   }
   const nativeSessionId = basename(locator, extname(locator));
   return matches.map((match, index) => {
@@ -518,7 +522,7 @@ function declaredVersion(records: BoundedJsonRecord[]): string {
     return typeof value.schemaVersion === 'string' ? value.schemaVersion : CURSOR_SOURCE_SCHEMA_VERSION;
   }));
   if (versions.size !== 1) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'Cursor source declares mixed schema versions');
+    throw new SessionContractError('SCHEMA_DRIFT', 'Cursor source declares mixed schema versions', schemaIssueDetail('schemaVersion'));
   }
   return [...versions][0];
 }
@@ -565,7 +569,7 @@ function asObject(value: unknown): Record<string, unknown> {
 function parseCursor(value?: string): number {
   if (!value) return 0;
   if (!/^\d+$/.test(value)) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Cursor record cursor');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid Cursor record cursor', schemaIssueDetail('cursor'));
   }
   return Number(value);
 }

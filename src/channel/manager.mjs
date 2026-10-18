@@ -541,6 +541,19 @@ export async function getVersionInfo() {
   const packageJsonPath = path.join(packageRoot, 'package.json');
   const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
 
+  const launcherRoot = process.env.AIWG_LAUNCHER_ROOT || packageRoot;
+  const runtimePath = resolveEffectiveInstallationRoot(launcherRoot, config);
+  const readVersion = async (root) => {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+      return typeof pkg.version === 'string' ? pkg.version : '(unknown)';
+    } catch {
+      return '(unknown)';
+    }
+  };
+  const launcherVersion = await readVersion(launcherRoot);
+  const runtimeVersion = await readVersion(runtimePath);
+
   // Detect pre-release channel from version string when channel.json says 'stable'
   // This handles the case where a user ran `npm install -g aiwg@next` directly —
   // npm updates the binary but channel.json stays as 'stable'.
@@ -560,6 +573,9 @@ export async function getVersionInfo() {
 
   const info = {
     version,
+    launcherVersion,
+    runtimeVersion,
+    runtimePath,
     channel,
     packageRoot,
     installation,

@@ -10,6 +10,8 @@ import {
   SessionSourceAdapterRegistry,
   fingerprintSourceFile,
   readBoundedJsonLines,
+  readBoundedJson,
+  readBoundedText,
   streamBoundedJsonLines,
   redactSourceLocator,
   type SessionSourceAdapter,
@@ -108,6 +110,49 @@ describe('session source adapter registry', () => {
 });
 
 describe('bounded session readers', () => {
+  it.each([
+    ['maxRecordBytes', 1, 40],
+    ['maxTotalBytes', 1, 40],
+    ['maxRecords', 1, 2],
+    ['maxNestingDepth', 0, 1],
+  ] as const)('identifies the configured and observed %s JSONL limit', async (limit, configured, observed) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-reader-limit-'));
+    const path = join(root, 'session.jsonl');
+    const content = JSON.stringify({ text: 'synthetic-transcript-marker' }) + '\n';
+    await writeFile(path, content.repeat(2));
+    await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', limits: { [limit]: configured },
+    })).rejects.toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED',
+      detail: { limit, configured, observed: limit.endsWith('Bytes') ? Buffer.byteLength(content) : observed },
+    });
+  });
+
+  it.each([readBoundedJson, readBoundedText])('reports whole-document byte limits without source text', async (read) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-document-limit-'));
+    const path = join(root, 'session.json');
+    const content = JSON.stringify({ text: 'synthetic-transcript-marker' });
+    await writeFile(path, content);
+    await expect(read({ selectedPath: path, allowedRoots: [root] }, { maxTotalBytes: 1 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+        limit: 'maxTotalBytes', configured: 1, observed: Buffer.byteLength(content),
+      } });
+  });
+
+  it('reports malformed JSON at the root without including parser input', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-json-rejection-'));
+    const path = join(root, 'session.json');
+    await writeFile(path, '{"text":"synthetic-transcript-marker"');
+    for (const read of [
+      () => readBoundedJson({ selectedPath: path, allowedRoots: [root] }),
+      () => readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, { consistency: 'complete' }),
+    ]) {
+      await expect(read()).rejects.toMatchObject({ code: 'SCHEMA_DRIFT', detail: {
+        issues: [{ path: '<root>', code: 'invalid_json' }],
+      } });
+    }
+  });
+
   it('reads complete JSONL records with stable byte cursors and fingerprints', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-reader-'));
     const path = join(root, 'session.jsonl');

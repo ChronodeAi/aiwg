@@ -20,6 +20,7 @@ import {
 } from './batch-contracts.js';
 import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
 import type { TimelineInput } from './timeline.js';
+import { effectiveSessionLifecycle } from './lifecycle.js';
 import {
   deriveSessionAnalytics,
   type SessionAnalyticsCategory,
@@ -1132,7 +1133,7 @@ export class SessionRepository {
        ${workspaceId ? 'AND s.workspace_id=?' : ''}`,
     )
       .get(...(workspaceId ? [id, workspaceId] : [id]));
-    return row ? JSON.parse(String(row.data)) as Session : null;
+    return row ? effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session) : null;
   }
 
   findSessionsByReference(reference: string, workspaceId?: string): Session[] {
@@ -1143,7 +1144,7 @@ export class SessionRepository {
        WHERE ${workspaceId ? 's.workspace_id=? AND' : ''} ${VISIBLE_SESSION_PREDICATE} AND (${predicate})
        ORDER BY s.session_id`,
     ).all(...(workspaceId ? [workspaceId, reference] : [reference]))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
     const exact = query('s.native_session_id=?');
     if (exact.length === 1) return exact;
     if (exact.length > 1) {
@@ -1175,7 +1176,7 @@ export class SessionRepository {
        ORDER BY s.session_id`,
     ).all(...(workspaceId ? [workspaceId, reference, reference, reference, reference]
       : [reference, reference, reference, reference]))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
   }
 
   listWorkspaceSessionCounts(): Array<{ workspaceId: string; count: number }> {
@@ -1235,6 +1236,25 @@ export class SessionRepository {
     return row ? JSON.parse(String(row.data)) as BatchImportRun : null;
   }
 
+  /** Call only while holding the catalog import lease, before starting a new import. */
+  interruptRunningBatchImports(now = new Date()): Array<{ runId: string; interruptedAt: string }> {
+    const interruptedAt = now.toISOString();
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(
+        "SELECT data FROM batch_import_runs WHERE status='running'",
+      ).all();
+      return rows.map((row) => {
+        const run = JSON.parse(String(row.data)) as BatchImportRun;
+        run.status = 'interrupted';
+        run.interruptedAt = interruptedAt;
+        run.updatedAt = interruptedAt;
+        run.completedAt = null;
+        this.saveBatchImportRun(run);
+        return { runId: run.runId, interruptedAt };
+      });
+    })();
+  }
+
   getBatchImportRunForManifest(
     manifestId: string,
     workspaceId: string,
@@ -1292,20 +1312,20 @@ export class SessionRepository {
     const pageParams = [...params];
     if (cursor) {
       pageWhere.push(`(
-        COALESCE(json_extract(s.data, '$.updatedAt'), '') > ?
+        COALESCE(json_extract(s.data, '$.updatedAt'), '') < ?
         OR (
           COALESCE(json_extract(s.data, '$.updatedAt'), '') = ?
-          AND s.session_id > ?
+          AND s.session_id < ?
         )
       )`);
       pageParams.push(cursor.updatedAt, cursor.updatedAt, cursor.sessionId);
     }
     const items = this.db.prepare(
       `SELECT s.data FROM sessions s WHERE ${pageWhere.join(' AND ')}
-       ORDER BY COALESCE(json_extract(s.data, '$.updatedAt'), ''), s.session_id
+       ORDER BY COALESCE(json_extract(s.data, '$.updatedAt'), '') DESC, s.session_id DESC
        LIMIT ?${options.offset ? ' OFFSET ?' : ''}`,
     ).all(...pageParams, options.limit + 1, ...(options.offset ? [options.offset] : []))
-      .map((row) => JSON.parse(String(row.data)) as Session);
+      .map((row) => effectiveSessionLifecycle(JSON.parse(String(row.data)) as Session));
     const page = items.slice(0, options.limit);
     const last = page.at(-1);
     return {
@@ -1381,7 +1401,7 @@ export class SessionRepository {
          e.sequence_no,
          e.event_id`,
     ).all(workspaceId).map((row) => ({
-      session: JSON.parse(String(row.session_data)) as Session,
+      session: effectiveSessionLifecycle(JSON.parse(String(row.session_data)) as Session),
       event: JSON.parse(String(row.event_data)) as SessionEvent,
     }));
   }

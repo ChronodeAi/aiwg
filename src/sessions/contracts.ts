@@ -497,8 +497,47 @@ function stableId(prefix: string, ...parts: Array<string | number>): string {
   return `${prefix}_${createHash('sha256').update(parts.join('\0')).digest('hex')}`;
 }
 
+export const SessionRejectionDetailSchema = z.union([
+  z.object({ limit: z.string(), configured: z.number(), observed: z.number() }),
+  z.object({ issues: z.array(z.object({ path: z.string(), code: z.string() })) }),
+]);
+export type SessionRejectionDetail = z.infer<typeof SessionRejectionDetailSchema>;
+
+export function schemaIssueDetail(path: string, code = 'custom'): SessionRejectionDetail {
+  return { issues: [{ path, code }] };
+}
+
+export function assertSessionResourceLimit(limit: string, configured: number, observed: number): void {
+  if (observed > configured) {
+    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'session resource limit exceeded', {
+      limit, configured, observed,
+    });
+  }
+}
+
+/** Extract schema locations and validator codes without messages or input values. */
+export function schemaRejectionDetail(error: z.ZodError): SessionRejectionDetail {
+  const issues: Array<{ path: string; code: string }> = [];
+  const visit = (entries: z.ZodIssue[]): void => {
+    for (const issue of entries) {
+      if (issues.length >= 20) return;
+      if (issue.code === 'invalid_union') {
+        for (const branch of issue.unionErrors) visit(branch.issues);
+      } else {
+        issues.push({ path: issue.path.join('.') || '<root>', code: issue.code });
+      }
+    }
+  };
+  visit(error.issues);
+  return { issues };
+}
+
 export class SessionContractError extends Error {
-  constructor(public readonly code: z.infer<typeof SessionErrorCodeSchema>, message: string) {
+  constructor(
+    public readonly code: z.infer<typeof SessionErrorCodeSchema>,
+    message: string,
+    public readonly detail?: SessionRejectionDetail,
+  ) {
     super(message);
     this.name = 'SessionContractError';
   }

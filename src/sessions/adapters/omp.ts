@@ -2,6 +2,8 @@ import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError, type AuthorizedScope, type ImportCursor,
   type ProviderRecord, type SelectedSource, type SessionSourceAdapter,
   type SourceDescriptor, type SourceProbe,
@@ -30,7 +32,7 @@ export class OmpSessionAdapter implements SessionSourceAdapter {
     let count = 0;
     for (const root of [...scope.allowedRoots].sort()) {
       for await (const locator of jsonlFiles(resolve(root))) {
-        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'OMP discovery file limit exceeded');
+        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'OMP discovery file limit exceeded', { limit: 'maxFiles', configured: this.maxFiles, observed: count });
         yield { provider: 'omp', locator, locatorClass: 'omp-session-v3-jsonl' };
       }
     }
@@ -55,18 +57,18 @@ export class OmpSessionAdapter implements SessionSourceAdapter {
     let header: Record<string, unknown> = {};
     let prefix = true;
     const start = cursor?.value.replace(/^byte:/, '') ?? '0';
-    if (!/^\d+$/.test(start)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OMP cursor');
+    if (!/^\d+$/.test(start)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OMP cursor', schemaIssueDetail('cursor'));
     let end = 0;
     const ids = new Set<string>();
     for await (const line of input) {
       end = line.byteOffset + line.byteLength;
       if (Number(start) > line.byteOffset && Number(start) < end) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'OMP cursor is not a record boundary');
+        throw new SessionContractError('SCHEMA_DRIFT', 'OMP cursor is not a record boundary', schemaIssueDetail('cursor'));
       }
       if (prefix) { prefix = false; if (titleOffset(line)) continue; }
       if (!sessionId) { header = parseHeader(line.value); sessionId = String(header.id); continue; }
       const parsed = Entry.safeParse(line.value);
-      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session entry is malformed');
+      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session entry is malformed', schemaRejectionDetail(parsed.error));
       const entry = parsed.data as Record<string, unknown> & z.infer<typeof Entry>;
       if (ids.has(entry.id)) throw new SessionContractError('DUPLICATE_NATIVE_ID', 'OMP session contains a duplicate entry id');
       ids.add(entry.id);
@@ -87,8 +89,8 @@ export class OmpSessionAdapter implements SessionSourceAdapter {
           opaque: !KNOWN.has(entry.type), redacted: sensitive,
           nativeType: entry.type, parentId: entry.parentId, ...metadata(entry, message) } };
     }
-    if (!sessionId) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session header is missing');
-    if (Number(start) > end) throw new SessionContractError('SCHEMA_DRIFT', 'OMP cursor exceeds source size');
+    if (!sessionId) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session header is missing', schemaIssueDetail('header'));
+    if (Number(start) > end) throw new SessionContractError('SCHEMA_DRIFT', 'OMP cursor exceeds source size', schemaIssueDetail('cursor'));
     if (input.incompleteTail) throw new SessionContractError('TRUNCATED_SOURCE', 'OMP session has a truncated JSONL tail');
   }
   async mutablePrefixBytes(source: SelectedSource): Promise<number> {
@@ -102,7 +104,7 @@ const KNOWN = new Set(['message', 'thinking_level_change', 'model_change', 'comp
   'branch_summary', 'custom', 'label', 'session_info', 'custom_message', 'model_usage', 'title_change', 'service_tier_change', 'reset_boundary', 'ttsr_injection', 'credential_pin', 'session_init', 'mode_change']);
 function parseHeader(value: unknown) {
   const parsed = Header.safeParse(value);
-  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session header is malformed');
+  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'OMP session header is malformed', schemaRejectionDetail(parsed.error));
   if (parsed.data.version !== 3) throw new SessionContractError('UNKNOWN_SCHEMA_MAJOR', `unsupported OMP session version: ${parsed.data.version}`);
   return parsed.data;
 }
@@ -135,8 +137,12 @@ function normalizeAuthorizationError(error: unknown): unknown {
 
 function titleOffset(line?: { value: unknown; byteLength: number }): number {
   if (object(line?.value).type !== 'title') return 0;
-  if (!Title.safeParse(line?.value).success || line?.byteLength !== 256) {
-    throw new SessionContractError('MALFORMED_SOURCE', 'OMP title slot is malformed');
+  const parsed = Title.safeParse(line?.value);
+  if (!parsed.success) {
+    throw new SessionContractError('MALFORMED_SOURCE', 'OMP title slot is malformed', schemaRejectionDetail(parsed.error));
+  }
+  if (line?.byteLength !== 256) {
+    throw new SessionContractError('MALFORMED_SOURCE', 'OMP title slot is malformed', schemaIssueDetail('title'));
   }
   return 256;
 }
@@ -160,5 +166,5 @@ export async function readOmpSessionHeader(source: SelectedSource) {
     if (first) { first = false; if (titleOffset(line)) continue; }
     return parseHeader(line.value);
   }
-  throw new SessionContractError('MALFORMED_SOURCE', 'OMP header is missing');
+  throw new SessionContractError('MALFORMED_SOURCE', 'OMP header is missing', schemaIssueDetail('header'));
 }

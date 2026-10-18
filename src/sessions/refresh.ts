@@ -57,7 +57,7 @@ export async function refreshSessionCatalog(
   try {
     const repository = new SessionRepository(database);
     try {
-      if (full) repository.reindex(canonicalWorkspace);
+      if (full) repository.reindex();
       else {
         const prior = repository.getBatchImportRunForManifest(manifest!.manifestId, canonicalWorkspace);
         if (prior?.status === 'complete') return 'unchanged';

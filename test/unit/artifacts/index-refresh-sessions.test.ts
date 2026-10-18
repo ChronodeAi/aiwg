@@ -97,9 +97,12 @@ describe('session refresh integration boundaries', () => {
     expect(mocks.importBatch).not.toHaveBeenCalled();
   });
 
-  it('reindexes with --full under the existing import lease without discovery', async () => {
+  it('reindexes all catalog workspaces with --full under the existing import lease without discovery', async () => {
+    mocks.reindex.mockImplementationOnce(() => {
+      expect(fs.existsSync(`${database}.import.lock`)).toBe(true);
+    });
     expect(await refreshSessionCatalog(workspace, true, 0)).toBeUndefined();
-    expect(mocks.reindex).toHaveBeenCalledWith(workspace);
+    expect(mocks.reindex).toHaveBeenCalledWith();
     expect(mocks.importBatch).not.toHaveBeenCalled();
     expect(fs.existsSync(defaultDiscoveryManifestPath(workspace))).toBe(false);
     const lease = await acquireImportLease(database, 'another-writer');

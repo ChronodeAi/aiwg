@@ -97,6 +97,7 @@ import {
   type SourceProbe,
 } from '../../sessions/index.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
+import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
@@ -168,7 +169,7 @@ Commands:
   promote <id> <version>          Preview promotion; use --confirm to write
   tag <session-id> <tag>          Add a catalog tag
   relocate <source-id> <file>     Update AIWG source-location metadata
-  reindex                         Rebuild catalog indexes
+  reindex --workspace <path-or-id> | --all-workspaces  Rebuild catalog indexes
   delete <session-id>             Preview deletion; use --confirm to tombstone
   restore <session-id>            Restore a reversible catalog tombstone
   purge <session-id>              Preview terminal AIWG-copy purge
@@ -180,6 +181,7 @@ Commands:
 Options:
   --json          Emit the versioned JSON contract
   --dry-run       Preview a mutation without changing state
+  --all-workspaces  Reindex every workspace in the selected catalog (reindex only)
   --db <path>     Select a catalog; relative paths resolve from cwd
   --workspace <path-or-id>  Select the workspace within that catalog for reads
                    (default: current project, matching cwd, or sole catalog workspace)
@@ -189,7 +191,7 @@ Options:
   --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
-  --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
@@ -284,6 +286,7 @@ interface ParsedArgs {
   positionals: string[];
   flags: Set<string>;
   values: Map<string, string>;
+  codexRoots: string[];
 }
 
 async function executeCommand(
@@ -764,10 +767,25 @@ async function executeCommand(
         return ok(command, { sourceId, redactedLocator });
       }
       case 'reindex': {
-        const { workspaceId } = authorizationContext(ctx, args, command);
-        if (isDryRun(ctx, args)) return preview(command, { operation: 'reindex' });
+        const allWorkspaces = args.flags.has('--all-workspaces');
+        if (allWorkspaces && args.values.has('--workspace')) {
+          throw new CliError(
+            'INVALID_ARGUMENT',
+            '--all-workspaces cannot be combined with --workspace',
+            EXIT.usage,
+          );
+        }
+        const workspaceId = allWorkspaces
+          ? undefined
+          : authorizationContext(ctx, args, command).workspaceId;
+        const data = {
+          operation: 'reindex',
+          allWorkspaces,
+          workspaceIds: allWorkspaces ? repository.listWorkspaceIds() : [workspaceId!],
+        };
+        if (isDryRun(ctx, args)) return preview(command, data);
         repository.reindex(workspaceId);
-        return ok(command, { operation: 'reindex' });
+        return ok(command, data);
       }
       case 'audit': {
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
@@ -1117,6 +1135,7 @@ async function importSource(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipts = await new IncrementalSessionImporter(repository).import({
         source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
@@ -1126,6 +1145,7 @@ async function importSource(
         sourceId,
         ...workspaceReport,
         receipts,
+        interruptedRuns,
         totals: {
           sessionsInserted: receipts.reduce((sum, item) => sum + item.sessionsInserted, 0),
           eventsInserted: receipts.reduce((sum, item) => sum + item.eventsInserted, 0),
@@ -1471,6 +1491,7 @@ async function discoverWorkspace(
   args: ParsedArgs,
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
+  const config = await readAiwgConfig(workspace);
   const manifest = await discoverWorkspaceHistories({
     workspace,
     expectedProviders: requestedProviders(args),
@@ -1485,9 +1506,10 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     grokbotRoot: args.values.has('--grokbot-root')
       ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
-    codexRoot: args.values.has('--codex-root')
-      ? resolve(ctx.cwd, args.values.get('--codex-root')!)
-      : undefined,
+    codexRoots: [
+      ...(config?.sessions?.codex_roots ?? []).map((root) => resolve(workspace, root)),
+      ...args.codexRoots.map((root) => resolve(ctx.cwd, root)),
+    ],
   });
   const manifestPath = resolve(
     ctx.cwd,
@@ -1565,12 +1587,14 @@ async function importDiscovered(
   try {
     const repository = openRepository(ctx, args);
     try {
+      const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
         signal: ctx.signal,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
+      receipt.interruptedRuns = interruptedRuns;
       return ok('import-discovered', {
         manifestId: manifest.manifestId,
         receipt,
@@ -1923,6 +1947,7 @@ function catalogScope(
 function parseArgs(argv: string[]): ParsedArgs {
   const flags = new Set<string>();
   const values = new Map<string, string>();
+  const codexRoots: string[] = [];
   const positionals: string[] = [];
   const valueFlags = new Set([
     '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
@@ -1945,6 +1970,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new CliError('MISSING_OPTION_VALUE', `missing value for ${arg}`, EXIT.usage);
       }
       values.set(arg, value);
+      if (arg === '--codex-root') codexRoots.push(value);
       index += 1;
     } else if (arg.startsWith('-')) {
       flags.add(arg);
@@ -1954,7 +1980,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, flags, values };
+  return { command, positionals, flags, values, codexRoots };
 }
 
 function requestedProviders(args: ParsedArgs): string[] | undefined {

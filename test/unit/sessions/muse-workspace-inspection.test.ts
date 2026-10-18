@@ -1,15 +1,16 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  inspectMuseNativeWorkspace, museNativeSourceMatchesWorkspace,
+  inspectMuseNativeWorkspace, museNativeSourceMatchesWorkspace, MuseWorkspaceInspectionSchema,
 } from '../../../src/sessions/adapters/muse.js';
 import { MUSE_WORKSPACE_SCAN_LIMITS, MUSE_WORKSPACE_TAIL_BYTES } from '../../../src/sessions/adapters/muse-workspace-scan.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
 import { coverageFromBatchRun } from '../../../src/sessions/batch-contracts.js';
 import type { SelectedSource } from '../../../src/sessions/contracts.js';
 import { museMetadata, writeMuseLog } from '../../helpers/muse-native.js';
+import { createSessionWorktree } from '../../helpers/session-worktree.js';
 
 let root: string;
 let workspace: string;
@@ -32,6 +33,32 @@ function selected(locator: string): SelectedSource {
 }
 
 describe('bounded Muse workspace inspection', () => {
+  it('reports canonical subfolder and worktree match kinds from metadata', async () => {
+    const subfolder = join(workspace, 'sub');
+    await mkdir(subfolder);
+    const alias = join(root, 'workspace-alias');
+    await symlink(workspace, alias);
+    const worktree = join(root, 'worktree');
+    await createSessionWorktree(workspace, worktree);
+    for (const [id, cwd, matchKind] of [
+      ['exact', workspace, 'exact'],
+      ['subfolder', subfolder, 'subfolder'],
+      ['symlink', join(alias, 'sub'), 'subfolder'],
+      ['worktree', worktree, 'worktree'],
+    ]) {
+      const locator = await writeMuseLog(museRoot, id, 1, cwd);
+      expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'matched', matchKind });
+    }
+    const sibling = `${workspace}-sibling`;
+    await mkdir(sibling);
+    const mismatch = await writeMuseLog(museRoot, 'sibling', 1, sibling);
+    expect(await inspectMuseNativeWorkspace(selected(mismatch), workspace)).toMatchObject({ outcome: 'mismatch' });
+    await mkdir(join(subfolder, '.aiwg', 'sessions'), { recursive: true });
+    const nested = await writeMuseLog(museRoot, 'nested', 1, subfolder);
+    expect(await inspectMuseNativeWorkspace(selected(nested), workspace)).toMatchObject({ outcome: 'mismatch' });
+    expect(await inspectMuseNativeWorkspace(selected(nested), subfolder)).toMatchObject({ outcome: 'matched', matchKind: 'exact' });
+  });
+
   it.each([100, 101, 5000, 20_000])('selects %i-record logs on early evidence', async (count) => {
     const locator = await writeMuseLog(museRoot, `session-${count}`, count, workspace);
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
@@ -77,6 +104,23 @@ describe('bounded Muse workspace inspection', () => {
     });
   });
 
+  it.each([undefined, 'unrelated'])('diagnoses evidence beyond the record budget even after %s evidence', async (initial) => {
+    const locator = await writeMuseLog(museRoot, 'too-late', MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1, workspace, MUSE_WORKSPACE_SCAN_LIMITS.maxRecords);
+    if (initial) {
+      // Valid nonmatching evidence does not prove mismatch if inspection is bounded.
+      const lines = [museMetadata('too-late', 0, root), ...Array.from({ length: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords }, (_, i) => museMetadata('too-late', i + 1, i === MUSE_WORKSPACE_SCAN_LIMITS.maxRecords - 1 ? workspace : undefined))];
+      await writeFile(locator, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+    }
+    // Keep the late evidence outside the bounded tail as well as the prefix.
+    await appendFile(locator, JSON.stringify({ padding: 'x'.repeat(MUSE_WORKSPACE_TAIL_BYTES) }) + '\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      recordsInspected: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords, completeInspection: false,
+      fallback: 'bounded-tail', limit: { name: 'maxRecords', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords },
+      detail: { limit: 'maxRecords', configured: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords, observed: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1 },
+    });
+  });
+
   it.each(['workspace_root', 'cwd', 'retained'] as const)('finds %s evidence after an oversized record', async (kind) => {
     const locator = await writeMuseLog(museRoot, 'oversized-prefix', 1);
     const metadata = kind === 'cwd'
@@ -93,6 +137,32 @@ describe('bounded Muse workspace inspection', () => {
       limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
     });
     expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes + MUSE_WORKSPACE_TAIL_BYTES);
+  });
+
+  it('preserves canonical match kinds in bounded-tail receipts', async () => {
+    const subfolder = join(workspace, 'sub');
+    await mkdir(subfolder);
+    const alias = join(root, 'workspace-alias');
+    await symlink(workspace, alias);
+    const worktree = join(root, 'worktree');
+    await createSessionWorktree(workspace, worktree);
+    for (const [id, cwd, matchKind] of [
+      ['exact', workspace, 'exact'],
+      ['subfolder', subfolder, 'subfolder'],
+      ['symlink', join(alias, 'sub'), 'subfolder'],
+      ['worktree', worktree, 'worktree'],
+    ]) {
+      const locator = await writeMuseLog(museRoot, id, 1);
+      await writeFile(locator, JSON.stringify({ padding: 'x'.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes) })
+        + '\n' + JSON.stringify(museMetadata(id, 1, cwd)) + '\n');
+      const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
+      expect(result).toMatchObject({
+        outcome: 'matched', attribution: 'matched', matchKind, reasonCode: null,
+        completeInspection: false, fallback: 'bounded-tail',
+        limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
+      });
+      expect(MuseWorkspaceInspectionSchema.parse(result)).toEqual(result);
+    }
   });
 
   it('finds workspace evidence after the default total byte budget', async () => {
@@ -115,6 +185,20 @@ describe('bounded Muse workspace inspection', () => {
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
       outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
       limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
+    });
+  });
+
+  it('preserves the original limit detail when the tail is malformed', async () => {
+    const locator = await writeMuseLog(museRoot, 'malformed-fallback', 1);
+    const oversized = JSON.stringify({ padding: 'x'.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes) }) + '\n';
+    await writeFile(locator, oversized + '{invalid}\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      fallback: 'bounded-tail', limit: { name: 'maxRecordBytes', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes },
+      detail: {
+        limit: 'maxRecordBytes', configured: MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes,
+        observed: Buffer.byteLength(oversized),
+      },
     });
   });
 
@@ -152,7 +236,13 @@ describe('bounded Muse workspace inspection', () => {
   ])('reports %s explicitly', async (_name, content, reasonCode) => {
     const locator = await writeMuseLog(museRoot, 'invalid', 1);
     await writeFile(locator, content);
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'inconclusive', reasonCode });
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
+    expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode });
+    if (reasonCode === 'MALFORMED_SOURCE') {
+      expect(result.detail).toMatchObject({ issues: expect.arrayContaining([
+        { path: expect.any(String), code: expect.any(String) },
+      ]) });
+    }
   });
 
   it('skips unmodelled native records before workspace evidence (#2865)', async () => {
@@ -171,10 +261,14 @@ describe('bounded Muse workspace inspection', () => {
 
   it.each(['maxTotalBytes', 'maxRecordBytes', 'maxNestingDepth', 'maxRecords'] as const)('enforces %s before positive evidence', async (limit) => {
     const locator = await writeMuseLog(museRoot, 'limited', 2, workspace, 1);
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 })).toMatchObject({
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 });
+    expect(result).toMatchObject({
       outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
       limit: { name: limit, value: 1 }, fallback: 'bounded-tail',
+      detail: { limit, configured: 1, observed: expect.any(Number) },
     });
+    expect(JSON.stringify(result.detail)).not.toContain(workspace);
+    expect(MuseWorkspaceInspectionSchema.parse(result)).toEqual(result);
   });
 
   it('bounds decoded retained-child depth and count', async () => {
@@ -184,12 +278,48 @@ describe('bounded Muse workspace inspection', () => {
     const child = { ...museMetadata('child', 0, workspace), nested };
     await writeFile(locator, JSON.stringify({ retained_frame: 'frame', children: [{ record_json: JSON.stringify(child) }] }) + '\n');
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({
-      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      fallback: 'bounded-tail',
       limit: { name: 'maxNestingDepth', value: MUSE_WORKSPACE_SCAN_LIMITS.maxNestingDepth },
+      detail: { limit: 'maxNestingDepth', configured: MUSE_WORKSPACE_SCAN_LIMITS.maxNestingDepth, observed: 65 },
     });
     await writeFile(locator, JSON.stringify({ retained_frame: 'frame', children: Array.from({ length: 3 }, (_, sequence) => ({ record_json: JSON.stringify(museMetadata('child', sequence, workspace)) })) }) + '\n');
     expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { maxRecords: 2 })).toMatchObject({
-      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', limit: { name: 'maxRecords', value: 2 },
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      fallback: 'bounded-tail', limit: { name: 'maxRecords', value: 2 },
+      detail: { limit: 'maxRecords', configured: 2, observed: 3 },
+    });
+  });
+
+  it('bounds retained children cumulatively across frames', async () => {
+    const locator = await writeMuseLog(museRoot, 'cumulative-children', 1);
+    const frames = [0, 1].map((frame) => ({
+      retained_frame: `frame-${frame}`,
+      children: [0, 1].map((child) => ({
+        record_json: JSON.stringify(museMetadata('child', frame * 2 + child)),
+      })),
+    }));
+    await writeFile(locator, frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { maxRecords: 3 })).toMatchObject({
+      outcome: 'inconclusive', attribution: 'unattributed', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      fallback: 'bounded-tail', limit: { name: 'maxRecords', value: 3 },
+      detail: { limit: 'maxRecords', configured: 3, observed: 4 },
+    });
+  });
+
+  it('finds tail evidence after a retained-child count limit', async () => {
+    const locator = await writeMuseLog(museRoot, 'child-count-tail', 1);
+    const frame = {
+      retained_frame: 'frame',
+      children: [0, 1, 2].map((sequence) => ({
+        record_json: JSON.stringify(museMetadata('child', sequence)),
+      })),
+    };
+    await writeFile(locator, [frame, { padding: 'x'.repeat(MUSE_WORKSPACE_TAIL_BYTES) },
+      museMetadata('child-count-tail', 1, workspace)].map((value) => JSON.stringify(value)).join('\n') + '\n');
+    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { maxRecords: 2 })).toMatchObject({
+      outcome: 'matched', attribution: 'matched', matchKind: 'exact', reasonCode: null,
+      fallback: 'bounded-tail', limit: { name: 'maxRecords', value: 2 }, completeInspection: false,
     });
   });
 
@@ -204,7 +334,9 @@ describe('bounded Muse workspace inspection', () => {
     const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
     expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', completeInspection: false });
     expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes + MUSE_WORKSPACE_TAIL_BYTES);
-    await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED' });
+    await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED', detail: result.detail,
+    });
   });
 
   it('rejects deeply nested outer JSON with a resource diagnostic', async () => {
@@ -246,6 +378,14 @@ describe('bounded Muse workspace inspection', () => {
     expect(report.museSourceInspections?.map((inspection) => inspection.reasonCode).sort())
       .toEqual([null, 'MUSE_WORKSPACE_MISMATCH', 'MUSE_WORKSPACE_EVIDENCE_ABSENT', 'MALFORMED_SOURCE', 'RESOURCE_LIMIT_EXCEEDED'].sort());
     expect(JSON.stringify(report)).not.toContain('private-content');
+    expect(report.museSourceInspections?.find((inspection) => inspection.reasonCode === null))
+      .toMatchObject({ attribution: 'matched', matchKind: 'exact' });
+    expect(report.museSourceInspections?.find((inspection) => inspection.reasonCode === 'RESOURCE_LIMIT_EXCEEDED'))
+      .toMatchObject({
+        attribution: 'unattributed', fallback: 'bounded-tail',
+        limit: { name: 'maxRecords', value: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords },
+        detail: { limit: 'maxRecords', configured: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords, observed: MUSE_WORKSPACE_SCAN_LIMITS.maxRecords + 1 },
+      });
     expect(report.museSourceInspections?.every((inspection) => !inspection.redactedLocator.includes(root))).toBe(true);
     const path = join(root, 'manifest.json');
     await writeDiscoveryManifest(path, manifest);

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
-import { acquireImportLease, GrokbotSessionAdapter } from '../../../../src/sessions/index.js';
+import { acquireImportLease, GrokbotSessionAdapter, SessionRepository } from '../../../../src/sessions/index.js';
 import {
   encodeGrokbotKey, grokbotTranscriptReplicaFilename,
 } from '../../../../src/sessions/adapters/grokbot-locator.js';
@@ -65,6 +65,8 @@ describe('sessions CLI contracts', () => {
     expect(usage).toContain('relative paths resolve from cwd');
     expect(usage).toContain('provider-native IDs');
     expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
+    expect(usage).toContain('reindex --workspace <path-or-id> | --all-workspaces');
+    expect(usage).toContain('Reindex every workspace in the selected catalog');
   });
 
   it('returns one explicit deterministic disposition for every canonical provider', async () => {
@@ -629,6 +631,41 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('lists an imported provisional session as inactive after 24 hours without re-import', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    try {
+      const transcript = resolve(root, 'active.jsonl');
+      writeFileSync(transcript, JSON.stringify({
+        type: 'user', uuid: 'event-active', sessionId: 'session-active', cwd: root,
+        timestamp: now.toISOString(),
+        message: { role: 'user', content: 'Synthetic request.' },
+      }) + '\n');
+      const scope = ['--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+      expect((await sessionsHandler.execute(context([
+        'import', transcript, '--provider', 'claude', '--source-id', 'active-source', ...scope,
+      ], root))).exitCode).toBe(0);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'active',
+      }]);
+
+      vi.setSystemTime(now.getTime() + 24 * 60 * 60 * 1_000 + 1);
+      expect((await sessionsHandler.execute(context(['list', ...scope], root))).exitCode).toBe(0);
+      expect(jsonOutput(log).data.items).toMatchObject([{
+        nativeSessionId: 'session-active', lifecycle: 'inactive',
+        extensions: {
+          'native.claude': {
+            lifecycleEvidence: { basis: 'inactivity-threshold', state: 'inactive' },
+          },
+        },
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   async function importOtherWorkspace(nativeId = '00000000-0000-4000-8000-000000002820') {
     const project = resolve(root, 'project');
     const other = resolve(root, 'other');
@@ -664,6 +701,64 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
     });
     return { project, other, database, nativeId };
   }
+
+  it.each([false, true])('reindexes the selected catalog with allWorkspaces=%s and reports its scopes', async (allWorkspaces) => {
+    const { project, other, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    const scope = allWorkspaces ? ['--all-workspaces'] : ['--workspace', project];
+    // A host maintenance invocation can select a catalog from an unrelated cwd.
+    expect((await sessionsHandler.execute(context([
+      'reindex', ...scope, '--db', database, '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).toHaveBeenCalledExactlyOnceWith(allWorkspaces ? undefined : project);
+    expect(jsonOutput(log)).toMatchObject({
+      command: 'sessions.reindex', status: 'ok', error: null,
+      data: {
+        operation: 'reindex', allWorkspaces,
+        workspaceIds: allWorkspaces ? [other, project].sort() : [project],
+      },
+    });
+  });
+
+  it.each([false, true])('previews reindex scopes without rebuilding with allWorkspaces=%s', async (allWorkspaces) => {
+    const { project, other, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    const scope = allWorkspaces ? ['--all-workspaces'] : ['--workspace', project];
+    expect((await sessionsHandler.execute(context([
+      'reindex', ...scope, '--db', database, '--dry-run', '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).not.toHaveBeenCalled();
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        operation: 'reindex', allWorkspaces,
+        workspaceIds: allWorkspaces ? [other, project].sort() : [project],
+      },
+    });
+  });
+
+  it('rejects conflicting reindex scopes without rebuilding', async () => {
+    const { project, database } = await importOtherWorkspace();
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    expect((await sessionsHandler.execute(context([
+      'reindex', '--all-workspaces', '--workspace', project, '--db', database, '--json',
+    ], root))).exitCode).toBe(2);
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'INVALID_ARGUMENT', message: '--all-workspaces cannot be combined with --workspace',
+    });
+    expect(reindex).not.toHaveBeenCalled();
+  });
+
+  it('reports no workspace scopes when reindexing an empty catalog', async () => {
+    const reindex = vi.spyOn(SessionRepository.prototype, 'reindex');
+    expect((await sessionsHandler.execute(context([
+      'reindex', '--all-workspaces', '--db', resolve(root, 'empty.sqlite'), '--json',
+    ], root))).exitCode).toBe(0);
+    expect(reindex).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'ok', data: { operation: 'reindex', allWorkspaces: true, workspaceIds: [] },
+    });
+  });
 
   it('finds outside-workspace discovered imports from both cwds and reports scoped-out counts', async () => {
     const { project, other, database, nativeId } = await importOtherWorkspace();
@@ -1043,6 +1138,34 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
       });
     } finally {
       await lease.release();
+    }
+  });
+
+  it('records orphaned batch recovery on a single-source import and leaves previews read-only', async () => {
+    const database = resolve(root, 'orphaned-batch.sqlite');
+    const timestamp = '2026-10-01T00:00:00.000Z';
+    const repository = new SessionRepository(database);
+    try {
+      repository.saveBatchImportRun({
+        schemaVersion: '1.0.0', runId: 'orphan', manifestId: 'manifest',
+        manifestCreatedAt: timestamp, workspaceId: 'workspace-fixture', status: 'running',
+        startedAt: timestamp, updatedAt: timestamp, completedAt: null,
+        providers: [], sources: [],
+      });
+      const args = ['import', resolve('test/fixtures/sessions/generic/valid-v1.jsonl'),
+        '--source-id', 'generic-fixture-v1', '--workspace', 'workspace-fixture',
+        '--db', database, '--json'];
+      expect((await sessionsHandler.execute(context([...args, '--dry-run']))).exitCode).toBe(0);
+      expect(repository.getBatchImportRun('orphan')?.status).toBe('running');
+      expect((await sessionsHandler.execute(context(args))).exitCode).toBe(0);
+      const interruptedRuns = jsonOutput(log).data.interruptedRuns;
+      expect(interruptedRuns).toEqual([{ runId: 'orphan', interruptedAt: expect.any(String) }]);
+      expect(repository.getBatchImportRun('orphan')).toMatchObject({
+        status: 'interrupted', updatedAt: interruptedRuns[0].interruptedAt,
+        interruptedAt: interruptedRuns[0].interruptedAt, completedAt: null,
+      });
+    } finally {
+      repository.close();
     }
   });
 

@@ -4,6 +4,7 @@ import { coveragePreflight, sessionRuntimeIdentity } from './coverage-preflight.
 import {
   SESSION_CONTRACT_VERSION,
   SessionContractError,
+  schemaIssueDetail,
   SessionSourceSchema,
   sha256,
   type SelectedSource,
@@ -43,6 +44,7 @@ export interface BatchImportReceipt {
   schemaVersion: typeof BATCH_IMPORT_VERSION;
   run: BatchImportRun;
   coverage: SessionCoverageReport;
+  interruptedRuns: Array<{ runId: string; interruptedAt: string }>;
   totals: {
     discovered: number;
     accepted: number;
@@ -76,6 +78,7 @@ export async function importDiscoveryManifest(
       'discovery manifest is already associated with a different batch run',
     );
   }
+  run.schemaVersion = BATCH_IMPORT_VERSION;
   run.preflight = coveragePreflight({
     expectedProviders: options.manifest.preflight?.expectedProviders,
     expectedProviderBasis: options.manifest.preflight?.expectedProviderBasis ?? 'legacy',
@@ -117,6 +120,7 @@ export async function importDiscoveryManifest(
     disposition.attempts += 1;
     disposition.errorCode = null;
     disposition.diagnostic = null;
+    disposition.detail = null;
     disposition.updatedAt = now().toISOString();
     persistProgress(options.repository, run, now());
     try {
@@ -160,10 +164,12 @@ export async function importDiscoveryManifest(
     } catch (error) {
       disposition.status = 'rejected';
       disposition.errorCode = importErrorCode(error);
+      disposition.detail = error instanceof SessionContractError ? error.detail ?? null : null;
       disposition.diagnostic = [
         `provider=${manifestSource.provider}`,
         `source=${manifestSource.sourceId}`,
         `code=${disposition.errorCode}`,
+        ...(disposition.detail ? [`detail=${JSON.stringify(disposition.detail)}`] : []),
       ].join(' ');
     }
     disposition.updatedAt = now().toISOString();
@@ -175,14 +181,14 @@ export async function importDiscoveryManifest(
   const pending = run.sources.some(
     (source) => source.status === 'pending' || source.status === 'running',
   );
-  const providerGap = coverageFromBatchRun(run, now()).acquisitionStatus !== 'complete';
+  const acquisitionIncomplete = coverageFromBatchRun(run, now()).acquisitionStatus !== 'complete';
   const publishable = run.sources
     .filter((source) => isAccepted(source.status))
     .map((source) => source.sourceId);
   injectFault(options, run, 'before-publication');
   options.repository.commitStagedBatch(run.runId, publishable);
   injectFault(options, run, 'after-publication');
-  run.status = pending ? 'interrupted' : rejected || providerGap ? 'partial' : 'complete';
+  run.status = pending ? 'interrupted' : rejected || acquisitionIncomplete ? 'partial' : 'complete';
   run.updatedAt = now().toISOString();
   run.completedAt = pending ? null : run.updatedAt;
   options.repository.saveBatchImportRun(run);
@@ -266,6 +272,7 @@ function receiptFor(run: BatchImportRun, now: Date): BatchImportReceipt {
     schemaVersion: BATCH_IMPORT_VERSION,
     run,
     coverage,
+    interruptedRuns: [],
     totals: {
       discovered: coverage.sources.discovered,
       accepted: coverage.sources.accepted,
@@ -297,12 +304,14 @@ async function assertManifestSourceUnchanged(source: DiscoveryManifestSource): P
     throw new SessionContractError(
       'SCHEMA_DRIFT',
       'discovered source is no longer available; run discovery again',
+      schemaIssueDetail('locator'),
     );
   }
   if (details.size !== source.sizeBytes || details.mtime.toISOString() !== source.modifiedAt) {
     throw new SessionContractError(
       'SCHEMA_DRIFT',
       'discovered source changed after manifest creation; run discovery again',
+      schemaIssueDetail(details.size !== source.sizeBytes ? 'sizeBytes' : 'modifiedAt'),
     );
   }
   const fingerprint = await fingerprintSourceFile({
@@ -313,6 +322,7 @@ async function assertManifestSourceUnchanged(source: DiscoveryManifestSource): P
     throw new SessionContractError(
       'SCHEMA_DRIFT',
       'discovered source content changed after manifest creation; run discovery again',
+      schemaIssueDetail('digest'),
     );
   }
 }

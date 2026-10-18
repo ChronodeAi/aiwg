@@ -2,7 +2,9 @@ import {
   SESSION_CONTRACT_VERSION, SessionEventSchema, SessionSchema,
   assertSupportedSchemaMajor, sha256, stableEventId, stableSessionId,
   SessionContractError,
-  type ImportCheckpoint, type ImportRun, type ProviderRecord,
+  schemaIssueDetail,
+  assertSessionResourceLimit,
+  type ImportCheckpoint, type ImportRun, type ProviderRecord, type SessionRejectionDetail,
   type SelectedSource, type Session, type SessionEvent, type SessionSource,
   type SessionSourceAdapter,
 } from './contracts.js';
@@ -10,6 +12,7 @@ import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
 import type { SessionRepositoryPort } from './ports.js';
 import { fingerprintSourcePrefix } from './readers.js';
+import { DEFAULT_INACTIVITY_THRESHOLD_MS } from './lifecycle.js';
 import {
   classifySessionEventOrigin,
   deriveSessionIntent,
@@ -54,6 +57,7 @@ export interface SessionImportFailureReceipt {
   };
   resumableCheckpoint: ImportCheckpoint;
   errorCode: string;
+  detail?: SessionRejectionDetail;
 }
 
 export class SessionImportFailure extends SessionContractError {
@@ -64,6 +68,7 @@ export class SessionImportFailure extends SessionContractError {
     super(
       cause instanceof SessionContractError ? cause.code : 'IMPORT_INTERRUPTED',
       cause instanceof Error ? cause.message : 'session import failed',
+      cause instanceof SessionContractError ? cause.detail : undefined,
     );
     this.name = 'SessionImportFailure';
   }
@@ -110,12 +115,14 @@ export class IncrementalSessionImporter {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session source generation changed; explicit restart or migration is required',
+        schemaIssueDetail('sourceGeneration'),
       );
     }
     if (previous?.adapterVersion && previous.adapterVersion !== request.adapter.adapterVersion) {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session checkpoint adapter version changed; checkpoint migration is required',
+        schemaIssueDetail('adapterVersion'),
       );
     }
     if (previous?.sourceSchemaVersion
@@ -123,12 +130,14 @@ export class IncrementalSessionImporter {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session checkpoint source schema changed; checkpoint migration is required',
+        schemaIssueDetail('sourceSchemaVersion'),
       );
     }
     if (previous?.policyVersion && previous.policyVersion !== request.policyVersion) {
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session checkpoint policy version changed; checkpoint migration is required',
+        schemaIssueDetail('policyVersion'),
       );
     }
     const checkpoint: ImportCheckpoint = {
@@ -233,11 +242,9 @@ export class IncrementalSessionImporter {
           );
         }
         const bytes = Buffer.byteLength(JSON.stringify(record));
-        if (bytes > limits.maxRecordBytes
-          || checkpoint.bytesRead + bytes > limits.maxTotalBytes
-          || checkpoint.recordsRead + 1 > limits.maxRecords) {
-          throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'session import exceeded an authorized resource limit');
-        }
+        assertSessionResourceLimit('maxRecordBytes', limits.maxRecordBytes, bytes);
+        assertSessionResourceLimit('maxTotalBytes', limits.maxTotalBytes, checkpoint.bytesRead + bytes);
+        assertSessionResourceLimit('maxRecords', limits.maxRecords, checkpoint.recordsRead + 1);
         batch.push(record);
         checkpoint.recordsRead += 1;
         if (record.sourceCursor?.startsWith('byte:')) {
@@ -286,6 +293,7 @@ export class IncrementalSessionImporter {
           : durableCheckpoint,
         errorCode: error instanceof SessionContractError
           ? error.code : 'IMPORT_INTERRUPTED',
+        detail: error instanceof SessionContractError ? error.detail : undefined,
       }, error);
     }
     if (request.publish !== false && request.source.consistency === 'complete') {
@@ -480,6 +488,7 @@ function sessionLifecycleEvidence(
     state: 'active',
     observedAt: observedAt ?? request.source.authorizedAt,
     confidence: 'provisional',
+    thresholdMs,
   };
 }
 
@@ -541,8 +550,6 @@ function evidenceTimestamp(value: Record<string, unknown>): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-const DEFAULT_INACTIVITY_THRESHOLD_MS = 24 * 60 * 60 * 1000;
-
 function inactivityThresholdMs(request: ImportRequest): number {
   return request.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS;
 }
@@ -596,6 +603,7 @@ async function sourceContinuity(
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session source was truncated before its durable checkpoint',
+        schemaIssueDetail('sourceSize'),
       );
     }
     if (previous.sourceFileIdentity
@@ -603,6 +611,7 @@ async function sourceContinuity(
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session source file generation was replaced or rotated',
+        schemaIssueDetail('sourceFileIdentity'),
       );
     }
     const priorPrefix = await fingerprintSourcePrefix(authorization, previous.sourceSize, skipPrefixBytes);
@@ -610,6 +619,7 @@ async function sourceContinuity(
       throw new SessionContractError(
         'SCHEMA_DRIFT',
         'session source prefix was rewritten before its durable checkpoint',
+        schemaIssueDetail('prefixDigest'),
       );
     }
   }

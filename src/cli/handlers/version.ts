@@ -37,6 +37,9 @@ export const versionHandler: CommandHandler = {
 
 interface VersionFingerprint {
   version: string;
+  launcherVersion: string;
+  runtimeVersion: string;
+  runtimePath: string;
   channel: string;
   packageRoot: string;
   git?: { sha: string; branch: string; path: string };
@@ -87,6 +90,9 @@ function collectFingerprint(versionInfo: Awaited<ReturnType<typeof getVersionInf
   const loggerInfo = getLoggerInfo();
   const fp: VersionFingerprint = {
     version: versionInfo.version,
+    launcherVersion: versionInfo.launcherVersion ?? versionInfo.version,
+    runtimeVersion: versionInfo.runtimeVersion ?? versionInfo.version,
+    runtimePath: versionInfo.runtimePath ?? versionInfo.packageRoot,
     channel: versionInfo.devMode ? 'dev' : versionInfo.channel,
     packageRoot: versionInfo.packageRoot,
     node: process.version,
@@ -169,6 +175,11 @@ async function displayVersion(opts: { verbose: boolean; json: boolean }): Promis
 
   ui.blank();
   console.log(`  ${ui.brandMark()} ${ui.bold('aiwg')}  ${ui.bold(fp.version)}  ${ui.channelLabel(fp.channel)}`);
+  if (info.devMode || fp.launcherVersion !== fp.runtimeVersion) {
+    ui.dim(`    launcher: ${fp.launcherVersion}`);
+    ui.dim(`    runtime: ${fp.runtimeVersion}`);
+    ui.dim(`    runtime path: ${fp.runtimePath}`);
+  }
 
   if (!opts.verbose) {
     if (fp.git) ui.dim(`    git: ${fp.git.sha} (${fp.git.branch})`);

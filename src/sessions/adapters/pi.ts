@@ -2,6 +2,7 @@ import { opendir } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
   SessionContractError, type AuthorizedScope, type ImportCursor,
   type ProviderRecord, type SelectedSource, type SessionSourceAdapter,
   type SourceDescriptor, type SourceProbe,
@@ -29,7 +30,7 @@ export class PiSessionAdapter implements SessionSourceAdapter {
     let count = 0;
     for (const root of [...scope.allowedRoots].sort()) {
       for await (const locator of jsonlFiles(resolve(root))) {
-        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Pi discovery file limit exceeded');
+        if (++count > this.maxFiles) throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Pi discovery file limit exceeded', { limit: 'maxFiles', configured: this.maxFiles, observed: count });
         yield { provider: 'pi', locator, locatorClass: 'pi-session-v3-jsonl' };
       }
     }
@@ -57,7 +58,7 @@ export class PiSessionAdapter implements SessionSourceAdapter {
       if (index++ === 0 && !cursor) { sessionId = parseHeader(line.value).id; continue; }
       if (!sessionId) sessionId = basename(source.locator, '.jsonl');
       const parsed = Entry.safeParse(line.value);
-      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'Pi session entry is malformed');
+      if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'Pi session entry is malformed', schemaRejectionDetail(parsed.error));
       const entry = parsed.data as Record<string, unknown> & z.infer<typeof Entry>;
       if (ids.has(entry.id)) throw new SessionContractError('DUPLICATE_NATIVE_ID', 'Pi session contains a duplicate entry id');
       ids.add(entry.id);
@@ -85,7 +86,7 @@ const KNOWN = new Set(['message', 'thinking_level_change', 'model_change', 'comp
   'branch_summary', 'custom', 'label', 'session_info', 'custom_message']);
 function parseHeader(value: unknown) {
   const parsed = Header.safeParse(value);
-  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'Pi session header is malformed');
+  if (!parsed.success) throw new SessionContractError('MALFORMED_SOURCE', 'Pi session header is malformed', schemaRejectionDetail(parsed.error));
   if (parsed.data.version !== 3) throw new SessionContractError('UNKNOWN_SCHEMA_MAJOR', `unsupported Pi session version: ${parsed.data.version}`);
   return parsed.data;
 }
