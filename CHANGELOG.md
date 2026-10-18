@@ -23,6 +23,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg index refresh` runs the host-scoped models job once per refresh and probes
+  the runtime once, publishing each workspace's runtime catalog from that result
+  instead of re-running both for every workspace (#338, Gitea #3261).
+- Sessions whose recorded worktree or subfolder has since been deleted are attributed
+  to the workspace that enclosed them instead of landing in no catalog (#335, Gitea #3258).
+- Session JSONL readers split records on LF only, so valid records containing raw
+  U+2028/U+2029 are no longer rejected as malformed or truncated (#336, Gitea #3259).
+- Pi session import resumes from its stored checkpoint instead of rejecting unchanged
+  sources as truncated; Pi now records byte cursors (#337, Gitea #3260).
 - `aiwg index refresh` treats per-source session rejections as a partial import
   rather than a job error, and clears its checkpoint after every finished run so
   later runs no longer skip completed jobs (#328, Gitea #3249).
