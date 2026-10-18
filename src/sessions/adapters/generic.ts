@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type ImportCursor,
@@ -108,7 +110,7 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
       }
       sessionSequences.add(sequenceKey);
     }
-    if (!header) throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty');
+    if (!header) throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty', schemaIssueDetail('<root>'));
     if (input.incompleteTail) {
       throw new SessionContractError(
         'TRUNCATED_SOURCE',
@@ -131,7 +133,7 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
       const iterator = headerStream[Symbol.asyncIterator]();
       const first = await iterator.next();
       await iterator.return?.();
-      if (first.done) throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty');
+      if (first.done) throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty', schemaIssueDetail('<root>'));
       header = this.validateHeader(first.value.value, source);
     }
     const input = await this.openStream(source, byteCursor ?? undefined);
@@ -198,7 +200,7 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
       };
     }
     if (!header) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'generic interchange is empty', schemaIssueDetail('<root>'));
     }
     if (input.incompleteTail) {
       throw new SessionContractError(
@@ -232,6 +234,7 @@ export class GenericSessionInterchangeAdapter implements SessionSourceAdapter {
         'SCHEMA_DRIFT',
         `selected source identity does not match interchange header: --source-id ${quoteValue(source.sourceId)} `
           + `but header sourceId is ${quoteValue(header.sourceId)}; pass --source-id ${quoteValue(header.sourceId)}`,
+        schemaIssueDetail('sourceId'),
       );
     }
     return header;
@@ -242,7 +245,7 @@ function parseByteCursor(value?: string): number | null {
   if (!value?.startsWith('byte:')) return null;
   const position = value.slice(5);
   if (!/^\d+$/.test(position)) {
-    throw new SessionContractError('SCHEMA_DRIFT', 'invalid generic byte cursor');
+    throw new SessionContractError('SCHEMA_DRIFT', 'invalid generic byte cursor', schemaIssueDetail('cursor'));
   }
   return Number(position);
 }
@@ -257,11 +260,13 @@ function parseHeader(value: unknown): GenericInterchangeHeader {
     throw new SessionContractError(
       'MALFORMED_SOURCE',
       'input is not a declared AIWG generic session interchange',
+      schemaRejectionDetail(result.error),
     );
   }
   throw new SessionContractError(
     'MALFORMED_SOURCE',
     `generic interchange header ${describeIssue(result.error, true)}`,
+    schemaRejectionDetail(result.error),
   );
 }
 
@@ -276,6 +281,7 @@ function parseEvent(value: unknown): z.infer<typeof GenericInterchangeEventSchem
   throw new SessionContractError(
     'MALFORMED_SOURCE',
     `generic interchange event is malformed: ${describeIssue(result.error, false)}`,
+    schemaRejectionDetail(result.error),
   );
 }
 
@@ -315,6 +321,6 @@ function hasAmbiguousTimestamp(error: z.ZodError): boolean {
 
 function parseEventCursor(value?: string): number {
   if (value === undefined || value === '') return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'generic event cursor is invalid');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'generic event cursor is invalid', schemaIssueDetail('cursor'));
   return Number(value);
 }

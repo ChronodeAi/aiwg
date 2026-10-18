@@ -123,7 +123,13 @@ describe('bounded Muse workspace inspection', () => {
   ])('reports %s explicitly', async (_name, content, reasonCode) => {
     const locator = await writeMuseLog(museRoot, 'invalid', 1);
     await writeFile(locator, content);
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace)).toMatchObject({ outcome: 'inconclusive', reasonCode });
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
+    expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode });
+    if (reasonCode === 'MALFORMED_SOURCE') {
+      expect(result.detail).toMatchObject({ issues: expect.arrayContaining([
+        { path: expect.any(String), code: expect.any(String) },
+      ]) });
+    }
   });
 
   it('skips unmodelled native records before workspace evidence (#2865)', async () => {
@@ -142,7 +148,10 @@ describe('bounded Muse workspace inspection', () => {
 
   it.each(['maxTotalBytes', 'maxRecordBytes', 'maxNestingDepth', 'maxRecords'] as const)('enforces %s before positive evidence', async (limit) => {
     const locator = await writeMuseLog(museRoot, 'limited', 2, workspace, 1);
-    expect(await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 })).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED' });
+    const result = await inspectMuseNativeWorkspace(selected(locator), workspace, { [limit]: 1 });
+    expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED',
+      detail: { limit, configured: 1, observed: expect.any(Number) } });
+    expect(JSON.stringify(result.detail)).not.toContain(workspace);
   });
 
   it('bounds decoded retained-child depth and count', async () => {
@@ -167,7 +176,9 @@ describe('bounded Muse workspace inspection', () => {
     const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
     expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', completeInspection: false });
     expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes);
-    await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED' });
+    await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED', detail: result.detail,
+    });
   });
 
   it('rejects deeply nested outer JSON with a resource diagnostic', async () => {

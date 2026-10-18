@@ -45,7 +45,9 @@ export async function authorizeSourceFile(input: SourceAuthorization): Promise<A
     throw new SessionContractError('SOURCE_NOT_REGULAR_FILE', 'session source must be a regular file');
   }
   if (input.maxBytes !== undefined && stat.size > input.maxBytes) {
-    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'session source exceeds the authorized byte limit');
+    throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'session source exceeds the authorized byte limit', {
+      limit: 'maxBytes', configured: input.maxBytes, observed: stat.size,
+    });
   }
   return {
     canonicalPath,

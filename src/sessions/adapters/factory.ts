@@ -2,6 +2,8 @@ import { opendir } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -79,6 +81,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Factory source discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.discoveryLimits.maxFiles, observed: emitted },
           );
         }
         yield { provider: 'factory', locator, locatorClass: 'factory-droid-jsonl' };
@@ -115,7 +118,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
         const value = parsed.data;
         const currentSchema = value.schemaVersion ?? FACTORY_SOURCE_SCHEMA_VERSION;
         if (schemaVersion && schemaVersion !== currentSchema) {
-          throw new SessionContractError('SCHEMA_DRIFT', 'mixed Factory source schemas');
+          throw new SessionContractError('SCHEMA_DRIFT', 'mixed Factory source schemas', schemaIssueDetail('schemaVersion'));
         }
         schemaVersion = currentSchema;
         assertSupportedSchemaMajor(schemaVersion);
@@ -130,7 +133,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
         }
       }
       if (!sawRecord && !input.incompleteTail) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty');
+        throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty', schemaIssueDetail('<root>'));
       }
       return;
     }
@@ -157,7 +160,7 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
       input = await this.remoteRecords(source);
     }
     if (input.length === 0 && !incompleteTail) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'Factory session source is empty', schemaIssueDetail('<root>'));
     }
     const schemaVersion = declaredVersion(input);
     assertSupportedSchemaMajor(schemaVersion);
@@ -193,7 +196,11 @@ export class FactorySessionAdapter implements SessionSourceAdapter {
     }
     const values = await transport.snapshot(source);
     if (values.length > (this.limits?.maxRecords ?? 1_000_000)) {
-      throw new SessionContractError('RESOURCE_LIMIT_EXCEEDED', 'Factory remote record limit exceeded');
+      throw new SessionContractError(
+        'RESOURCE_LIMIT_EXCEEDED',
+        'Factory remote record limit exceeded',
+        { limit: 'maxRecords', configured: this.limits?.maxRecords ?? 1_000_000, observed: values.length },
+      );
     }
     return values.map((value, sequence) => ({
       value, sequence, byteOffset: sequence, byteLength: Buffer.byteLength(JSON.stringify(value)),
@@ -383,6 +390,7 @@ function factoryMalformedRecord(
     'MALFORMED_SOURCE',
     `Factory source ${basename(source.locator)} record ${record.sequence + 1} `
     + `type ${type} failed requirement ${requirement} (${issue?.code ?? 'invalid_type'})`,
+    schemaRejectionDetail(error),
   );
 }
 
@@ -391,7 +399,7 @@ function declaredVersion(records: BoundedJsonRecord[]): string {
     const value = asObject(record.value);
     return typeof value.schemaVersion === 'string' ? [value.schemaVersion] : [];
   }));
-  if (versions.size > 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed Factory schema versions');
+  if (versions.size > 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed Factory schema versions', schemaIssueDetail('schemaVersion'));
   return [...versions][0] ?? FACTORY_SOURCE_SCHEMA_VERSION;
 }
 
@@ -430,7 +438,7 @@ function unknownFields(value: Record<string, unknown>, keys: ReadonlySet<string>
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Factory cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Factory cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

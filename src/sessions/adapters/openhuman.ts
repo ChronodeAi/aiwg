@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -128,12 +130,12 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
     for await (const line of input) {
       const parsed = RecordSchema.safeParse(line.value);
       if (!parsed.success) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript record is malformed');
+        throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript record is malformed', schemaRejectionDetail(parsed.error));
       }
       const value = parsed.data;
       const currentVersion = version(value.schemaVersion);
       if (schemaVersion && schemaVersion !== currentVersion) {
-        throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenHuman schema versions');
+        throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenHuman schema versions', schemaIssueDetail('schemaVersion'));
       }
       schemaVersion = currentVersion;
       assertSupportedSchemaMajor(schemaVersion);
@@ -156,11 +158,12 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
         throw new SessionContractError(
           'RESOURCE_LIMIT_EXCEEDED',
           'OpenHuman enrichment join state exceeds the bounded streaming limit',
+          { limit: 'maxJoinStates', configured: maxJoinStates, observed: threads.size + turns.size },
         );
       }
     }
     if (!sawRaw) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records');
+      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records', schemaIssueDetail('<root>'));
     }
   }
 
@@ -178,20 +181,28 @@ export class OpenHumanSessionAdapter implements SessionSourceAdapter {
       allowedRoots: source.authorizedScope.allowedRoots,
     }, { consistency: 'provisional', limits: this.limits });
     if (result.records.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript source is empty');
+      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript source is empty', schemaIssueDetail('<root>'));
     }
     const parsed = result.records.map(({ value, ...line }) => {
       const record = RecordSchema.safeParse(value);
-      if (!record.success) throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman transcript record is malformed');
+      if (!record.success) throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'OpenHuman transcript record is malformed',
+        schemaRejectionDetail(record.error),
+      );
       return { value: record.data, ...line };
     });
     const versions = new Set(parsed.map(({ value }) => version(value.schemaVersion)));
-    if (versions.size !== 1) throw new SessionContractError('SCHEMA_DRIFT', 'mixed OpenHuman schema versions');
+    if (versions.size !== 1) throw new SessionContractError(
+      'SCHEMA_DRIFT',
+      'mixed OpenHuman schema versions',
+      schemaIssueDetail('schemaVersion'),
+    );
     assertSupportedSchemaMajor([...versions][0]);
     const raw = parsed.filter((item): item is typeof item & { value: RawRecord } =>
       item.value.recordType === 'session_raw');
     if (raw.length === 0) {
-      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records');
+      throw new SessionContractError('MALFORMED_SOURCE', 'OpenHuman source contains no session_raw records', schemaIssueDetail('<root>'));
     }
     const threads = new Map<string, ThreadState>();
     const turns = new Map<string, TurnState>();
@@ -339,7 +350,7 @@ function unknownFields(value: Record<string, unknown>, keys: ReadonlySet<string>
 
 function parseCursor(value?: string): number {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenHuman cursor');
+  if (!/^\d+$/.test(value)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid OpenHuman cursor', schemaIssueDetail('cursor'));
   return Number(value);
 }
 

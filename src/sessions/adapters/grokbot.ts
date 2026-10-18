@@ -57,6 +57,8 @@ import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  schemaRejectionDetail,
+  schemaIssueDetail,
   SessionContractError,
   assertSupportedSchemaMajor,
   type AuthorizedScope,
@@ -227,6 +229,7 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
           throw new SessionContractError(
             'RESOURCE_LIMIT_EXCEEDED',
             'Grok Bot native discovery exceeded the authorized file limit',
+            { limit: 'maxFiles', configured: this.maxFiles, observed: count },
           );
         }
         yield {
@@ -346,7 +349,7 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
 function parseNativeCursor(value?: string): number {
   if (!value) return 0;
   const raw = value.startsWith('native:') ? value.slice('native:'.length) : value;
-  if (!/^\d+$/.test(raw)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Bot native cursor');
+  if (!/^\d+$/.test(raw)) throw new SessionContractError('SCHEMA_DRIFT', 'invalid Grok Bot native cursor', schemaIssueDetail('cursor'));
   return Number(raw);
 }
 
@@ -372,7 +375,11 @@ function mapGrokbotEntry(entry: GrokbotRawEntry): MappedGrokbotRecord | null {
 function malformedGrokbotSource(subject: string, error: z.ZodError): SessionContractError {
   // Include only schema paths and codes, never Zod messages or input values.
   const issues = error.issues.map((issue) => `${issue.path.join('.') || '<root>'} (${issue.code})`);
-  return new SessionContractError('MALFORMED_SOURCE', `Grok Bot ${subject} is malformed at ${issues.join(', ')}`);
+  return new SessionContractError(
+    'MALFORMED_SOURCE',
+    `Grok Bot ${subject} is malformed at ${issues.join(', ')}`,
+    schemaRejectionDetail(error),
+  );
 }
 
 function mapSendMessage(raw: GrokbotRawEntry, occurredAt: string): MappedGrokbotRecord | null {

@@ -231,6 +231,7 @@ describe('Grok Bot native transcript-replica locator', () => {
       const error = {
         code: 'MALFORMED_SOURCE',
         message: `Grok Bot transcript replica is malformed at value.${field} (invalid_type)`,
+        detail: { issues: [{ path: `value.${field}`, code: 'invalid_type' }] },
       };
       await expect(adapter.inspect(source)).rejects.toMatchObject(error);
       await expect(collect(adapter.stream(source))).rejects.toMatchObject(error);
@@ -242,6 +243,10 @@ describe('Grok Bot native transcript-replica locator', () => {
         code: 'MALFORMED_SOURCE',
         message: 'Grok Bot transcript replica is malformed at value.entries.0.timestampMs (invalid_type), '
           + 'value.persistedAt (too_small)',
+        detail: { issues: [
+          { path: 'value.entries.0.timestampMs', code: 'invalid_type' },
+          { path: 'value.persistedAt', code: 'too_small' },
+        ] },
       });
     });
   });
