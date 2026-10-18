@@ -135,10 +135,10 @@ describe('plugin payload links (#3204)', () => {
 
   it('provides a read-only strict check with success and failure exit codes', () => {
     const packager = path.resolve('tools/plugin/package-plugins.mjs');
-    const good = spawnSync(process.execPath, [packager, '--plugin', 'sdlc', '--check-links'], { encoding: 'utf8' });
+    const good = spawnSync(process.execPath, [packager, '--plugin', 'sdlc', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
     expect(good.status, good.stderr).toBe(0);
     const before = fs.readFileSync('agentic/code/plugins/research/skills/induct-research/SKILL.md', 'utf8');
-    const bad = spawnSync(process.execPath, [packager, '--all', '--check-links'], { encoding: 'utf8' });
+    const bad = spawnSync(process.execPath, [packager, '--all', '--check-links'], { encoding: 'utf8', timeout: 120_000 });
     expect(bad.status).toBe(1);
     expect(bad.stderr).toContain('agent-loop/README.md:147: missing-target: docs/examples/test-fix.md');
     expect(bad.stderr).toContain('context-curator/README.md');
