@@ -10,6 +10,7 @@ import {
   writeAiwgConfig,
 } from '../../../src/config/aiwg-config.js';
 import { getGraphIndexDir } from '../../../src/artifacts/types.js';
+import { buildIndex } from '../../../src/artifacts/index-builder.js';
 import { generate as generateContextFiles } from '../../../src/smiths/context-pipeline/index.js';
 import {
   aggregateUseDeploymentResult,
@@ -174,6 +175,96 @@ describe.sequential('deployment verification contract (#2069)', () => {
     expect(second.outcome).toBe(first.outcome);
     expect(second.counts).toEqual(first.counts);
   });
+
+  it('accepts a no-op index refresh during deployment without rewriting metadata', async () => {
+    const fixture = await readyCodexFixture();
+    const skillDir = path.join(fixture.frameworkRoot, 'agentic/code/frameworks/sdlc-complete/skills/fixture');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(path.join(skillDir, 'SKILL.md'), '# Fixture skill\n');
+    await finalizeProviderTransformationReceipt({
+      ...fixture,
+      provider: 'codex',
+      scope: 'project',
+      requestedBundles: ['sdlc'],
+      sourceDisposition: 'local-source',
+    });
+    await buildIndex(fixture.frameworkRoot, { graph: 'framework', force: true, quiet: true });
+    const indexDir = getGraphIndexDir(fixture.frameworkRoot, 'framework');
+    for (const filename of ['metadata.json', 'stats.json']) {
+      const file = path.join(indexDir, filename);
+      const data = JSON.parse(await readFile(file, 'utf8'));
+      data.builtAt = '2020-01-01T00:00:00.000Z';
+      await writeFile(file, JSON.stringify(data));
+    }
+    const metadataBefore = await readFile(path.join(indexDir, 'metadata.json'), 'utf8');
+    const invocationStartedAt = new Date().toISOString();
+
+    await buildIndex(fixture.frameworkRoot, { graph: 'framework', quiet: true });
+    const result = await verifyFixture(fixture.projectRoot, fixture.frameworkRoot, { invocationStartedAt });
+
+    expect(await readFile(path.join(indexDir, 'metadata.json'), 'utf8')).toBe(metadataBefore);
+    const stats = JSON.parse(await readFile(path.join(indexDir, 'stats.json'), 'utf8'));
+    expect(Date.parse(stats.builtAt)).toBeGreaterThanOrEqual(Date.parse(invocationStartedAt));
+    expect(result.findings.filter((item) => item.severity === 'blocking')).toEqual([]);
+    expect(result.outcome).toBe('ready');
+    expect(result.phases.find((item) => item.id === 'index')?.state).toBe('passed');
+  });
+
+  it.each(['2020-01-01T00:00:00.000Z', 'invalid'])(
+    'blocks a stale index when refresh did not run and stats builtAt is %s', async (statsBuiltAt) => {
+      const fixture = await readyCodexFixture();
+      await writeFrameworkIndex(fixture.frameworkRoot, '2020-01-01T00:00:00.000Z');
+      const statsFile = path.join(getGraphIndexDir(fixture.frameworkRoot, 'framework'), 'stats.json');
+      const stats = JSON.parse(await readFile(statsFile, 'utf8'));
+      stats.builtAt = statsBuiltAt;
+      await writeFile(statsFile, JSON.stringify(stats));
+
+      const result = await verifyFixture(fixture.projectRoot, fixture.frameworkRoot, {
+        invocationStartedAt: new Date().toISOString(),
+      });
+
+      expect(result.outcome).toBe('failed');
+      expect(result.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'index-stale:framework', severity: 'blocking' }),
+      ]));
+      expect(result.phases.find((item) => item.id === 'index')?.state).toBe('failed');
+    },
+  );
+
+  it.each(['project', 'user'] as const)(
+    'accepts stats refresh evidence for a project-local bundle in the %s graph', async (graph) => {
+      const fixture = await readyCodexFixture();
+      const config = updateInstalled(
+        emptyConfig(['codex']), 'sdlc', 'codex',
+        { agents: 0, commands: 1, skills: 1, rules: 0 },
+        { version: 'test', source: 'project-local', localPath: '.aiwg/frameworks/sdlc', localType: 'framework' },
+      );
+      if (graph === 'user') {
+        await writeFile(process.env.AIWG_USER_REGISTRY_PATH!, JSON.stringify(config));
+      } else {
+        await writeAiwgConfig(fixture.projectRoot, config);
+      }
+      const indexDir = getGraphIndexDir(fixture.projectRoot, graph);
+      await mkdir(indexDir, { recursive: true });
+      await writeFile(path.join(indexDir, 'metadata.json'), JSON.stringify({
+        builtAt: '2020-01-01T00:00:00.000Z',
+        entries: { '.aiwg/frameworks/sdlc/skills/fixture/SKILL.md': { type: 'skill' } },
+      }));
+      const invocationStartedAt = new Date().toISOString();
+      await writeFile(path.join(indexDir, 'stats.json'), JSON.stringify({ builtAt: invocationStartedAt }));
+
+      const result = await verifyProviderDeployment({
+        ...fixture,
+        provider: 'codex',
+        scope: graph,
+        requestedBundles: ['sdlc'],
+        invocationStartedAt,
+      });
+
+      expect(result.findings.filter((item) => item.id.startsWith('index-'))).toHaveLength(0);
+      expect(result.phases.find((item) => item.id === 'index')?.state).toBe('passed');
+    },
+  );
 
   it('keeps a required restart for providers that only rescan on session start (#2309)', async () => {
     const fixture = await readyCodexFixture();
