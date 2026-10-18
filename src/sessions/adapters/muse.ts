@@ -61,7 +61,7 @@ import {
 } from '../contracts.js';
 import {
   readBoundedJson,
-  readBoundedJsonLines,
+  streamBoundedJsonLines,
   type BoundedJsonRecord,
   type ReaderLimits,
 } from '../readers.js';
@@ -279,7 +279,7 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
       const native = await this.readNative(source);
       const start = parseEventCursor(cursor?.value);
       let outputIndex = 0;
-      for (const record of native.records) {
+      for await (const record of this.readNativeRecords(source)) {
         const position = outputIndex;
         outputIndex += 1;
         if (position < start) continue;
@@ -426,103 +426,112 @@ export class MuseSessionAdapter implements SessionSourceAdapter {
   }
 
   private async readNative(source: SelectedSource): Promise<{
-    records: MuseNativeRecord[];
     complete: boolean;
     context: MuseRecordContext;
   }> {
-    this.assertSupportedLocator(source);
-    let input;
+    const records = this.readNativeRecords(source);
+    let result = await records.next();
+    while (!result.done) result = await records.next();
+    return result.value;
+  }
+
+  private async *readNativeRecords(source: SelectedSource): AsyncGenerator<MuseNativeRecord, {
+    complete: boolean;
+    context: MuseRecordContext;
+  }> {
     try {
-      input = await readBoundedJsonLines(
+      this.assertSupportedLocator(source);
+      const input = await streamBoundedJsonLines(
         { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
         { consistency: 'complete', limits: this.limits },
       );
+      const diagnostics: MuseDiagnostics = {};
+      let records = 0;
+      let fallbackSessionId = nativeSessionIdFromLocator(source.locator) ?? source.sourceId;
+      let complete = false;
+      for await (const line of input) {
+        const value = line.value;
+        if (isOmissionMarker(value)) {
+          diagnostics.omitted_records = (diagnostics.omitted_records ?? 0) + 1;
+          if (asObject(value).retained_marker === 'omitted_live_only') {
+            diagnostics.omitted_live_only = (diagnostics.omitted_live_only ?? 0) + 1;
+          }
+          continue;
+        }
+        const retained = MuseRetainedFrameSchema.safeParse(value);
+        if (retained.success) {
+          diagnostics.retained_frames = (diagnostics.retained_frames ?? 0) + 1;
+          for (const child of retained.data.children) {
+            let decoded: unknown;
+            try {
+              decoded = JSON.parse(child.record_json);
+            } catch {
+              throw new SessionContractError(
+                'MALFORMED_SOURCE',
+                'Muse retained frame child record is malformed JSON',
+                schemaIssueDetail('children.record_json', 'invalid_json'),
+              );
+            }
+            const envelope = MuseEnvelopeSchema.safeParse(decoded);
+            if (!envelope.success) {
+              throw new SessionContractError(
+                'MALFORMED_SOURCE',
+                'Muse retained frame child record is malformed',
+                schemaRejectionDetail(envelope.error),
+              );
+            }
+            const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
+            fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+            complete ||= event.envelope.payload_type === 'session.end';
+            diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
+            records += 1;
+            yield {
+              event,
+              line,
+              retainedFrame: retained.data.retained_frame,
+              retainedChildIndex: child.child_index,
+            };
+          }
+          continue;
+        }
+        const envelope = MuseEnvelopeSchema.safeParse(value);
+        if (!envelope.success) {
+          throw new SessionContractError(
+            'MALFORMED_SOURCE',
+            'Muse native session log line is not a supported record shape',
+            schemaRejectionDetail('retained_frame' in asObject(value) ? retained.error : envelope.error),
+          );
+        }
+        const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
+        fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
+        complete ||= event.envelope.payload_type === 'session.end';
+        records += 1;
+        yield { event, line };
+      }
+      if (records === 0) {
+        throw new SessionContractError(
+          'MALFORMED_SOURCE',
+          'Muse native session log contains no record envelopes',
+          schemaIssueDetail('<root>'),
+        );
+      }
+      return {
+        complete,
+        context: {
+          locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
+          sourceLabel: 'muse native session log',
+          bytesRead: input.bytesRead,
+          fallbackSessionId,
+          spawns: new Map(),
+          diagnostics,
+        },
+      };
     } catch (error) {
       if (error instanceof SessionContractError && error.code === 'SCHEMA_DRIFT') {
         throw new SessionContractError('MALFORMED_SOURCE', 'Muse native session log contains malformed JSONL', error.detail);
       }
       throw error;
     }
-    const diagnostics: MuseDiagnostics = {};
-    const records: MuseNativeRecord[] = [];
-    let fallbackSessionId = nativeSessionIdFromLocator(source.locator) ?? source.sourceId;
-    let complete = false;
-    for (const line of input.records) {
-      const value = line.value;
-      if (isOmissionMarker(value)) {
-        diagnostics.omitted_records = (diagnostics.omitted_records ?? 0) + 1;
-        if (asObject(value).retained_marker === 'omitted_live_only') {
-          diagnostics.omitted_live_only = (diagnostics.omitted_live_only ?? 0) + 1;
-        }
-        continue;
-      }
-      const retained = MuseRetainedFrameSchema.safeParse(value);
-      if (retained.success) {
-        diagnostics.retained_frames = (diagnostics.retained_frames ?? 0) + 1;
-        for (const child of retained.data.children) {
-          let decoded: unknown;
-          try {
-            decoded = JSON.parse(child.record_json);
-          } catch {
-            throw new SessionContractError(
-              'MALFORMED_SOURCE',
-              'Muse retained frame child record is malformed JSON',
-              schemaIssueDetail('children.record_json', 'invalid_json'),
-            );
-          }
-          const envelope = MuseEnvelopeSchema.safeParse(decoded);
-          if (!envelope.success) {
-            throw new SessionContractError(
-              'MALFORMED_SOURCE',
-              'Muse retained frame child record is malformed',
-              schemaRejectionDetail(envelope.error),
-            );
-          }
-          const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
-          fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
-          complete ||= event.envelope.payload_type === 'session.end';
-          diagnostics.retained_frame_children = (diagnostics.retained_frame_children ?? 0) + 1;
-          records.push({
-            event,
-            line,
-            retainedFrame: retained.data.retained_frame,
-            retainedChildIndex: child.child_index,
-          });
-        }
-        continue;
-      }
-      const envelope = MuseEnvelopeSchema.safeParse(value);
-      if (!envelope.success) {
-        throw new SessionContractError(
-          'MALFORMED_SOURCE',
-          'Muse native session log line is not a supported record shape',
-          schemaRejectionDetail('retained_frame' in asObject(value) ? retained.error : envelope.error),
-        );
-      }
-      const event: MuseRecordEvent = { kind: 'record', envelope: envelope.data };
-      fallbackSessionId = streamSessionIdOf(event.envelope) ?? fallbackSessionId;
-      complete ||= event.envelope.payload_type === 'session.end';
-      records.push({ event, line });
-    }
-    if (records.length === 0) {
-      throw new SessionContractError(
-        'MALFORMED_SOURCE',
-        'Muse native session log contains no record envelopes',
-        schemaIssueDetail('<root>'),
-      );
-    }
-    return {
-      records,
-      complete,
-      context: {
-        locatorClass: MUSE_NATIVE_LOCATOR_CLASS,
-        sourceLabel: 'muse native session log',
-        bytesRead: input.bytesRead,
-        fallbackSessionId,
-        spawns: new Map(),
-        diagnostics,
-      },
-    };
   }
 
   private assertSupportedLocator(source: SelectedSource): void {
@@ -663,7 +672,8 @@ export async function inspectMuseNativeWorkspace(
     }
   });
   try {
-    if (Object.values(limits).some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
+    if ([limits.maxRecords, limits.maxRecordBytes, limits.maxTotalBytes, limits.maxNestingDepth]
+      .some((limit) => !Number.isSafeInteger(limit) || limit <= 0)) {
       throw new SessionContractError('INVALID_ARGUMENT', 'Muse inspection limits must be positive safe integers');
     }
     for await (const value of museWorkspaceScanLines(

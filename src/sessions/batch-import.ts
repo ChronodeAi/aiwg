@@ -19,7 +19,7 @@ import {
   type BatchSourceDisposition,
   type SessionCoverageReport,
 } from './batch-contracts.js';
-import { IncrementalSessionImporter, SessionImportFailure } from './importer.js';
+import { IncrementalSessionImporter, SessionImportFailure, type ImportLimits } from './importer.js';
 import { fingerprintSourceFile } from './readers.js';
 import type { SessionRepository } from './repository.js';
 import type {
@@ -29,6 +29,7 @@ import type {
 
 export interface BatchImportOptions {
   manifest: SessionDiscoveryManifest;
+  limits?: Partial<ImportLimits>;
   runtime?: SessionRuntimeIdentity;
   repository: SessionRepository;
   signal?: AbortSignal;
@@ -135,7 +136,7 @@ export async function importDiscoveryManifest(
           allowedRoots: [manifestSource.authorizedRoot],
         },
       };
-      const adapter = adapterFor(manifestSource.provider);
+      const adapter = adapterFor(manifestSource.provider, options.limits);
       const source = await sessionSource(selectedSource, adapter);
       const receipts = await new IncrementalSessionImporter(options.repository).import({
         source,
@@ -147,6 +148,7 @@ export async function importDiscoveryManifest(
         publish: false,
         signal: options.signal,
         inactivityThresholdMs: options.inactivityThresholdMs,
+        limits: options.limits,
       });
       await assertManifestSourceUnchanged(manifestSource);
       const totals = options.repository.sourceImportTotals(
@@ -327,8 +329,8 @@ async function assertManifestSourceUnchanged(source: DiscoveryManifestSource): P
   }
 }
 
-function adapterFor(provider: DiscoveryManifestSource['provider']): SessionSourceAdapter {
-  return createSessionAdapterRegistry().get(provider);
+function adapterFor(provider: DiscoveryManifestSource['provider'], limits?: Partial<ImportLimits>): SessionSourceAdapter {
+  return createSessionAdapterRegistry(limits).get(provider);
 }
 
 async function sessionSource(

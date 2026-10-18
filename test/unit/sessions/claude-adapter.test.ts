@@ -1,7 +1,8 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { appendFile, cp, mkdir, mkdtemp, stat, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CLAUDE_ADAPTER_VERSION,
   CLAUDE_TRANSCRIPT_SCHEMA_VERSION,
@@ -36,6 +37,25 @@ afterEach(async () => {
 });
 
 describe('Claude session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new ClaudeSessionAdapter();
+      const selection = selected('lifecycle.hooks.jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new ClaudeSessionAdapter();
 
   it('reports implemented local JSONL and hook capabilities', () => {

@@ -498,7 +498,8 @@ function stableId(prefix: string, ...parts: Array<string | number>): string {
 }
 
 export const SessionRejectionDetailSchema = z.union([
-  z.object({ limit: z.string(), configured: z.number(), observed: z.number() }),
+  z.object({ limit: z.string(), configured: z.number(), observed: z.number(),
+    setting: z.string().optional(), origin: z.enum(['flag', 'config', 'default']).optional() }),
   z.object({ issues: z.array(z.object({ path: z.string(), code: z.string() })) }),
 ]);
 export type SessionRejectionDetail = z.infer<typeof SessionRejectionDetailSchema>;

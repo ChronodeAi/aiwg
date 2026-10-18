@@ -372,6 +372,8 @@ export function printIndexUsage(): void {
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
   console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
   console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('          [--max-record-bytes <n>] [--max-source-bytes <n>]');
+  console.log('          Session import limits: record default 67108864; source default 0 (unlimited). Flags override sessions.import config.');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');

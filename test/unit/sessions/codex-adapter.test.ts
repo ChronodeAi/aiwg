@@ -1,7 +1,8 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { cp, mkdtemp, mkdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CODEX_ADAPTER_VERSION,
   CodexSessionAdapter,
@@ -24,6 +25,25 @@ afterEach(async () => {
 });
 
 describe('Codex session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new CodexSessionAdapter();
+      const selection = selectedSource('threads.app-server.jsonl', 'codex-streaming');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   it('publishes implemented API-first and rollout fallback capabilities', () => {
     const adapter = new CodexSessionAdapter();
     expect(adapter).toMatchObject({

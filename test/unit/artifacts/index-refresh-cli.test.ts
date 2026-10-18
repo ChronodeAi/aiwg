@@ -76,7 +76,23 @@ describe('index refresh CLI routing', () => {
     expect(help).toContain('refresh');
     expect(help).toContain('[--root <dir>]...');
     expect(help).toContain('--only graphs|sessions|caches|runtime|models|issues');
-    for (const flag of ['--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms']) expect(help).toContain(flag);
+    for (const flag of ['--full', '--workspace', '--root', '--only', '--dry-run', '--json', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes']) expect(help).toContain(flag);
+  });
+
+  it('accepts import byte flags for refresh planning', async () => {
+    await main(['refresh', '--workspace', root, '--dry-run', '--json',
+      '--max-record-bytes', '1024', '--max-source-bytes', '0']);
+    expect(JSON.parse(output.mock.calls[0][0])).toMatchObject({ status: 'ok' });
+  });
+
+  it.each([
+    ['--max-record-bytes', '0'], ['--max-record-bytes', '1.5'],
+    ['--max-source-bytes', '-1'], ['--max-source-bytes', 'invalid'],
+  ])('rejects invalid refresh byte limit %s %s', async (flag, value) => {
+    await main(['refresh', '--workspace', root, '--dry-run', '--json', flag, value]);
+    expect(JSON.parse(output.mock.calls[0][0])).toMatchObject({ status: 'error' });
+    expect(JSON.parse(output.mock.calls[0][0]).messages[0]).toContain('sessions.import.');
+    expect(process.exitCode).toBe(1);
   });
 
   it('routes without registry initialization, hooks or telemetry even when command logging is enabled', async () => {

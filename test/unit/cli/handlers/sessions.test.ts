@@ -105,11 +105,27 @@ describe('sessions CLI contracts', () => {
         .toContain('--workspace <path-or-id>');
     }
     expect(usage).toContain('--db <path>');
+    expect(usage).toContain('--max-record-bytes <n>');
+    expect(usage).toContain('--max-source-bytes <n>');
+    expect(usage).toContain('default 67108864');
+    expect(usage).toContain('default 0, unlimited');
     expect(usage).toContain('relative paths resolve from cwd');
     expect(usage).toContain('provider-native IDs');
     expect(usage).toContain('Imports for other workspaces stay in the selected catalog');
     expect(usage).toContain('reindex --workspace <path-or-id> | --all-workspaces');
     expect(usage).toContain('Reindex every workspace in the selected catalog');
+  });
+
+  it.each([
+    ['--max-record-bytes', '0'], ['--max-record-bytes', '-1'],
+    ['--max-source-bytes', '-1'], ['--max-source-bytes', '1.5'],
+  ])('rejects invalid import byte limit %s %s before inspection', async (flag, value) => {
+    const result = await sessionsHandler.execute(context([
+      'import', '/missing/source.jsonl', '--source-id', 'synthetic', flag, value, '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(2);
+    expect(jsonOutput(log).error).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(jsonOutput(log).error.message).toContain('sessions.import.');
   });
 
   it('returns one explicit deterministic disposition for every canonical provider', async () => {
@@ -672,6 +688,54 @@ describeWithSqlite('sessions CLI catalog lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['max_record_bytes', '--max-record-bytes', '4096'],
+    ['max_source_bytes', '--max-source-bytes', '0'],
+  ])('applies workspace %s config to import inspection and lets its flag override it', async (setting, flag, value) => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { [setting]: 1 } } }));
+    const transcript = resolve(root, 'synthetic.jsonl');
+    writeFileSync(transcript, JSON.stringify({
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    }) + '\n');
+    const args = ['import', transcript, '--provider', 'claude', '--source-id', 'synthetic',
+      '--workspace', root, '--db', resolve(root, 'catalog.sqlite'), '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).not.toBe(0);
+    expect(jsonOutput(log).error).toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED', details: { setting: `sessions.import.${setting}`, configured: 1, origin: 'config' },
+    });
+    expect((await sessionsHandler.execute(context([...args, flag, value], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.totals.eventsInserted).toBe(1);
+  });
+
+  it('threads config and flag source limits through discovered batch import', async () => {
+    mkdirSync(resolve(root, '.aiwg'));
+    writeFileSync(resolve(root, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { max_source_bytes: 1 } } }));
+    const providerRoot = resolve(root, 'authorized');
+    mkdirSync(providerRoot);
+    writeFileSync(resolve(providerRoot, 'synthetic.jsonl'), JSON.stringify({
+      type: 'user', uuid: 'event', sessionId: 'synthetic', cwd: root,
+      message: { role: 'user', content: 'hello' },
+    }) + '\n');
+    const { discoverWorkspaceHistories, writeDiscoveryManifest } = await import('../../../../src/sessions/workspace-discovery.js');
+    const manifest = await discoverWorkspaceHistories({
+      workspace: root, expectedProviders: ['claude'], authorizedRoots: { claude: [providerRoot] },
+    });
+    const manifestPath = resolve(root, 'manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const args = ['import-discovered', '--workspace', root, '--manifest', manifestPath,
+      '--db', resolve(root, 'catalog.sqlite'), '--confirm', '--json'];
+    expect((await sessionsHandler.execute(context(args, root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.rejected).toBe(1);
+    expect(jsonOutput(log).data.receipt.run.sources[0].detail).toMatchObject({
+      setting: 'sessions.import.max_source_bytes', configured: 1, origin: 'config',
+    });
+    expect((await sessionsHandler.execute(context([...args, '--max-source-bytes', '0'], root))).exitCode).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.rejected).toBe(0);
+    expect(jsonOutput(log).data.receipt.totals.accepted).toBe(1);
   });
 
   it('lists an imported provisional session as inactive after 24 hours without re-import', async () => {

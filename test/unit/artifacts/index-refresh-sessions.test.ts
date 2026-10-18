@@ -63,6 +63,32 @@ function configureManifests(files: string[]): void {
 }
 
 describe('session refresh integration boundaries', () => {
+  it.each([
+    [{}, { maxRecordBytes: 67108864, maxTotalBytes: 0, limitOrigins: { maxRecordBytes: 'default', maxTotalBytes: 'default' } }],
+    [{ maxRecordBytes: '4096', maxSourceBytes: '0' }, { maxRecordBytes: 4096, maxTotalBytes: 0, limitOrigins: { maxRecordBytes: 'flag', maxTotalBytes: 'flag' } }],
+  ])('threads resolved import limits into refresh imports (%j)', async (flags, expected) => {
+    await saveAuthorization();
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], flags);
+    expect(mocks.importBatch.mock.calls[0][0].limits).toEqual(expected);
+  });
+
+  it('uses workspace import config and lets flags override individual limits', async () => {
+    await saveAuthorization();
+    fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+      sessions: { import: { max_record_bytes: 1024, max_source_bytes: 8192 } },
+    }));
+    await refreshSessionCatalog(workspace, false, 0);
+    expect(mocks.importBatch.mock.calls[0][0].limits).toEqual({
+      maxRecordBytes: 1024, maxTotalBytes: 8192,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'config' },
+    });
+    await refreshSessionCatalog(workspace, false, 0, undefined, [], { maxSourceBytes: '0' });
+    expect(mocks.importBatch.mock.calls[1][0].limits).toEqual({
+      maxRecordBytes: 1024, maxTotalBytes: 0,
+      limitOrigins: { maxRecordBytes: 'config', maxTotalBytes: 'flag' },
+    });
+  });
+
   it('discovers new files only within saved authorized roots and confirms the exact saved manifest under the import lease', async () => {
     await saveAuthorization();
     fs.writeFileSync(path.join(authorized, 'two.jsonl'), JSON.stringify({

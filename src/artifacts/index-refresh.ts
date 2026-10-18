@@ -10,6 +10,7 @@ import { collectGraphIndexFiles } from './index-files.js';
 import { collectIndexStatus } from './index-status.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
+import { resolveImportLimits } from '../sessions/import-limits.js';
 import type { BatchImportReceipt } from '../sessions/batch-import.js';
 import {
   BUILTIN_GRAPH_CONFIGS, GRAPH_CONFIGS, INDEX_EXTRACTOR_VERSION, INDEX_VERSION,
@@ -26,6 +27,8 @@ export interface RefreshOptions {
   dryRun?: boolean;
   lockWaitMs?: number;
   signal?: AbortSignal;
+  maxRecordBytes?: string | number;
+  maxSourceBytes?: string | number;
 }
 
 export type RefreshJob = {
@@ -345,7 +348,9 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
     }
   } else {
     const { refreshSessionCatalog } = await import('../sessions/refresh.js');
-    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases);
+    const result = await refreshSessionCatalog(workspace, Boolean(options.full), options.lockWaitMs ?? 0, options.signal, aliases, {
+      maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes,
+    });
     if (typeof result === 'string') {
       job.status = 'skipped';
       job.reason = result;
@@ -511,11 +516,13 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       if (flag === '--full') options.full = true;
       else if (flag === '--dry-run') options.dryRun = true;
       else if (flag === '--json') json = true;
-      else if (['--workspace', '--root', '--only', '--lock-wait-ms'].includes(flag)) {
+      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes'].includes(flag)) {
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
         else if (flag === '--root') (options.root as string[]).push(value);
+        else if (flag === '--max-record-bytes') options.maxRecordBytes = value;
+        else if (flag === '--max-source-bytes') options.maxSourceBytes = value;
         else if (flag === '--only') {
           if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
             && value !== 'runtime' && value !== 'models' && value !== 'issues') {
@@ -528,6 +535,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         }
       } else throw new Error(`unknown refresh option: ${flag}`);
     }
+    resolveImportLimits(undefined, { maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes });
     const report = await refreshIndexes(options);
     if (json) console.log(JSON.stringify(report, null, 2));
     else {

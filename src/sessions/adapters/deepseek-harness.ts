@@ -8,7 +8,7 @@ import {
   type ProviderRecord, type SelectedSource, type SessionSourceAdapter,
   type SourceDescriptor, type SourceProbe,
 } from '../contracts.js';
-import { readBoundedJsonLines, streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
+import { streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
 
 export const DEEPSEEK_HARNESS_ADAPTER_VERSION = '1.0.0';
 export const DEEPSEEK_HARNESS_SOURCE_SCHEMA_VERSION = '2.0.0';
@@ -52,9 +52,11 @@ export class DeepSeekHarnessSessionAdapter implements SessionSourceAdapter {
   async inspect(source: SelectedSource): Promise<SourceProbe> {
     let input;
     try {
-      input = await readBoundedJsonLines({ selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
+      input = await streamBoundedJsonLines({ selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots }, { consistency: 'provisional', limits: this.limits });
     } catch (error) { throw normalizeAuthorizationError(error); }
-    const header = parseHeader(input.records[0]?.value);
+    let header: ReturnType<typeof parseHeader> | undefined;
+    for await (const line of input) header ??= parseHeader(line.value);
+    header ??= parseHeader(undefined);
     if (input.incompleteTail) throw new SessionContractError('TRUNCATED_SOURCE', 'DeepSeek Harness session has a truncated JSONL tail');
     return { sourceSchemaVersion: `${header.version}.0.0`, consistency: 'complete', operationalState: 'available' };
   }

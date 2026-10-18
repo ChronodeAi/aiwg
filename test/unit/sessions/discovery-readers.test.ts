@@ -1,6 +1,6 @@
 import { mkdtemp } from '../../helpers/temp-dir.js';
 import { execFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { open, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,6 +137,45 @@ describe('bounded session readers', () => {
       .rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
         limit: 'maxTotalBytes', configured: 1, observed: Buffer.byteLength(content),
       } });
+  });
+
+  it.each([readBoundedJson, readBoundedText])('caps buffered documents even with raised import limits', async (read) => {
+    const root = await mkdtemp(join(tmpdir(), 'session-buffered-limit-'));
+    const path = join(root, 'large.json');
+    const file = await open(path, 'w');
+    try { await file.truncate(64 * 1024 * 1024 + 1); } finally { await file.close(); }
+    await expect(read({ selectedPath: path, allowedRoots: [root] }, { maxRecordBytes: 128 * 1024 * 1024 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_LIMIT_EXCEEDED', detail: {
+        limit: 'maxBufferedSourceBytes', configured: 64 * 1024 * 1024, observed: 64 * 1024 * 1024 + 1,
+      } });
+  });
+
+  it('accepts records above the former 8 MiB default with an unlimited source cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-default-limit-'));
+    const path = join(root, 'large.jsonl');
+    await writeFile(path, JSON.stringify({ text: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
+    const stream = await streamBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete',
+    });
+    let count = 0;
+    for await (const record of stream) {
+      expect(record.byteLength).toBeGreaterThan(8 * 1024 * 1024);
+      count++;
+    }
+    expect(count).toBe(1);
+  });
+
+  it('counts the consumed prefix against the per-source cap when resuming', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-resumed-limit-'));
+    const path = join(root, 'session.jsonl');
+    await writeFile(path, '{"id":1}\n{"id":2}\n');
+    await expect(readBoundedJsonLines({ selectedPath: path, allowedRoots: [root] }, {
+      consistency: 'complete', cursor: '9', limits: { maxTotalBytes: 10,
+        limitOrigins: { maxTotalBytes: 'config' } },
+    })).rejects.toMatchObject({ detail: {
+      limit: 'maxTotalBytes', setting: 'sessions.import.max_source_bytes',
+      configured: 10, observed: 18, origin: 'config',
+    } });
   });
 
   it('reports malformed JSON at the root without including parser input', async () => {
@@ -313,11 +352,12 @@ describe('bounded session readers', () => {
     const path = join(root, 'million.jsonl');
     await writeFile(path, '{"ok":1}\n'.repeat(1_000_000));
     const probe = fileURLToPath(new URL('../../fixtures/sessions/reader-retained-memory.ts', import.meta.url));
-    const { stdout } = await execFileAsync(
+    const { stdout, stderr } = await execFileAsync(
       process.execPath,
       ['--expose-gc', '--import', 'tsx', probe, path, root],
       { timeout: 20_000, maxBuffer: 64 * 1024 },
     );
+    expect(stdout, stderr || 'reader memory probe exited without a result').not.toBe('');
     const result = JSON.parse(stdout) as {
       count: number;
       recordsRead: number;

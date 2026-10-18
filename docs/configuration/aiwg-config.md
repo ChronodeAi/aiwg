@@ -52,11 +52,53 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `remotes`       | `RemotesConfig`                  | optional | Repo origin topology. When absent, agents treat `origin` as primary. See [Remotes Block](#remotes-block).                                             |
 | `delivery`      | `DeliveryConfig`                 | optional | Repo control / delivery policy. When absent, runtime defaults apply. See [Delivery Block](#delivery-block).                                           |
 | `build`         | `BuildConfig`                    | optional | Project build policy, including large-build host resource preflight. See [Build Block](#build-block).                                                 |
+| `sessions`      | object                           | optional | Authorized discovery paths and import byte limits. See [Sessions](#sessions). |
 | `uhp`           | `UhpConfig`                      | optional | Explicit experimental UHP client profiles. See [UHP Client Profiles](#uhp-client-profiles).                                                           |
 
 Valid `providers` values: `antigravity` (alias `agy`), `claude`, `codex`,
 `copilot`, `cursor`, `deepseek-harness`, `factory`, `grokbot`, `hermes`, `muse`, `opencode`, `openclaw`, `openhuman`,
 `omp`, `pi`, `warp`, and `windsurf`.
+
+## Sessions
+
+```json
+{
+  "sessions": {
+    "codex_roots": ["/authorized/codex/sessions"],
+    "discovery_manifests": ["additional-discovery.json"],
+    "import": {
+      "max_record_bytes": 67108864,
+      "max_source_bytes": 0
+    }
+  }
+}
+```
+
+`codex_roots` authorizes additional Codex discovery roots. `discovery_manifests`
+adds manifests to session index refresh. Paths are relative to the selected
+workspace or absolute.
+
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `sessions.import.max_record_bytes` | `67108864` (64 MiB) | Positive safe integer, in bytes |
+| `sessions.import.max_source_bytes` | `0` (unlimited) | Non-negative safe integer, in bytes |
+
+`aiwg sessions import`, `aiwg sessions import-discovered`, and `aiwg index refresh`
+accept `--max-record-bytes <n>` and `--max-source-bytes <n>`. Precedence is CLI
+flag, then the selected workspace's config, then the defaults above. An omitted
+source cap or `0` removes the source byte cap. Codex and Claude JSONL imports
+stream with bounded memory; the run resource gate still applies. Record-count
+and nesting limits remain unchanged. Muse workspace inspection uses its separate
+discovery limits.
+
+Single-document JSON and Markdown exports retain a 64 MiB safety cap because
+those formats require buffering: Claude account exports, Copilot JSON, OpenCode
+JSON, Grokbot JSON, Muse package exports, and Cursor, Warp, and Grok Build
+Markdown. A smaller configured source cap also applies. Raising import limits
+does not raise this safety cap.
+
+Resource rejection diagnostics include the setting name, configured bytes,
+observed bytes, and origin (`flag`, `config`, or `default`).
 
 ## UHP Client Profiles
 

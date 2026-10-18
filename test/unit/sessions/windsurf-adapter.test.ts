@@ -1,8 +1,9 @@
+import * as sessionReaders from '../../../src/sessions/readers.js';
 import { resolve } from 'node:path';
 import { requireFeaturePackage } from '../../../src/features/runtime.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   IncrementalSessionImporter,
   DEVIN_DESKTOP_ADAPTER_VERSION,
@@ -33,6 +34,25 @@ function selected(name: string, locatorClass = 'windsurf-cascade-hook-jsonl'): S
 }
 
 describe('Devin Desktop (Windsurf compatibility) session adapter', () => {
+
+  it('inspects and streams JSONL without collecting the source', async () => {
+    const buffered = vi.spyOn(sessionReaders, 'readBoundedJsonLines')
+      .mockRejectedValue(new Error('JSONL import must stream'));
+    try {
+      const adapter = new DevinDesktopSessionAdapter();
+      const selection = selected('current.jsonl');
+      await expect(adapter.inspect(selection)).resolves.toMatchObject({ operationalState: 'available' });
+      let records = 0;
+      for await (const record of adapter.stream(selection)) {
+        expect(record.nativeSessionId).toBeTruthy();
+        records += 1;
+      }
+      expect(records).toBeGreaterThan(0);
+      expect(buffered).not.toHaveBeenCalled();
+    } finally {
+      buffered.mockRestore();
+    }
+  });
   const adapter = new DevinDesktopSessionAdapter();
 
   it('reports opt-in hook acquisition and performs no discovery', async () => {

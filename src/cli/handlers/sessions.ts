@@ -96,6 +96,7 @@ import {
   type SelectedSource,
   type SourceProbe,
 } from '../../sessions/index.js';
+import { resolveImportLimits } from '../../sessions/import-limits.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
 import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -200,6 +201,8 @@ Options:
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
+  --max-record-bytes <n>  Import record limit (default 67108864); overrides sessions.import.max_record_bytes
+  --max-source-bytes <n>  Import source limit (default 0, unlimited); overrides sessions.import.max_source_bytes
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter
@@ -914,6 +917,7 @@ async function importSource(
   ctx: HandlerContext,
   args: ParsedArgs,
 ): Promise<{ envelope: Envelope; exitCode: number }> {
+  const limits = await configuredImportLimits(ctx, args);
   const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
   const providerInput = args.values.get('--provider') ?? 'generic';
   const provider = assertSessionProviderId(providerInput);
@@ -946,37 +950,37 @@ async function importSource(
   const isDsh = provider === 'deepseek-harness';
   const isWarp = provider === 'warp';
   const isDevinDesktop = provider === 'devin-desktop';
-  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter() : isOmp ? new OmpSessionAdapter() : isClaude
-    ? new ClaudeSessionAdapter()
+  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter(limits) : isOmp ? new OmpSessionAdapter(limits) : isClaude
+    ? new ClaudeSessionAdapter(limits)
     : isCodex
-      ? new CodexSessionAdapter()
+      ? new CodexSessionAdapter(limits)
       : isCopilot
-        ? new CopilotSessionAdapter()
+        ? new CopilotSessionAdapter(limits)
         : isCursor
-          ? new CursorSessionAdapter()
+          ? new CursorSessionAdapter(limits)
           : isFactory
-            ? new FactorySessionAdapter()
+            ? new FactorySessionAdapter(limits)
             : isHermes
-              ? new HermesSessionAdapter()
+              ? new HermesSessionAdapter(limits)
               : isOpenCode
-                ? new OpenCodeSessionAdapter()
+                ? new OpenCodeSessionAdapter(limits)
                 : isOpenClaw
-                  ? new OpenClawSessionAdapter()
+                  ? new OpenClawSessionAdapter(limits)
                   : isOpenHuman
-                    ? new OpenHumanSessionAdapter()
+                    ? new OpenHumanSessionAdapter(limits)
                     : isGrokbot
-                      ? new GrokbotSessionAdapter()
+                      ? new GrokbotSessionAdapter(limits)
                       : isGrokBuild
-                        ? new GrokBuildSessionAdapter()
+                        ? new GrokBuildSessionAdapter(limits)
                       : isMuse
-                        ? new MuseSessionAdapter()
+                        ? new MuseSessionAdapter(limits)
                       : isPi
-                        ? new PiSessionAdapter()
+                        ? new PiSessionAdapter(limits)
                     : isWarp
-                      ? new WarpSessionAdapter()
+                      ? new WarpSessionAdapter(limits)
                       : isDevinDesktop
-                        ? new DevinDesktopSessionAdapter()
-                        : new GenericSessionInterchangeAdapter();
+                        ? new DevinDesktopSessionAdapter(limits)
+                        : new GenericSessionInterchangeAdapter(limits);
   const locatorClass = isDsh ? 'deepseek-harness-session-v2-jsonl' : isOmp ? 'omp-session-v3-jsonl' : isClaude
     ? claudeLocatorClass(input)
     : isCodex
@@ -1137,7 +1141,7 @@ async function importSource(
     try {
       const interruptedRuns = repository.interruptRunningBatchImports();
       const receipts = await new IncrementalSessionImporter(repository).import({
-        source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
+        source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0', limits,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
       for (const warning of workspaceReport.warnings) console.error(`WARNING ${warning}`);
@@ -1533,6 +1537,7 @@ async function importDiscovered(
 ): Promise<{ envelope: Envelope; exitCode: number }> {
   const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
   const canonicalWorkspace = realpathSync(workspace);
+  const limits = await configuredImportLimits(ctx, args, canonicalWorkspace);
   const manifestPath = resolve(
     ctx.cwd,
     args.values.get('--manifest') ?? defaultDiscoveryManifestPath(canonicalWorkspace),
@@ -1591,6 +1596,7 @@ async function importDiscovered(
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        limits,
         signal: ctx.signal,
         inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
       });
@@ -1944,6 +1950,20 @@ function catalogScope(
   };
 }
 
+async function configuredImportLimits(ctx: HandlerContext, args: ParsedArgs, workspace?: string) {
+  const selectedWorkspace = workspace ?? (args.values.has('--workspace')
+    ? resolve(ctx.cwd, args.values.get('--workspace')!) : ctx.cwd);
+  try {
+    const config = await readAiwgConfig(selectedWorkspace);
+    return resolveImportLimits(config?.sessions?.import, {
+      maxRecordBytes: args.values.get('--max-record-bytes'),
+      maxSourceBytes: args.values.get('--max-source-bytes'),
+    });
+  } catch (error) {
+    throw new CliError('INVALID_ARGUMENT', error instanceof Error ? error.message : String(error), EXIT.usage);
+  }
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const flags = new Set<string>();
   const values = new Map<string, string>();
@@ -1956,7 +1976,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
     '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
-    '--inactivity-threshold', '--expected-providers',
+    '--inactivity-threshold', '--expected-providers', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
     '--out', '--plan', '--input', '--shard-name', '--max-attachment-bytes', '--format', '--grok-bin',
@@ -2377,7 +2397,7 @@ function normalizeError(error: unknown): {
   }
   if (error instanceof SessionContractError) {
     const exitCode = error.code === 'UNSUPPORTED_OPERATION' ? EXIT.unsupported : EXIT.contract;
-    return { error: { code: error.code, message: error.message }, exitCode };
+    return { error: { code: error.code, message: error.message, ...(error.detail ? { details: error.detail } : {}) }, exitCode };
   }
   if (error instanceof ImportLeaseContentionError) {
     return {

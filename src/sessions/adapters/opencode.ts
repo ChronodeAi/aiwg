@@ -14,7 +14,6 @@ import {
 } from '../contracts.js';
 import {
   readBoundedJson,
-  readBoundedJsonLines,
   streamBoundedJsonLines,
   type BoundedJsonRecord,
   type ReaderLimits,
@@ -118,6 +117,12 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
   }
 
   async inspect(source: SelectedSource): Promise<SourceProbe> {
+    if (source.locatorClass === 'opencode-sse-jsonl') {
+      const records = this.stream(source);
+      let result = await records.next();
+      while (!result.done) result = await records.next();
+      if (result.value) return result.value;
+    }
     const parsed = await this.readSource(source);
     return {
       sourceSchemaVersion: parsed.schemaVersion,
@@ -126,7 +131,7 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
     };
   }
 
-  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+  async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncGenerator<ProviderRecord, SourceProbe | undefined> {
     if (source.locatorClass === 'opencode-sse-jsonl') {
       const input = await streamBoundedJsonLines({
         selectedPath: source.locator,
@@ -227,11 +232,16 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
       if (!sawSession) {
         throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE stream lacks a session identity', schemaIssueDetail('properties.info.id'));
       }
-      return;
+      return {
+        sourceSchemaVersion: schemaVersion ?? OPENCODE_EXPORT_SCHEMA_VERSION,
+        consistency: 'provisional',
+        operationalState: 'available',
+      };
     }
     const parsed = await this.readSource(source);
     const start = parseCursor(cursor?.value);
     for (const record of parsed.records.slice(start)) yield record;
+    return undefined;
   }
 
   private async readSource(source: SelectedSource): Promise<{
@@ -251,16 +261,6 @@ export class OpenCodeSessionAdapter implements SessionSourceAdapter {
         allowedRoots: source.authorizedScope.allowedRoots,
       }, this.limits);
       return normalizeExport(value, source.locatorClass);
-    }
-    if (source.locatorClass === 'opencode-sse-jsonl') {
-      const result = await readBoundedJsonLines({
-        selectedPath: source.locator,
-        allowedRoots: source.authorizedScope.allowedRoots,
-      }, { consistency: 'provisional', limits: this.limits });
-      if (result.records.length === 0) {
-        throw new SessionContractError('MALFORMED_SOURCE', 'OpenCode SSE source is empty', schemaIssueDetail('<root>'));
-      }
-      return normalizeEvents(result.records, source.locatorClass);
     }
     const kind = source.locatorClass === 'opencode-local-api'
       ? 'api'

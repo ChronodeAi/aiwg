@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs';
 import { streamBoundedJsonLines } from '../../../src/sessions/index.js';
 
 const [path, root] = process.argv.slice(2);
@@ -36,7 +37,7 @@ for await (const record of stream) {
 forceGc();
 retainedPeak = Math.max(retainedPeak, process.memoryUsage().heapUsed);
 
-process.stdout.write(JSON.stringify({
+writeSync(1, JSON.stringify({
   count,
   recordsRead: stream.recordsRead,
   first,

@@ -147,6 +147,32 @@ describe('aiwg-config', () => {
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
 
   describe('readAiwgConfig', () => {
+    it('reads session import byte limits including an unlimited source cap', async () => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({
+        sessions: { import: { max_record_bytes: 67108864, max_source_bytes: 0 } },
+      }));
+      expect((await readAiwgConfig(tmpDir))?.sessions?.import)
+        .toEqual({ max_record_bytes: 67108864, max_source_bytes: 0 });
+    });
+
+    it.each([null, [], 'limits'])('rejects malformed session import config %j', async (limits) => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: limits } }));
+      await expect(readAiwgConfig(tmpDir)).rejects.toThrow('sessions.import must be an object');
+    });
+
+    it.each([
+      ['max_record_bytes', 0], ['max_record_bytes', -1], ['max_record_bytes', 1.5],
+      ['max_record_bytes', '1024'], ['max_record_bytes', null],
+      ['max_source_bytes', -1], ['max_source_bytes', 1.5], ['max_source_bytes', '0'],
+      ['max_source_bytes', 9007199254740992],
+    ])('rejects invalid sessions.import.%s=%j', async (key, value) => {
+      mkdirSync(join(tmpDir, '.aiwg'));
+      writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { import: { [key]: value } } }));
+      await expect(readAiwgConfig(tmpDir)).rejects.toThrow(`sessions.import.${key} must be`);
+    });
+
     it('reads an explicit discovery manifest list', async () => {
       mkdirSync(join(tmpDir, '.aiwg'));
       writeFileSync(join(tmpDir, '.aiwg/aiwg.config'), JSON.stringify({
