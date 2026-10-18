@@ -2053,6 +2053,171 @@ describeWithSqlite('transactional session repository and importer', () => {
     repository.close();
   });
 
+  it.each([
+    { label: 'default', thresholdMs: undefined, timestamped: true },
+    { label: 'custom', thresholdMs: 1_000, timestamped: true },
+    { label: 'zero', thresholdMs: 0, timestamped: true },
+    { label: 'timestamp-less', thresholdMs: 1_000, timestamped: false },
+  ])('ages an imported active session on reads without re-import ($label)', async ({ thresholdMs, timestamped }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    const repository = new SessionRepository();
+    try {
+      const activeSource = {
+        ...source, consistency: 'provisional' as const, authorizedAt: now.toISOString(),
+      };
+      const activeAdapter = adapter([{
+        ...records[0], text: 'synthetic request',
+        occurredAt: timestamped ? now.toISOString() : undefined,
+      }]);
+      const stream = vi.spyOn(activeAdapter, 'stream');
+      await new IncrementalSessionImporter(repository).import({
+        source: activeSource,
+        selectedSource: {
+          provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId,
+          authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+        },
+        adapter: activeAdapter, workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        inactivityThresholdMs: thresholdMs,
+      });
+      const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+      const threshold = thresholdMs ?? 24 * 60 * 60 * 1_000;
+      const readSessions = () => [
+        repository.getSession(sessionId),
+        ...repository.listSessions({ limit: 10 }).items,
+        ...repository.findSessionsByReference(sessionId),
+        ...repository.findSessionsByReference('native-1'),
+        ...repository.findSessionsByReference('native-'),
+        ...repository.listTimelineInputs('workspace-1').map((input) => input.session),
+      ];
+      for (const session of readSessions()) {
+        expect(session).toMatchObject({
+          lifecycle: 'active',
+          extensions: {
+            'native.generic': { lifecycleEvidence: { state: 'active', thresholdMs: threshold } },
+          },
+        });
+      }
+      vi.setSystemTime(now.getTime() + threshold);
+      expect(repository.getSession(sessionId)?.lifecycle).toBe('active');
+      vi.setSystemTime(now.getTime() + threshold + 1);
+      for (const session of readSessions()) {
+        expect(session).toMatchObject({
+          lifecycle: 'inactive',
+          extensions: {
+            'native.generic': {
+              lifecycleEvidence: {
+                basis: 'inactivity-threshold', state: 'inactive', confidence: 'medium',
+                observedAt: now.toISOString(), thresholdMs: threshold,
+              },
+            },
+          },
+        });
+      }
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(repository.listEvents(sessionId)).toHaveLength(1);
+    } finally {
+      repository.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['open-provisional-source', 'inactivity-threshold'])(
+    'evaluates legacy %s evidence from the last event without changing stored rows', async (basis) => {
+      const root = await mkdtemp(join(tmpdir(), 'aiwg-legacy-lifecycle-'));
+      const databasePath = join(root, 'catalog.sqlite');
+      const repository = new SessionRepository(databasePath);
+      const Database = requireFeaturePackage('better-sqlite3') as new (path: string) => any;
+      const raw = new Database(databasePath);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const now = new Date('2026-10-18T12:00:00.000Z');
+      vi.setSystemTime(now);
+      try {
+        await new IncrementalSessionImporter(repository).import({
+          source: { ...source, consistency: 'provisional' },
+          selectedSource: {
+            provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+            sourceId: source.sourceId,
+            authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+          },
+          adapter: adapter([{
+            ...records[0], text: 'synthetic request', occurredAt: now.toISOString(),
+          }]),
+          workspaceId: 'workspace-1', policyVersion: '1.0.0',
+        });
+        const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+        const stored = repository.getSession(sessionId)!;
+        stored.lifecycle = basis === 'inactivity-threshold' ? 'inactive' : 'active';
+        stored.extensions['native.generic'] = {
+          lifecycleEvidence: {
+            basis, state: stored.lifecycle,
+            observedAt: '2026-10-16T12:00:00.000Z',
+            confidence: basis === 'inactivity-threshold' ? 'medium' : 'provisional',
+          },
+        };
+        raw.prepare('UPDATE sessions SET lifecycle=?, data=? WHERE session_id=?')
+          .run(stored.lifecycle, JSON.stringify(stored), sessionId);
+        const readStored = () => raw.prepare('SELECT lifecycle, data FROM sessions WHERE session_id=?')
+          .get(sessionId);
+        const before = readStored();
+        expect(repository.getSession(sessionId)?.lifecycle).toBe('active');
+        vi.setSystemTime(now.getTime() + 24 * 60 * 60 * 1_000 + 1);
+        expect(repository.listSessions({ limit: 10 }).items[0]).toMatchObject({
+          lifecycle: 'inactive',
+          extensions: {
+            'native.generic': {
+              lifecycleEvidence: {
+                basis: 'inactivity-threshold', state: 'inactive',
+                observedAt: now.toISOString(), thresholdMs: 24 * 60 * 60 * 1_000,
+              },
+            },
+          },
+        });
+        expect(readStored()).toEqual(before);
+      } finally {
+        raw.close();
+        repository.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    'active', 'inactive', 'paused', 'complete', 'interrupted', 'archived', 'unknown',
+    undefined,
+  ])('preserves authoritative lifecycle evidence as time passes (%s)', async (lifecycle) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = new Date('2026-10-18T12:00:00.000Z');
+    vi.setSystemTime(now);
+    const repository = new SessionRepository();
+    try {
+      await new IncrementalSessionImporter(repository).import({
+        source: { ...source, consistency: lifecycle ? 'provisional' : 'complete' },
+        selectedSource: {
+          provider: 'generic', locator: '<fixture>', locatorClass: 'synthetic-fixture',
+          sourceId: source.sourceId,
+          authorizedScope: { workspaceId: 'workspace-1', allowedRoots: ['/fixture'] },
+        },
+        adapter: adapter([{
+          ...records[0], text: 'synthetic request', occurredAt: now.toISOString(),
+          extensions: lifecycle ? { lifecycle } : {},
+        }]),
+        workspaceId: 'workspace-1', policyVersion: '1.0.0',
+      });
+      const sessionId = stableSessionId('generic', source.sourceId, 'native-1');
+      const initial = repository.getSession(sessionId);
+      expect(initial?.lifecycle).toBe(lifecycle ?? 'complete');
+      vi.setSystemTime(now.getTime() + 10 * 24 * 60 * 60 * 1_000);
+      expect(repository.getSession(sessionId)).toEqual(initial);
+      expect(repository.listSessions({ limit: 10 }).items).toEqual([initial]);
+    } finally {
+      repository.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('uses a configurable inactivity threshold and revises inference on continuation', async () => {
     const repository = new SessionRepository();
     const importer = new IncrementalSessionImporter(repository);

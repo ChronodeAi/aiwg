@@ -12,6 +12,7 @@ import { redactSessionText, sanitizeNativeExtensions } from './policy.js';
 import type { ImportReceipt } from './repository.js';
 import type { SessionRepositoryPort } from './ports.js';
 import { fingerprintSourcePrefix } from './readers.js';
+import { DEFAULT_INACTIVITY_THRESHOLD_MS } from './lifecycle.js';
 import {
   classifySessionEventOrigin,
   deriveSessionIntent,
@@ -487,6 +488,7 @@ function sessionLifecycleEvidence(
     state: 'active',
     observedAt: observedAt ?? request.source.authorizedAt,
     confidence: 'provisional',
+    thresholdMs,
   };
 }
 
@@ -547,8 +549,6 @@ function evidenceTimestamp(value: Record<string, unknown>): number {
   const parsed = Date.parse(String(value.observedAt ?? ''));
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
-
-const DEFAULT_INACTIVITY_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 function inactivityThresholdMs(request: ImportRequest): number {
   return request.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS;
