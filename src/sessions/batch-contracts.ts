@@ -2,8 +2,8 @@ import type { SessionCoveragePreflight, SessionRuntimeIdentity } from './contrac
 import { reconcileCoveragePreflight } from './coverage-preflight.js';
 import type { DiscoveryProviderReport } from './workspace-discovery.js';
 
-export const BATCH_IMPORT_VERSION = '1.0.0' as const;
-export const COVERAGE_VERSION = '1.0.0' as const;
+export const BATCH_IMPORT_VERSION = '2.0.0' as const;
+export const COVERAGE_VERSION = '2.0.0' as const;
 
 export type BatchSourceStatus =
   | 'pending'
@@ -27,7 +27,7 @@ export interface BatchSourceDisposition {
 }
 
 export interface BatchImportRun {
-  schemaVersion: typeof BATCH_IMPORT_VERSION;
+  schemaVersion: '1.0.0' | typeof BATCH_IMPORT_VERSION;
   runId: string;
   manifestId: string;
   manifestCreatedAt: string;
@@ -46,6 +46,7 @@ export interface SessionCoverageReport {
   schemaVersion: typeof COVERAGE_VERSION;
   status: 'complete' | 'partial' | 'stale' | 'unknown';
   acquisitionStatus: 'complete' | 'partial' | 'unknown';
+  unresolvedProviders: string[];
   preflight?: SessionCoveragePreflight;
   semanticReview: 'not-assessed';
   workspaceId: string;
@@ -105,9 +106,12 @@ export function coverageFromBatchRun(
   const manifestAgeMs = Math.max(0, now.getTime() - Date.parse(run.manifestCreatedAt));
   const isStale = manifestAgeMs > staleAfterMs;
   const preflight = run.preflight ? reconcileCoveragePreflight(run.preflight, run.sources) : undefined;
-  const incomplete = !preflight || preflight.status !== 'complete'
+  const unresolvedProviders = preflight?.unresolvedProviders
+    ?? [...new Set([...unavailable, ...exportRequired, ...notChecked])].sort();
+  const acquisitionIncomplete = rejected > 0 || pending > 0 || skipped > 0
+    || (preflight?.expectedProviderBasis === 'explicit' && unresolvedProviders.length > 0);
+  const incomplete = acquisitionIncomplete || !preflight || preflight.status !== 'complete'
     || unavailable.length > 0 || accepted + duplicated + previouslyCommitted === 0
-    || rejected > 0 || pending > 0 || skipped > 0
     || exportRequired.length > 0 || notChecked.length > 0;
   const rejectionCounts: Record<string, number> = {};
   for (const source of run.sources) {
@@ -138,7 +142,8 @@ export function coverageFromBatchRun(
   return {
     schemaVersion: COVERAGE_VERSION,
     status: isStale ? 'stale' : incomplete ? 'partial' : 'complete',
-    acquisitionStatus: incomplete ? 'partial' : 'complete',
+    acquisitionStatus: acquisitionIncomplete ? 'partial' : 'complete',
+    unresolvedProviders,
     preflight,
     semanticReview: 'not-assessed',
     workspaceId: run.workspaceId,
@@ -189,6 +194,7 @@ function unknownCoverage(): SessionCoverageReport {
     schemaVersion: COVERAGE_VERSION,
     status: 'unknown',
     acquisitionStatus: 'unknown',
+    unresolvedProviders: [],
     semanticReview: 'not-assessed',
     workspaceId: '',
     manifestId: null,

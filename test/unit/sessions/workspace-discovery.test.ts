@@ -108,7 +108,7 @@ describe('workspace session discovery and batch import', () => {
     )).toHaveLength(0);
   });
 
-  itWithSqlite('resumes only incomplete sources and reconciles partial coverage', async () => {
+  itWithSqlite('completes accepted default-scope imports while retaining unresolved provider coverage', async () => {
     const fixture = await providerFixture();
     const manifest = await discoverWorkspaceHistories({
       workspace: fixture.workspace,
@@ -124,17 +124,25 @@ describe('workspace session discovery and batch import', () => {
         rejected: 0,
         pending: 0,
       });
-      expect(first.run.status).toBe('partial');
+      expect(first.schemaVersion).toBe('2.0.0');
+      expect(first.run).toMatchObject({ schemaVersion: '2.0.0', status: 'complete' });
       expect(first.coverage).toMatchObject({
+        schemaVersion: '2.0.0',
         status: 'partial',
+        acquisitionStatus: 'complete',
+        unresolvedProviders: expect.arrayContaining(['warp', 'opencode']),
         providers: { exportRequired: expect.arrayContaining(['warp', 'opencode']) },
         sources: { discovered: 4, accepted: 4 },
       });
+      repository.saveBatchImportRun({ ...first.run, schemaVersion: '1.0.0', status: 'partial' });
       const second = await importDiscoveryManifest({ manifest, repository });
+      expect(second.run.schemaVersion).toBe('2.0.0');
       expect(second.run.sources.every(
         (source) => source.status === 'previously-committed',
       )).toBe(true);
       expect(second.run.sources.every((source) => source.attempts === 1)).toBe(true);
+      expect(second.run.status).toBe('complete');
+      expect(repository.getCoverage(manifest.workspaceId).acquisitionStatus).toBe('complete');
       expect(repository.doctor()).toMatchObject({
         integrity: 'ok',
         indexIntegrity: 'ok',
@@ -144,6 +152,56 @@ describe('workspace session discovery and batch import', () => {
     } finally {
       repository.close();
     }
+  });
+
+  itWithSqlite.each([
+    { expectedProviders: ['claude'], status: 'complete' },
+    { expectedProviders: ['claude', 'warp'], status: 'partial' },
+    { expectedProviders: ['claude', 'future-provider'], status: 'partial' },
+  ])('uses explicit provider scope $expectedProviders for acquisition status', async ({ expectedProviders, status }) => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders,
+    });
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.totals).toMatchObject({ discovered: 1, accepted: 1, rejected: 0, pending: 0 });
+      expect(receipt.run.status).toBe(status);
+      expect(receipt.coverage.acquisitionStatus).toBe(status);
+      expect(receipt.coverage.unresolvedProviders).toEqual(expectedProviders.filter((provider) => provider !== 'claude'));
+    } finally { repository.close(); }
+  });
+
+  itWithSqlite('keeps rejected default-scope imports partial', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace, providerHome: fixture.providerHome });
+    await writeFile(manifest.sources[0].locator, '{}\n');
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.run.status).toBe('partial');
+      expect(receipt.totals).toMatchObject({ discovered: 4, accepted: 3, rejected: 1, pending: 0 });
+      expect(receipt.coverage.acquisitionStatus).toBe('partial');
+    } finally { repository.close(); }
+  });
+
+  itWithSqlite.each([
+    { expectedProviders: undefined, status: 'complete' },
+    { expectedProviders: ['claude'], status: 'partial' },
+  ])('reports $status for empty acquisition with expectations $expectedProviders', async ({ expectedProviders, status }) => {
+    const fixture = await providerFixture();
+    const empty = join(fixture.root, 'empty');
+    await mkdir(empty);
+    const manifest = await discoverWorkspaceHistories({ workspace: empty, providerHome: empty, expectedProviders });
+    const repository = new SessionRepository(':memory:');
+    try {
+      const receipt = await importDiscoveryManifest({ manifest, repository });
+      expect(receipt.run.status).toBe(status);
+      expect(receipt.totals).toMatchObject({ discovered: 0, rejected: 0, pending: 0 });
+      expect(receipt.coverage).toMatchObject({ status: 'partial', acquisitionStatus: status, coverageRatio: null });
+      expect(receipt.coverage.unresolvedProviders.length).toBeGreaterThan(0);
+    } finally { repository.close(); }
   });
 
   itWithSqlite('reports the observed 304-discovered/35-accepted case without claiming completeness', async () => {
@@ -179,7 +237,7 @@ describe('workspace session discovery and batch import', () => {
       };
       repository.saveBatchImportRun(run);
       expect(repository.getCoverage(manifest.workspaceId)).toMatchObject({
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         status: 'partial',
         sources: {
           discovered: 304,
@@ -231,6 +289,7 @@ describe('workspace session discovery and batch import', () => {
       expect(interrupted?.status).toBe('interrupted');
 
       const resumed = await importDiscoveryManifest({ manifest, repository });
+      expect(resumed.run.status).toBe('complete');
       expect(resumed.totals).toMatchObject({
         discovered: 4,
         rejected: 0,
