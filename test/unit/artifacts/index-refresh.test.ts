@@ -68,6 +68,112 @@ afterEach(() => {
 });
 
 describe('index refresh', () => {
+  it('imports multiple configured manifests into the catalog and skips completed batches on the next refresh', async () => {
+    const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
+    fs.mkdirSync(path.dirname(database), { recursive: true });
+    new SessionRepository(database).close();
+    const files = ['first.json', 'second.json'];
+    for (const [index, file] of files.entries()) {
+      const authorized = path.join(root, `authorized-${index}`);
+      write(path.join(authorized, 'one.jsonl'), JSON.stringify({
+        type: 'user', sessionId: `one-${index}`, cwd: workspace, message: { role: 'user', content: 'hello' },
+      }) + '\n');
+      const manifest = await discoverWorkspaceHistories({
+        workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+      });
+      await writeDiscoveryManifest(path.join(workspace, file), manifest);
+    }
+    write(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { discovery_manifests: files } }));
+    const first = await refreshIndexes({ cwd: workspace, only: 'sessions' }, admitted);
+    expect(first).toMatchObject({ status: 'ok', totals: { ok: 1, noManifest: 0, errors: 0 } });
+    expect(first.jobs[0].sessionImport).toBeUndefined();
+    expect(first.jobs[0].sessionImports).toHaveLength(2);
+    for (const [index, receipt] of first.jobs[0].sessionImports!.entries()) {
+      const manifest = await readDiscoveryManifest(path.join(workspace, files[index]));
+      expect(receipt).toMatchObject({ run: { manifestId: manifest.manifestId, status: 'complete' },
+        totals: { discovered: 1, accepted: 1, rejected: 0, pending: 0, sessionsAccepted: 1 } });
+    }
+    const repository = new SessionRepository(database);
+    try {
+      expect(repository.listSessions({ workspaceId: workspace, limit: 10 }).total).toBe(2);
+    } finally { repository.close(); }
+    const second = await refreshIndexes({ cwd: workspace, only: 'sessions' }, admitted);
+    expect(second.jobs).toEqual([expect.objectContaining({ status: 'skipped', reason: 'unchanged', noManifest: 0 })]);
+    expect(second.messages).toEqual([]);
+    expect(fs.existsSync(path.join(workspace, '.aiwg/sessions/discovery-manifest.json'))).toBe(false);
+  });
+
+  itWithSqlite('reports all receipts from mixed complete and partial manifests and retries only unfinished batches', async () => {
+    const database = path.join(workspace, '.aiwg/sessions/catalog.sqlite');
+    fs.mkdirSync(path.dirname(database), { recursive: true });
+    new SessionRepository(database).close();
+    const files = ['first.json', 'second.json', 'third.json'];
+    for (const [index, file] of files.entries()) {
+      const authorized = path.join(root, `authorized-${index}`);
+      write(path.join(authorized, 'valid.jsonl'), JSON.stringify({
+        type: 'user', sessionId: `valid-${index}`, cwd: workspace, message: { role: 'user', content: 'hello' },
+      }) + '\n');
+      if (index < 2) write(path.join(authorized, 'invalid.jsonl'), JSON.stringify({ type: 42, cwd: workspace }) + '\n');
+      const manifest = await discoverWorkspaceHistories({
+        workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+      });
+      await writeDiscoveryManifest(path.join(workspace, file), manifest);
+    }
+    write(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({ sessions: { discovery_manifests: files } }));
+    const options = { cwd: workspace, only: 'sessions' as const };
+    const first = await refreshIndexes(options, admitted);
+    expect(first).toMatchObject({ status: 'partial', totals: { ok: 1, errors: 0, noManifest: 0 } });
+    expect(first.jobs[0]).toMatchObject({ status: 'ok', reason: 'session import partial: 2 rejected, 0 pending' });
+    expect(first.jobs[0].sessionImport).toBeUndefined();
+    const receipts = first.jobs[0].sessionImports!;
+    expect(JSON.parse(JSON.stringify(first)).jobs[0].sessionImports).toEqual(receipts);
+    expect(receipts).toHaveLength(3);
+    expect(receipts.map(receipt => receipt.run.status)).toEqual(['partial', 'partial', 'complete']);
+    for (const [index, receipt] of receipts.entries()) {
+      const manifest = await readDiscoveryManifest(path.join(workspace, files[index]));
+      expect(receipt.run.manifestId).toBe(manifest.manifestId);
+      expect(receipt.totals).toMatchObject({ discovered: index < 2 ? 2 : 1, accepted: 1,
+        rejected: index < 2 ? 1 : 0, pending: 0, sessionsAccepted: 1 });
+      if (index < 2) expect(receipt.run.sources.find(source => source.status === 'rejected')).toMatchObject({
+        errorCode: 'MALFORMED_SOURCE', detail: { issues: [{ path: 'type', code: 'invalid_type' }] },
+      });
+    }
+    expect(process.exitCode ?? 0).toBe(0);
+    const next = await refreshIndexes(options, admitted);
+    expect(next).toMatchObject({ status: 'partial', totals: { ok: 1, errors: 0 } });
+    expect(next.jobs[0].sessionImports?.map(receipt => receipt.run.manifestId))
+      .toEqual(receipts.slice(0, 2).map(receipt => receipt.run.manifestId));
+    expect(next.jobs[0].sessionImports?.every(receipt => receipt.run.sources
+      .find(source => source.status === 'rejected')?.attempts === 2)).toBe(true);
+    const repository = new SessionRepository(database);
+    try {
+      expect(repository.listSessions({ workspaceId: workspace, limit: 10 }).total).toBe(3);
+    } finally { repository.close(); }
+  });
+
+  it('keeps missing-manifest warnings visible when resuming after another workspace fails', async () => {
+    const other = path.join(root, 'zz-other');
+    config(other);
+    for (const ws of [workspace, other]) {
+      const database = path.join(ws, '.aiwg/sessions/catalog.sqlite');
+      fs.mkdirSync(path.dirname(database), { recursive: true });
+      new SessionRepository(database).close();
+    }
+    write(path.join(other, '.aiwg/sessions/discovery-manifest.json'), '{}');
+    await expect(refreshIndexes({ workspaces: [workspace, other], only: 'sessions' }, {
+      ...admitted, afterJob: job => { if (job.status === 'error') throw new Error('simulated interruption'); },
+    })).rejects.toThrow('simulated interruption');
+    expect(JSON.parse(fs.readFileSync(path.join(state, 'index-refresh-checkpoint.json'), 'utf8')).completed).toEqual([]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const report = await refreshIndexes({ workspaces: [workspace, other], only: 'sessions' }, admitted);
+      expect(report).toMatchObject({ status: 'partial', totals: { noManifest: 1, errors: 1 } });
+      expect(report.messages).toHaveLength(1);
+      expect(report.messages[0]).toContain(`aiwg sessions discover --workspace '${workspace}'`);
+      expect(report.jobs[0]).toMatchObject({ workspace, noManifest: 1, reason: 'no authorized discovery manifest' });
+      expect(fs.existsSync(path.join(state, 'index-refresh-checkpoint.json'))).toBe(false);
+    }
+  });
+
   it('plans ordered default, configured, built, cache, and existing session jobs without writes', async () => {
     config(workspace, {
       refs: { scanDirs: ['refs'], defaultBuild: false, buildTier: 'lightweight' },

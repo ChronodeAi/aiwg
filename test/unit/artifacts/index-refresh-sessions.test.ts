@@ -49,11 +49,17 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function saveAuthorization(): Promise<void> {
+async function saveAuthorization(file = defaultDiscoveryManifestPath(workspace), providerRoot = authorized): Promise<void> {
   const manifest = await discoverWorkspaceHistories({
-    workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    workspace, expectedProviders: ['claude'], authorizedRoots: { claude: [providerRoot] },
   });
-  await writeDiscoveryManifest(defaultDiscoveryManifestPath(workspace), manifest);
+  await writeDiscoveryManifest(file, manifest);
+}
+
+function configureManifests(files: string[]): void {
+  fs.writeFileSync(path.join(workspace, '.aiwg/aiwg.config'), JSON.stringify({
+    sessions: { discovery_manifests: files },
+  }));
 }
 
 describe('session refresh integration boundaries', () => {
@@ -88,6 +94,109 @@ describe('session refresh integration boundaries', () => {
     expect(fs.existsSync(defaultDiscoveryManifestPath(workspace))).toBe(false);
   });
 
+  it('refreshes a configured non-default manifest without creating a default manifest', async () => {
+    const saved = path.join(root, 'custom-manifest.json');
+    await saveAuthorization(saved);
+    configureManifests([saved]);
+    fs.writeFileSync(path.join(authorized, 'two.jsonl'), JSON.stringify({
+      type: 'user', sessionId: 'two', cwd: workspace, message: { role: 'user', content: 'second' },
+    }) + '\n');
+    mocks.importBatch.mockImplementationOnce(async ({ manifest }) => {
+      expect(fs.existsSync(`${database}.import.lock`)).toBe(true);
+      expect(await readDiscoveryManifest(saved)).toEqual(manifest);
+      expect(manifest.sources).toHaveLength(2);
+      return { totals: { rejected: 0, pending: 0 } };
+    });
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual({ totals: { rejected: 0, pending: 0 } });
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+    expect(fs.existsSync(defaultDiscoveryManifestPath(workspace))).toBe(false);
+  });
+
+  it('refreshes default and configured manifests once each with workspace-relative paths', async () => {
+    await saveAuthorization();
+    const otherRoot = path.join(root, 'other-authorized');
+    fs.mkdirSync(otherRoot);
+    fs.writeFileSync(path.join(otherRoot, 'two.jsonl'), JSON.stringify({
+      type: 'user', sessionId: 'two', cwd: workspace, message: { role: 'user', content: 'second' },
+    }) + '\n');
+    const saved = path.join(workspace, 'custom.json');
+    await saveAuthorization(saved, otherRoot);
+    configureManifests(['custom.json', saved, defaultDiscoveryManifestPath(workspace)]);
+    const complete = { run: { status: 'complete', manifestId: 'default' }, totals: { rejected: 0, pending: 0 } };
+    const partial = { run: { status: 'partial', manifestId: 'custom', sources: [{ status: 'rejected',
+      errorCode: 'MALFORMED_SOURCE',
+    }] }, totals: { rejected: 1, pending: 0 } };
+    mocks.importBatch.mockResolvedValueOnce(complete).mockResolvedValueOnce(partial);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual([complete, partial]);
+    expect(mocks.importBatch).toHaveBeenCalledTimes(2);
+    expect(mocks.importBatch.mock.calls.map(([{ manifest }]) => manifest.authorizedRoots))
+      .toEqual([{ claude: [authorized] }, { claude: [otherRoot] }]);
+
+    mocks.importBatch.mockClear();
+    mocks.prior.mockReturnValueOnce({ status: 'complete' }).mockReturnValue(null);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual({
+      run: { status: 'complete' }, totals: { rejected: 0, pending: 0 },
+    });
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+    expect(mocks.importBatch.mock.calls[0][0].manifest.authorizedRoots).toEqual({ claude: [otherRoot] });
+
+    mocks.prior.mockReturnValue({ status: 'complete' });
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBe('unchanged');
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+  });
+
+  it.each([{}, { claude: [] }])('skips manifests without authorized provider roots (%j)', async authorizedRoots => {
+    const manifest = await discoverWorkspaceHistories({ workspace, expectedProviders: ['claude'], authorizedRoots });
+    await writeDiscoveryManifest(defaultDiscoveryManifestPath(workspace), manifest);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBe('no authorized provider roots');
+    expect(mocks.importBatch).not.toHaveBeenCalled();
+    expect(mocks.close).not.toHaveBeenCalled();
+
+    const saved = path.join(workspace, 'custom.json');
+    await saveAuthorization(saved);
+    configureManifests(['custom.json']);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toEqual({
+      run: { status: 'complete' }, totals: { rejected: 0, pending: 0 },
+    });
+    expect(mocks.importBatch).toHaveBeenCalledOnce();
+  });
+
+  it.each(['pending', 'operational'])('propagates a later manifest import failure (%s) and releases the lease', async failure => {
+    await saveAuthorization();
+    const otherRoot = path.join(root, 'other-authorized');
+    fs.mkdirSync(otherRoot);
+    await saveAuthorization(path.join(workspace, 'custom.json'), otherRoot);
+    configureManifests(['custom.json']);
+    mocks.importBatch.mockResolvedValueOnce({ run: { status: 'complete' }, totals: { rejected: 0, pending: 0 } });
+    if (failure === 'pending') mocks.importBatch.mockResolvedValueOnce({ totals: { rejected: 0, pending: 1 } });
+    else mocks.importBatch.mockRejectedValueOnce(new Error('catalog write failed'));
+    await expect(refreshSessionCatalog(workspace, false, 0))
+      .rejects.toThrow(failure === 'pending' ? '1 pending' : 'catalog write failed');
+    expect(mocks.importBatch).toHaveBeenCalledTimes(2);
+    expect(fs.existsSync(`${database}.import.lock`)).toBe(false);
+    expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it('reports no manifest when configured files and the default are missing', async () => {
+    configureManifests(['missing.json']);
+    expect(await refreshSessionCatalog(workspace, false, 0)).toBe('no authorized discovery manifest');
+    expect(mocks.importBatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a configured manifest belonging to another workspace before importing any batch', async () => {
+    await saveAuthorization();
+    const other = path.join(root, 'other');
+    fs.mkdirSync(other);
+    const manifest = await discoverWorkspaceHistories({
+      workspace: other, expectedProviders: ['claude'], authorizedRoots: { claude: [authorized] },
+    });
+    const saved = path.join(root, 'wrong-workspace.json');
+    await writeDiscoveryManifest(saved, manifest);
+    configureManifests([saved]);
+    await expect(refreshSessionCatalog(workspace, false, 0)).rejects.toThrow('discovery manifest workspace mismatch');
+    expect(mocks.importBatch).not.toHaveBeenCalled();
+  });
+
   it('rejects a saved root redirected through a symlink without importing', async () => {
     await saveAuthorization();
     const elsewhere = path.join(root, 'elsewhere');
@@ -117,6 +226,28 @@ describe('session refresh integration boundaries', () => {
     await expect(refreshSessionCatalog(workspace, false, 0, undefined, [authorized]))
       .rejects.toThrow('workspace alias resolves to a different workspace');
     expect(mocks.importBatch).toHaveBeenCalledOnce();
+  });
+
+  it('passes logical workspace aliases to every configured manifest without expanding authorization', async () => {
+    const alias = path.join(root, 'logical-workspace');
+    fs.symlinkSync(workspace, alias, 'dir');
+    const files = ['first.json', 'second.json'];
+    const roots = files.map((_, index) => path.join(root, `authorized-${index}`));
+    for (const [index, file] of files.entries()) {
+      fs.mkdirSync(roots[index]);
+      fs.writeFileSync(path.join(roots[index], 'logical.jsonl'), JSON.stringify({
+        type: 'user', sessionId: `logical-${index}`, cwd: alias,
+      }) + '\n');
+      await saveAuthorization(path.join(workspace, file), roots[index]);
+    }
+    configureManifests(files);
+    const result = await refreshSessionCatalog(workspace, false, 0, undefined, [alias]);
+    expect(result).toHaveLength(2);
+    for (const [index, [{ manifest }]] of mocks.importBatch.mock.calls.entries()) {
+      expect(manifest.sources).toHaveLength(1);
+      expect(manifest.authorizedRoots).toEqual({ claude: [roots[index]] });
+      expect(manifest.sources[0].authorizedRoot).toBe(roots[index]);
+    }
   });
 
   it('reindexes all catalog workspaces with --full under the existing import lease without discovery', async () => {

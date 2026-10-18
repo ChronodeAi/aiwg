@@ -464,8 +464,12 @@ export interface ProjectLocalConfig {
  * Top-level shape of .aiwg/aiwg.config
  */
 export interface AiwgConfig {
-  /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
-  sessions?: { codex_roots?: string[] };
+  sessions?: {
+    /** Explicitly authorized Codex discovery roots, relative to the workspace or absolute. */
+    codex_roots?: string[];
+    /** Additional authorized discovery manifests for refresh, relative to the workspace or absolute. */
+    discovery_manifests?: string[];
+  };
   $schema?: string;
   version: '1';
 
@@ -1966,6 +1970,12 @@ export async function readAiwgConfigCandidate(projectDir: string): Promise<AiwgC
     ))
   )) {
     throw new Error('sessions.codex_roots must be an array of non-empty paths');
+  }
+  if (parsed.sessions?.discovery_manifests !== undefined && (
+    !Array.isArray(parsed.sessions.discovery_manifests)
+    || !parsed.sessions.discovery_manifests.every((file) => typeof file === 'string' && file.trim().length > 0)
+  )) {
+    throw new Error('sessions.discovery_manifests must be an array of non-empty paths');
   }
 
   const externalLinkErrors = validateExternalLinks(parsed.externalLinks);

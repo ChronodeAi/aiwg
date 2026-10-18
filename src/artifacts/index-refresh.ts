@@ -36,6 +36,8 @@ export interface RefreshJob {
   reason?: string;
   error?: string;
   sessionImport?: BatchImportReceipt;
+  sessionImports?: BatchImportReceipt[];
+  noManifest?: number;
 }
 
 export interface RefreshReport {
@@ -46,7 +48,7 @@ export interface RefreshReport {
   reason?: string;
   messages: string[];
   jobs: RefreshJob[];
-  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; wallMs: number };
+  totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; wallMs: number };
 }
 
 interface Checkpoint {
@@ -174,7 +176,7 @@ function planWorkspaceRefresh(options: RefreshOptions, workspaces: Map<string, s
         }
       }
       if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
-        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0 });
+        jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0, noManifest: 0 });
       }
       for (const kind of ['runtime', 'models', 'issues'] as const) {
         if (options.only && options.only !== kind) continue;
@@ -296,12 +298,17 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
     if (typeof result === 'string') {
       job.status = 'skipped';
       job.reason = result;
+      job.noManifest = result === 'no authorized discovery manifest' ? 1 : 0;
       return;
     }
     if (result) {
-      job.sessionImport = result;
-      if (result.run.status === 'partial') {
-        job.reason = `session import partial: ${result.totals.rejected} rejected, ${result.totals.pending} pending`;
+      const receipts = Array.isArray(result) ? result : [result];
+      if (Array.isArray(result)) job.sessionImports = result;
+      else job.sessionImport = result;
+      if (receipts.some(receipt => receipt.run.status === 'partial')) {
+        const rejected = receipts.reduce((sum, receipt) => sum + receipt.totals.rejected, 0);
+        const pending = receipts.reduce((sum, receipt) => sum + receipt.totals.pending, 0);
+        job.reason = `session import partial: ${rejected} rejected, ${pending} pending`;
       }
     }
   }
@@ -333,15 +340,20 @@ export async function refreshIndexes(
   const report: RefreshReport = {
     contractVersion: '1.0.0', command: 'index.refresh', status: 'ok',
     mode: options.full ? 'full' : 'incremental', jobs, messages: [],
-    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, wallMs: 0 },
+    totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, wallMs: 0 },
   };
   const finish = () => {
+    for (const job of jobs.filter(job => job.noManifest)) {
+      const command = `aiwg sessions discover --workspace '${job.workspace.replace(/'/g, "'\\''")}'`;
+      report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);
+    }
     report.totals = {
       jobs: jobs.length,
       ok: jobs.filter(job => job.status === 'ok').length,
       skipped: jobs.filter(job => job.status === 'skipped').length,
       deferred: jobs.filter(job => job.status === 'deferred').length,
       errors: jobs.filter(job => job.status === 'error').length,
+      noManifest: jobs.reduce((sum, job) => sum + (job.noManifest ?? 0), 0),
       wallMs: Date.now() - start,
     };
     return report;
@@ -406,7 +418,8 @@ export async function refreshIndexes(
       } finally {
         job.wallMs = Date.now() - jobStart;
       }
-      if (job.status !== 'error' && job.reason !== 'graph failed') checkpoint.completed.push(key);
+      if (job.status !== 'error' && job.reason !== 'graph failed'
+        && job.reason !== 'no authorized discovery manifest') checkpoint.completed.push(key);
       writeJson(checkpointPath, checkpoint);
       dependencies.afterJob?.(job, checkpoint.completed.length);
     }
@@ -417,6 +430,7 @@ export async function refreshIndexes(
     if (errors) report.status = errors === jobs.length ? 'error' : 'partial';
     else if (!deferred) {
       if (jobs.some(job => job.sessionImport?.run.status === 'partial'
+        || job.sessionImports?.some(receipt => receipt.run.status === 'partial')
         || job.reason === 'sqlite unavailable' || job.reason?.startsWith('no authorized'))) report.status = 'partial';
     }
     return finish();
@@ -466,7 +480,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
     const report: RefreshReport = {
       contractVersion: '1.0.0', command: 'index.refresh', status: 'error', mode: options.full ? 'full' : 'incremental',
       jobs: [], messages: [error instanceof Error ? error.message : String(error)],
-      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, wallMs: 0 },
+      totals: { jobs: 0, ok: 0, skipped: 0, deferred: 0, errors: 1, noManifest: 0, wallMs: 0 },
     };
     console.log(json ? JSON.stringify(report, null, 2) : `Index refresh: error: ${report.messages[0]}`);
     process.exitCode = 1;

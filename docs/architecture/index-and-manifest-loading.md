@@ -245,6 +245,22 @@ Use `--only graphs|sessions|caches|runtime|models|issues`
 to narrow the work or `--dry-run` to inspect the plan without writes. Missing
 SQLite support skips sessions with `aiwg features install sqlite` as the remedy.
 
+Incremental session refresh reads the workspace's default discovery manifest and
+every path in `sessions.discovery_manifests` in `.aiwg/aiwg.config`. List custom
+manifests there, including those saved with `aiwg sessions discover --manifest`:
+
+```json
+{ "sessions": { "discovery_manifests": ["./exports/discovery.json", "/archive/home-discovery.json"] } }
+```
+
+Paths are workspace-relative or absolute. Each manifest must belong to the
+selected workspace; refresh scans only its saved authorized roots and updates
+that manifest under the catalog import lease. If none of the manifests exists,
+`messages` includes a workspace-specific `aiwg sessions discover --workspace`
+remedy. JSON session jobs include `noManifest` (1 when missing, otherwise 0),
+and `totals.noManifest` counts affected workspaces. These checks apply to existing
+catalogs during incremental runs; `--full` reindexes without discovery.
+
 A host lease prevents overlapping runs; `--lock-wait-ms <n>` optionally waits
 (default: zero). A same-host dead PID lease is reclaimed. Checkpoints in
 `$XDG_STATE_HOME/aiwg` (default `~/.local/state/aiwg`) resume matching interrupted
@@ -255,8 +271,11 @@ core at most 0.8, plus the dispatch PSI/disk limits
 and any stricter project thresholds. A locked or resource-deferred run exits zero;
 job errors exit nonzero. JSON reports use `contractVersion: "1.0.0"`, command
 `index.refresh`, job outcomes and durations, and totals. Session jobs include the
-batch import receipt in `sessionImport`, retaining rejection counts and per-source
-details. A completed import with rejected sources has job status `ok` and overall
+batch import receipt in `sessionImport` when one batch was imported, or the list
+of receipts in `sessionImports` when several batches were imported, retaining
+each batch's identity, rejection counts, and per-source details. Completed batches
+skipped as unchanged have no receipt in the report. A completed import with
+rejected sources has job status `ok` and overall
 status `partial`, with zero job errors and a zero exit status. Operational failures
 remain job errors. Refresh does not deploy, check for updates, log commands, or
 regenerate corpus views.
