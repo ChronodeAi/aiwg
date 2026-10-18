@@ -103,6 +103,15 @@ describe('Runtime Info Command Handler', () => {
   });
 
   describe('--discover flag', () => {
+    it('passes --force through to discovery', async () => {
+      const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
+      mockContext.args = ['--discover', '--force', '--json'];
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const result = await runtimeInfoHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(mockDiscovery.discover).toHaveBeenCalledWith({ force: true });
+      consoleSpy.mockRestore();
+    });
     it('should perform full discovery and display results', async () => {
       const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
 

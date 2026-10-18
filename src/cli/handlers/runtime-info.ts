@@ -213,8 +213,7 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
   const discovery = new RuntimeDiscovery();
 
   if (hasDiscover) {
-    // Full discovery
-    const catalog = await discovery.discover();
+    const catalog = await discovery.discover({ force: args.includes('--force') });
 
     if (hasJson) {
       console.log(JSON.stringify(catalog, null, 2));

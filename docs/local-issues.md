@@ -27,6 +27,12 @@ commands below for explicit migration or synchronization work.
 
 The canonical files are `items/` and `events/`. The `index/` directory is a cache and can be rebuilt with `aiwg issue index rebuild`.
 
+Index rebuilds skip parsing and rewriting when the issue file names and file
+metadata are unchanged, preserving `rebuilt_at`. The cache records an optional
+`inputFingerprint`; older caches rebuild once. Use `aiwg issue index rebuild
+--force` to rebuild regardless of the fingerprint. Missing or malformed caches
+are rebuilt automatically by the rebuild command.
+
 ## Basic Commands
 
 ```bash
