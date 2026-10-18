@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   inspectMuseNativeWorkspace, museNativeSourceMatchesWorkspace, MuseWorkspaceInspectionSchema,
 } from '../../../src/sessions/adapters/muse.js';
-import { MUSE_WORKSPACE_SCAN_LIMITS, MUSE_WORKSPACE_TAIL_BYTES } from '../../../src/sessions/adapters/muse-workspace-scan.js';
+import { MUSE_WORKSPACE_SCAN_LIMITS, MUSE_WORKSPACE_TAIL_BYTES, museWorkspaceScanLines } from '../../../src/sessions/adapters/muse-workspace-scan.js';
 import { discoverWorkspaceHistories, readDiscoveryManifest, writeDiscoveryManifest } from '../../../src/sessions/workspace-discovery.js';
 import { coverageFromBatchRun } from '../../../src/sessions/batch-contracts.js';
 import type { SelectedSource } from '../../../src/sessions/contracts.js';
@@ -325,18 +325,41 @@ describe('bounded Muse workspace inspection', () => {
 
   it.each(['record', 'total'] as const)('enforces the default %s byte budget without unbounded line buffering', async (budget) => {
     const locator = await writeMuseLog(museRoot, 'default-byte-limit', 1);
+    const limitName = budget === 'record' ? 'maxRecordBytes' : 'maxTotalBytes';
+    const byteBudget = MUSE_WORKSPACE_SCAN_LIMITS[limitName];
     if (budget === 'record') {
-      await writeFile(locator, 'x'.repeat(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes + 1));
+      await writeFile(locator, 'x'.repeat(byteBudget + 1));
     } else {
-      const line = JSON.stringify({ ...museMetadata('large', 0, root), padding: 'x'.repeat(4000) }) + '\n';
-      await writeFile(locator, line.repeat(Math.ceil(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes / Buffer.byteLength(line)) + 1));
+      // Reach the byte limit with few records: small metadata records trigger
+      // thousands of filesystem ownership checks in each of the two inspections.
+      const line = JSON.stringify({ ...museMetadata('large', 0, root), padding: 'x'.repeat(256 * 1024) }) + '\n';
+      expect(Buffer.byteLength(line)).toBeLessThan(MUSE_WORKSPACE_SCAN_LIMITS.maxRecordBytes);
+      const content = line.repeat(Math.ceil((byteBudget + 2 * MUSE_WORKSPACE_TAIL_BYTES) / Buffer.byteLength(line)));
+      // Reading to EOF must exceed even the combined prefix and tail allowance.
+      expect(Buffer.byteLength(content)).toBeGreaterThan(byteBudget + MUSE_WORKSPACE_TAIL_BYTES);
+      await writeFile(locator, content);
     }
     const result = await inspectMuseNativeWorkspace(selected(locator), workspace);
-    expect(result).toMatchObject({ outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', completeInspection: false });
-    expect(result.bytesInspected).toBeLessThanOrEqual(MUSE_WORKSPACE_SCAN_LIMITS.maxTotalBytes + MUSE_WORKSPACE_TAIL_BYTES);
+    expect(result).toMatchObject({
+      outcome: 'inconclusive', reasonCode: 'RESOURCE_LIMIT_EXCEEDED', completeInspection: false,
+      limit: { name: limitName, value: byteBudget }, fallback: 'bounded-tail',
+    });
+    expect(result.bytesInspected).toBeLessThanOrEqual(byteBudget + MUSE_WORKSPACE_TAIL_BYTES);
     await expect(museNativeSourceMatchesWorkspace(selected(locator), workspace)).rejects.toMatchObject({
       code: 'RESOURCE_LIMIT_EXCEEDED', detail: result.detail,
     });
+
+    // Check the prefix separately: the inspection receipt also counts its tail.
+    const progress = { recordsInspected: 0, bytesInspected: 0 };
+    const scan = museWorkspaceScanLines(
+      { selectedPath: locator, allowedRoots: [museRoot] }, MUSE_WORKSPACE_SCAN_LIMITS, progress,
+    );
+    await expect((async () => {
+      while (!(await scan.next()).done) { /* Consume records without retaining them. */ }
+    })()).rejects.toMatchObject({
+      code: 'RESOURCE_LIMIT_EXCEEDED', detail: { limit: limitName, configured: byteBudget },
+    });
+    expect(progress.bytesInspected).toBeLessThanOrEqual(byteBudget);
   });
 
   it('rejects deeply nested outer JSON with a resource diagnostic', async () => {
